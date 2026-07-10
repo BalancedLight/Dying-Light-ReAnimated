@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.rpack binary
+*.anm2 binary
+*.fbx binary
+*.png binary
+*.jpg binary

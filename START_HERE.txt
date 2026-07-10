@@ -1,0 +1,11 @@
+DL ReAnimated 0.3.0-alpha.4
+
+1. Double-click run_gui.bat.
+2. Add animation FBX files.
+3. Leave "Use imported animation FBX bind pose (recommended)" enabled.
+4. Review Retargeting and choose root motion.
+5. Save the project and build the RPack.
+
+Advanced users can enable "Show advanced settings" in the Project tab.
+Build a portable Windows app with build_exe.bat.
+Documentation is available inside the GUI Help tab and the docs folder.

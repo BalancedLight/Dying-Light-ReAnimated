@@ -1,0 +1,254 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dl-reanimated/dlraproj.schema.v2.json",
+  "title": "DL ReAnimated Project v2",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "minimum_reader_version",
+    "project_id",
+    "name",
+    "created_utc",
+    "modified_utc",
+    "rig",
+    "export",
+    "animations",
+    "mapping_profiles"
+  ],
+  "properties": {
+    "format": {
+      "const": "dl-reanimated-project"
+    },
+    "schema_version": {
+      "const": 2
+    },
+    "minimum_reader_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_with": {
+      "type": "string"
+    },
+    "project_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_utc": {
+      "type": "string"
+    },
+    "modified_utc": {
+      "type": "string"
+    },
+    "notes": {
+      "type": "string"
+    },
+    "rig": {
+      "$ref": "#/$defs/rig"
+    },
+    "export": {
+      "$ref": "#/$defs/export"
+    },
+    "animations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/animation"
+      }
+    },
+    "mapping_profiles": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      }
+    },
+    "user_script_targets": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "extensions": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "rig": {
+      "type": "object",
+      "required": [
+        "use_imported_animation_bind_pose",
+        "source_rest_fbx",
+        "canonical_smd",
+        "target_template_anm2",
+        "stock_writer_control_anm2"
+      ],
+      "properties": {
+        "source_rest_fbx": {
+          "type": "string"
+        },
+        "trusted_source_rest_json": {
+          "type": "string"
+        },
+        "canonical_smd": {
+          "type": "string"
+        },
+        "target_template_anm2": {
+          "type": "string"
+        },
+        "stock_writer_control_anm2": {
+          "type": "string"
+        },
+        "target_rig_name": {
+          "type": "string"
+        },
+        "extensions": {
+          "type": "object"
+        },
+        "use_imported_animation_bind_pose": {
+          "type": "boolean",
+          "description": "Use each animation FBX unanimated/bind transforms as its source rest pose."
+        }
+      },
+      "additionalProperties": true
+    },
+    "export": {
+      "type": "object",
+      "required": [
+        "mode",
+        "output_directory",
+        "pack_filename",
+        "collision_policy",
+        "default_script_target"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "new",
+            "append"
+          ]
+        },
+        "output_directory": {
+          "type": "string"
+        },
+        "pack_filename": {
+          "type": "string",
+          "pattern": "\\.rpack$"
+        },
+        "existing_rpack": {
+          "type": "string"
+        },
+        "collision_policy": {
+          "enum": [
+            "error",
+            "replace"
+          ]
+        },
+        "default_script_target": {
+          "type": "string"
+        },
+        "custom_script_resource": {
+          "type": "string"
+        },
+        "resource_prefix": {
+          "type": "string"
+        },
+        "include_validation_controls": {
+          "type": "boolean"
+        },
+        "write_intermediate_anm2": {
+          "type": "boolean"
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    },
+    "animation": {
+      "type": "object",
+      "required": [
+        "animation_id",
+        "source_fbx",
+        "display_name",
+        "resource_name",
+        "enabled",
+        "root_policy",
+        "ik_preset",
+        "fps"
+      ],
+      "properties": {
+        "animation_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "source_fbx": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "resource_name": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "script_target": {
+          "type": "string"
+        },
+        "root_policy": {
+          "enum": [
+            "inplace",
+            "bip01",
+            "motion"
+          ]
+        },
+        "ik_preset": {
+          "enum": [
+            "runtime",
+            "off"
+          ]
+        },
+        "mapping_profile_id": {
+          "type": "string"
+        },
+        "fps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 240
+        },
+        "start_frame": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "end_frame": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "notes": {
+          "type": "string"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "extensions": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
