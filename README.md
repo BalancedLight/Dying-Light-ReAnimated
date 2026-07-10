@@ -81,19 +81,7 @@ Contributor material is kept under `docs/project/`; generated diagnostics and sc
 The full-body Mixamo retarget, model-only exact-rig object workflow, deterministic `.crig` packages, embedded-bind workflow, Cayley rotation encoding, packed ANM2 writer, multi-page long-clip output, animation-script packaging, and three humanoid root-motion modes are implemented. Finger retargeting and semantic quadruped retargeting remain active/future validation areas.
 
 ## Disclaimer
-<<<<<<< HEAD
-=======
-
-Dying Light ReAnimated was helped developed with AI tools
->>>>>>> b25156355dcf6a8e49111f1ec772ee22820933eb
-
 Dying Light ReAnimated was developed with assistance from AI tools.
 
-<<<<<<< HEAD
+
 *Yes, ReAnimated is a pun.*
-=======
-
-
-
-*Yes, the ReAnimated is a pun.*
->>>>>>> b25156355dcf6a8e49111f1ec772ee22820933eb
