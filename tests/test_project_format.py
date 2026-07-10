@@ -44,6 +44,27 @@ def test_v0_project_is_migrated() -> None:
     assert project.export.pack_filename.endswith(".rpack")
 
 
+def test_v3_project_adds_empty_animation_stack_selection() -> None:
+    project = DlReanimatedProject.from_dict(
+        {
+            "format": "dl-reanimated-project",
+            "schema_version": 3,
+            "minimum_reader_version": 1,
+            "name": "Legacy stack",
+            "animations": [
+                {
+                    "animation_id": "clip",
+                    "source_fbx": "multi.fbx",
+                    "display_name": "Clip",
+                    "resource_name": "clip",
+                }
+            ],
+        }
+    )
+    assert project.schema_version == 4
+    assert project.animations[0].source_animation_stack == ""
+
+
 
 def test_v1_project_bind_policy_migration_preserves_explicit_rest() -> None:
     explicit = DlReanimatedProject.from_dict(
@@ -120,3 +141,11 @@ def test_schema_v2_describes_embedded_bind_policy() -> None:
     rig = schema["$defs"]["rig"]
     assert "use_imported_animation_bind_pose" in rig["required"]
     assert rig["properties"]["use_imported_animation_bind_pose"]["type"] == "boolean"
+
+
+def test_schema_v4_describes_animation_stack_selection() -> None:
+    root = Path(__file__).resolve().parents[1]
+    schema = json.loads((root / "docs/schemas/dlraproj.schema.v4.json").read_text())
+    assert schema["properties"]["schema_version"]["const"] == 4
+    animation = schema["$defs"]["animation"]
+    assert "source_animation_stack" in animation["required"]

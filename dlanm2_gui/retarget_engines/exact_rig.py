@@ -25,7 +25,7 @@ def _validate_exact_skeleton(
     document: _FbxDocument,
     *,
     meters_per_unit: float,
-) -> dict[str, float]:
+) -> dict[str, Any]:
     source_names = set(document.limb_models)
     target_names = {bone.name for bone in rig.bones}
     missing = sorted(target_names - source_names)
@@ -46,40 +46,74 @@ def _validate_exact_skeleton(
                 f"parent mismatch for {bone.name!r}: expected {expected_parent!r}, "
                 f"found {actual_parent!r}"
             )
+    if errors:
+        raise ValueError("Exact-rig skeleton mismatch:\n- " + "\n- ".join(errors))
     maximum_translation = 0.0
     maximum_rotation_degrees = 0.0
     maximum_scale = 0.0
-    if not errors:
-        for bone in rig.bones:
-            local = document._local_matrix(
-                document.limb_models[bone.name], tick=0, use_animation=False
+    mismatches: list[dict[str, Any]] = []
+    for bone in rig.bones:
+        local = document._local_matrix(
+            document.limb_models[bone.name], tick=0, use_animation=False
+        )
+        translation, quaternion, scale = decompose_local_matrix(local)
+        translation_delta = float(
+            np.linalg.norm(
+                translation * meters_per_unit
+                - np.asarray(bone.bind_translation, dtype=float)
             )
-            translation, quaternion, scale = decompose_local_matrix(local)
-            target_translation = np.asarray(bone.bind_translation, dtype=float)
-            source_translation = translation * meters_per_unit
-            translation_delta = float(np.linalg.norm(source_translation - target_translation))
-            target_quaternion = np.asarray(bone.bind_rotation_wxyz, dtype=float)
-            quaternion_dot = abs(float(np.dot(quaternion, target_quaternion)))
-            quaternion_dot = max(-1.0, min(1.0, quaternion_dot))
-            rotation_delta = math.degrees(2.0 * math.acos(quaternion_dot))
-            scale_delta = float(
-                np.max(np.abs(scale - np.asarray(bone.bind_scale, dtype=float)))
+        )
+        quaternion_dot = abs(
+            float(np.dot(quaternion, np.asarray(bone.bind_rotation_wxyz, dtype=float)))
+        )
+        rotation_delta = math.degrees(
+            2.0 * math.acos(max(-1.0, min(1.0, quaternion_dot)))
+        )
+        scale_delta = float(
+            np.max(np.abs(scale - np.asarray(bone.bind_scale, dtype=float)))
+        )
+        maximum_translation = max(maximum_translation, translation_delta)
+        maximum_rotation_degrees = max(maximum_rotation_degrees, rotation_delta)
+        maximum_scale = max(maximum_scale, scale_delta)
+        components = []
+        if translation_delta > 1.0e-4:
+            components.append("translation")
+        if rotation_delta > 0.1:
+            components.append("rotation")
+        if scale_delta > 1.0e-4:
+            components.append("scale")
+        if components:
+            mismatches.append(
+                {
+                    "bone": bone.name,
+                    "components": components,
+                    "translation_delta_meters": translation_delta,
+                    "rotation_delta_degrees": rotation_delta,
+                    "scale_component_delta": scale_delta,
+                }
             )
-            maximum_translation = max(maximum_translation, translation_delta)
-            maximum_rotation_degrees = max(maximum_rotation_degrees, rotation_delta)
-            maximum_scale = max(maximum_scale, scale_delta)
-            if translation_delta > 1.0e-4 or rotation_delta > 0.1 or scale_delta > 1.0e-4:
-                errors.append(
-                    f"bind mismatch for {bone.name!r}: translation {translation_delta:.6g} m, "
-                    f"rotation {rotation_delta:.6g}°, scale {scale_delta:.6g}"
-                )
-    if errors:
-        raise ValueError("Exact-rig skeleton mismatch:\n- " + "\n- ".join(errors))
     return {
         "max_translation_meters": maximum_translation,
         "max_rotation_degrees": maximum_rotation_degrees,
         "max_scale_component": maximum_scale,
+        "default_pose_mismatches": mismatches,
+        "default_pose_mismatch_count": len(mismatches),
+        "status": "warning" if mismatches else "compatible",
     }
+
+
+def _compatibility_warnings(compatibility: dict[str, Any]) -> list[str]:
+    mismatches = list(compatibility.get("default_pose_mismatches", []))
+    if not mismatches:
+        return []
+    worst = max(mismatches, key=lambda row: float(row["rotation_delta_degrees"]))
+    return [
+        "Exact-rig default pose differs from the .crig for "
+        f"{len(mismatches)} bone(s); exporting anyway. Largest rotation mismatch: "
+        f"{worst['bone']!r} (translation {worst['translation_delta_meters']:.6g} m, "
+        f"rotation {worst['rotation_delta_degrees']:.6g} degrees, "
+        f"scale {worst['scale_component_delta']:.6g})."
+    ]
 
 
 def build_exact_rig_anm2(
@@ -87,6 +121,7 @@ def build_exact_rig_anm2(
     rig: ChromeRig,
     *,
     fps: int | None = None,
+    animation_stack: str | None = None,
     document_factory: Any = _FbxDocument,
 ) -> ExactRigBuild:
     rig.validate().require_valid()
@@ -95,15 +130,22 @@ def build_exact_rig_anm2(
         raise ValueError("Exact-rig sample FPS must be between 1 and 240")
     source = Path(animation_fbx)
     document = document_factory(source)
+    if animation_stack or len(getattr(document, "animation_stacks", ())) > 1:
+        document.select_animation_stack(animation_stack)
     source_meters = float(document.meters_per_unit)
     bind_compatibility = _validate_exact_skeleton(
         rig, document, meters_per_unit=source_meters
     )
-    frame_count = max(2, int(document.frame_count(fps=sample_fps)))
-    ticks = [
-        int(round(frame * FBX_TICKS_PER_SECOND / sample_fps))
-        for frame in range(frame_count)
-    ]
+    if hasattr(document, "frame_ticks"):
+        ticks = list(document.frame_ticks(fps=sample_fps))
+    else:
+        ticks = [
+            int(round(frame * FBX_TICKS_PER_SECOND / sample_fps))
+            for frame in range(max(1, int(document.frame_count(fps=sample_fps))))
+        ]
+    if len(ticks) == 1:
+        ticks.append(ticks[0])
+    frame_count = len(ticks)
     values: list[list[list[float]]] = []
     for tick in ticks:
         rows_by_descriptor: dict[int, list[float]] = {}
@@ -170,7 +212,13 @@ def build_exact_rig_anm2(
             "sample_frames": sample_frames,
             "decoded_max_component_error": maximum_error,
             "source_unit_meters": source_meters,
+            "source_animation_stack": (
+                document.selected_animation_stack.name
+                if getattr(document, "selected_animation_stack", None)
+                else ""
+            ),
             "bind_compatibility": bind_compatibility,
+            "warnings": _compatibility_warnings(bind_compatibility),
             "root_policy": "exact_local_transforms",
             "candidate_path": None,
         },

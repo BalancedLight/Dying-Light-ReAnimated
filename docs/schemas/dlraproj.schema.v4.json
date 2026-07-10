@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/dlraproj.schema.v4.json",
+  "title": "DL ReAnimated Project v4",
+  "type": "object",
+  "required": ["format", "schema_version", "minimum_reader_version", "rig", "animations"],
+  "properties": {
+    "format": {"const": "dl-reanimated-project"},
+    "schema_version": {"const": 4},
+    "minimum_reader_version": {"type": "integer", "minimum": 1},
+    "rig": {"$ref": "#/$defs/rig"},
+    "animations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/animation"}
+    }
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "rig": {
+      "type": "object",
+      "required": ["target_rig_ref", "target_rig_path", "retarget_mode"],
+      "properties": {
+        "target_rig_ref": {"type": "string"},
+        "target_rig_path": {"type": "string"},
+        "retarget_mode": {"enum": ["humanoid", "exact"]}
+      },
+      "additionalProperties": true
+    },
+    "animation": {
+      "type": "object",
+      "required": ["animation_id", "source_fbx", "source_animation_stack", "display_name", "resource_name"],
+      "properties": {
+        "animation_id": {"type": "string"},
+        "source_fbx": {"type": "string"},
+        "source_animation_stack": {
+          "type": "string",
+          "description": "Selected FBX AnimationStack/action name; blank permits automatic selection only when unambiguous."
+        },
+        "display_name": {"type": "string"},
+        "resource_name": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

@@ -138,8 +138,8 @@ def build_custom_fbx_smd_retarget_editor_rpack(
     }
 
     animation = _FbxDocument(Path(animation_fbx))
-    frame_count = animation.frame_count(fps=FPS)
-    ticks = [round(frame * FBX_TICKS_PER_SECOND / FPS) for frame in range(frame_count)]
+    ticks = animation.frame_ticks(fps=FPS)
+    frame_count = len(ticks)
     source_rotation_by_bone = _source_rotation_matrices(animation, ticks)
 
     packaged: list[tuple[str, bytes]] = []

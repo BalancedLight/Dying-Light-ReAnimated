@@ -294,5 +294,5 @@
   "schema_version": 2,
   "minimum_reader_version": 1,
   "format": "dl-reanimated-project",
-  "created_with": "0.3.1"
+  "created_with": "0.3.2"
 }
