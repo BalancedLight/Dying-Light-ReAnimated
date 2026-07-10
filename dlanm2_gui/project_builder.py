@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import json
 import os
@@ -20,6 +21,8 @@ from .animation_scr import (
     patch_animation_scr_sequence_ranges,
 )
 from .fbx_pipeline import build_fbx_rpack
+from .chrome_rig import ChromeRig
+from .chrome_rig_builder import build_chrome_rig_from_smd_template
 from .oracle.binary_fbx_mixamo import _FbxDocument
 from .pack_manifest import (
     PackManifest,
@@ -28,6 +31,8 @@ from .pack_manifest import (
     sha256_bytes,
 )
 from .retarget_profiles import SourceBoneMappingProfile, auto_map_source_bones
+from .retarget_engines.exact_rig import build_exact_rig_anm2
+from .runtime_paths import resource_root
 from .rp6l import (
     AnimationLibrary,
     build_animation_library_rpack,
@@ -75,6 +80,43 @@ class ProjectBuildResult:
         return asdict(self)
 
 
+def export_project_anm2_files(
+    project: DlReanimatedProject,
+    output_directory: str | Path,
+    *,
+    progress: ProgressCallback | None = None,
+) -> list[Path]:
+    """Retarget enabled clips and export their ANM2 payloads without pack sidecars."""
+
+    log = progress or (lambda _message: None)
+    destination = Path(output_directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="dl_reanimated_anm2_") as temp_name:
+        export_project = deepcopy(project)
+        export_project.export.mode = "new"
+        export_project.export.output_directory = temp_name
+        export_project.export.pack_filename = "anm2_export_work.rpack"
+        export_project.export.existing_rpack = ""
+        export_project.export.include_validation_controls = False
+        export_project.export.write_intermediate_anm2 = True
+
+        def report_generation(message: str) -> None:
+            if message.startswith("Writing ") or message.startswith("Build complete:"):
+                return
+            log(message)
+
+        result = build_project(export_project, progress=report_generation)
+
+        exported: list[Path] = []
+        for animation in result.built_animations:
+            source = Path(animation.anm2_path)
+            target = destination / f"{animation.resource_name}.anm2"
+            _atomic_write_bytes(target, source.read_bytes())
+            exported.append(target)
+        log(f"ANM2 export complete: {len(exported)} file(s) written to {destination}")
+        return exported
+
+
 def build_project(
     project: DlReanimatedProject,
     *,
@@ -91,17 +133,30 @@ def build_project(
     if not enabled:
         raise ValueError("Project does not contain any enabled animations")
 
-    rig_paths = {
-        "canonical_smd": Path(project.rig.canonical_smd),
-        "target_template_anm2": Path(project.rig.target_template_anm2),
-        "stock_writer_control_anm2": Path(project.rig.stock_writer_control_anm2),
-    }
-    for label, path in rig_paths.items():
-        if not path.is_file():
-            raise FileNotFoundError(f"{label} must be a file: {path}")
+    retarget_mode = project.rig.retarget_mode
+    rig_paths: dict[str, Path] = {}
+    exact_rig: ChromeRig | None = None
+    target_rig_definition: ChromeRig | None = None
+    if retarget_mode == "humanoid":
+        rig_paths = {
+            "canonical_smd": Path(project.rig.canonical_smd),
+            "target_template_anm2": Path(project.rig.target_template_anm2),
+            "stock_writer_control_anm2": Path(project.rig.stock_writer_control_anm2),
+        }
+        for label, path in rig_paths.items():
+            if not path.is_file():
+                raise FileNotFoundError(f"{label} must be a file: {path}")
+    elif retarget_mode == "exact":
+        rig_path = Path(project.rig.target_rig_path)
+        if not rig_path.is_file():
+            raise FileNotFoundError(f"target_rig_path must be a .crig file: {rig_path}")
+        exact_rig = ChromeRig.load(rig_path)
+        target_rig_definition = exact_rig
+    else:
+        raise ValueError(f"Unsupported retarget mode: {retarget_mode!r}")
 
     explicit_source_rest = None
-    if not project.rig.use_imported_animation_bind_pose:
+    if retarget_mode == "humanoid" and not project.rig.use_imported_animation_bind_pose:
         explicit_source_rest = Path(project.rig.source_rest_fbx)
         if not project.rig.source_rest_fbx.strip() or not explicit_source_rest.is_file():
             raise FileNotFoundError(
@@ -110,12 +165,39 @@ def build_project(
             )
 
     trusted_path = None
-    if not project.rig.use_imported_animation_bind_pose and project.rig.trusted_source_rest_json:
+    if (
+        retarget_mode == "humanoid"
+        and not project.rig.use_imported_animation_bind_pose
+        and project.rig.trusted_source_rest_json
+    ):
         trusted_path = Path(project.rig.trusted_source_rest_json)
         if not trusted_path.is_file():
             raise FileNotFoundError(
                 f"trusted_source_rest_json must be a file: {trusted_path}"
             )
+
+    if retarget_mode == "humanoid":
+        try:
+            bundled_reference = resource_root() / "reference"
+            bundled_crig = bundled_reference / "male_npc_infected.crig"
+            using_bundled_assets = (
+                rig_paths["canonical_smd"].resolve()
+                == (bundled_reference / "player_1_tpp.smd").resolve()
+                and rig_paths["target_template_anm2"].resolve()
+                == (bundled_reference / "infected_turn_90r.template.anm2").resolve()
+            )
+            target_rig_definition = (
+                ChromeRig.load(bundled_crig)
+                if using_bundled_assets and bundled_crig.is_file()
+                else build_chrome_rig_from_smd_template(
+                    rig_paths["canonical_smd"], rig_paths["target_template_anm2"]
+                )
+            )
+        except ValueError:
+            # The legacy build path performs its own authoritative asset checks.
+            # Keeping this metadata conversion non-blocking also allows isolated
+            # project-builder tests to use intentionally minimal file stubs.
+            target_rig_definition = None
 
     if not project.export.output_directory.strip():
         raise ValueError("Choose an output folder before building")
@@ -131,6 +213,11 @@ def build_project(
     registry = _project_script_registry(project)
     existing_library = AnimationLibrary({}, {})
     warnings: list[str] = []
+    if retarget_mode == "exact" and project.export.include_validation_controls:
+        warnings.append(
+            "Bundled humanoid writer/bind controls are not compatible with custom Chrome "
+            "Rigs and were omitted. Exact-rig output is decoded and sampled during validation."
+        )
     existing_manifest: PackManifest | None = None
     if project.export.mode == "append":
         existing_path = Path(project.export.existing_rpack)
@@ -162,14 +249,16 @@ def build_project(
         if not source_path.is_file():
             raise FileNotFoundError(f"Animation FBX must be a file: {source_path}")
         log(f"[{index}/{len(enabled)}] Reading skeleton: {source_path.name}")
-        document = _FbxDocument(source_path)
-        profile = _mapping_profile_for_animation(project, animation, document)
-        mapping_errors = profile.validate(document.limb_models)
-        if mapping_errors:
-            raise ValueError(
-                f"Retarget mapping for {animation.display_name!r} is incomplete:\n- "
-                + "\n- ".join(mapping_errors)
-            )
+        profile: SourceBoneMappingProfile | None = None
+        if retarget_mode == "humanoid":
+            document = _FbxDocument(source_path)
+            profile = _mapping_profile_for_animation(project, animation, document)
+            mapping_errors = profile.validate(document.limb_models)
+            if mapping_errors:
+                raise ValueError(
+                    f"Retarget mapping for {animation.display_name!r} is incomplete:\n- "
+                    + "\n- ".join(mapping_errors)
+                )
 
         script_resource = _resolve_script_resource(project, animation, registry)
         resource_name = _final_resource_name(project, animation)
@@ -185,42 +274,56 @@ def build_project(
             f"[{index}/{len(enabled)}] Retargeting {animation.display_name} "
             f"({animation.root_policy}, {script_resource})"
         )
-        source_rest_for_clip = (
-            source_path
-            if project.rig.use_imported_animation_bind_pose
-            else explicit_source_rest
-        )
-        source_rest_policy = (
-            "embedded_animation_fbx"
-            if project.rig.use_imported_animation_bind_pose
-            else "explicit_rest_fbx"
-        )
-        summary = build_fbx_rpack(
-            animation_fbxs=[source_path],
-            source_rest_fbx=source_rest_for_clip,
-            trusted_source_rest_json=trusted_path,
-            canonical_smd=rig_paths["canonical_smd"],
-            target_template_anm2=rig_paths["target_template_anm2"],
-            stock_writer_control_anm2=rig_paths["stock_writer_control_anm2"],
-            out_dir=clip_out,
-            root_policies=(animation.root_policy,),
-            ik_authoring_preset=animation.ik_preset,
-            source_bone_aliases=profile.canonical_aliases(),
-            animation_script_resource_name=script_resource,
-            include_controls=(
-                project.export.include_validation_controls and not controls_added
-            ),
-        )
-        reports = json.loads(
-            (clip_out / "retarget_candidate_summary.json").read_text(encoding="utf-8")
-        )
-        if len(reports) != 1:
-            raise ValueError(
-                f"Expected one retarget candidate for {animation.display_name}, got {len(reports)}"
+        if retarget_mode == "exact":
+            assert exact_rig is not None
+            source_rest_for_clip = source_path
+            source_rest_policy = "exact_same_rig"
+            clip_out.mkdir(parents=True, exist_ok=True)
+            exact_build = build_exact_rig_anm2(source_path, exact_rig)
+            payload = exact_build.payload
+            candidate_path = clip_out / f"{resource_name}.anm2"
+            candidate_path.write_bytes(payload)
+            retarget_report = dict(exact_build.report)
+            retarget_report["candidate_path"] = str(candidate_path)
+            retarget_report["requested_project_root_policy"] = animation.root_policy
+        else:
+            assert profile is not None
+            source_rest_for_clip = (
+                source_path
+                if project.rig.use_imported_animation_bind_pose
+                else explicit_source_rest
             )
-        retarget_report = reports[0]
-        candidate_path = Path(retarget_report["candidate_path"])
-        payload = candidate_path.read_bytes()
+            source_rest_policy = (
+                "embedded_animation_fbx"
+                if project.rig.use_imported_animation_bind_pose
+                else "explicit_rest_fbx"
+            )
+            build_fbx_rpack(
+                animation_fbxs=[source_path],
+                source_rest_fbx=source_rest_for_clip,
+                trusted_source_rest_json=trusted_path,
+                canonical_smd=rig_paths["canonical_smd"],
+                target_template_anm2=rig_paths["target_template_anm2"],
+                stock_writer_control_anm2=rig_paths["stock_writer_control_anm2"],
+                out_dir=clip_out,
+                root_policies=(animation.root_policy,),
+                ik_authoring_preset=animation.ik_preset,
+                source_bone_aliases=profile.canonical_aliases(),
+                animation_script_resource_name=script_resource,
+                include_controls=(
+                    project.export.include_validation_controls and not controls_added
+                ),
+            )
+            reports = json.loads(
+                (clip_out / "retarget_candidate_summary.json").read_text(encoding="utf-8")
+            )
+            if len(reports) != 1:
+                raise ValueError(
+                    f"Expected one retarget candidate for {animation.display_name}, got {len(reports)}"
+                )
+            retarget_report = reports[0]
+            candidate_path = Path(retarget_report["candidate_path"])
+            payload = candidate_path.read_bytes()
         page_layout = _validate_generated_anm2_payload(
             payload,
             resource_name=resource_name,
@@ -266,12 +369,18 @@ def build_project(
             {
                 "resource_name": resource_name,
                 "script_resource": script_resource,
-                "mapping_profile_id": profile.profile_id,
+                "mapping_profile_id": profile.profile_id if profile is not None else "",
                 "root_policy": animation.root_policy,
                 "ik_preset": animation.ik_preset,
                 "source_fbx": str(source_path),
                 "source_rest_policy": source_rest_policy,
                 "source_rest_fbx": str(source_rest_for_clip),
+                "target_rig_ref": project.rig.target_rig_ref,
+                "target_rig_name": target_rig_definition.name if target_rig_definition else "",
+                "target_skeleton_hash": (
+                    target_rig_definition.skeleton_hash if target_rig_definition else ""
+                ),
+                "retarget_mode": retarget_mode,
                 "anm2_sha256": sha256_bytes(payload),
                 "anm2_page_count": page_layout.page_count,
                 "anm2_page_frame_spans": list(page_layout.page_frame_spans),
@@ -296,7 +405,7 @@ def build_project(
             script_resource=script_resource,
             root_policy=animation.root_policy,
             ik_preset=animation.ik_preset,
-            mapping_profile_id=profile.profile_id,
+            mapping_profile_id=profile.profile_id if profile is not None else "",
             frame_count=frame_count,
             fps=animation.fps,
             page_count=page_layout.page_count,
@@ -315,18 +424,24 @@ def build_project(
                 frame_count=frame_count,
                 fps=animation.fps,
                 sha256=built.sha256,
-                mapping_profile_id=profile.profile_id,
+                mapping_profile_id=profile.profile_id if profile is not None else "",
                 ik_preset=animation.ik_preset,
                 extensions={
                     "source_rest_policy": source_rest_policy,
                     "source_rest_fbx": str(source_rest_for_clip),
+                    "target_rig_ref": project.rig.target_rig_ref,
+                    "retarget_mode": retarget_mode,
                     "anm2_page_count": page_layout.page_count,
                     "anm2_page_frame_spans": list(page_layout.page_frame_spans),
                 },
             )
         )
 
-        if project.export.include_validation_controls and not controls_added:
+        if (
+            retarget_mode == "humanoid"
+            and project.export.include_validation_controls
+            and not controls_added
+        ):
             _merge_validation_controls(
                 clip_out=clip_out,
                 generated_script_resource=script_resource,
@@ -385,6 +500,12 @@ def build_project(
         "status": "ok",
         "project_id": project.project_id,
         "project_name": project.name,
+        "target_rig_ref": project.rig.target_rig_ref,
+        "target_rig_name": target_rig_definition.name if target_rig_definition else "",
+        "target_skeleton_hash": (
+            target_rig_definition.skeleton_hash if target_rig_definition else ""
+        ),
+        "retarget_mode": retarget_mode,
         "build_mode": project.export.mode,
         "pack_path": str(output_pack),
         "pack_sha256": manifest.pack_sha256,
@@ -603,4 +724,9 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
             os.unlink(temp_name)
 
 
-__all__ = ["BuiltAnimation", "ProjectBuildResult", "build_project"]
+__all__ = [
+    "BuiltAnimation",
+    "ProjectBuildResult",
+    "build_project",
+    "export_project_anm2_files",
+]

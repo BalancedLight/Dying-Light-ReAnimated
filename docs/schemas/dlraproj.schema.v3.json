@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/dlraproj.schema.v3.json",
+  "title": "DL ReAnimated Project v3",
+  "type": "object",
+  "required": ["format", "schema_version", "minimum_reader_version", "rig"],
+  "properties": {
+    "format": {"const": "dl-reanimated-project"},
+    "schema_version": {"const": 3},
+    "minimum_reader_version": {"type": "integer", "minimum": 1},
+    "rig": {"$ref": "#/$defs/rig"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "rig": {
+      "type": "object",
+      "required": [
+        "target_rig_ref",
+        "target_rig_path",
+        "retarget_mode",
+        "use_imported_animation_bind_pose",
+        "source_rest_fbx",
+        "trusted_source_rest_json",
+        "canonical_smd",
+        "target_template_anm2",
+        "stock_writer_control_anm2",
+        "target_rig_name"
+      ],
+      "properties": {
+        "target_rig_ref": {"type": "string"},
+        "target_rig_path": {"type": "string"},
+        "retarget_mode": {"enum": ["humanoid", "exact"]},
+        "use_imported_animation_bind_pose": {"type": "boolean"},
+        "source_rest_fbx": {"type": "string"},
+        "trusted_source_rest_json": {"type": "string"},
+        "canonical_smd": {"type": "string"},
+        "target_template_anm2": {"type": "string"},
+        "stock_writer_control_anm2": {"type": "string"},
+        "target_rig_name": {"type": "string"},
+        "extensions": {"type": "object"}
+      },
+      "additionalProperties": true
+    }
+  }
+}

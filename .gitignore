@@ -65,6 +65,7 @@ dl_reanimated_build/
 !/common_anims_sp_pc.rpack.dlrmanifest.json
 !/reference/*.anm2
 !/reference/*.smd
+!/reference/*.crig
 !/examples/*.dlraproj
 !/examples/*.dlrmap.json
 !/tests/fixtures/*.smd

@@ -1,6 +1,12 @@
-# DL ReAnimated
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/51f5eba4-3e85-4436-8b81-48c9151d6ab9"
+    alt="ReAnimated logo"
+    width="628"
+  />
+</p>
 
-DL ReAnimated is a project-based **FBX → ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, humanoid retarget mapping, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+DL ReAnimated is a project-based **FBX → ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, humanoid retarget mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
 ## Start
 
@@ -33,6 +39,8 @@ build_exe.bat
 
 Advanced target files, diagnostic controls, intermediate reports, and developer options are hidden unless **Show advanced settings** is enabled.
 
+For a custom object, animal, or model that already exists in a mod, Advanced mode can create a shareable `.crig` from one binary model FBX. Animations using that exact skeleton can then be exported without humanoid roles or additional target files.
+
 ## Output
 
 The editor-loadable output is normally:
@@ -49,6 +57,7 @@ run_gui.bat                  first-run setup and GUI launcher
 build_exe.bat                portable Windows EXE/ZIP builder
 *.dlraproj                   versioned multi-animation project
 *.dlrmap.json                reusable humanoid mapping profile
+*.crig                       shareable custom target-rig package
 common_anims_sp_pc.rpack     example output
 ```
 
@@ -56,6 +65,7 @@ common_anims_sp_pc.rpack     example output
 
 - [GUI quick start](docs/GUI_GUIDE.md)
 - [Humanoid retargeting](docs/RETARGETING.md)
+- [Chrome Rig custom targets](docs/CHROME_RIGS.md)
 - [Animation-script targets](docs/ANIMATION_SCRIPT_TARGETS.md)
 - [New and append RPack export](docs/RPACK_WORKFLOW.md)
 - [Root motion and IK](docs/ROOT_MOTION_AND_IK.md)
@@ -68,12 +78,10 @@ Contributor material is kept under `docs/project/`; generated diagnostics and sc
 
 ## Current status
 
-The full-body Mixamo retarget, embedded-bind workflow, target SMD hierarchy, Cayley rotation encoding, packed ANM2 writer, multi-page long-clip output, animation-script packaging, and three root-motion modes are implemented. Finger retargeting remains an active validation area.
+The full-body Mixamo retarget, model-only exact-rig object workflow, deterministic `.crig` packages, embedded-bind workflow, Cayley rotation encoding, packed ANM2 writer, multi-page long-clip output, animation-script packaging, and three humanoid root-motion modes are implemented. Finger retargeting and semantic quadruped retargeting remain active/future validation areas.
 
+## Disclaimer
 
+Dying Light ReAnimated was developed with assistance from AI tools.
 
-
-
-
-
-Yes, the ReAnimated is a pun.
+*Yes, ReAnimated is a pun.*

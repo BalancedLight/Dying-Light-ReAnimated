@@ -35,6 +35,7 @@ def run_checks(*, gui: bool, pipeline: bool) -> dict[str, Any]:
         "reference/infected_turn_90r.template.anm2",
         "reference/stock_writer_control.anm2",
         "reference/same_model_tpose_20260619.json",
+        "reference/male_npc_infected.crig",
         "docs/GUI_GUIDE.md",
     ):
         path = root / relative

@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/crig.schema.v1.json",
+  "title": "DL ReAnimated Chrome Rig manifest v1",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "rig_id",
+    "name",
+    "category",
+    "bone_count",
+    "track_count",
+    "skeleton_sha256",
+    "writer_profile_sha256"
+  ],
+  "properties": {
+    "format": {"const": "dl-reanimated-chrome-rig"},
+    "schema_version": {"const": 1},
+    "rig_id": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "category": {"type": "string"},
+    "description": {"type": "string"},
+    "author": {"type": "string"},
+    "license": {"type": "string"},
+    "source_model_name": {"type": "string"},
+    "bone_count": {"type": "integer", "minimum": 1},
+    "track_count": {"type": "integer", "minimum": 1},
+    "skeleton_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "writer_profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "extensions": {"type": "object"}
+  },
+  "additionalProperties": false
+}

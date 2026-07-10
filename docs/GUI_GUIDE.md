@@ -26,6 +26,7 @@ A separate T-pose is only required when an FBX has unreliable or missing bind tr
 
 Enable **Show advanced settings** to expose:
 
+- `.crig` import and model-FBX rig creation;
 - trusted source-rest matrix JSON;
 - custom target SMD/template/control files;
 - mapping profile load/save/clear controls;
@@ -36,6 +37,15 @@ Enable **Show advanced settings** to expose:
 - developer documentation.
 
 Advanced mode is a local UI preference and does not change animation data by itself.
+
+### Custom target in four steps
+
+1. Enable **Show advanced settings**.
+2. Click **Create .crig from model FBX…** and choose the target model's binary FBX.
+3. Save the shareable package; it is installed and selected automatically.
+4. Add animation FBXs that use the same bone names and parent hierarchy, then build normally.
+
+The model must already be available to the game/mod. A `.crig` defines animation tracks; it does not compile a mesh, CHR, skin, physics, or AI resources. Rigid objects still need at least one root bone with the object skinned to it.
 
 ## Animations
 
@@ -56,9 +66,14 @@ Mouse-wheel changes are disabled on closed dropdowns so scrolling a table cannot
 
 Click **Auto-map humanoid**, then review the required roles. Change a role by choosing the correct source FBX bone. The status line stays compact, and the mapping table uses the available window height.
 
+With a custom `.crig`, the tab reports **Exact skeleton mode** instead. No humanoid mapping is required; every target bone is checked by exact name and parent during the build.
+
 **Apply to compatible clips** copies the mapping only to clips with the exact same source-skeleton hash.
 
 ## Export
+
+**Export ANM2 only…** retargets every enabled clip and writes just the generated `.anm2`
+files to the folder you choose. It does not leave an RPack, manifest, or build report there.
 
 ### Create new
 
