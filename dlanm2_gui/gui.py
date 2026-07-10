@@ -386,12 +386,13 @@ class MainWindow:
         row.addStretch(1)
         layout.addLayout(row)
 
-        self.animation_table = qt["QTableWidget"](0, 8)
+        self.animation_table = qt["QTableWidget"](0, 9)
         self.animation_table.setHorizontalHeaderLabels(
             [
                 "Use",
                 "Display name",
                 "FBX source",
+                "FBX animation",
                 "Resource name",
                 "Animation SCR",
                 "Root motion",
@@ -415,12 +416,14 @@ class MainWindow:
         header.setSectionResizeMode(4, qt["QHeaderView"].Interactive)
         header.setSectionResizeMode(5, qt["QHeaderView"].Interactive)
         header.setSectionResizeMode(6, qt["QHeaderView"].Interactive)
-        header.setSectionResizeMode(7, qt["QHeaderView"].ResizeToContents)
+        header.setSectionResizeMode(7, qt["QHeaderView"].Interactive)
+        header.setSectionResizeMode(8, qt["QHeaderView"].ResizeToContents)
         self.animation_table.setColumnWidth(1, 210)
         self.animation_table.setColumnWidth(3, 190)
-        self.animation_table.setColumnWidth(4, 210)
-        self.animation_table.setColumnWidth(5, 155)
+        self.animation_table.setColumnWidth(4, 190)
+        self.animation_table.setColumnWidth(5, 210)
         self.animation_table.setColumnWidth(6, 155)
+        self.animation_table.setColumnWidth(7, 155)
         self.animation_table.itemSelectionChanged.connect(self._animation_selection_changed)
         layout.addWidget(self.animation_table, 1)
 
@@ -843,17 +846,33 @@ class MainWindow:
         )
         if not paths:
             return
-        existing = {Path(row.source_fbx).resolve() for row in self.project.animations}
+        existing = {
+            (Path(row.source_fbx).resolve(), row.source_animation_stack)
+            for row in self.project.animations
+        }
         for raw in paths:
             path = Path(raw).resolve()
-            if path in existing:
-                continue
-            row = ProjectAnimation.create(str(path))
-            prefix = self.project.export.resource_prefix.strip()
-            if prefix:
-                row.resource_name = f"{prefix}_{row.resource_name}"
-            self.project.animations.append(row)
-            existing.add(path)
+            document = self._source_document(str(path))
+            stacks = list(document.animation_stacks)
+            selections = [stack.name for stack in stacks] or [""]
+            for stack_name in selections:
+                key = (path, stack_name)
+                if key in existing:
+                    continue
+                multi = len(selections) > 1
+                resource_seed = f"{path.stem}_{stack_name}" if multi else path.stem
+                row = ProjectAnimation.create(
+                    str(path),
+                    resource_name=resource_seed,
+                    animation_stack=stack_name,
+                )
+                if multi:
+                    row.display_name = f"{path.stem}: {stack_name}"
+                prefix = self.project.export.resource_prefix.strip()
+                if prefix:
+                    row.resource_name = f"{prefix}_{row.resource_name}"
+                self.project.animations.append(row)
+                existing.add(key)
         self._mark_dirty()
         self._refresh_animation_table()
         self._refresh_retarget_clip_combo()
@@ -877,6 +896,7 @@ class MainWindow:
             return
         row = ProjectAnimation.create(source.source_fbx, resource_name=source.resource_name + "_copy")
         row.display_name = source.display_name + " (copy)"
+        row.source_animation_stack = source.source_animation_stack
         row.script_target = source.script_target
         row.root_policy = source.root_policy
         row.ik_preset = source.ik_preset
@@ -919,13 +939,34 @@ class MainWindow:
                 source_item.setFlags(source_item.flags() & ~qt["Qt"].ItemIsEditable)
                 table.setItem(row_index, 2, source_item)
 
+                stack = self._combo_box()
+                stack.setMinimumHeight(32)
+                stack.setToolTip("Animation stack/action inside the selected FBX file.")
+                try:
+                    stack_names = self._source_document(animation.source_fbx).animation_stack_names
+                except Exception:
+                    stack_names = ()
+                if len(stack_names) > 1:
+                    stack.addItem("Choose animation…", "")
+                elif not stack_names:
+                    stack.addItem("Static/default pose", "")
+                for stack_name in stack_names:
+                    stack.addItem(stack_name, stack_name)
+                self._set_combo_data(stack, animation.source_animation_stack)
+                stack.currentIndexChanged.connect(
+                    lambda _index, combo=stack, aid=animation.animation_id: self._set_animation_field(
+                        aid, "source_animation_stack", combo.currentData() or ""
+                    )
+                )
+                table.setCellWidget(row_index, 3, stack)
+
                 resource = qt["QLineEdit"](animation.resource_name)
                 resource.setMinimumHeight(32)
                 resource.setToolTip("Final _ANIMATION_ resource and sequence name written to the RPack.")
                 resource.textChanged.connect(
                     lambda value, aid=animation.animation_id: self._set_animation_field(aid, "resource_name", value)
                 )
-                table.setCellWidget(row_index, 3, resource)
+                table.setCellWidget(row_index, 4, resource)
 
                 script = self._script_combo(include_project_default=True)
                 script.setMinimumHeight(32)
@@ -936,7 +977,7 @@ class MainWindow:
                         aid, "script_target", self._script_combo_value(combo, allow_default=True)
                     )
                 )
-                table.setCellWidget(row_index, 4, script)
+                table.setCellWidget(row_index, 5, script)
 
                 root = self._combo_box()
                 root.setMinimumHeight(32)
@@ -953,7 +994,7 @@ class MainWindow:
                         aid, "root_policy", combo.currentData()
                     )
                 )
-                table.setCellWidget(row_index, 5, root)
+                table.setCellWidget(row_index, 6, root)
 
                 ik = self._combo_box()
                 ik.setMinimumHeight(32)
@@ -969,7 +1010,7 @@ class MainWindow:
                         aid, "ik_preset", combo.currentData()
                     )
                 )
-                table.setCellWidget(row_index, 6, ik)
+                table.setCellWidget(row_index, 7, ik)
 
                 mapping = qt["QPushButton"](
                     "Edit mapping" if animation.mapping_profile_id else "Create mapping"
@@ -981,7 +1022,7 @@ class MainWindow:
                 mapping.clicked.connect(
                     lambda _checked=False, aid=animation.animation_id: self._open_mapping_for_animation(aid)
                 )
-                table.setCellWidget(row_index, 7, mapping)
+                table.setCellWidget(row_index, 8, mapping)
         finally:
             self._refreshing = False
         self._animation_selection_changed()
@@ -1359,10 +1400,12 @@ class MainWindow:
         self.export_anm2_button.setEnabled(False)
         self.qt["QApplication"].setOverrideCursor(self.qt["Qt"].WaitCursor)
         try:
+            export_warnings: list[str] = []
             paths = export_project_anm2_files(
                 self.project,
                 destination,
                 progress=self._append_build_log,
+                warning=export_warnings.append,
             )
             self._append_build_log("")
             self._append_build_log("Exported ANM2 files:")
@@ -1370,11 +1413,19 @@ class MainWindow:
                 self._append_build_log(str(path))
             noun = "file" if len(paths) == 1 else "files"
             self.status.showMessage(f"Exported {len(paths)} ANM2 {noun}", 10000)
-            self.qt["QMessageBox"].information(
-                self.window,
-                "ANM2 export complete",
-                f"Exported {len(paths)} ANM2 {noun} to:\n{destination}",
-            )
+            message = f"Exported {len(paths)} ANM2 {noun} to:\n{destination}"
+            if export_warnings:
+                shown = export_warnings[:8]
+                message += "\n\nWarnings:\n- " + "\n- ".join(shown)
+                if len(export_warnings) > len(shown):
+                    message += f"\n- ...and {len(export_warnings) - len(shown)} more; see the build log."
+                self.qt["QMessageBox"].warning(
+                    self.window, "ANM2 export completed with warnings", message
+                )
+            else:
+                self.qt["QMessageBox"].information(
+                    self.window, "ANM2 export complete", message
+                )
         except Exception as exc:
             self._append_build_log(f"ERROR: {exc}")
             self._show_error("ANM2 export failed", exc)
@@ -1408,12 +1459,22 @@ class MainWindow:
             self._append_build_log("")
             self._append_build_log(json.dumps(result.to_dict(), indent=2))
             self.status.showMessage(f"Built {result.pack_path}", 10000)
-            self.qt["QMessageBox"].information(
-                self.window,
-                "RPack built",
+            message = (
                 f"Created {result.animation_count} animation resources in:\n{result.pack_path}\n\n"
-                f"SHA-256:\n{result.pack_sha256}",
+                f"SHA-256:\n{result.pack_sha256}"
             )
+            if result.warnings:
+                shown = result.warnings[:8]
+                message += "\n\nWarnings:\n- " + "\n- ".join(shown)
+                if len(result.warnings) > len(shown):
+                    message += f"\n- ...and {len(result.warnings) - len(shown)} more; see the build report."
+                self.qt["QMessageBox"].warning(
+                    self.window, "RPack built with warnings", message
+                )
+            else:
+                self.qt["QMessageBox"].information(
+                    self.window, "RPack built", message
+                )
             self.project.save(self.project_path)
             self.dirty = False
             self._update_title()

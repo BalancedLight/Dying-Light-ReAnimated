@@ -108,6 +108,34 @@ def test_exact_rig_rejects_parent_mismatch(tmp_path: Path) -> None:
         )
 
 
+def test_exact_rig_default_pose_mismatch_warns_and_exports(tmp_path: Path) -> None:
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "door.fbx",
+        document_factory=_factory(("root", "bone_door")),
+    )
+    animation = _ObjectFbx(tmp_path / "animation.fbx", ("root", "bone_door"))
+    original_local_matrix = animation._local_matrix
+
+    def mismatched_local_matrix(object_id: int, *, tick: int, use_animation: bool) -> np.ndarray:
+        if object_id == 2 and not use_animation:
+            matrix = _rotation_z(12.0)
+            matrix[1, 3] = 10.0
+            return matrix
+        return original_local_matrix(object_id, tick=tick, use_animation=use_animation)
+
+    animation._local_matrix = mismatched_local_matrix  # type: ignore[method-assign]
+    build = build_exact_rig_anm2(
+        tmp_path / "animation.fbx",
+        rig,
+        document_factory=lambda _path: animation,
+    )
+    compatibility = build.report["bind_compatibility"]
+    assert compatibility["status"] == "warning"
+    assert compatibility["default_pose_mismatch_count"] == 1
+    assert compatibility["default_pose_mismatches"][0]["bone"] == "bone_door"
+    assert build.report["warnings"]
+
+
 def test_crig_rejects_unsafe_or_executable_members() -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -153,8 +181,8 @@ def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
             "rig": {"use_imported_animation_bind_pose": True},
         }
     )
-    assert CURRENT_PROJECT_SCHEMA_VERSION == 3
-    assert project.schema_version == 3
+    assert CURRENT_PROJECT_SCHEMA_VERSION == 4
+    assert project.schema_version == 4
     assert project.rig.target_rig_ref == "builtin:male_npc_infected"
     assert project.rig.retarget_mode == "humanoid"
     assert "legacy_target_files" in project.rig.extensions
@@ -188,7 +216,7 @@ def test_project_builder_dispatches_exact_rig_without_humanoid_mapping(
     monkeypatch.setattr(
         project_builder,
         "build_exact_rig_anm2",
-        lambda path, selected_rig: RetargetBuild(
+        lambda path, selected_rig, **_kwargs: RetargetBuild(
             payload,
             2,
             {

@@ -228,8 +228,8 @@ def build_custom_fbx_smd_two_vector_fullbody_editor_rpack(
     out.mkdir(parents=True)
 
     animation = _FbxDocument(Path(animation_fbx))
-    frame_count = animation.frame_count(fps=FPS)
-    ticks = [round(frame * FBX_TICKS_PER_SECOND / FPS) for frame in range(frame_count)]
+    ticks = animation.frame_ticks(fps=FPS)
+    frame_count = len(ticks)
     source_positions = _sample_source_positions(animation, ticks)
     source_body_frames = _continuous_frames([_source_body_frame(row) for row in source_positions])
 

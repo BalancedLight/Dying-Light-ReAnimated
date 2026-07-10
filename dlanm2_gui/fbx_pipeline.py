@@ -7,15 +7,23 @@ API and adds project persistence plus create/append RPack orchestration.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 ROOT_POLICIES = ("inplace", "bip01", "motion")
 
 
+@dataclass(frozen=True, slots=True)
+class FbxAnimationClip:
+    path: str | Path
+    stack_name: str = ""
+
+
 def build_fbx_rpack(
     *,
-    animation_fbxs: Sequence[str | Path],
+    animation_fbxs: Sequence[str | Path] | None = None,
+    animation_clips: Sequence[FbxAnimationClip] | None = None,
     source_rest_fbx: str | Path,
     trusted_source_rest_json: str | Path | None = None,
     canonical_smd: str | Path,
@@ -51,6 +59,7 @@ def build_fbx_rpack(
 
     return build_custom_fbx_release_candidate_editor_rpack(
         animation_fbxs=animation_fbxs,
+        animation_clips=animation_clips,
         source_rest_fbx=source_rest_fbx,
         trusted_source_rest_json=trusted_source_rest_json,
         canonical_smd=canonical_smd,
@@ -65,4 +74,4 @@ def build_fbx_rpack(
     )
 
 
-__all__ = ["ROOT_POLICIES", "build_fbx_rpack"]
+__all__ = ["FbxAnimationClip", "ROOT_POLICIES", "build_fbx_rpack"]

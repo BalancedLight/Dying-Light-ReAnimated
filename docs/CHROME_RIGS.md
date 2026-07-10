@@ -18,7 +18,9 @@ It saves and installs the `.crig`. Add animation FBXs using the same skeleton, s
 
 ## Exact-rig behavior
 
-Exact mode compares the complete source skeleton with the package. Missing or extra bones and parent mismatches stop the build with a specific error. When compatible, the exporter evaluates every local FBX transform at 30 FPS, converts translation to meters and rotation to ANM2 Cayley XYZ, packs changing curves, decodes representative samples, and then packages the result through the normal RPack workflow.
+Exact mode compares the complete source skeleton with the package. Missing or extra bones and parent mismatches stop the build with a specific error. Differences between the FBX model defaults and the packaged bind transforms are preserved as build/report warnings because animation-only FBXs do not always contain an authoritative BindPose. The exporter evaluates every local FBX transform at the selected FPS, converts translation to meters and rotation to ANM2 Cayley XYZ, packs changing curves, decodes representative samples, and then packages the result through the normal RPack workflow.
+
+FBX animation stacks/actions are discovered by connection rather than by a hardcoded layer name. A file with multiple stacks creates one selectable project clip per stack. Stacks containing multiple blended layers must be baked or flattened to one layer before import.
 
 Humanoid role mapping and humanoid root-motion policies do not run in this mode. The animation's local root transform is preserved exactly. The project's existing root-policy field is retained for compatibility but is reported as informational for exact-rig output.
 

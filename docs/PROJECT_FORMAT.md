@@ -9,9 +9,9 @@ Every project contains:
 ```json
 {
   "format": "dl-reanimated-project",
-  "schema_version": 3,
+  "schema_version": 4,
   "minimum_reader_version": 1,
-  "created_with": "0.3.1",
+  "created_with": "0.3.2",
   "project_id": "stable UUID"
 }
 ```
@@ -116,6 +116,7 @@ MyProject/
 docs/schemas/dlraproj.schema.v1.json
 docs/schemas/dlraproj.schema.v2.json
 docs/schemas/dlraproj.schema.v3.json
+docs/schemas/dlraproj.schema.v4.json
 ```
 
 Runtime validation remains authoritative because file existence, duplicate resources, and cross-references cannot be fully described by JSON Schema.

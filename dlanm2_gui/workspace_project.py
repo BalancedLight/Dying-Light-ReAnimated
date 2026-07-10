@@ -22,7 +22,7 @@ from .script_targets import DEFAULT_SCRIPT_TARGET_ID
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
-CURRENT_PROJECT_SCHEMA_VERSION = 3
+CURRENT_PROJECT_SCHEMA_VERSION = 4
 MINIMUM_READER_VERSION = 1
 
 
@@ -36,6 +36,7 @@ class ProjectAnimation:
     source_fbx: str
     display_name: str
     resource_name: str
+    source_animation_stack: str = ""
     enabled: bool = True
     script_target: str = ""
     root_policy: str = "inplace"
@@ -49,7 +50,13 @@ class ProjectAnimation:
     extensions: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, source_fbx: str, *, resource_name: str | None = None) -> "ProjectAnimation":
+    def create(
+        cls,
+        source_fbx: str,
+        *,
+        resource_name: str | None = None,
+        animation_stack: str = "",
+    ) -> "ProjectAnimation":
         path = Path(source_fbx)
         stem = _safe_resource_name(resource_name or path.stem)
         return cls(
@@ -57,6 +64,7 @@ class ProjectAnimation:
             source_fbx=str(source_fbx),
             display_name=path.stem,
             resource_name=stem,
+            source_animation_stack=animation_stack,
         )
 
 
@@ -349,7 +357,26 @@ def _migrate_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-_MIGRATIONS = {0: _migrate_v0_to_v1, 1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
+def _migrate_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add explicit FBX animation-stack selection to every project clip."""
+
+    migrated = dict(payload)
+    animations = []
+    for raw in migrated.get("animations", []):
+        row = dict(raw)
+        row.setdefault("source_animation_stack", "")
+        animations.append(row)
+    migrated["animations"] = animations
+    migrated["schema_version"] = 4
+    return migrated
+
+
+_MIGRATIONS = {
+    0: _migrate_v0_to_v1,
+    1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
+}
 
 
 def _filtered_dataclass_payload(data_class: type, payload: dict[str, Any]) -> dict[str, Any]:

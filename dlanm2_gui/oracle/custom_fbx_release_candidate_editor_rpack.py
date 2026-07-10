@@ -63,6 +63,7 @@ class ClipSpec:
     path: Path
     slug: str
     display_name: str
+    stack_name: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +191,8 @@ _SLUG_OVERRIDES = {
 
 def build_custom_fbx_release_candidate_editor_rpack(
     *,
-    animation_fbxs: Sequence[str | Path],
+    animation_fbxs: Sequence[str | Path] | None = None,
+    animation_clips: Sequence[Any] | None = None,
     source_rest_fbx: str | Path,
     trusted_source_rest_json: str | Path | None = None,
     canonical_smd: str | Path,
@@ -226,7 +228,16 @@ def build_custom_fbx_release_candidate_editor_rpack(
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
-    clips = [_clip_spec(Path(value)) for value in animation_fbxs]
+    if animation_fbxs is not None and animation_clips is not None:
+        raise ValueError("provide animation_fbxs or animation_clips, not both")
+    clips = (
+        [
+            _clip_spec(Path(value.path), str(value.stack_name))
+            for value in animation_clips or ()
+        ]
+        if animation_clips is not None
+        else [_clip_spec(Path(value)) for value in animation_fbxs or ()]
+    )
     if not clips:
         raise ValueError("at least one animation FBX is required")
     if len({clip.slug for clip in clips}) != len(clips):
@@ -300,12 +311,12 @@ def build_custom_fbx_release_candidate_editor_rpack(
 
     inventory: list[dict[str, Any]] = []
     for clip in clips:
-        animation = _FbxDocument(clip.path)
+        animation = _FbxDocument(clip.path, animation_stack=clip.stack_name or None)
         if set(animation.limb_models) != set(source_rest.limb_models):
             raise ValueError(f"{clip.path.name}: animation and source-rest skeletons differ")
         _validate_source_aliases(animation.limb_models, source_bone_aliases)
-        frame_count = animation.frame_count(fps=FPS)
-        ticks = [round(frame * FBX_TICKS_PER_SECOND / FPS) for frame in range(frame_count)]
+        ticks = animation.frame_ticks(fps=FPS)
+        frame_count = len(ticks)
         source_globals = [
             apply_canonical_aliases(
                 animation.global_matrices(tick=tick, use_animation=True),
@@ -362,6 +373,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
                 frame_count=frame_count,
                 extra={
                     "source_fbx": str(clip.path),
+                    "source_animation_stack": clip.stack_name,
                     "root_policy": root_policy,
                     "moving_named_tracks": report["moving_named_tracks"],
                     "moving_finger_tracks": report["moving_finger_tracks"],
@@ -712,6 +724,11 @@ def _build_clip_candidate(
         "resource_name": spec.resource_name,
         "role": spec.role,
         "source_fbx": str(spec.clip.path),
+        "source_animation_stack": (
+            animation.selected_animation_stack.name
+            if animation.selected_animation_stack is not None
+            else ""
+        ),
         "frame_count": frame_count,
         "fps": FPS,
         "root_policy": spec.root_policy,
@@ -1314,14 +1331,19 @@ def _clip_inventory(
     }
 
 
-def _clip_spec(path: Path) -> ClipSpec:
+def _clip_spec(path: Path, stack_name: str = "") -> ClipSpec:
     if not path.exists():
         raise FileNotFoundError(path)
     normalized = re.sub(r"[^a-z0-9]+", "_", path.stem.lower()).strip("_")
     slug = _SLUG_OVERRIDES.get(normalized, normalized)
+    if stack_name:
+        stack_slug = re.sub(r"[^a-z0-9]+", "_", stack_name.lower()).strip("_")
+        if stack_slug and stack_slug != normalized:
+            slug = f"{slug}_{stack_slug}"
     if len(slug) > 20:
         slug = slug[:20].rstrip("_")
-    return ClipSpec(path=path, slug=slug, display_name=path.stem)
+    display_name = f"{path.stem}: {stack_name}" if stack_name else path.stem
+    return ClipSpec(path=path, slug=slug, display_name=display_name, stack_name=stack_name)
 
 
 def _write_observation_sheet(out: Path, manifests: list[dict[str, Any]]) -> None:

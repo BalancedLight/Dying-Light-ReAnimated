@@ -26,6 +26,18 @@ class FbxNode:
     end_offset: int
 
 
+@dataclass(frozen=True, slots=True)
+class FbxAnimationStack:
+    """One independently selectable animation stack in an FBX document."""
+
+    name: str
+    layer_names: tuple[str, ...]
+    start_tick: int
+    stop_tick: int
+    object_id: int
+    layer_ids: tuple[int, ...]
+
+
 def extract_mixamo_normalized(
     *,
     animation_fbx: str | Path,
@@ -53,8 +65,8 @@ def extract_mixamo_normalized(
         name: np.linalg.inv(raw_rest_globals[name]) @ trusted_bones[name]
         for name in trusted_bones
     }
-    frame_count = animation.frame_count(fps=fps)
-    ticks = [round(index * FBX_TICKS_PER_SECOND / fps) for index in range(frame_count)]
+    ticks = animation.frame_ticks(fps=fps)
+    frame_count = len(ticks)
 
     tracks: list[dict[str, Any]] = []
     if raw_local_rotation:
@@ -141,7 +153,7 @@ def extract_mixamo_normalized(
 
 
 class _FbxDocument:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, animation_stack: str | None = None):
         self.path = path
         data = path.read_bytes()
         if not data.startswith(b"Kaydara FBX Binary"):
@@ -170,7 +182,62 @@ class _FbxDocument:
             name: self._model_parent_name(object_id)
             for name, object_id in self.limb_models.items()
         }
-        self.curves = self._animation_curves("Layer0")
+        self.animation_stacks = self._animation_stack_inventory()
+        self.selected_animation_stack: FbxAnimationStack | None = None
+        self.curves: dict[tuple[int, str, str], tuple[list[int], list[float]]] = {}
+        self.animation_start_tick = 0
+        self.animation_stop_tick = 0
+        if animation_stack or len(self.animation_stacks) == 1:
+            self.select_animation_stack(animation_stack or self.animation_stacks[0].name)
+
+    @property
+    def animation_stack_names(self) -> tuple[str, ...]:
+        return tuple(stack.name for stack in self.animation_stacks)
+
+    def select_animation_stack(self, name: str | None = None) -> FbxAnimationStack | None:
+        """Select one stack without silently choosing among multiple animations."""
+
+        if not self.animation_stacks:
+            if name:
+                raise ValueError(f"FBX has no animation stack named {name!r}: {self.path}")
+            self.selected_animation_stack = None
+            self.curves = {}
+            self.animation_start_tick = 0
+            self.animation_stop_tick = 0
+            return None
+        if not name:
+            if len(self.animation_stacks) != 1:
+                available = ", ".join(repr(row.name) for row in self.animation_stacks)
+                raise ValueError(
+                    "FBX contains multiple animations; choose an animation stack: " + available
+                )
+            selected = self.animation_stacks[0]
+        else:
+            matches = [row for row in self.animation_stacks if row.name == name]
+            if not matches:
+                available = ", ".join(repr(row.name) for row in self.animation_stacks)
+                raise ValueError(
+                    f"FBX animation stack {name!r} was not found; available stacks: {available}"
+                )
+            if len(matches) > 1:
+                raise ValueError(f"FBX contains duplicate animation stack names: {name!r}")
+            selected = matches[0]
+        if len(selected.layer_ids) != 1:
+            layers = ", ".join(repr(value) for value in selected.layer_names) or "none"
+            raise ValueError(
+                f"FBX animation stack {selected.name!r} contains {len(selected.layer_ids)} "
+                f"layers ({layers}); bake/flatten it to one animation layer before import"
+            )
+        self.selected_animation_stack = selected
+        self.curves = self._animation_curves(selected.layer_ids[0])
+        curve_times = [time for times, _values in self.curves.values() for time in times]
+        self.animation_start_tick = int(selected.start_tick)
+        self.animation_stop_tick = int(selected.stop_tick)
+        if curve_times:
+            if self.animation_start_tick == self.animation_stop_tick == 0:
+                self.animation_start_tick = min(curve_times)
+            self.animation_stop_tick = max(self.animation_stop_tick, max(curve_times))
+        return selected
 
     @property
     def meters_per_unit(self) -> float:
@@ -191,18 +258,18 @@ class _FbxDocument:
         return factor_centimeters / 100.0
 
     def frame_count(self, *, fps: int) -> int:
-        takes = self.top.get("Takes")
-        stop = 0
-        if takes:
-            for node in takes.children:
-                if node.name == "Take" and node.properties and node.properties[0] == "mixamo.com":
-                    local_time = _child(node, "LocalTime")
-                    if local_time and len(local_time.properties) >= 2:
-                        stop = int(local_time.properties[1])
-        if stop <= 0:
-            all_times = [time for times, _values in self.curves.values() for time in times]
-            stop = max(all_times, default=0)
-        return int(round(stop * fps / FBX_TICKS_PER_SECOND)) + 1
+        return len(self.frame_ticks(fps=fps))
+
+    def frame_ticks(self, *, fps: int) -> list[int]:
+        if len(self.animation_stacks) > 1 and self.selected_animation_stack is None:
+            self.select_animation_stack(None)
+        start = int(self.animation_start_tick)
+        stop = max(start, int(self.animation_stop_tick))
+        frame_count = int(math.ceil((stop - start) * fps / FBX_TICKS_PER_SECOND)) + 1
+        return [
+            min(stop, start + int(round(index * FBX_TICKS_PER_SECOND / fps)))
+            for index in range(max(1, frame_count))
+        ]
 
     def raw_local_quaternions(self, name: str, ticks: list[int]) -> list[np.ndarray]:
         object_id = self.limb_models[name]
@@ -244,16 +311,8 @@ class _FbxDocument:
 
         return {name_by_id[object_id]: calculate(object_id) for object_id in local_by_id}
 
-    def _animation_curves(self, layer_name: str) -> dict[tuple[int, str, str], tuple[list[int], list[float]]]:
-        layers = {
-            _clean_name(node.properties[1]): int(node.properties[0])
-            for node in self.objects.children
-            if node.name == "AnimationLayer"
-        }
-        layer_id = layers.get(layer_name)
+    def _animation_curves(self, layer_id: int) -> dict[tuple[int, str, str], tuple[list[int], list[float]]]:
         result: dict[tuple[int, str, str], tuple[list[int], list[float]]] = {}
-        if layer_id is None:
-            return result
         for kind, curve_node_id, _rest in self.children[layer_id]:
             curve_node = self.object_by_id.get(curve_node_id)
             if kind != "OO" or curve_node is None or curve_node.name != "AnimationCurveNode":
@@ -276,6 +335,68 @@ class _FbxDocument:
                 values = [float(value) for value in _child_value(curve, "KeyValueFloat", [])]
                 result[(model_id, property_name, axis)] = (times, values)
         return result
+
+    def _animation_stack_inventory(self) -> tuple[FbxAnimationStack, ...]:
+        layers = {
+            int(node.properties[0]): _clean_name(node.properties[1])
+            for node in self.objects.children
+            if node.name == "AnimationLayer" and len(node.properties) >= 2
+        }
+        stacks: list[FbxAnimationStack] = []
+        takes: dict[str, tuple[int, int]] = {}
+        takes_node = self.top.get("Takes")
+        if takes_node:
+            for node in takes_node.children:
+                if node.name != "Take" or not node.properties:
+                    continue
+                local_time = _child(node, "LocalTime")
+                if local_time and len(local_time.properties) >= 2:
+                    takes[_clean_name(node.properties[0])] = (
+                        int(local_time.properties[0]),
+                        int(local_time.properties[1]),
+                    )
+        claimed_layers: set[int] = set()
+        for node in self.objects.children:
+            if node.name != "AnimationStack" or len(node.properties) < 2:
+                continue
+            object_id = int(node.properties[0])
+            name = _clean_name(node.properties[1])
+            layer_ids = tuple(
+                child_id
+                for kind, child_id, _rest in self.children[object_id]
+                if kind == "OO" and child_id in layers
+            )
+            claimed_layers.update(layer_ids)
+            props = _properties70(node)
+            start = int((props.get("LocalStart") or [0])[0])
+            stop = int((props.get("LocalStop") or [start])[0])
+            if name in takes:
+                start, stop = takes[name]
+            stacks.append(
+                FbxAnimationStack(
+                    name=name,
+                    layer_names=tuple(layers[value] for value in layer_ids),
+                    start_tick=start,
+                    stop_tick=stop,
+                    object_id=object_id,
+                    layer_ids=layer_ids,
+                )
+            )
+        # Some exporters omit AnimationStack objects. Treat each standalone layer
+        # as an independently selectable clip rather than reverting to "Layer0".
+        for layer_id, layer_name in layers.items():
+            if layer_id not in claimed_layers:
+                stacks.append(
+                    FbxAnimationStack(
+                        name=layer_name,
+                        layer_names=(layer_name,),
+                        start_tick=0,
+                        stop_tick=0,
+                        object_id=layer_id,
+                        layer_ids=(layer_id,),
+                    )
+                )
+        return tuple(stacks)
 
     def _local_matrix(self, object_id: int, *, tick: int, use_animation: bool) -> np.ndarray:
         node = self.object_by_id[object_id]

@@ -30,12 +30,15 @@ def test_export_project_anm2_files_copies_only_generated_payloads(tmp_path, monk
             source.write_bytes(payload)
             generated_sources.append(source)
             rows.append(SimpleNamespace(resource_name=name, anm2_path=str(source)))
-        return SimpleNamespace(built_animations=rows)
+        return SimpleNamespace(built_animations=rows, warnings=["pose mismatch"])
 
     monkeypatch.setattr(project_builder, "build_project", fake_build)
 
     destination = tmp_path / "export"
-    paths = project_builder.export_project_anm2_files(project, destination)
+    warnings: list[str] = []
+    paths = project_builder.export_project_anm2_files(
+        project, destination, warning=warnings.append
+    )
 
     assert paths == [destination / "walk.anm2", destination / "run.anm2"]
     assert (destination / "walk.anm2").read_bytes() == b"walk-anm2"
@@ -45,3 +48,4 @@ def test_export_project_anm2_files_copies_only_generated_payloads(tmp_path, monk
     assert project.export.mode == "append"
     assert project.export.output_directory == "original-output"
     assert project.export.write_intermediate_anm2 is False
+    assert warnings == ["pose mismatch"]

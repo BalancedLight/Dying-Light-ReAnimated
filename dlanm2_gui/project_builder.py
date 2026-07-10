@@ -20,7 +20,7 @@ from .animation_scr import (
     parse_animation_scr_sections,
     patch_animation_scr_sequence_ranges,
 )
-from .fbx_pipeline import build_fbx_rpack
+from .fbx_pipeline import FbxAnimationClip, build_fbx_rpack
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_smd_template
 from .oracle.binary_fbx_mixamo import _FbxDocument
@@ -49,6 +49,7 @@ ProgressCallback = Callable[[str], None]
 class BuiltAnimation:
     animation_id: str
     source_fbx: str
+    source_animation_stack: str
     resource_name: str
     script_resource: str
     root_policy: str
@@ -85,6 +86,7 @@ def export_project_anm2_files(
     output_directory: str | Path,
     *,
     progress: ProgressCallback | None = None,
+    warning: ProgressCallback | None = None,
 ) -> list[Path]:
     """Retarget enabled clips and export their ANM2 payloads without pack sidecars."""
 
@@ -106,6 +108,9 @@ def export_project_anm2_files(
             log(message)
 
         result = build_project(export_project, progress=report_generation)
+        for message in getattr(result, "warnings", []):
+            if warning is not None:
+                warning(message)
 
         exported: list[Path] = []
         for animation in result.built_animations:
@@ -252,6 +257,8 @@ def build_project(
         profile: SourceBoneMappingProfile | None = None
         if retarget_mode == "humanoid":
             document = _FbxDocument(source_path)
+            if animation.source_animation_stack:
+                document.select_animation_stack(animation.source_animation_stack)
             profile = _mapping_profile_for_animation(project, animation, document)
             mapping_errors = profile.validate(document.limb_models)
             if mapping_errors:
@@ -279,7 +286,12 @@ def build_project(
             source_rest_for_clip = source_path
             source_rest_policy = "exact_same_rig"
             clip_out.mkdir(parents=True, exist_ok=True)
-            exact_build = build_exact_rig_anm2(source_path, exact_rig)
+            exact_build = build_exact_rig_anm2(
+                source_path,
+                exact_rig,
+                fps=animation.fps,
+                animation_stack=animation.source_animation_stack or None,
+            )
             payload = exact_build.payload
             candidate_path = clip_out / f"{resource_name}.anm2"
             candidate_path.write_bytes(payload)
@@ -299,7 +311,9 @@ def build_project(
                 else "explicit_rest_fbx"
             )
             build_fbx_rpack(
-                animation_fbxs=[source_path],
+                animation_clips=[
+                    FbxAnimationClip(source_path, animation.source_animation_stack)
+                ],
                 source_rest_fbx=source_rest_for_clip,
                 trusted_source_rest_json=trusted_path,
                 canonical_smd=rig_paths["canonical_smd"],
@@ -324,6 +338,10 @@ def build_project(
             retarget_report = reports[0]
             candidate_path = Path(retarget_report["candidate_path"])
             payload = candidate_path.read_bytes()
+        for message in retarget_report.get("warnings", []):
+            rendered = f"{animation.display_name}: {message}"
+            warnings.append(rendered)
+            log(f"WARNING: {rendered}")
         page_layout = _validate_generated_anm2_payload(
             payload,
             resource_name=resource_name,
@@ -373,6 +391,10 @@ def build_project(
                 "root_policy": animation.root_policy,
                 "ik_preset": animation.ik_preset,
                 "source_fbx": str(source_path),
+                "source_animation_stack": (
+                    animation.source_animation_stack
+                    or str(retarget_report.get("source_animation_stack", ""))
+                ),
                 "source_rest_policy": source_rest_policy,
                 "source_rest_fbx": str(source_rest_for_clip),
                 "target_rig_ref": project.rig.target_rig_ref,
@@ -401,6 +423,10 @@ def build_project(
         built = BuiltAnimation(
             animation_id=animation.animation_id,
             source_fbx=str(source_path),
+            source_animation_stack=(
+                animation.source_animation_stack
+                or str(retarget_report.get("source_animation_stack", ""))
+            ),
             resource_name=resource_name,
             script_resource=script_resource,
             root_policy=animation.root_policy,
@@ -428,6 +454,10 @@ def build_project(
                 ik_preset=animation.ik_preset,
                 extensions={
                     "source_rest_policy": source_rest_policy,
+                    "source_animation_stack": (
+                        animation.source_animation_stack
+                        or str(retarget_report.get("source_animation_stack", ""))
+                    ),
                     "source_rest_fbx": str(source_rest_for_clip),
                     "target_rig_ref": project.rig.target_rig_ref,
                     "retarget_mode": retarget_mode,
