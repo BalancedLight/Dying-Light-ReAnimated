@@ -1,4 +1,10 @@
-# DL ReAnimated
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/51f5eba4-3e85-4436-8b81-48c9151d6ab9"
+    alt="ReAnimated logo"
+    width="628"
+  />
+</p>
 
 DL ReAnimated is a project-based **FBX → ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, humanoid retarget mapping, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
@@ -70,10 +76,12 @@ Contributor material is kept under `docs/project/`; generated diagnostics and sc
 
 The full-body Mixamo retarget, embedded-bind workflow, target SMD hierarchy, Cayley rotation encoding, packed ANM2 writer, multi-page long-clip output, animation-script packaging, and three root-motion modes are implemented. Finger retargeting remains an active validation area.
 
+## Disclaimer
+
+Dying Light ReAnimated was helped developed with AI tools
 
 
 
 
 
-
-Yes, the ReAnimated is a pun.
+*Yes, the ReAnimated is a pun.*
