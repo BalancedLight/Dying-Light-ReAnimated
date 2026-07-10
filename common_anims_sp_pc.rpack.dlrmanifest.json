@@ -290,7 +290,7 @@
   "build_mode": "example",
   "schema_version": 1,
   "format": "dl-reanimated-rpack-manifest",
-  "created_with": "0.3.0a4",
+  "created_with": "0.3.1",
   "extensions": {
     "warning": "Example output for evaluation; target compatibility and current limitations are documented in README.md.",
     "resource_count": 20

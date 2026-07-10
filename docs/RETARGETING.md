@@ -36,8 +36,10 @@ Closed dropdowns ignore the mouse wheel, so scrolling the table cannot alter a m
 
 ## Target rig
 
-The bundled preset is the editor-validated Dying Light male NPC/infected skeleton. Selecting a different `_ANIMATION_SCR_` target does not automatically change the target skeleton. Female, player-specific, or custom rigs require their own compatible target preset assets.
+The bundled preset is the editor-validated Dying Light male NPC/infected skeleton, represented internally by the same Chrome Rig model used for custom targets. Selecting a different `_ANIMATION_SCR_` target does not automatically change the target skeleton.
+
+Custom `.crig` targets use exact-rig mode: source and target bone names and parents must match, and evaluated FBX local translation, rotation, and scale are copied into the target tracks. This mode has no humanoid, `bip01`, finger, or motion-helper assumptions, so it is appropriate for doors, machines, props, and same-rig animal animations.
 
 ## Extra bones
 
-Unmapped end nodes, controls, constraints, and non-deforming helpers may remain ignored. Target-specific twist/helper ownership is kept separate from primary deform bones.
+Unmapped end nodes, controls, constraints, and non-deforming helpers may remain ignored in humanoid mode. Exact-rig mode instead requires the source to match all bones declared by the `.crig` and preserves their tracks.

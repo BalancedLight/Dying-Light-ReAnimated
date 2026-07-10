@@ -4,6 +4,7 @@
 
 - [GUI quick start](GUI_GUIDE.md)
 - [Humanoid retargeting](RETARGETING.md)
+- [Chrome Rig custom targets](CHROME_RIGS.md)
 - [Animation-script targets](ANIMATION_SCRIPT_TARGETS.md)
 - [RPack workflow](RPACK_WORKFLOW.md)
 - [Root motion and IK](ROOT_MOTION_AND_IK.md)

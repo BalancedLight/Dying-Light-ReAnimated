@@ -9,9 +9,9 @@ Every project contains:
 ```json
 {
   "format": "dl-reanimated-project",
-  "schema_version": 2,
+  "schema_version": 3,
   "minimum_reader_version": 1,
-  "created_with": "0.3.0a4",
+  "created_with": "0.3.1",
   "project_id": "stable UUID"
 }
 ```
@@ -40,11 +40,30 @@ Migration from schema 1 is deterministic:
 - an existing non-empty `source_rest_fbx` keeps explicit-rest mode;
 - an empty source-rest path becomes embedded-bind mode.
 
+## Schema 3 target rigs
+
+Schema 3 adds an explicit target reference, optional portable `.crig` path, and retarget engine:
+
+```json
+{
+  "rig": {
+    "target_rig_ref": "builtin:male_npc_infected",
+    "target_rig_path": "",
+    "retarget_mode": "humanoid"
+  }
+}
+```
+
+Schema-2 projects migrate to the bundled humanoid target with identical build behavior. The historical SMD/template/control fields remain available and are also recorded under `rig.extensions.legacy_target_files` during migration.
+
 ## Main sections
 
 ### `rig`
 
 ```
+target_rig_ref
+target_rig_path
+retarget_mode                 humanoid | exact
 use_imported_animation_bind_pose
 source_rest_fbx
 trusted_source_rest_json
@@ -96,6 +115,7 @@ MyProject/
 ```
 docs/schemas/dlraproj.schema.v1.json
 docs/schemas/dlraproj.schema.v2.json
+docs/schemas/dlraproj.schema.v3.json
 ```
 
 Runtime validation remains authoritative because file existence, duplicate resources, and cross-references cannot be fully described by JSON Schema.

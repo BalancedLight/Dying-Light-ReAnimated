@@ -22,7 +22,7 @@ from .script_targets import DEFAULT_SCRIPT_TARGET_ID
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
-CURRENT_PROJECT_SCHEMA_VERSION = 2
+CURRENT_PROJECT_SCHEMA_VERSION = 3
 MINIMUM_READER_VERSION = 1
 
 
@@ -62,6 +62,9 @@ class ProjectAnimation:
 
 @dataclass(slots=True)
 class RigSettings:
+    target_rig_ref: str = "builtin:male_npc_infected"
+    target_rig_path: str = ""
+    retarget_mode: str = "humanoid"
     use_imported_animation_bind_pose: bool = True
     source_rest_fbx: str = ""
     trusted_source_rest_json: str = ""
@@ -129,6 +132,10 @@ class DlReanimatedProject:
         errors: list[str] = []
         if not self.name.strip():
             errors.append("Project name cannot be empty.")
+        if self.rig.retarget_mode not in {"humanoid", "exact"}:
+            errors.append("Retarget mode must be 'humanoid' or 'exact'.")
+        if self.rig.retarget_mode == "exact" and not self.rig.target_rig_path.strip():
+            errors.append("Exact retarget mode requires an installed or selected .crig file.")
         if self.export.mode not in {"new", "append"}:
             errors.append("Export mode must be 'new' or 'append'.")
         if self.export.collision_policy not in {"error", "replace"}:
@@ -137,7 +144,11 @@ class DlReanimatedProject:
             errors.append("Append mode requires an existing tool-created RPack.")
         if not self.export.output_directory.strip():
             errors.append("Choose an output folder before building.")
-        if not self.rig.use_imported_animation_bind_pose and not self.rig.source_rest_fbx.strip():
+        if (
+            self.rig.retarget_mode == "humanoid"
+            and not self.rig.use_imported_animation_bind_pose
+            and not self.rig.source_rest_fbx.strip()
+        ):
             errors.append(
                 "Choose a source rest/T-pose FBX or enable imported-animation bind pose."
             )
@@ -312,7 +323,33 @@ def _migrate_v1_to_v2(payload: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
-_MIGRATIONS = {0: _migrate_v0_to_v1, 1: _migrate_v1_to_v2}
+def _migrate_v2_to_v3(payload: dict[str, Any]) -> dict[str, Any]:
+    """Route legacy targets through an explicit rig reference and engine mode."""
+
+    migrated = dict(payload)
+    rig = dict(migrated.get("rig", {}))
+    rig.setdefault("target_rig_ref", "builtin:male_npc_infected")
+    rig.setdefault("target_rig_path", "")
+    rig.setdefault("retarget_mode", "humanoid")
+    extensions = dict(rig.get("extensions", {}))
+    extensions.setdefault(
+        "legacy_target_files",
+        {
+            key: rig.get(key, "")
+            for key in (
+                "canonical_smd",
+                "target_template_anm2",
+                "stock_writer_control_anm2",
+            )
+        },
+    )
+    rig["extensions"] = extensions
+    migrated["rig"] = rig
+    migrated["schema_version"] = 3
+    return migrated
+
+
+_MIGRATIONS = {0: _migrate_v0_to_v1, 1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
 
 
 def _filtered_dataclass_payload(data_class: type, payload: dict[str, Any]) -> dict[str, Any]:
@@ -331,6 +368,7 @@ def _relativize_project_paths(payload: dict[str, Any], base: Path) -> None:
     for key in (
         "source_rest_fbx",
         "trusted_source_rest_json",
+        "target_rig_path",
         "canonical_smd",
         "target_template_anm2",
         "stock_writer_control_anm2",
@@ -363,6 +401,7 @@ def _resolve_project_paths(project: DlReanimatedProject, base: Path) -> None:
 
     project.rig.source_rest_fbx = resolve(project.rig.source_rest_fbx)
     project.rig.trusted_source_rest_json = resolve(project.rig.trusted_source_rest_json)
+    project.rig.target_rig_path = resolve(project.rig.target_rig_path)
     project.rig.canonical_smd = resolve(project.rig.canonical_smd)
     project.rig.target_template_anm2 = resolve(project.rig.target_template_anm2)
     project.rig.stock_writer_control_anm2 = resolve(project.rig.stock_writer_control_anm2)

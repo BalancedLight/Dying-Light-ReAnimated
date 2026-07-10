@@ -70,17 +70,22 @@ Add aliases to the existing semantic role rather than branching the retargeter b
 
 ## Adding target rigs
 
-A target-rig preset should bundle or locate:
+A target-rig preset is represented by the declarative `ChromeRig` model. Shareable
+custom targets use a deterministic `.crig` package containing:
 
 ```
-canonical SMD/reference hierarchy
-ANM2 template/descriptor policy
-writer regression control
-human-readable target family
-compatible default animation-script target
+skeleton hierarchy and bind-local transforms
+ordered descriptor table
+ANM2 writer profile
+validation and content hashes
+optional aliases, semantic roles, preview, and license metadata
 ```
 
-Target-rig presets should not be conflated with source mappings.
+The bundled male humanoid SMD/template is converted to this model at the project
+builder boundary while its editor-validated semantic solver remains unchanged.
+Custom exact-rig targets dispatch to `retarget_engines.exact_rig` and must never
+enter humanoid mapping or body-frame code. Target-rig presets should not be
+conflated with source mappings.
 
 ## RPack safety
 
@@ -97,7 +102,7 @@ Unknown RP6L resource types must not be silently dropped. The current append wor
 
 Suggested next GUI work:
 
-- target-rig preset manager;
+- installed-rig removal and metadata editor;
 - custom script-target preset dialog;
 - skeleton tree/3D preview;
 - mapping copy/link across selected clips;

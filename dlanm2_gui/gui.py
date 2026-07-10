@@ -15,8 +15,11 @@ import sys
 from typing import Any
 
 from . import __version__
+from .chrome_rig import ChromeRig
+from .chrome_rig_builder import build_chrome_rig_from_fbx
+from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
 from .oracle.binary_fbx_mixamo import _FbxDocument
-from .project_builder import build_project
+from .project_builder import build_project, export_project_anm2_files
 from .retarget_profiles import (
     HUMANOID_ROLES,
     ROLE_BY_ID,
@@ -151,6 +154,7 @@ class MainWindow:
         self._refreshing = False
         self._source_cache: dict[str, _FbxDocument] = {}
         self.script_registry = ScriptTargetRegistry()
+        self.rig_registry = ChromeRigRegistry(self.root / "rigs")
 
         self._build_toolbar()
         self._build_project_tab()
@@ -242,14 +246,29 @@ class MainWindow:
         rig = qt["QGroupBox"]("Source avatar and target rig")
         rig_form = qt["QFormLayout"](rig)
         self.target_rig_combo = self._combo_box()
-        self.target_rig_combo.addItem(
-            "Dying Light Male NPC / Infected (bundled)", "male_npc_infected"
-        )
+        self._reload_target_rig_combo()
         self.target_rig_combo.setToolTip(
-            "Uses the bundled player_1_tpp bind skeleton and validated ANM2 template. "
-            "Additional target-rig presets can be added later."
+            "The bundled target uses humanoid retargeting. Installed .crig targets use "
+            "exact same-skeleton mapping for objects, machinery, animals, or custom models."
         )
+        self.target_rig_combo.currentIndexChanged.connect(self._target_rig_changed)
         rig_form.addRow("Target rig preset", self.target_rig_combo)
+
+        self.custom_rig_actions = qt["QWidget"]()
+        custom_rig_row = qt["QHBoxLayout"](self.custom_rig_actions)
+        custom_rig_row.setContentsMargins(0, 0, 0, 0)
+        import_rig_button = qt["QPushButton"]("Import .crig…")
+        import_rig_button.clicked.connect(self.import_chrome_rig)
+        create_rig_button = qt["QPushButton"]("Create .crig from model FBX…")
+        create_rig_button.clicked.connect(self.create_chrome_rig)
+        manage_rigs_button = qt["QPushButton"]("Manage rigs…")
+        manage_rigs_button.clicked.connect(self.manage_chrome_rigs)
+        custom_rig_row.addWidget(import_rig_button)
+        custom_rig_row.addWidget(create_rig_button)
+        custom_rig_row.addWidget(manage_rigs_button)
+        custom_rig_row.addStretch(1)
+        rig_form.addRow("Custom targets", self.custom_rig_actions)
+        self.custom_rig_actions_label = rig_form.labelForField(self.custom_rig_actions)
 
         self.use_imported_bind_pose = qt["QCheckBox"](
             "Use imported animation FBX bind pose (recommended)"
@@ -647,10 +666,16 @@ class MainWindow:
         self.build_button = qt["QPushButton"]("Build RPack")
         self.build_button.setToolTip("Validate the project, retarget enabled clips, and write the RPack.")
         self.build_button.clicked.connect(self.build_rpack)
+        self.export_anm2_button = qt["QPushButton"]("Export ANM2 only…")
+        self.export_anm2_button.setToolTip(
+            "Retarget enabled clips and write only their generated ANM2 files to a folder."
+        )
+        self.export_anm2_button.clicked.connect(self.export_anm2_only)
         self.progress_bar = qt["QProgressBar"]()
         self.progress_bar.setRange(0, 1)
         self.progress_bar.setValue(0)
         build_row.addWidget(self.build_button)
+        build_row.addWidget(self.export_anm2_button)
         build_row.addWidget(self.progress_bar, 1)
         layout.addLayout(build_row)
         self.build_log = qt["QPlainTextEdit"]()
@@ -1031,6 +1056,17 @@ class MainWindow:
     def _retarget_clip_changed(self) -> None:
         if self._refreshing:
             return
+        if self.project.rig.retarget_mode == "exact":
+            self.mapping_table.setRowCount(0)
+            self.mapping_status.setText(
+                "<b style='color:#2e7d32'>Exact skeleton mode</b> — bone names and parents "
+                "are checked against the selected .crig during build; no humanoid mapping is required."
+            )
+            self.ignored_bones.setPlainText(
+                "Exact mode preserves every target bone track, including small-object and "
+                "non-humanoid skeletons."
+            )
+            return
         animation = self.project.animation_by_id(str(self.retarget_clip_combo.currentData() or ""))
         if animation is None:
             self.mapping_table.setRowCount(0)
@@ -1159,6 +1195,8 @@ class MainWindow:
         self._refresh_mapping_table(animation, document, profile)
 
     def auto_map_selected(self) -> None:
+        if self.project.rig.retarget_mode == "exact":
+            return
         animation = self._retarget_animation()
         if animation is None:
             return
@@ -1180,6 +1218,8 @@ class MainWindow:
             self._show_error("Auto-map failed", exc)
 
     def clear_mapping(self) -> None:
+        if self.project.rig.retarget_mode == "exact":
+            return
         animation = self._retarget_animation()
         if animation is None:
             return
@@ -1303,6 +1343,48 @@ class MainWindow:
             self.mapping_table.setRowHidden(row, bool(text and text not in haystack))
 
     # ----------------------------------------------------------------- export
+    def export_anm2_only(self) -> None:
+        self._sync_project_from_ui()
+        destination = self.qt["QFileDialog"].getExistingDirectory(
+            self.window,
+            "Export generated ANM2 files",
+            self.project.export.output_directory or str(self.root),
+        )
+        if not destination:
+            return
+
+        self.build_log.clear()
+        self.progress_bar.setRange(0, 0)
+        self.build_button.setEnabled(False)
+        self.export_anm2_button.setEnabled(False)
+        self.qt["QApplication"].setOverrideCursor(self.qt["Qt"].WaitCursor)
+        try:
+            paths = export_project_anm2_files(
+                self.project,
+                destination,
+                progress=self._append_build_log,
+            )
+            self._append_build_log("")
+            self._append_build_log("Exported ANM2 files:")
+            for path in paths:
+                self._append_build_log(str(path))
+            noun = "file" if len(paths) == 1 else "files"
+            self.status.showMessage(f"Exported {len(paths)} ANM2 {noun}", 10000)
+            self.qt["QMessageBox"].information(
+                self.window,
+                "ANM2 export complete",
+                f"Exported {len(paths)} ANM2 {noun} to:\n{destination}",
+            )
+        except Exception as exc:
+            self._append_build_log(f"ERROR: {exc}")
+            self._show_error("ANM2 export failed", exc)
+        finally:
+            self.qt["QApplication"].restoreOverrideCursor()
+            self.progress_bar.setRange(0, 1)
+            self.progress_bar.setValue(0)
+            self.build_button.setEnabled(True)
+            self.export_anm2_button.setEnabled(True)
+
     def build_rpack(self) -> None:
         self._sync_project_from_ui()
         if self.project_path is None:
@@ -1319,6 +1401,7 @@ class MainWindow:
         self.build_log.clear()
         self.progress_bar.setRange(0, 0)
         self.build_button.setEnabled(False)
+        self.export_anm2_button.setEnabled(False)
         self.qt["QApplication"].setOverrideCursor(self.qt["Qt"].WaitCursor)
         try:
             result = build_project(self.project, progress=self._append_build_log)
@@ -1342,6 +1425,7 @@ class MainWindow:
             self.progress_bar.setRange(0, 1)
             self.progress_bar.setValue(0)
             self.build_button.setEnabled(True)
+            self.export_anm2_button.setEnabled(True)
 
     def _append_build_log(self, message: str) -> None:
         self.build_log.appendPlainText(message)
@@ -1359,6 +1443,8 @@ class MainWindow:
         try:
             self.project_name.setText(self.project.name)
             self.project_notes.setPlainText(self.project.notes)
+            self._reload_target_rig_combo()
+            self._set_combo_data(self.target_rig_combo, self.project.rig.target_rig_ref)
             self.use_imported_bind_pose.setChecked(
                 self.project.rig.use_imported_animation_bind_pose
             )
@@ -1399,6 +1485,21 @@ class MainWindow:
     def _sync_project_from_ui(self) -> None:
         self.project.name = self.project_name.text().strip() or "Untitled Animation Project"
         self.project.notes = self.project_notes.toPlainText()
+        selected_rig_ref = str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
+        self.project.rig.target_rig_ref = selected_rig_ref
+        if selected_rig_ref == BUILTIN_MALE_RIG_REF:
+            self.project.rig.retarget_mode = "humanoid"
+            self.project.rig.target_rig_path = ""
+            self.project.rig.target_rig_name = "Dying Light player_1_tpp / male humanoid"
+        else:
+            self.project.rig.retarget_mode = "exact"
+            selected_path = getattr(self, "_rig_paths_by_ref", {}).get(selected_rig_ref, "")
+            if selected_path:
+                self.project.rig.target_rig_path = selected_path
+                try:
+                    self.project.rig.target_rig_name = ChromeRig.load(selected_path).name
+                except (OSError, ValueError):
+                    pass
         self.project.rig.use_imported_animation_bind_pose = (
             self.use_imported_bind_pose.isChecked()
         )
@@ -1437,6 +1538,8 @@ class MainWindow:
             return
         advanced = self.advanced_mode_toggle.isChecked()
         self.advanced_rig_group.setVisible(advanced)
+        self.custom_rig_actions.setVisible(advanced)
+        self.custom_rig_actions_label.setVisible(advanced)
         self.advanced_export_group.setVisible(advanced)
         self.retarget_advanced_actions.setVisible(advanced)
         self.ignored_bones_panel.setVisible(advanced)
@@ -1449,6 +1552,111 @@ class MainWindow:
         self.custom_script_resource.setVisible(advanced or custom_selected)
         if getattr(self, "custom_script_resource_label", None) is not None:
             self.custom_script_resource_label.setVisible(advanced or custom_selected)
+
+    def _reload_target_rig_combo(self) -> None:
+        if not hasattr(self, "target_rig_combo"):
+            return
+        current = self.target_rig_combo.currentData()
+        self.target_rig_combo.clear()
+        records = self.rig_registry.records()
+        self._rig_paths_by_ref = {row.rig_ref: row.path for row in records}
+        for row in records:
+            suffix = "" if row.builtin else f" [{row.category}]"
+            self.target_rig_combo.addItem(row.display_name + suffix, row.rig_ref)
+        project = getattr(self, "project", None)
+        if (
+            project is not None
+            and project.rig.target_rig_ref not in self._rig_paths_by_ref
+            and project.rig.target_rig_path
+            and Path(project.rig.target_rig_path).is_file()
+        ):
+            try:
+                rig = ChromeRig.load(project.rig.target_rig_path)
+                self.target_rig_combo.addItem(
+                    f"{rig.name} [{rig.category}, project]", project.rig.target_rig_ref
+                )
+                self._rig_paths_by_ref[project.rig.target_rig_ref] = project.rig.target_rig_path
+            except (OSError, ValueError):
+                pass
+        if current:
+            self._set_combo_data(self.target_rig_combo, current)
+
+    def _target_rig_changed(self, *_args) -> None:
+        if self._refreshing:
+            return
+        selected = str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
+        self.project.rig.target_rig_ref = selected
+        self.project.rig.retarget_mode = (
+            "humanoid" if selected == BUILTIN_MALE_RIG_REF else "exact"
+        )
+        selected_path = getattr(self, "_rig_paths_by_ref", {}).get(selected, "")
+        self.project.rig.target_rig_path = selected_path
+        if selected_path:
+            try:
+                self.project.rig.target_rig_name = ChromeRig.load(selected_path).name
+            except (OSError, ValueError):
+                pass
+        self._mark_dirty()
+        self._bind_pose_mode_changed()
+        self._retarget_clip_changed()
+
+    def import_chrome_rig(self) -> None:
+        path, _ = self.qt["QFileDialog"].getOpenFileName(
+            self.window,
+            "Import Chrome Rig",
+            str(self.root),
+            "Chrome Rig (*.crig)",
+        )
+        if not path:
+            return
+        try:
+            record = self.rig_registry.import_rig(path)
+            self._reload_target_rig_combo()
+            self._set_combo_data(self.target_rig_combo, record.rig_ref)
+            self._target_rig_changed()
+            self.status.showMessage(f"Installed Chrome Rig: {record.display_name}", 7000)
+        except Exception as exc:
+            self._show_error("Could not import Chrome Rig", exc)
+
+    def create_chrome_rig(self) -> None:
+        model_path, _ = self.qt["QFileDialog"].getOpenFileName(
+            self.window,
+            "Choose target model FBX",
+            str(self.root),
+            "FBX (*.fbx)",
+        )
+        if not model_path:
+            return
+        suggested = self.root / f"{Path(model_path).stem}.crig"
+        output_path, _ = self.qt["QFileDialog"].getSaveFileName(
+            self.window,
+            "Save shareable Chrome Rig",
+            str(suggested),
+            "Chrome Rig (*.crig)",
+        )
+        if not output_path:
+            return
+        try:
+            rig = build_chrome_rig_from_fbx(model_path)
+            saved = rig.save(output_path)
+            record = self.rig_registry.import_rig(saved)
+            self._reload_target_rig_combo()
+            self._set_combo_data(self.target_rig_combo, record.rig_ref)
+            self._target_rig_changed()
+            warnings = rig.validate().warnings
+            message = (
+                f"Created and installed {record.display_name} ({len(rig.bones)} bones)."
+                + (f"\n\nWarnings:\n- " + "\n- ".join(warnings) if warnings else "")
+            )
+            self.qt["QMessageBox"].information(self.window, "Chrome Rig created", message)
+        except Exception as exc:
+            self._show_error("Could not create Chrome Rig", exc)
+
+    def manage_chrome_rigs(self) -> None:
+        self.rig_registry.root.mkdir(parents=True, exist_ok=True)
+        self.qt["QDesktopServices"].openUrl(
+            self.qt["QUrl"].fromLocalFile(str(self.rig_registry.root.resolve()))
+        )
 
     def _advanced_mode_changed(self, checked: bool) -> None:
         if not self._refreshing:
@@ -1464,13 +1672,20 @@ class MainWindow:
     def _bind_pose_mode_changed(self, *_args) -> None:
         if not hasattr(self, "use_imported_bind_pose"):
             return
+        exact = (
+            str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
+            != BUILTIN_MALE_RIG_REF
+        )
         embedded = self.use_imported_bind_pose.isChecked()
-        self._set_path_row_visible(self.source_rest_path, not embedded)
+        self.use_imported_bind_pose.setVisible(not exact)
+        self._set_path_row_visible(self.source_rest_path, not exact and not embedded)
         if hasattr(self, "trusted_rest_path"):
             self._set_path_row_visible(
                 self.trusted_rest_path,
-                self.advanced_mode_toggle.isChecked() and not embedded,
+                self.advanced_mode_toggle.isChecked() and not exact and not embedded,
             )
+        if hasattr(self, "advanced_rig_group"):
+            self.advanced_rig_group.setEnabled(not exact)
         if not self._refreshing:
             self._mark_dirty()
 
