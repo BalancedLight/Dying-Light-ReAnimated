@@ -1,0 +1,20 @@
+{
+  "animation_fbxs": [
+    "../inputs/Standing Greeting.fbx"
+  ],
+  "source_rest_fbx": "../inputs/T-Pose.fbx",
+  "trusted_source_rest_json": "../reference/same_model_tpose_20260619.json",
+  "canonical_smd": "../reference/player_1_tpp.smd",
+  "target_template_anm2": "../reference/infected_turn_90r.template.anm2",
+  "stock_writer_control_anm2": "../reference/stock_writer_control.anm2",
+  "mapping_profile": "mixamo_humanoid.dlrmap.json",
+  "animation_script_resource": "anims_man_all_DLC60",
+  "out_dir": "../build/single_shot",
+  "root_policies": [
+    "inplace",
+    "bip01",
+    "motion"
+  ],
+  "ik_authoring_preset": "runtime",
+  "include_controls": false
+}
