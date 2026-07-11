@@ -37,6 +37,8 @@ def run_checks(*, gui: bool, pipeline: bool) -> dict[str, Any]:
         "reference/same_model_tpose_20260619.json",
         "reference/male_npc_infected.crig",
         "docs/GUI_GUIDE.md",
+        "docs/ANM2_TO_FBX.md",
+        "dlanm2_gui/blender_scripts/export_anm2_fbx.py",
     ):
         path = root / relative
         checks.append({"name": f"asset:{relative}", "ok": path.is_file(), "path": str(path)})

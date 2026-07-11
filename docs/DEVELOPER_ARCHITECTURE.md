@@ -28,6 +28,15 @@ dlanm2_gui/fbx_pipeline.py
 
 dlanm2_gui/gui.py
   Thin PySide6 interface over the models/build service
+
+dlanm2_gui/anm2_fbx.py
+  Full ANM2 decode, native scene reconstruction, and bind-relative retarget
+
+dlanm2_gui/bone_maps.py
+  Versioned `.dlrbmap.json` profiles and conservative automatic mapping
+
+dlanm2_gui/blender_fbx.py
+  Blender discovery, cancellable background execution, and atomic output
 ```
 
 The GUI must not duplicate codec or build rules. CLI and GUI builds should call the same `build_project` or `build_fbx_rpack` functions.
@@ -50,6 +59,8 @@ Project schema 2 introduced `rig.use_imported_animation_bind_pose`. The builder
 resolves the source rest per clip: the animation FBX in embedded mode, or the
 explicit rest FBX otherwise. Trusted-rest validation is intentionally skipped in
 embedded mode.
+
+Project schema 5 adds the optional `anm2_to_fbx` reverse workspace. Blender paths remain machine-local `QSettings`; ANM2 inputs, output paths, rig references, target FBX, and mapping profiles are portable project data.
 
 When adding a project field:
 

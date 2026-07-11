@@ -6,7 +6,7 @@
   />
 </p>
 
-DL ReAnimated is a project-based **FBX → ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, humanoid retarget mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+DL ReAnimated is a project-based **FBX ↔ ANM2 → RPack** animation tool for Dying Light. It provides a desktop GUI, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
 ## Start
 
@@ -41,6 +41,8 @@ Advanced target files, diagnostic controls, intermediate reports, and developer 
 
 For a custom object, animal, or model that already exists in a mod, Advanced mode can create a shareable `.crig` from one binary model FBX. Animations using that exact skeleton can then be exported without humanoid roles or additional target files.
 
+The dedicated **ANM2 → FBX** workspace converts extracted animations back into editable skeleton FBXs. Native export supports any matching `.crig`, including doors and props; cross-rig mode provides conservative automatic mapping plus manual review.
+
 ## Output
 
 The editor-loadable output is normally:
@@ -71,6 +73,7 @@ common_anims_sp_pc.rpack     example output
 - [Root motion and IK](docs/ROOT_MOTION_AND_IK.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [ANM2 format](docs/ANM2_FORMAT.md)
+- [ANM2 to FBX](docs/ANM2_TO_FBX.md)
 - [Project compatibility](docs/PROJECT_FORMAT.md)
 - [Building the Windows EXE](docs/BUILDING_WINDOWS_EXE.md)
 
@@ -78,7 +81,7 @@ Contributor material is kept under `docs/project/`; generated diagnostics and sc
 
 ## Current status
 
-The full-body Mixamo retarget, model-only exact-rig object workflow, deterministic `.crig` packages, embedded-bind workflow, Cayley rotation encoding, packed ANM2 writer, multi-page long-clip output, animation-script packaging, and three humanoid root-motion modes are implemented. Finger retargeting and semantic quadruped retargeting remain active/future validation areas.
+The full-body Mixamo retarget, exact-rig object workflow, deterministic `.crig` packages, full ANM2 decoding, Blender-assisted ANM2-to-FBX export, reviewed generic cross-rig mapping, Cayley rotation encoding, packed multi-page ANM2 writer, and animation-script packaging are implemented. Finger retargeting and semantic quadruped retargeting remain active/future validation areas.
 
 ## Disclaimer
 Dying Light ReAnimated was developed with assistance from AI tools.

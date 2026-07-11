@@ -22,7 +22,7 @@ from .script_targets import DEFAULT_SCRIPT_TARGET_ID
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
-CURRENT_PROJECT_SCHEMA_VERSION = 4
+CURRENT_PROJECT_SCHEMA_VERSION = 5
 MINIMUM_READER_VERSION = 1
 
 
@@ -99,6 +99,37 @@ class ExportSettings:
 
 
 @dataclass(slots=True)
+class Anm2ToFbxItem:
+    conversion_id: str
+    source_anm2: str
+    output_name: str
+    source_rig_ref: str = "builtin:male_npc_infected"
+    source_rig_path: str = ""
+    enabled: bool = True
+    fps: int = 30
+    start_frame: int | None = None
+    end_frame: int | None = None
+    extensions: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def create(cls, source_anm2: str, *, output_name: str | None = None) -> "Anm2ToFbxItem":
+        source = Path(source_anm2)
+        return cls(str(uuid.uuid4()), str(source), output_name or source.stem)
+
+
+@dataclass(slots=True)
+class Anm2ToFbxSettings:
+    mode: str = "native"  # native | retarget
+    target_fbx: str = ""
+    output_directory: str = "build/fbx"
+    translation_scale: str = "auto"
+    selected_mapping_profile_id: str = ""
+    items: list[Anm2ToFbxItem] = field(default_factory=list)
+    bone_mapping_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    extensions: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
 class DlReanimatedProject:
     project_id: str
     name: str
@@ -109,6 +140,7 @@ class DlReanimatedProject:
     animations: list[ProjectAnimation] = field(default_factory=list)
     mapping_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
     user_script_targets: list[dict[str, Any]] = field(default_factory=list)
+    anm2_to_fbx: Anm2ToFbxSettings = field(default_factory=Anm2ToFbxSettings)
     notes: str = ""
     extensions: dict[str, Any] = field(default_factory=dict)
     schema_version: int = CURRENT_PROJECT_SCHEMA_VERSION
@@ -181,6 +213,19 @@ class DlReanimatedProject:
                 )
             if row.enabled:
                 seen_resources.add(key)
+        if self.anm2_to_fbx.mode not in {"native", "retarget"}:
+            errors.append("ANM2 to FBX mode must be 'native' or 'retarget'.")
+        if (
+            self.anm2_to_fbx.mode == "retarget"
+            and any(row.enabled for row in self.anm2_to_fbx.items)
+            and not self.anm2_to_fbx.target_fbx
+        ):
+            errors.append("Cross-rig ANM2 to FBX export requires a target skeleton FBX.")
+        for row in self.anm2_to_fbx.items:
+            if row.enabled and not row.source_anm2:
+                errors.append("An ANM2 to FBX item has no source ANM2 file.")
+            if not 1 <= row.fps <= 240:
+                errors.append(f"ANM2 to FBX item {row.output_name!r} has an invalid FPS.")
         return errors
 
     def to_dict(self, *, project_path: str | Path | None = None) -> dict[str, Any]:
@@ -204,6 +249,7 @@ class DlReanimatedProject:
             "animations",
             "mapping_profiles",
             "user_script_targets",
+            "anm2_to_fbx",
             "notes",
             "extensions",
             "schema_version",
@@ -217,9 +263,14 @@ class DlReanimatedProject:
             extensions.setdefault("unknown_fields", {}).update(unknown)
         rig_payload = dict(migrated.get("rig", {}))
         export_payload = dict(migrated.get("export", {}))
+        reverse_payload = dict(migrated.get("anm2_to_fbx", {}))
         animations = [
             ProjectAnimation(**_filtered_dataclass_payload(ProjectAnimation, dict(row)))
             for row in migrated.get("animations", [])
+        ]
+        reverse_items = [
+            Anm2ToFbxItem(**_filtered_dataclass_payload(Anm2ToFbxItem, dict(row)))
+            for row in reverse_payload.pop("items", [])
         ]
         return cls(
             project_id=str(migrated.get("project_id") or uuid.uuid4()),
@@ -234,6 +285,10 @@ class DlReanimatedProject:
                 for key, value in dict(migrated.get("mapping_profiles", {})).items()
             },
             user_script_targets=[dict(row) for row in migrated.get("user_script_targets", [])],
+            anm2_to_fbx=Anm2ToFbxSettings(
+                **_filtered_dataclass_payload(Anm2ToFbxSettings, reverse_payload),
+                items=reverse_items,
+            ),
             notes=str(migrated.get("notes", "")),
             extensions=extensions,
             schema_version=int(migrated.get("schema_version", CURRENT_PROJECT_SCHEMA_VERSION)),
@@ -371,11 +426,21 @@ def _migrate_v3_to_v4(payload: dict[str, Any]) -> dict[str, Any]:
     return migrated
 
 
+def _migrate_v4_to_v5(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add the optional reverse-conversion workspace without changing forward builds."""
+
+    migrated = dict(payload)
+    migrated.setdefault("anm2_to_fbx", {})
+    migrated["schema_version"] = 5
+    return migrated
+
+
 _MIGRATIONS = {
     0: _migrate_v0_to_v1,
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
 }
 
 
@@ -406,6 +471,12 @@ def _relativize_project_paths(payload: dict[str, Any], base: Path) -> None:
         export[key] = _portable_path(export.get(key, ""), base)
     for row in payload.get("animations", []):
         row["source_fbx"] = _portable_path(row.get("source_fbx", ""), base)
+    reverse = payload.get("anm2_to_fbx", {})
+    for key in ("target_fbx", "output_directory"):
+        reverse[key] = _portable_path(reverse.get(key, ""), base)
+    for row in reverse.get("items", []):
+        row["source_anm2"] = _portable_path(row.get("source_anm2", ""), base)
+        row["source_rig_path"] = _portable_path(row.get("source_rig_path", ""), base)
 
 
 def _portable_path(value: str, base: Path) -> str:
@@ -436,6 +507,11 @@ def _resolve_project_paths(project: DlReanimatedProject, base: Path) -> None:
     project.export.existing_rpack = resolve(project.export.existing_rpack)
     for row in project.animations:
         row.source_fbx = resolve(row.source_fbx)
+    project.anm2_to_fbx.target_fbx = resolve(project.anm2_to_fbx.target_fbx)
+    project.anm2_to_fbx.output_directory = resolve(project.anm2_to_fbx.output_directory)
+    for row in project.anm2_to_fbx.items:
+        row.source_anm2 = resolve(row.source_anm2)
+        row.source_rig_path = resolve(row.source_rig_path)
 
 
 def _atomic_write_text(path: Path, text: str) -> None:
@@ -466,6 +542,8 @@ def _safe_resource_name(value: str) -> str:
 
 __all__ = [
     "CURRENT_PROJECT_SCHEMA_VERSION",
+    "Anm2ToFbxItem",
+    "Anm2ToFbxSettings",
     "DlReanimatedProject",
     "ExportSettings",
     "MINIMUM_READER_VERSION",

@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from dlanm2_gui.workspace_project import (
+    Anm2ToFbxItem,
     CURRENT_PROJECT_SCHEMA_VERSION,
     DlReanimatedProject,
     ProjectAnimation,
@@ -61,7 +62,7 @@ def test_v3_project_adds_empty_animation_stack_selection() -> None:
             ],
         }
     )
-    assert project.schema_version == 4
+    assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
     assert project.animations[0].source_animation_stack == ""
 
 
@@ -149,3 +150,41 @@ def test_schema_v4_describes_animation_stack_selection() -> None:
     assert schema["properties"]["schema_version"]["const"] == 4
     animation = schema["$defs"]["animation"]
     assert "source_animation_stack" in animation["required"]
+
+
+def test_v4_project_adds_reverse_workspace() -> None:
+    project = DlReanimatedProject.from_dict({
+        "format": "dl-reanimated-project", "schema_version": 4,
+        "minimum_reader_version": 1, "name": "Forward only",
+    })
+    assert project.schema_version == 5
+    assert project.anm2_to_fbx.mode == "native"
+    assert project.anm2_to_fbx.items == []
+
+
+def test_reverse_workspace_paths_are_portable(tmp_path: Path) -> None:
+    source = tmp_path / "inputs" / "door.anm2"
+    rig = tmp_path / "rigs" / "door.crig"
+    target = tmp_path / "targets" / "renamed-door.fbx"
+    for path in (source, rig, target):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    project = DlReanimatedProject.new("Reverse")
+    project.anm2_to_fbx.target_fbx = str(target)
+    project.anm2_to_fbx.output_directory = str(tmp_path / "build" / "fbx")
+    item = Anm2ToFbxItem.create(str(source))
+    item.source_rig_path = str(rig)
+    project.anm2_to_fbx.items.append(item)
+    saved = project.save(tmp_path / "reverse.dlraproj")
+    raw = json.loads(saved.read_text(encoding="utf-8"))["anm2_to_fbx"]
+    assert not Path(raw["target_fbx"]).is_absolute()
+    assert not Path(raw["items"][0]["source_anm2"]).is_absolute()
+    loaded = DlReanimatedProject.load(saved)
+    assert Path(loaded.anm2_to_fbx.items[0].source_rig_path) == rig.resolve()
+
+
+def test_schema_v5_describes_reverse_workspace() -> None:
+    root = Path(__file__).resolve().parents[1]
+    schema = json.loads((root / "docs/schemas/dlraproj.schema.v5.json").read_text())
+    assert schema["properties"]["schema_version"]["const"] == 5
+    assert schema["properties"]["anm2_to_fbx"]["$ref"] == "#/$defs/reverse"

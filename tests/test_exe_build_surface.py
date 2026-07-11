@@ -42,6 +42,7 @@ def test_windows_build_surface_exists_and_mentions_frozen_self_test() -> None:
         "docs/BUILDING_WINDOWS_EXE.md",
         "dlanm2_gui/environment_check.py",
         "dlanm2_gui/runtime_paths.py",
+        "dlanm2_gui/blender_scripts/export_anm2_fbx.py",
     ):
         assert (root() / relative).is_file(), relative
     script = (root() / "tools/build_windows_exe.py").read_text(encoding="utf-8")

@@ -77,3 +77,7 @@ dist
 ## Release caution
 
 The repository includes game-derived reference files and an example RPack. Review `docs/project/THIRD_PARTY_ASSETS.md` before public redistribution.
+
+## Optional Blender integration
+
+Blender is not embedded in the portable application or ZIP. ANM2 → FBX users install Blender separately and select `blender.exe`; all FBX → ANM2 and RPack features remain self-contained. The PyInstaller build includes only DL ReAnimated's small background export helper.

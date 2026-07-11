@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import sys
 from typing import Any
 
@@ -18,6 +19,10 @@ from . import __version__
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_fbx
 from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
+from .anm2 import Anm2Header, HEADER_LENGTH
+from .anm2_fbx import chrome_rig_from_fbx_skeleton
+from .blender_fbx import discover_blender, export_anm2_to_fbx
+from .bone_maps import GenericBoneMap, BoneMapPair, auto_map_skeletons
 from .oracle.binary_fbx_mixamo import _FbxDocument
 from .project_builder import build_project, export_project_anm2_files
 from .retarget_profiles import (
@@ -35,6 +40,7 @@ from .script_targets import (
 from .runtime_paths import resource_root, writable_application_root
 from .workspace_project import (
     DlReanimatedProject,
+    Anm2ToFbxItem,
     PROJECT_EXTENSION,
     ProjectAnimation,
 )
@@ -161,6 +167,7 @@ class MainWindow:
         self._build_animations_tab()
         self._build_retarget_tab()
         self._build_export_tab()
+        self._build_anm2_to_fbx_tab()
         self._build_help_tab()
         self._refresh_all()
 
@@ -181,6 +188,7 @@ class MainWindow:
             self.resource_root / "reference" / "same_model_tpose_20260619.json"
         )
         project.export.output_directory = str(self.root / "build")
+        project.anm2_to_fbx.output_directory = str(self.root / "build" / "fbx")
         project.export.default_script_target = DEFAULT_SCRIPT_TARGET_ID
         return project
 
@@ -688,6 +696,142 @@ class MainWindow:
         self.tabs.addTab(page, "Export")
 
 
+    def _build_anm2_to_fbx_tab(self) -> None:
+        qt = self.qt
+        page = qt["QWidget"]()
+        layout = qt["QVBoxLayout"](page)
+        intro = qt["QLabel"](
+            "Convert extracted ANM2 files into editable skeleton-and-animation FBXs. "
+            "Choose the matching Chrome Rig because ANM2 stores hashes, not a hierarchy or bind pose."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+
+        toolbar = qt["QHBoxLayout"]()
+        add_button = qt["QPushButton"]("Add ANM2 files…")
+        add_button.setToolTip("Add one or more extracted .anm2 animation files to this project.")
+        add_button.clicked.connect(self._reverse_add_files)
+        remove_button = qt["QPushButton"]("Remove selected")
+        remove_button.clicked.connect(self._reverse_remove_selected)
+        create_rig = qt["QPushButton"]("Create .crig from model FBX…")
+        create_rig.setToolTip(
+            "For doors, props, animals, or custom models, create the source rig definition from "
+            "the matching binary model FBX."
+        )
+        create_rig.clicked.connect(self.create_chrome_rig)
+        toolbar.addWidget(add_button)
+        toolbar.addWidget(remove_button)
+        toolbar.addWidget(create_rig)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+
+        self.reverse_table = qt["QTableWidget"](0, 7)
+        self.reverse_table.setHorizontalHeaderLabels(
+            ["Use", "ANM2", "Output action", "Frames", "FPS", "Start", "End"]
+        )
+        self.reverse_table.setSelectionBehavior(qt["QAbstractItemView"].SelectRows)
+        self.reverse_table.setAlternatingRowColors(True)
+        header = self.reverse_table.horizontalHeader()
+        header.setSectionResizeMode(1, qt["QHeaderView"].Stretch)
+        header.setSectionResizeMode(2, qt["QHeaderView"].Stretch)
+        for column in (0, 3, 4, 5, 6):
+            header.setSectionResizeMode(column, qt["QHeaderView"].ResizeToContents)
+        layout.addWidget(self.reverse_table, 2)
+
+        settings = qt["QGroupBox"]("Rig and output settings")
+        form = qt["QFormLayout"](settings)
+        self.reverse_source_rig = self._combo_box()
+        self.reverse_source_rig.setToolTip(
+            "Rig that resolves ANM2 descriptor hashes to bone names, hierarchy, and bind transforms."
+        )
+        self.reverse_source_rig.currentIndexChanged.connect(self._reverse_source_rig_changed)
+        form.addRow("Source Chrome Rig", self.reverse_source_rig)
+        self.reverse_mode = self._combo_box()
+        self.reverse_mode.addItem("Native rig (recommended)", "native")
+        self.reverse_mode.addItem("Retarget onto another skeleton", "retarget")
+        self.reverse_mode.setToolTip(
+            "Native export preserves the original skeleton. Retarget mode transfers bind-relative "
+            "motion onto the target FBX after you review the bone map."
+        )
+        self.reverse_mode.currentIndexChanged.connect(self._reverse_mode_changed)
+        form.addRow("Conversion mode", self.reverse_mode)
+        self.reverse_target_fbx = self._path_row(
+            form, "Target skeleton FBX", "FBX (*.fbx)", directory=False,
+            tooltip="Binary FBX whose armature becomes the output skeleton in retarget mode.",
+        )
+        self.reverse_translation_scale = self._combo_box()
+        self.reverse_translation_scale.setEditable(True)
+        self.reverse_translation_scale.addItem("Auto from mapped bone lengths", "auto")
+        self.reverse_translation_scale.addItem("No scaling (1.0)", "1.0")
+        self.reverse_translation_scale.setToolTip(
+            "Scales only animated translation deltas. Target bind offsets and proportions remain unchanged."
+        )
+        self.reverse_translation_scale.currentIndexChanged.connect(self._mark_dirty)
+        form.addRow("Translation motion scale", self.reverse_translation_scale)
+        self.reverse_blender_path = self._path_row(
+            form, "Blender executable", "Blender (blender.exe);;Executable (*.exe);;All files (*)",
+            directory=False,
+            tooltip="Blender is used only as the standards-compatible FBX writer and is not bundled in the EXE.",
+        )
+        self.reverse_blender_path.textChanged.connect(self._reverse_blender_path_changed)
+        self.reverse_blender_status = qt["QLabel"]()
+        form.addRow("Blender status", self.reverse_blender_status)
+        self.reverse_output_directory = self._path_row(
+            form, "FBX output folder", "", directory=True,
+            tooltip="Each enabled ANM2 is exported as one skeleton-and-animation FBX.",
+        )
+        layout.addWidget(settings)
+
+        mapping_group = qt["QGroupBox"]("Cross-rig bone mapping")
+        mapping_layout = qt["QVBoxLayout"](mapping_group)
+        mapping_actions = qt["QHBoxLayout"]()
+        auto_button = qt["QPushButton"]("Automatic map")
+        auto_button.setToolTip(
+            "Suggest unique matches using descriptors, names, aliases, hierarchy, and structure. "
+            "Review every low-confidence or unmapped row before export."
+        )
+        auto_button.clicked.connect(self._reverse_auto_map)
+        load_button = qt["QPushButton"]("Load .dlrbmap.json…")
+        load_button.clicked.connect(self._reverse_load_map)
+        save_button = qt["QPushButton"]("Save mapping…")
+        save_button.clicked.connect(self._reverse_save_map)
+        mapping_actions.addWidget(auto_button)
+        mapping_actions.addWidget(load_button)
+        mapping_actions.addWidget(save_button)
+        mapping_actions.addStretch(1)
+        mapping_layout.addLayout(mapping_actions)
+        self.reverse_mapping_table = qt["QTableWidget"](0, 5)
+        self.reverse_mapping_table.setHorizontalHeaderLabels(
+            ["Source bone", "Descriptor", "Target bone", "Confidence", "Method"]
+        )
+        map_header = self.reverse_mapping_table.horizontalHeader()
+        map_header.setSectionResizeMode(0, qt["QHeaderView"].Stretch)
+        map_header.setSectionResizeMode(2, qt["QHeaderView"].Stretch)
+        for column in (1, 3, 4):
+            map_header.setSectionResizeMode(column, qt["QHeaderView"].ResizeToContents)
+        mapping_layout.addWidget(self.reverse_mapping_table, 1)
+        self.reverse_mapping_status = qt["QLabel"]("Native mode does not require a bone map.")
+        self.reverse_mapping_status.setWordWrap(True)
+        mapping_layout.addWidget(self.reverse_mapping_status)
+        layout.addWidget(mapping_group, 2)
+        self.reverse_mapping_group = mapping_group
+
+        export_row = qt["QHBoxLayout"]()
+        self.reverse_export_button = qt["QPushButton"]("Export FBX batch")
+        self.reverse_export_button.clicked.connect(self._reverse_export)
+        self.reverse_cancel_button = qt["QPushButton"]("Cancel")
+        self.reverse_cancel_button.setEnabled(False)
+        self.reverse_cancel_button.clicked.connect(self._reverse_cancel)
+        self.reverse_log = qt["QPlainTextEdit"]()
+        self.reverse_log.setReadOnly(True)
+        self.reverse_log.setMaximumHeight(110)
+        export_row.addWidget(self.reverse_export_button)
+        export_row.addWidget(self.reverse_cancel_button)
+        layout.addLayout(export_row)
+        layout.addWidget(self.reverse_log)
+        self._reverse_cancel_requested = False
+        self.tabs.addTab(page, "ANM2 → FBX")
+
     def _build_help_tab(self) -> None:
         qt = self.qt
         page = qt["QWidget"]()
@@ -707,6 +851,7 @@ class MainWindow:
             ("Root motion and IK", "ROOT_MOTION_AND_IK.md", False),
             ("Troubleshooting", "TROUBLESHOOTING.md", False),
             ("ANM2 format", "ANM2_FORMAT.md", True),
+            ("ANM2 to FBX", "ANM2_TO_FBX.md", False),
             ("Project file format and compatibility", "PROJECT_FORMAT.md", True),
             ("Building the Windows EXE", "BUILDING_WINDOWS_EXE.md", True),
             ("Developer architecture", "DEVELOPER_ARCHITECTURE.md", True),
@@ -1498,6 +1643,346 @@ class MainWindow:
         self.existing_rpack.setEnabled(self.append_pack_radio.isChecked())
         self._mark_dirty()
 
+    # --------------------------------------------------------- ANM2 -> FBX
+    def _reverse_reload_rigs(self) -> None:
+        current = self.reverse_source_rig.currentData() if hasattr(self, "reverse_source_rig") else None
+        if not hasattr(self, "reverse_source_rig"):
+            return
+        self.reverse_source_rig.clear()
+        records = self.rig_registry.records()
+        self._rig_paths_by_ref = {row.rig_ref: row.path for row in records}
+        for row in records:
+            suffix = "" if row.builtin else f" [{row.category}]"
+            self.reverse_source_rig.addItem(row.display_name + suffix, row.rig_ref)
+        selected = current or (
+            self.project.anm2_to_fbx.items[0].source_rig_ref
+            if self.project.anm2_to_fbx.items else BUILTIN_MALE_RIG_REF
+        )
+        self._set_combo_data(self.reverse_source_rig, selected)
+
+    def _reverse_load_rig(self, rig_ref: str, rig_path: str = "") -> ChromeRig:
+        if rig_ref == BUILTIN_MALE_RIG_REF:
+            return ChromeRig.load(self.resource_root / "reference" / "male_npc_infected.crig")
+        path = rig_path or getattr(self, "_rig_paths_by_ref", {}).get(rig_ref, "")
+        if not path:
+            raise FileNotFoundError(f"Installed Chrome Rig not found: {rig_ref}")
+        return ChromeRig.load(path)
+
+    def _reverse_detect_rig(self, path: str | Path) -> tuple[str, str]:
+        data = Path(path).read_bytes()
+        header = Anm2Header.parse(data)
+        descriptors = set(struct.unpack_from(f"<{header.track_count}I", data, HEADER_LENGTH))
+        matches: list[tuple[int, str, str]] = []
+        for row in self.rig_registry.records():
+            try:
+                rig = self._reverse_load_rig(row.rig_ref, row.path)
+            except (OSError, ValueError):
+                continue
+            overlap = len(descriptors & set(rig.descriptors))
+            if overlap:
+                matches.append((overlap, row.rig_ref, row.path))
+        if not matches:
+            return BUILTIN_MALE_RIG_REF, ""
+        matches.sort(reverse=True)
+        return matches[0][1], matches[0][2]
+
+    def _reverse_add_files(self) -> None:
+        paths, _ = self.qt["QFileDialog"].getOpenFileNames(
+            self.window, "Add extracted ANM2 files", str(self.root), "ANM2 animation (*.anm2)"
+        )
+        if not paths:
+            return
+        for path in paths:
+            try:
+                header = Anm2Header.parse(Path(path).read_bytes())
+                rig_ref, rig_path = self._reverse_detect_rig(path)
+                item = Anm2ToFbxItem.create(path)
+                item.source_rig_ref = rig_ref
+                item.source_rig_path = rig_path
+                item.end_frame = header.frame_count - 1
+                self.project.anm2_to_fbx.items.append(item)
+            except Exception as exc:
+                self._show_error(f"Could not add {Path(path).name}", exc)
+        if self.project.anm2_to_fbx.items:
+            self._set_combo_data(
+                self.reverse_source_rig, self.project.anm2_to_fbx.items[0].source_rig_ref
+            )
+        self._reverse_refresh_table()
+        self._mark_dirty()
+
+    def _reverse_remove_selected(self) -> None:
+        selected = sorted({index.row() for index in self.reverse_table.selectedIndexes()}, reverse=True)
+        for row in selected:
+            if 0 <= row < len(self.project.anm2_to_fbx.items):
+                self.project.anm2_to_fbx.items.pop(row)
+        self._reverse_refresh_table()
+        self._mark_dirty()
+
+    def _reverse_refresh_table(self) -> None:
+        if not hasattr(self, "reverse_table"):
+            return
+        qt = self.qt
+        self.reverse_table.setRowCount(len(self.project.anm2_to_fbx.items))
+        for row_index, item in enumerate(self.project.anm2_to_fbx.items):
+            enabled = qt["QCheckBox"]()
+            enabled.setChecked(item.enabled)
+            enabled.toggled.connect(self._mark_dirty)
+            self.reverse_table.setCellWidget(row_index, 0, enabled)
+            source_item = qt["QTableWidgetItem"](item.source_anm2)
+            source_item.setFlags(source_item.flags() & ~qt["Qt"].ItemIsEditable)
+            self.reverse_table.setItem(row_index, 1, source_item)
+            output_item = qt["QTableWidgetItem"](item.output_name)
+            self.reverse_table.setItem(row_index, 2, output_item)
+            frames = "?"
+            try:
+                header = Anm2Header.parse(Path(item.source_anm2).read_bytes())
+                frames = str(header.frame_count)
+            except (OSError, ValueError):
+                pass
+            frame_item = qt["QTableWidgetItem"](frames)
+            frame_item.setFlags(frame_item.flags() & ~qt["Qt"].ItemIsEditable)
+            self.reverse_table.setItem(row_index, 3, frame_item)
+            fps = qt["QSpinBox"](); fps.setRange(1, 240); fps.setValue(item.fps)
+            start = qt["QSpinBox"](); start.setRange(-1, 65534); start.setSpecialValueText("First")
+            end = qt["QSpinBox"](); end.setRange(-1, 65534); end.setSpecialValueText("Last")
+            start.setValue(-1 if item.start_frame is None else item.start_frame)
+            end.setValue(-1 if item.end_frame is None else item.end_frame)
+            for widget in (fps, start, end):
+                widget.valueChanged.connect(self._mark_dirty)
+            self.reverse_table.setCellWidget(row_index, 4, fps)
+            self.reverse_table.setCellWidget(row_index, 5, start)
+            self.reverse_table.setCellWidget(row_index, 6, end)
+            self.reverse_table.setRowHeight(row_index, 38)
+
+    def _sync_reverse_from_ui(self) -> None:
+        if not hasattr(self, "reverse_table"):
+            return
+        settings = self.project.anm2_to_fbx
+        settings.mode = str(self.reverse_mode.currentData() or "native")
+        settings.target_fbx = self.reverse_target_fbx.text().strip()
+        settings.output_directory = self.reverse_output_directory.text().strip()
+        value = self.reverse_translation_scale.currentData()
+        settings.translation_scale = str(value if value is not None else self.reverse_translation_scale.currentText()).strip()
+        rig_ref = str(self.reverse_source_rig.currentData() or BUILTIN_MALE_RIG_REF)
+        rig_path = getattr(self, "_rig_paths_by_ref", {}).get(rig_ref, "")
+        for row_index, item in enumerate(settings.items):
+            item.enabled = self.reverse_table.cellWidget(row_index, 0).isChecked()
+            item.output_name = self.reverse_table.item(row_index, 2).text().strip() or Path(item.source_anm2).stem
+            item.fps = self.reverse_table.cellWidget(row_index, 4).value()
+            start = self.reverse_table.cellWidget(row_index, 5).value()
+            end = self.reverse_table.cellWidget(row_index, 6).value()
+            item.start_frame = None if start < 0 else start
+            item.end_frame = None if end < 0 else end
+            item.source_rig_ref = rig_ref
+            item.source_rig_path = rig_path
+        self.settings.setValue("blender_executable", self.reverse_blender_path.text().strip())
+
+    def _reverse_source_rig_changed(self, *_args) -> None:
+        if self._refreshing:
+            return
+        self._mark_dirty()
+        if self.reverse_mode.currentData() == "retarget" and self.reverse_target_fbx.text().strip():
+            self._reverse_auto_map()
+
+    def _reverse_mode_changed(self, *_args) -> None:
+        retarget = str(self.reverse_mode.currentData()) == "retarget"
+        self._set_path_row_visible(self.reverse_target_fbx, retarget)
+        self.reverse_translation_scale.setVisible(retarget)
+        self.reverse_mapping_group.setVisible(retarget)
+        if not self._refreshing:
+            self._mark_dirty()
+
+    def _reverse_blender_path_changed(self, value: str) -> None:
+        if not hasattr(self, "reverse_blender_status"):
+            return
+        found = discover_blender(value.strip())
+        self.reverse_blender_status.setText(
+            f"Ready: {found}" if found else "Not found — choose blender.exe"
+        )
+
+    def _reverse_profile_from_table(self) -> GenericBoneMap:
+        source = self._reverse_load_rig(str(self.reverse_source_rig.currentData()))
+        target = chrome_rig_from_fbx_skeleton(self.reverse_target_fbx.text().strip())
+        profile = GenericBoneMap.create(
+            f"{source.name} to {target.name}", source.skeleton_hash, target.skeleton_hash,
+            source_rig_ref=source.rig_id,
+        )
+        by_name = {bone.name: bone for bone in source.bones}
+        for row in range(self.reverse_mapping_table.rowCount()):
+            source_name = self.reverse_mapping_table.item(row, 0).text()
+            combo = self.reverse_mapping_table.cellWidget(row, 2)
+            target_name = str(combo.currentData() or "")
+            if not target_name:
+                continue
+            bone = by_name[source_name]
+            confidence_item = self.reverse_mapping_table.item(row, 3)
+            method_item = self.reverse_mapping_table.item(row, 4)
+            profile.pairs.append(BoneMapPair(
+                bone.descriptor, bone.name, target_name,
+                float(confidence_item.data(self.qt["Qt"].UserRole) or 1.0),
+                str(method_item.text() or "manual"),
+            ))
+        errors = profile.validate()
+        if errors:
+            raise ValueError("Invalid reviewed mapping:\n- " + "\n- ".join(errors))
+        return profile
+
+    def _reverse_show_profile(self, profile: GenericBoneMap) -> None:
+        source = self._reverse_load_rig(str(self.reverse_source_rig.currentData()))
+        target = chrome_rig_from_fbx_skeleton(self.reverse_target_fbx.text().strip())
+        pair_by_descriptor = {row.source_descriptor: row for row in profile.pairs}
+        self.reverse_mapping_table.setRowCount(len(source.bones))
+        for row_index, bone in enumerate(source.bones):
+            pair = pair_by_descriptor.get(bone.descriptor)
+            self.reverse_mapping_table.setItem(row_index, 0, self.qt["QTableWidgetItem"](bone.name))
+            self.reverse_mapping_table.setItem(row_index, 1, self.qt["QTableWidgetItem"](f"0x{bone.descriptor:08X}"))
+            combo = self._combo_box(); combo.addItem("(unmapped)", "")
+            for target_bone in target.bones:
+                combo.addItem(target_bone.name, target_bone.name)
+            if pair:
+                self._set_combo_data(combo, pair.target_bone)
+            combo.currentIndexChanged.connect(
+                lambda _index, row=row_index: self._reverse_mapping_changed(row)
+            )
+            self.reverse_mapping_table.setCellWidget(row_index, 2, combo)
+            confidence = self.qt["QTableWidgetItem"](f"{pair.confidence:.0%}" if pair else "—")
+            confidence.setData(self.qt["Qt"].UserRole, pair.confidence if pair else 1.0)
+            self.reverse_mapping_table.setItem(row_index, 3, confidence)
+            self.reverse_mapping_table.setItem(row_index, 4, self.qt["QTableWidgetItem"](pair.method if pair else "manual"))
+        self.reverse_mapping_status.setText(
+            f"Mapped {len(profile.pairs)} of {len(source.bones)} source bones. Unmapped target bones remain at bind pose."
+        )
+
+    def _reverse_mapping_changed(self, row: int) -> None:
+        if self._refreshing:
+            return
+        confidence = self.reverse_mapping_table.item(row, 3)
+        method = self.reverse_mapping_table.item(row, 4)
+        if confidence is not None:
+            confidence.setText("100%")
+            confidence.setData(self.qt["Qt"].UserRole, 1.0)
+        if method is not None:
+            method.setText("manual")
+        self._mark_dirty()
+
+    def _reverse_restore_profile(self) -> None:
+        settings = self.project.anm2_to_fbx
+        if settings.mode != "retarget" or not settings.target_fbx:
+            return
+        payload = settings.bone_mapping_profiles.get(settings.selected_mapping_profile_id)
+        if not payload:
+            return
+        try:
+            self._reverse_show_profile(GenericBoneMap.from_dict(payload))
+        except (OSError, ValueError):
+            self.reverse_mapping_status.setText(
+                "Saved map does not match the current rig/target; run Automatic map again."
+            )
+
+    def _reverse_auto_map(self) -> None:
+        try:
+            source = self._reverse_load_rig(str(self.reverse_source_rig.currentData()))
+            target = chrome_rig_from_fbx_skeleton(self.reverse_target_fbx.text().strip())
+            parents = {
+                bone.name: target.bones[bone.parent_index].name if bone.parent_index >= 0 else None
+                for bone in target.bones
+            }
+            profile = auto_map_skeletons(
+                source, [bone.name for bone in target.bones], parents,
+                target_skeleton_hash=target.skeleton_hash,
+            )
+            self.project.anm2_to_fbx.bone_mapping_profiles[profile.profile_id] = profile.to_dict()
+            self.project.anm2_to_fbx.selected_mapping_profile_id = profile.profile_id
+            self._reverse_show_profile(profile)
+            self._mark_dirty()
+        except Exception as exc:
+            self._show_error("Automatic mapping failed", exc)
+
+    def _reverse_load_map(self) -> None:
+        path, _ = self.qt["QFileDialog"].getOpenFileName(
+            self.window, "Load generic bone map", str(self.root), "DL ReAnimated bone map (*.dlrbmap.json)"
+        )
+        if not path: return
+        try:
+            profile = GenericBoneMap.load(path)
+            self.project.anm2_to_fbx.bone_mapping_profiles[profile.profile_id] = profile.to_dict()
+            self.project.anm2_to_fbx.selected_mapping_profile_id = profile.profile_id
+            self._reverse_show_profile(profile)
+            self._mark_dirty()
+        except Exception as exc:
+            self._show_error("Could not load bone map", exc)
+
+    def _reverse_save_map(self) -> None:
+        try:
+            profile = self._reverse_profile_from_table()
+            path, _ = self.qt["QFileDialog"].getSaveFileName(
+                self.window, "Save generic bone map", str(self.root / "mapping.dlrbmap.json"),
+                "DL ReAnimated bone map (*.dlrbmap.json)"
+            )
+            if path:
+                profile.save(path)
+                self.project.anm2_to_fbx.bone_mapping_profiles[profile.profile_id] = profile.to_dict()
+                self.project.anm2_to_fbx.selected_mapping_profile_id = profile.profile_id
+                self._mark_dirty()
+        except Exception as exc:
+            self._show_error("Could not save bone map", exc)
+
+    def _reverse_cancel(self) -> None:
+        self._reverse_cancel_requested = True
+        self.reverse_log.appendPlainText("Cancelling Blender export…")
+
+    def _reverse_export(self) -> None:
+        self._sync_reverse_from_ui()
+        settings = self.project.anm2_to_fbx
+        enabled = [row for row in settings.items if row.enabled]
+        if not enabled:
+            self._show_error("Nothing to export", ValueError("Add and enable at least one ANM2 file.")); return
+        blender = discover_blender(self.reverse_blender_path.text().strip())
+        if blender is None:
+            self._show_error("Blender not found", FileNotFoundError("Choose an installed blender.exe.")); return
+        mapping = None
+        if settings.mode == "retarget":
+            try: mapping = self._reverse_profile_from_table()
+            except Exception as exc: self._show_error("Bone mapping is not ready", exc); return
+        output = Path(settings.output_directory); output.mkdir(parents=True, exist_ok=True)
+        self.reverse_log.clear(); self._reverse_cancel_requested = False
+        self.reverse_export_button.setEnabled(False); self.reverse_cancel_button.setEnabled(True)
+        try:
+            for item in enabled:
+                if self._reverse_cancel_requested: break
+                if (
+                    not item.output_name.strip()
+                    or Path(item.output_name).name != item.output_name
+                    or "/" in item.output_name
+                    or "\\" in item.output_name
+                ):
+                    raise ValueError(f"Invalid FBX output name: {item.output_name!r}")
+                rig = self._reverse_load_rig(item.source_rig_ref, item.source_rig_path)
+                scale: str | float = settings.translation_scale
+                if scale != "auto": scale = float(scale)
+                result = export_anm2_to_fbx(
+                    item.source_anm2, rig, output / f"{item.output_name}.fbx",
+                    fps=item.fps, start_frame=item.start_frame, end_frame=item.end_frame,
+                    target_fbx=settings.target_fbx if settings.mode == "retarget" else None,
+                    bone_map=mapping, translation_scale=scale, blender_executable=blender,
+                    progress=self.reverse_log.appendPlainText,
+                    cancel_check=lambda: self._reverse_process_cancel(),
+                )
+                for warning in result.warnings: self.reverse_log.appendPlainText("WARNING: " + warning)
+            if not self._reverse_cancel_requested:
+                self.qt["QMessageBox"].information(self.window, "FBX export complete", f"Exported FBX files to:\n{output}")
+            if self.project_path:
+                self.project.save(self.project_path); self.dirty = False; self._update_title()
+        except Exception as exc:
+            self.reverse_log.appendPlainText("ERROR: " + str(exc))
+            if "cancelled" not in str(exc).lower(): self._show_error("ANM2 to FBX export failed", exc)
+        finally:
+            self.reverse_export_button.setEnabled(True); self.reverse_cancel_button.setEnabled(False)
+
+    def _reverse_process_cancel(self) -> bool:
+        self.qt["QApplication"].processEvents()
+        return bool(self._reverse_cancel_requested)
+
     # --------------------------------------------------------------- helpers
     def _refresh_all(self) -> None:
         self._refreshing = True
@@ -1527,18 +2012,40 @@ class MainWindow:
             self._set_combo_data(self.collision_combo, self.project.export.collision_policy)
             self.include_controls.setChecked(self.project.export.include_validation_controls)
             self.keep_anm2.setChecked(self.project.export.write_intermediate_anm2)
+            self._reverse_reload_rigs()
+            if self.project.anm2_to_fbx.items:
+                self._set_combo_data(
+                    self.reverse_source_rig,
+                    self.project.anm2_to_fbx.items[0].source_rig_ref,
+                )
+            self._set_combo_data(self.reverse_mode, self.project.anm2_to_fbx.mode)
+            self.reverse_target_fbx.setText(self.project.anm2_to_fbx.target_fbx)
+            self.reverse_output_directory.setText(self.project.anm2_to_fbx.output_directory)
+            self._set_combo_data(
+                self.reverse_translation_scale,
+                self.project.anm2_to_fbx.translation_scale,
+            )
+            saved_blender = str(self.settings.value("blender_executable", "") or "")
+            detected_blender = discover_blender(saved_blender)
+            self.reverse_blender_path.setText(str(detected_blender or saved_blender))
+            self.reverse_blender_status.setText(
+                f"Ready: {detected_blender}" if detected_blender else "Not found — choose blender.exe"
+            )
             advanced = self.settings.value("advanced_mode", False, type=bool)
             self.advanced_mode_toggle.setChecked(bool(advanced))
         finally:
             self._refreshing = False
         self.existing_rpack.setEnabled(self.project.export.mode == "append")
         self._refresh_animation_table()
+        self._reverse_refresh_table()
         self._refresh_retarget_clip_combo()
         self._refreshing = True
         try:
             self._script_default_changed()
             self._apply_advanced_visibility()
             self._bind_pose_mode_changed()
+            self._reverse_mode_changed()
+            self._reverse_restore_profile()
         finally:
             self._refreshing = False
         self._update_title()
@@ -1582,6 +2089,7 @@ class MainWindow:
         self.project.export.collision_policy = str(self.collision_combo.currentData())
         self.project.export.include_validation_controls = self.include_controls.isChecked()
         self.project.export.write_intermediate_anm2 = self.keep_anm2.isChecked()
+        self._sync_reverse_from_ui()
 
     def _combo_box(self) -> Any:
         return self._NoWheelComboBox()
@@ -1673,6 +2181,7 @@ class MainWindow:
         try:
             record = self.rig_registry.import_rig(path)
             self._reload_target_rig_combo()
+            self._reverse_reload_rigs()
             self._set_combo_data(self.target_rig_combo, record.rig_ref)
             self._target_rig_changed()
             self.status.showMessage(f"Installed Chrome Rig: {record.display_name}", 7000)
@@ -1702,6 +2211,8 @@ class MainWindow:
             saved = rig.save(output_path)
             record = self.rig_registry.import_rig(saved)
             self._reload_target_rig_combo()
+            self._reverse_reload_rigs()
+            self._set_combo_data(self.reverse_source_rig, record.rig_ref)
             self._set_combo_data(self.target_rig_combo, record.rig_ref)
             self._target_rig_changed()
             warnings = rig.validate().warnings

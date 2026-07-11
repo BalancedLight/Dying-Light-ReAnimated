@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dl-reanimated"
-version = "0.3.2"
+version = "0.4.0a1"
 description = "Mixamo FBX retargeting and ANM2/RPack authoring for Dying Light."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -21,6 +21,7 @@ build = ["PyInstaller>=6.8"]
 dlanm2-fbx-to-rpack = "dlanm2_gui.tools.fbx_to_rpack:main"
 dlanm2-project-build = "dlanm2_gui.tools.project_build:main"
 dlanm2-gui = "dlanm2_gui.gui:main"
+dlanm2-anm2-to-fbx = "dlanm2_gui.tools.anm2_to_fbx:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -102,3 +102,12 @@ A corrected build report includes fields similar to:
 ```
 
 The spans must sum to `frame_count - 1`. Rebuilding is required for a malformed payload; changing the AnimationScr or target model will not repair its page layout.
+# ANM2 to FBX
+
+**Blender was not found** — choose the installed `blender.exe` in the ANM2 → FBX workspace. Blender is deliberately not bundled with the portable application.
+
+**The exported hierarchy is wrong** — the selected `.crig` does not match the ANM2. Create/import the rig from the model FBX that owns that animation and review descriptor diagnostics.
+
+**Cross-rig bones do not move** — unmapped target bones intentionally remain at bind pose. Run Automatic map, review uncertain rows, and save the corrected `.dlrbmap.json`.
+
+**Playback speed is wrong** — standalone ANM2 has no authoritative FPS. Set the FPS used by the original sequence; 30 is only the default.

@@ -8,6 +8,9 @@ for directory in ("reference", "docs", "examples"):
     source = root / directory
     if source.exists():
         datas.append((str(source), directory))
+blender_helpers = root / "dlanm2_gui" / "blender_scripts"
+if blender_helpers.exists():
+    datas.append((str(blender_helpers / "export_anm2_fbx.py"), "dlanm2_gui/blender_scripts"))
 for filename in (
     "README.md",
     "START_HERE.txt",
