@@ -60,7 +60,8 @@ Each row is one output animation. Rows are intentionally tall enough to edit nam
 - **IK** — consumer-side authoring recommendation.
 - **Edit mapping** — opens the Retargeting tab for that clip.
 
-Mouse-wheel changes are disabled on closed dropdowns so scrolling a table cannot silently change a mapping or policy.
+
+For **Root Motion**, use motion accumulator for clips that will involve movements like walking, as this will move the entire object itself and not just the mesh.
 
 ## Retargeting
 
