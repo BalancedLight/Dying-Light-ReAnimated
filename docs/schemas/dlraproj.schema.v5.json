@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/dlraproj.schema.v5.json",
+  "title": "DL ReAnimated Project v5",
+  "type": "object",
+  "required": ["format", "schema_version", "minimum_reader_version", "rig", "animations", "anm2_to_fbx"],
+  "properties": {
+    "format": {"const": "dl-reanimated-project"},
+    "schema_version": {"const": 5},
+    "minimum_reader_version": {"type": "integer", "minimum": 1},
+    "rig": {"type": "object", "additionalProperties": true},
+    "animations": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "anm2_to_fbx": {"$ref": "#/$defs/reverse"}
+  },
+  "additionalProperties": true,
+  "$defs": {
+    "reverse": {
+      "type": "object",
+      "required": ["mode", "items"],
+      "properties": {
+        "mode": {"enum": ["native", "retarget"]},
+        "target_fbx": {"type": "string"},
+        "output_directory": {"type": "string"},
+        "translation_scale": {"type": "string"},
+        "selected_mapping_profile_id": {"type": "string"},
+        "items": {"type": "array", "items": {"$ref": "#/$defs/reverseItem"}},
+        "bone_mapping_profiles": {"type": "object", "additionalProperties": true}
+      },
+      "additionalProperties": true
+    },
+    "reverseItem": {
+      "type": "object",
+      "required": ["conversion_id", "source_anm2", "output_name", "source_rig_ref", "fps"],
+      "properties": {
+        "conversion_id": {"type": "string"},
+        "source_anm2": {"type": "string"},
+        "output_name": {"type": "string"},
+        "source_rig_ref": {"type": "string"},
+        "source_rig_path": {"type": "string"},
+        "enabled": {"type": "boolean"},
+        "fps": {"type": "integer", "minimum": 1, "maximum": 240},
+        "start_frame": {"type": ["integer", "null"], "minimum": 0},
+        "end_frame": {"type": ["integer", "null"], "minimum": 0}
+      },
+      "additionalProperties": true
+    }
+  }
+}

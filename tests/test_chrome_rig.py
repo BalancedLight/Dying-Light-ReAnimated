@@ -136,6 +136,25 @@ def test_exact_rig_default_pose_mismatch_warns_and_exports(tmp_path: Path) -> No
     assert build.report["warnings"]
 
 
+def test_exact_rig_roundtrips_synthetic_motion_helper(tmp_path: Path) -> None:
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "door.fbx",
+        document_factory=_factory(("root", "bone_door")),
+    )
+    rig.extra_track_descriptors = (0xCCC3CDDF,)
+    rig.track_descriptors = tuple([bone.descriptor for bone in rig.bones] + [0xCCC3CDDF])
+    exported = _ObjectFbx(
+        tmp_path / "exported.fbx",
+        ("DLR_OffsetHelper_CCC3CDDF", "root", "bone_door"),
+    )
+    build = build_exact_rig_anm2(
+        tmp_path / "exported.fbx", rig, document_factory=lambda _path: exported
+    )
+    decoded = decode_samples(build.payload, [2.0])
+    helper_index = rig.descriptors.index(0xCCC3CDDF)
+    assert decoded.frames[0].tracks[helper_index][3] == pytest.approx(0.02, abs=1e-4)
+
+
 def test_crig_rejects_unsafe_or_executable_members() -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -181,8 +200,8 @@ def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
             "rig": {"use_imported_animation_bind_pose": True},
         }
     )
-    assert CURRENT_PROJECT_SCHEMA_VERSION == 4
-    assert project.schema_version == 4
+    assert CURRENT_PROJECT_SCHEMA_VERSION == 5
+    assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
     assert project.rig.target_rig_ref == "builtin:male_npc_infected"
     assert project.rig.retarget_mode == "humanoid"
     assert "legacy_target_files" in project.rig.extensions

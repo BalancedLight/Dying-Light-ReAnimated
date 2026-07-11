@@ -10,7 +10,7 @@ from dlanm2_gui.workspace_project import DlReanimatedProject
 
 def test_gui_module_is_importable_without_loading_qt() -> None:
     assert callable(gui.main)
-    assert __version__ == "0.3.2"
+    assert __version__ == "0.4.0a1"
 
 
 def test_release_docs_launchers_and_examples_exist() -> None:
@@ -26,6 +26,8 @@ def test_release_docs_launchers_and_examples_exist() -> None:
         "docs/PROJECT_FORMAT.md",
         "docs/schemas/dlraproj.schema.v2.json",
         "docs/schemas/dlraproj.schema.v4.json",
+        "docs/schemas/dlraproj.schema.v5.json",
+        "docs/ANM2_TO_FBX.md",
         "docs/RETARGETING.md",
         "docs/ANIMATION_SCRIPT_TARGETS.md",
         "docs/RPACK_WORKFLOW.md",

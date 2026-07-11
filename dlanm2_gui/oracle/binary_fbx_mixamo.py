@@ -178,6 +178,11 @@ class _FbxDocument:
             for node in self.objects.children
             if node.name == "Model" and len(node.properties) > 2 and node.properties[2] == "LimbNode"
         }
+        self.null_models = {
+            _clean_name(node.properties[1]): int(node.properties[0])
+            for node in self.objects.children
+            if node.name == "Model" and len(node.properties) > 2 and node.properties[2] == "Null"
+        }
         self.parent_by_name = {
             name: self._model_parent_name(object_id)
             for name, object_id in self.limb_models.items()

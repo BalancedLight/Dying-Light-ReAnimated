@@ -369,6 +369,12 @@ dlanm2_gui/anm2_writer.py
 
 dlanm2_gui/fbx_pipeline.py
   public FBX -> ANM2/RPack build surface
+
+dlanm2_gui/anm2_fbx.py
+  full-clip decode, rig reconstruction, and generic reverse retarget
+
+dlanm2_gui/blender_fbx.py
+  Blender-assisted skeleton-and-animation FBX export
 ```
 
 ## 15. Practical debugging order

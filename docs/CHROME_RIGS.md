@@ -2,6 +2,8 @@
 
 A Chrome Rig (`.crig`) is a shareable animation-target definition for a skeletal model that already exists in a Dying Light mod or DevTools project. It lets DL ReAnimated author ANM2 tracks for small objects, machinery, custom humanoids, and same-rig animals without asking users for an SMD, donor ANM2, descriptor list, or writer-control file.
 
+The same package resolves descriptors for ANM2 → FBX, making doors, props, machinery, animals, and custom characters reversible when their matching `.crig` is available.
+
 ## Create and use
 
 In **Show advanced settings**, choose **Create .crig from model FBX…**. The current importer accepts a binary FBX containing at least one `LimbNode` armature. For a rigid object, add one root bone and skin the object to it.
@@ -52,7 +54,7 @@ Implemented now:
 
 Not yet implemented:
 
-- source-to-target direct mapping for differently named custom rigs;
+- semantic/anatomical inference across unrelated custom rigs (reviewed generic bone mapping is available);
 - semantic quadruped-to-quadruped retargeting;
 - FBX-to-game-model/CHR/skin compilation;
 - gameplay AI, physics, ragdoll, or navigation setup.

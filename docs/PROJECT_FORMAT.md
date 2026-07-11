@@ -9,9 +9,9 @@ Every project contains:
 ```json
 {
   "format": "dl-reanimated-project",
-  "schema_version": 4,
+  "schema_version": 5,
   "minimum_reader_version": 1,
-  "created_with": "0.3.2",
+  "created_with": "0.4.0a1",
   "project_id": "stable UUID"
 }
 ```
@@ -56,6 +56,10 @@ Schema 3 adds an explicit target reference, optional portable `.crig` path, and 
 
 Schema-2 projects migrate to the bundled humanoid target with identical build behavior. The historical SMD/template/control fields remain available and are also recorded under `rig.extensions.legacy_target_files` during migration.
 
+## Schema 5 ANM2 to FBX workspace
+
+Schema 5 adds an optional `anm2_to_fbx` section containing batch ANM2 inputs, source rig references, native/retarget mode, target skeleton FBX, FPS/frame ranges, translation scale, output directory, and embedded generic mapping profiles. Schema-4 projects migrate with an empty native reverse workspace and unchanged forward-build behavior. Blender's executable path is a machine-local GUI preference and is not written into portable projects.
+
 ## Main sections
 
 ### `rig`
@@ -98,6 +102,10 @@ Each clip has a stable UUID and stores its FBX path, display/resource names, scr
 
 Mappings are embedded by UUID so a project remains self-contained. They can also be exported as `.dlrmap.json` files for reuse.
 
+### `anm2_to_fbx`
+
+Reverse-conversion jobs and `.dlrbmap.json` payloads used by the dedicated workspace. Input, target, rig, and output paths use the same portable-path rules as forward projects.
+
 ## Portable paths
 
 Known file paths are written relative to the project directory whenever possible and resolved to absolute paths in memory when loaded.
@@ -117,6 +125,7 @@ docs/schemas/dlraproj.schema.v1.json
 docs/schemas/dlraproj.schema.v2.json
 docs/schemas/dlraproj.schema.v3.json
 docs/schemas/dlraproj.schema.v4.json
+docs/schemas/dlraproj.schema.v5.json
 ```
 
 Runtime validation remains authoritative because file existence, duplicate resources, and cross-references cannot be fully described by JSON Schema.

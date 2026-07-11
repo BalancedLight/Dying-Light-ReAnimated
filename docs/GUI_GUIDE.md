@@ -70,6 +70,12 @@ With a custom `.crig`, the tab reports **Exact skeleton mode** instead. No human
 
 **Apply to compatible clips** copies the mapping only to clips with the exact same source-skeleton hash.
 
+## ANM2 to FBX
+
+The dedicated workspace batches extracted ANM2 files into skeleton-and-animation FBXs through Blender. Select the matching Chrome Rig because ANM2 does not contain bone names, hierarchy, or bind transforms. Native mode requires no mapping. Cross-rig mode accepts a target skeleton FBX and provides conservative automatic suggestions plus an editable mapping table.
+
+For a door or prop, create/import its `.crig` from the matching model FBX, then use native export. Reverse jobs and generic mapping profiles are saved with the project. Blender is detected automatically when possible and can be selected manually.
+
 ## Export
 
 **Export ANM2 only…** retargets every enabled clip and writes just the generated `.anm2`
