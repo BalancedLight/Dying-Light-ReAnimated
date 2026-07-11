@@ -6,7 +6,7 @@
   />
 </p>
 
-DL ReAnimated is a project-based **FBX → ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, humanoid retarget mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+DL ReAnimated is a fully open source, project-based **FBX → ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, humanoid retarget mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
 ## Start
 
@@ -75,6 +75,8 @@ common_anims_sp_pc.rpack     example output
 - [Building the Windows EXE](docs/BUILDING_WINDOWS_EXE.md)
 
 Contributor material is kept under `docs/project/`; generated diagnostics and scratch research are not shipped in the release tree.
+
+More technical documentation can also be found in the `docs` folder.
 
 ## Current status
 
