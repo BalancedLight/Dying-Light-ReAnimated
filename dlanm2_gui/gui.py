@@ -172,6 +172,10 @@ class MainWindow:
         self._build_export_tab()
         self._build_anm2_to_fbx_tab()
         self._build_help_tab()
+        # DLR_MIMIC_PROTOTYPE_BEGIN
+        from .mimic_gui import install_mimic_ui
+        install_mimic_ui(self)
+        # DLR_MIMIC_PROTOTYPE_END
         self._refresh_all()
 
     def show(self) -> None:

@@ -384,7 +384,8 @@ def install_mimic_ui(controller: Any) -> None:
 
     if getattr(controller, "_mimic_ui_installed", False):
         return
-    controller._mimic_ui_installed = True
+    # Mark the feature installed only after every widget and wrapper is ready.
+    # This prevents a partially installed/invisible UI after an integration error.
     controller._mimic_scan_cache = {}
 
     # Project-level target-face policy.
@@ -429,12 +430,78 @@ def install_mimic_ui(controller: Any) -> None:
         controller._mimic_profile_holder = holder
         controller._mimic_profile_label = form.labelForField(holder)
     else:
-        # Defensive fallbacks for unexpected UI customizations.
+        # Defensive fallback for a customized host GUI. The controls are still
+        # fully configured and will be placed in the dedicated Facial tab.
         controller.facial_policy_combo = controller._combo_box()
+        controller.facial_policy_combo.addItem("Auto-detect from target and FBX", "auto")
+        controller.facial_policy_combo.addItem("Model supports facial animations", "yes")
+        controller.facial_policy_combo.addItem("Model has no facial animations", "no")
+        controller.facial_policy_combo.currentIndexChanged.connect(controller._mark_dirty)
         controller.mimic_profile_combo = controller._combo_box()
+        controller.mimic_profile_combo.addItem("Automatic target profile", "auto")
+        controller.mimic_profile_combo.addItem("Human / infected common 46", BUILTIN_COMMON46_REF)
+        controller.mimic_profile_combo.addItem("Custom .dlrmimic profile", "custom")
+        controller.mimic_profile_combo.currentIndexChanged.connect(
+            lambda _index: _mimic_profile_selection_changed(controller)
+        )
         controller.mimic_profile_path = QLineEdit()
+        controller.mimic_profile_path.textChanged.connect(controller._mark_dirty)
         controller._mimic_profile_holder = controller.mimic_profile_path
         controller._mimic_profile_label = None
+
+    # A dedicated, always-visible facial workspace makes the feature discoverable
+    # even before an animation has been imported.
+    controller.facial_page = QWidget()
+    facial_layout = QVBoxLayout(controller.facial_page)
+    facial_intro = QLabel(
+        "Import an FBX with animated shape keys/blendshapes, then scan and map its facial "
+        "curves to the selected Dying Light mimic profile. Body-only FBXs remain supported."
+    )
+    facial_intro.setWordWrap(True)
+    facial_layout.addWidget(facial_intro)
+
+    if rig_group is None:
+        fallback_group = QGroupBox("Target facial support")
+        fallback_form = QFormLayout(fallback_group)
+        fallback_form.addRow("Facial animations", controller.facial_policy_combo)
+        fallback_form.addRow("Facial target", controller.mimic_profile_combo)
+        fallback_form.addRow("Custom facial profile", controller.mimic_profile_path)
+        facial_layout.addWidget(fallback_group)
+
+    clip_group = QGroupBox("Selected animation facial mapping")
+    clip_layout = QVBoxLayout(clip_group)
+    clip_row = QHBoxLayout()
+    controller.mimic_clip_combo = controller._combo_box()
+    controller.mimic_clip_combo.setToolTip("Choose the imported animation whose facial curves you want to inspect.")
+    controller.mimic_clip_combo.currentIndexChanged.connect(
+        lambda _index: _facial_clip_selection_changed(controller)
+    )
+    controller.mimic_scan_button = QPushButton("Scan facial curves")
+    controller.mimic_scan_button.setToolTip(
+        "Inspect the selected FBX for BlendShapeChannel/DeformPercent animation without changing the project."
+    )
+    controller.mimic_scan_button.clicked.connect(lambda: _scan_selected_face(controller))
+    controller.mimic_map_button = QPushButton("Open facial retargeting…")
+    controller.mimic_map_button.setToolTip(
+        "Map source blendshapes to Dying Light morph descriptors, including many-to-one consolidation."
+    )
+    controller.mimic_map_button.clicked.connect(lambda: _open_selected_face_mapping(controller))
+    clip_row.addWidget(QLabel("Animation"))
+    clip_row.addWidget(controller.mimic_clip_combo, 1)
+    clip_row.addWidget(controller.mimic_scan_button)
+    clip_row.addWidget(controller.mimic_map_button)
+    clip_layout.addLayout(clip_row)
+    controller.mimic_status = QLabel("Add an FBX animation to begin facial detection.")
+    controller.mimic_status.setWordWrap(True)
+    clip_layout.addWidget(controller.mimic_status)
+    facial_layout.addWidget(clip_group)
+    facial_layout.addStretch(1)
+
+    help_index = next(
+        (index for index in range(controller.tabs.count()) if controller.tabs.tabText(index) == "Help"),
+        controller.tabs.count(),
+    )
+    controller.tabs.insertTab(help_index, controller.facial_page, "Facial")
 
     # Advanced source-bone override below the playback-range editor.
     animation_page = controller.animation_table.parentWidget()
@@ -476,28 +543,25 @@ def install_mimic_ui(controller: Any) -> None:
             break
 
     # Wrap animation-table rendering to place Body/Face directly after Root motion.
+    # Important: use QTableWidget.insertColumn(). Removing and re-inserting a
+    # cell widget can delete the Qt-owned C++ object and caused the Windows crash
+    # when the first FBX row was created.
     original_refresh_animation_table = controller._refresh_animation_table
 
     def refresh_animation_table(self) -> None:
         table = self.animation_table
-        table.setColumnCount(10)
+        # Restore the host table's native nine-column shape before it creates
+        # fresh widgets. This cleanly disposes of the previous facial column.
+        table.setColumnCount(9)
         original_refresh_animation_table()
+        # Qt shifts the newly-created IK and Retarget cells safely and retains
+        # ownership; no Python wrapper ever points at a deleted C++ widget.
+        table.insertColumn(7)
         table.setHorizontalHeaderLabels([
             "Use", "Display name", "FBX source", "FBX animation", "Resource name",
             "Animation SCR", "Root motion", "Body / face", "IK", "Retarget",
         ])
         for row_index, animation in enumerate(self.project.animations):
-            ik = table.cellWidget(row_index, 7)
-            mapping_button = table.cellWidget(row_index, 8)
-            if ik is not None:
-                table.removeCellWidget(row_index, 7)
-            if mapping_button is not None:
-                table.removeCellWidget(row_index, 8)
-            if ik is not None:
-                table.setCellWidget(row_index, 8, ik)
-            if mapping_button is not None:
-                table.setCellWidget(row_index, 9, mapping_button)
-
             holder = QWidget()
             layout = QHBoxLayout(holder)
             layout.setContentsMargins(1, 1, 1, 1)
@@ -534,9 +598,6 @@ def install_mimic_ui(controller: Any) -> None:
                 else:
                     face_button.setText("Face none")
             else:
-                # Actual detection is performed lazily when the mapping dialog opens
-                # and automatically during build. Large projects should not parse every
-                # FBX simply because the table was repainted.
                 face_button.setText("Face auto")
             face_button.clicked.connect(
                 lambda _checked=False, aid=animation.animation_id: _open_face_mapping(self, aid)
@@ -552,6 +613,7 @@ def install_mimic_ui(controller: Any) -> None:
         table.setColumnWidth(7, 230)
         table.setColumnWidth(8, 155)
         _refresh_motion_source_widget(self)
+        _refresh_facial_tab(self)
 
     controller._refresh_animation_table = types.MethodType(refresh_animation_table, controller)
 
@@ -560,6 +622,15 @@ def install_mimic_ui(controller: Any) -> None:
     def animation_selection_changed(self) -> None:
         original_selection_changed()
         _refresh_motion_source_widget(self)
+        animation = self._selected_animation()
+        if animation is not None and hasattr(self, "mimic_clip_combo"):
+            previous = self._refreshing
+            self._refreshing = True
+            try:
+                _set_combo_data(self.mimic_clip_combo, animation.animation_id)
+            finally:
+                self._refreshing = previous
+        _update_facial_status(self)
 
     controller._animation_selection_changed = types.MethodType(
         animation_selection_changed, controller
@@ -626,6 +697,97 @@ def install_mimic_ui(controller: Any) -> None:
     controller._apply_advanced_visibility = types.MethodType(
         apply_advanced_visibility, controller
     )
+    controller._mimic_ui_installed = True
+
+
+def _refresh_facial_tab(controller: Any, *, preserve_selection: bool = False) -> None:
+    if not hasattr(controller, "mimic_clip_combo"):
+        return
+    current = str(controller.mimic_clip_combo.currentData() or "") if preserve_selection else ""
+    if not current:
+        selected = controller._selected_animation()
+        current = selected.animation_id if selected is not None else ""
+    previous = controller._refreshing
+    controller._refreshing = True
+    try:
+        controller.mimic_clip_combo.blockSignals(True)
+        controller.mimic_clip_combo.clear()
+        for animation in controller.project.animations:
+            controller.mimic_clip_combo.addItem(animation.display_name, animation.animation_id)
+        if current:
+            _set_combo_data(controller.mimic_clip_combo, current)
+    finally:
+        controller.mimic_clip_combo.blockSignals(False)
+        controller._refreshing = previous
+    _update_facial_status(controller)
+
+
+def _facial_clip_selection_changed(controller: Any) -> None:
+    if controller._refreshing:
+        return
+    _update_facial_status(controller)
+
+
+def _update_facial_status(controller: Any) -> None:
+    if not hasattr(controller, "mimic_clip_combo"):
+        return
+    animation = controller.project.animation_by_id(str(controller.mimic_clip_combo.currentData() or ""))
+    enabled = animation is not None
+    controller.mimic_scan_button.setEnabled(enabled)
+    controller.mimic_map_button.setEnabled(enabled)
+    if animation is None:
+        controller.mimic_status.setText("Add an FBX animation to begin facial detection.")
+        return
+    settings = _mimic_settings(animation)
+    detection = settings.get("last_detection")
+    mode = str(settings.get("mode", "auto"))
+    if isinstance(detection, dict):
+        shapes = int(detection.get("shape_count", 0) or 0)
+        animated = int(detection.get("animated_shape_count", 0) or 0)
+        mapped = sum(
+            1
+            for row in settings.get("mapping", [])
+            if isinstance(row, dict) and row.get("enabled", True)
+        )
+        controller.mimic_status.setText(
+            f"{animation.display_name}: {shapes} facial channel(s), {animated} animated, "
+            f"{mapped} enabled mapping contribution(s). Export mode: {mode}."
+        )
+    else:
+        controller.mimic_status.setText(
+            f"{animation.display_name}: not scanned yet. Export mode: {mode}. "
+            "Scan is automatic during build or can be run now."
+        )
+
+
+def _selected_facial_animation(controller: Any) -> Any | None:
+    if not hasattr(controller, "mimic_clip_combo"):
+        return None
+    return controller.project.animation_by_id(str(controller.mimic_clip_combo.currentData() or ""))
+
+
+def _scan_selected_face(controller: Any) -> None:
+    animation = _selected_facial_animation(controller)
+    if animation is None:
+        return
+    try:
+        scan = _cached_scan(controller, animation)
+        settings = _mimic_settings(animation)
+        settings["last_detection"] = scan.summary()
+        controller._mark_dirty()
+        controller._refresh_animation_table()
+        _set_combo_data(controller.mimic_clip_combo, animation.animation_id)
+        _refresh_facial_tab(controller, preserve_selection=True)
+    except Exception as exc:
+        controller._show_error("Facial scan failed", exc)
+
+
+def _open_selected_face_mapping(controller: Any) -> None:
+    animation = _selected_facial_animation(controller)
+    if animation is not None:
+        _open_face_mapping(controller, animation.animation_id)
+        _set_combo_data(controller.mimic_clip_combo, animation.animation_id)
+        _refresh_facial_tab(controller, preserve_selection=True)
 
 
 def _cached_scan(controller: Any, animation: Any) -> FbxFacialScan:

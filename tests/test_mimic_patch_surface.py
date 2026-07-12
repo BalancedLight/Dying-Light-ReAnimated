@@ -11,3 +11,19 @@ def test_host_integration_markers_are_present():
     assert "DLR_MIMIC_PROTOTYPE_BEGIN" in gui
     assert "DLR_MIMIC_PROTOTYPE_BODY_CORE" in builder
     assert "dlanm2_gui.mimic_gui" in spec
+
+
+def test_mimic_gui_uses_safe_qt_column_insertion_and_visible_tab():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "dlanm2_gui" / "mimic_gui.py").read_text(encoding="utf-8")
+    assert "table.insertColumn(7)" in source
+    assert "removeCellWidget" not in source
+    assert 'controller.tabs.insertTab(help_index, controller.facial_page, "Facial")' in source
+    assert "controller._mimic_ui_installed = True" in source
+
+
+def test_mimic_clip_combo_refresh_blocks_signals():
+    root = Path(__file__).resolve().parents[1]
+    source = (root / "dlanm2_gui" / "mimic_gui.py").read_text(encoding="utf-8")
+    assert "controller.mimic_clip_combo.blockSignals(True)" in source
+    assert "controller.mimic_clip_combo.blockSignals(False)" in source

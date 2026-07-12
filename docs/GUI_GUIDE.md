@@ -101,3 +101,8 @@ common_anims_sp_pc.rpack
 ```
 
 Do not replace `common_anims_PC.rpack`. Reload the editor project to clear cached resources.
+
+
+## Facial tab
+
+The **Facial** tab is always visible. Select an imported animation, then use **Scan facial curves** to inspect FBX BlendShapeChannel animation or **Open facial retargeting** to map source shapes to Dying Light mimic descriptors. The **Body / face** control beside Root motion chooses Auto, Body only, Mimic only, or Body + mimic. FBXs without facial curves continue to export normally as body animation.
