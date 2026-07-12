@@ -108,7 +108,10 @@ def main() -> int:
         QGroupBox::title { font-weight: 600; subcontrol-origin: margin; left: 10px; padding: 0 4px; }
         QPushButton { min-height: 26px; padding: 4px 10px; }
         QLineEdit, QComboBox, QSpinBox { min-height: 28px; }
-        QTableWidget { gridline-color: #d6d6d6; alternate-background-color: #f6f8fa; }
+        QTableWidget {
+            gridline-color: palette(mid);
+            alternate-background-color: palette(alternate-base);
+        }
         QToolTip { padding: 5px; }
         """
     )
