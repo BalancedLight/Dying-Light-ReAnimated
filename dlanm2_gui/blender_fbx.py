@@ -25,7 +25,6 @@ from .bone_maps import GenericBoneMap
 from .chrome_rig import ChromeRig
 from .runtime_paths import resource_root
 
-
 @dataclass(frozen=True, slots=True)
 class FbxExportResult:
     output_path: str
@@ -34,7 +33,6 @@ class FbxExportResult:
     bone_count: int
     warnings: tuple[str, ...]
     blender_log: str
-
 
 def discover_blender(explicit_path: str | Path | None = None) -> Path | None:
     candidates: list[Path] = []
@@ -68,7 +66,6 @@ def discover_blender(explicit_path: str | Path | None = None) -> Path | None:
     if not valid:
         return None
     return max(valid, key=lambda path: path.stat().st_mtime).resolve()
-
 
 def run_blender_export(
     scene: AnimationScene,
@@ -149,7 +146,6 @@ def run_blender_export(
         tuple(scene.warnings), log,
     )
 
-
 def export_anm2_to_fbx(
     anm2_path: str | Path,
     source_rig: ChromeRig,
@@ -185,7 +181,6 @@ def export_anm2_to_fbx(
         progress=progress,
         cancel_check=cancel_check,
     )
-
 
 __all__ = [
     "FbxExportResult", "discover_blender", "export_anm2_to_fbx", "run_blender_export",

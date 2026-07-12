@@ -1,0 +1,316 @@
+from __future__ import annotations
+
+"""Unified three-workspace shell for DL ReAnimated."""
+
+from pathlib import Path
+import sys
+from typing import Any
+
+from . import __version__
+from .workspaces.animation_mapping import CrigMappingWorkspace
+from .workspaces.models import MODEL_WORKSPACE_EXTENSION_KEY, ModelWorkspace
+
+
+def main() -> int:
+    from . import gui as legacy_gui
+
+    try:
+        qt = legacy_gui._load_qt()
+    except RuntimeError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    app = qt["QApplication"].instance() or qt["QApplication"](sys.argv)
+    app.setApplicationName("DL ReAnimated")
+    app.setApplicationVersion(__version__)
+    app.setStyleSheet(
+        """
+        QWidget { font-size: 10pt; }
+        QMenuBar { padding: 2px; }
+        QMenuBar::item { padding: 5px 10px; }
+        QTabWidget::pane { border: 1px solid palette(mid); top: -1px; }
+        QTabBar::tab { padding: 8px 14px; }
+        QGroupBox { margin-top: 10px; padding-top: 10px; }
+        QGroupBox::title { font-weight: 600; subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+        QPushButton { min-height: 26px; padding: 4px 10px; }
+        QLineEdit, QComboBox, QSpinBox { min-height: 28px; }
+        QTableWidget { gridline-color: palette(mid); alternate-background-color: palette(alternate-base); }
+        QToolTip { padding: 5px; }
+        """
+    )
+    shell = UnifiedMainWindow(qt, legacy_gui)
+    shell.show()
+    return int(app.exec())
+
+
+class UnifiedMainWindow:
+    def __init__(self, qt: dict[str, Any], legacy_gui: Any) -> None:
+        self.qt = qt
+        self.legacy_gui_module = legacy_gui
+        self.controller = legacy_gui.MainWindow(qt)
+        self.window = self.controller.window
+        self.window.resize(1480, 920)
+        self.window.setMinimumSize(1120, 720)
+        self.window.setWindowTitle(f"DL ReAnimated {__version__}")
+
+        pages: dict[str, Any] = {}
+        while self.controller.tabs.count():
+            text = self.controller.tabs.tabText(0)
+            widget = self.controller.tabs.widget(0)
+            self.controller.tabs.removeTab(0)
+            pages[text] = widget
+
+        # The legacy Help page is replaced below. Its buttons are owned by that
+        # page and are deleted when it is discarded, so the legacy visibility
+        # pass must not retain and dereference them later.
+        self.controller.advanced_help_buttons = []
+
+        # The legacy flat action strip is replaced by the application menu.
+        for toolbar in self.window.findChildren(qt["QToolBar"]):
+            self.window.removeToolBar(toolbar)
+            toolbar.hide()
+
+        self.main_tabs = qt["QTabWidget"]()
+        self.animation_tabs = qt["QTabWidget"]()
+        for title in ("Project", "Animations", "Retargeting", "Facial", "Export"):
+            if title in pages:
+                self.animation_tabs.addTab(pages[title], title)
+
+        self.crig_mapping = CrigMappingWorkspace(qt, controller=self.controller, mark_dirty=self._mark_dirty)
+        self.animation_tabs.addTab(
+            self._help_page(
+                "Animation help",
+                "Guides for importing, mapping, packaging, and facial animation clips.",
+                (
+                    ("Humanoid retargeting", "RETARGETING.md"),
+                    ("Animation script targets", "ANIMATION_SCRIPT_TARGETS.md"),
+                    ("RPack export workflow", "RPACK_WORKFLOW.md"),
+                    ("Root motion and IK", "ROOT_MOTION_AND_IK.md"),
+                    ("Facial animations", "FACIAL_ANIMATIONS.md"),
+                    ("Mimic profiles", "MIMIC_PROFILES.md"),
+                ),
+            ),
+            "Help",
+        )
+        self.animation_tabs.currentChanged.connect(self._animation_subtab_changed)
+
+        self.models = ModelWorkspace(
+            qt,
+            parent_window=self.window,
+            root=Path(self.controller.root),
+            mark_dirty=self._mark_dirty,
+            status_callback=lambda message: self.controller.status.showMessage(message),
+        )
+        self.controller.extra_task_runners = [self.models.background_tasks]
+        self._remove_tab(self.models.tabs, "Help")
+        self.models.tabs.addTab(
+            self._help_page(
+                "Model help",
+                "Guides for importing model FBXs, choosing a rig workflow, and installing model assets.",
+                (
+                    ("Model import and installation", "MODEL_IMPORT.md"),
+                    ("Chrome Rig custom targets", "CHROME_RIGS.md"),
+                ),
+            ),
+            "Help",
+        )
+
+        reverse_holder = qt["QWidget"]()
+        reverse_layout = qt["QVBoxLayout"](reverse_holder)
+        reverse_layout.setContentsMargins(0, 0, 0, 0)
+        self.reverse_tabs = qt["QTabWidget"]()
+        if "ANM2 → FBX" in pages:
+            self.reverse_tabs.addTab(pages["ANM2 → FBX"], "Convert")
+        self.reverse_tabs.addTab(
+            self._help_page(
+                "ANM2 to FBX help",
+                "Guides for extracting animation resources and converting them into editable FBX files.",
+                (("ANM2 to FBX workflow", "ANM2_TO_FBX.md"), ("ANM2 file format", "ANM2_FORMAT.md")),
+            ),
+            "Help",
+        )
+        reverse_layout.addWidget(self.reverse_tabs)
+
+        self.main_tabs.addTab(self.animation_tabs, "Animations")
+        self.main_tabs.addTab(self.models.widget, "Models")
+        self.main_tabs.addTab(reverse_holder, "ANM2 → FBX")
+        self.window.setCentralWidget(self.main_tabs)
+        self._build_menu_bar()
+        self.controller.advanced_mode_toggle.toggled.connect(self._advanced_visibility_changed)
+        self._set_crig_tab_visible(self.controller.advanced_mode_toggle.isChecked())
+        self._install_project_sync_hooks()
+        self._restore_extension_state()
+        self.crig_mapping.reload_clips()
+        self.main_tabs.currentChanged.connect(self._workspace_changed)
+
+    def show(self) -> None:
+        self.window.show()
+
+    def _build_menu_bar(self) -> None:
+        qt = self.qt
+        menu_bar = self.window.menuBar()
+        menu_bar.clear()
+
+        def action(menu: Any, text: str, shortcut: str | None, callback) -> Any:
+            row = qt["QAction"](text, self.window)
+            if shortcut:
+                row.setShortcut(qt["QKeySequence"](shortcut))
+            row.triggered.connect(callback)
+            menu.addAction(row)
+            return row
+
+        file_menu = menu_bar.addMenu("&File")
+        action(file_menu, "New Project", "Ctrl+N", self.controller.new_project)
+        action(file_menu, "Open Project…", "Ctrl+O", self.controller.open_project)
+        file_menu.addSeparator()
+        action(file_menu, "Save Project", "Ctrl+S", self.controller.save_project)
+        action(file_menu, "Save Project As…", "Ctrl+Shift+S", self.controller.save_project_as)
+        file_menu.addSeparator()
+        action(file_menu, "Exit", "Alt+F4", self.window.close)
+
+        import_menu = menu_bar.addMenu("&Import")
+        action(import_menu, "Animation FBX…", "Ctrl+I", self._add_animation)
+        action(import_menu, "Model FBX…", "Ctrl+Shift+I", self._add_model)
+
+        build_menu = menu_bar.addMenu("&Build")
+        action(build_menu, "Animation RPack", "Ctrl+B", self._build_animations)
+        action(build_menu, "Model Assets", "Ctrl+Shift+B", self._build_models)
+
+        workspace_menu = menu_bar.addMenu("&Workspace")
+        action(workspace_menu, "Animations", "Alt+1", lambda: self.main_tabs.setCurrentIndex(0))
+        action(workspace_menu, "Models", "Alt+2", lambda: self.main_tabs.setCurrentIndex(1))
+        action(workspace_menu, "ANM2 → FBX", "Alt+3", lambda: self.main_tabs.setCurrentIndex(2))
+
+        view_menu = menu_bar.addMenu("&View")
+        self.advanced_action = action(view_menu, "Advanced Settings", None, self._set_advanced_from_action)
+        self.advanced_action.setCheckable(True)
+        self.advanced_action.setChecked(self.controller.advanced_mode_toggle.isChecked())
+
+        help_menu = menu_bar.addMenu("&Help")
+        action(help_menu, "GUI Guide", "F1", lambda: self.controller.open_doc("GUI_GUIDE.md"))
+        action(help_menu, "Troubleshooting", None, lambda: self.controller.open_doc("TROUBLESHOOTING.md"))
+        action(help_menu, "Project Compatibility", None, lambda: self.controller.open_doc("PROJECT_FORMAT.md"))
+        help_menu.addSeparator()
+        action(help_menu, "About DL ReAnimated", None, self._show_about)
+
+        advanced_toggle = self.controller.advanced_mode_toggle
+        advanced_toggle.setText("Advanced settings")
+        advanced_toggle.setToolTip("Show custom rig mapping, diagnostic controls, and developer options.")
+        menu_bar.setCornerWidget(advanced_toggle)
+
+    def _help_page(self, heading: str, description: str, documents: tuple[tuple[str, str], ...]) -> Any:
+        qt = self.qt
+        page = qt["QWidget"]()
+        layout = qt["QVBoxLayout"](page)
+        layout.setSpacing(10)
+        title = qt["QLabel"](heading)
+        title.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        layout.addWidget(title)
+        intro = qt["QLabel"](description)
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        group = qt["QGroupBox"]("Documentation")
+        rows = qt["QVBoxLayout"](group)
+        for label, filename in documents:
+            button = qt["QPushButton"](label)
+            button.setToolTip(f"Open docs/{filename} in your default Markdown viewer.")
+            button.clicked.connect(lambda _checked=False, name=filename: self.controller.open_doc(name))
+            rows.addWidget(button)
+        layout.addWidget(group)
+        layout.addStretch(1)
+        return page
+
+    @staticmethod
+    def _remove_tab(tabs: Any, title: str) -> None:
+        for index in range(tabs.count() - 1, -1, -1):
+            if tabs.tabText(index) == title:
+                tabs.removeTab(index)
+
+    def _set_advanced_from_action(self, checked: bool) -> None:
+        self.controller.advanced_mode_toggle.setChecked(bool(checked))
+
+    def _advanced_visibility_changed(self, checked: bool) -> None:
+        self.advanced_action.setChecked(bool(checked))
+        self._set_crig_tab_visible(bool(checked))
+
+    def _set_crig_tab_visible(self, visible: bool) -> None:
+        index = self._animation_tab_index("Root & .crig Mapping")
+        if visible and index < 0:
+            insert_at = self._animation_tab_index("Export")
+            if insert_at < 0:
+                insert_at = max(0, self.animation_tabs.count() - 1)
+            self.animation_tabs.insertTab(insert_at, self.crig_mapping.widget, "Root & .crig Mapping")
+        elif not visible and index >= 0:
+            self.animation_tabs.removeTab(index)
+
+    def _show_about(self) -> None:
+        self.qt["QMessageBox"].information(
+            self.window,
+            "About DL ReAnimated",
+            f"DL ReAnimated {__version__}\n\nProject-based FBX, ANM2, RPack, and model authoring tools for Dying Light.",
+        )
+
+    def _install_project_sync_hooks(self) -> None:
+        original_sync = self.controller._sync_project_from_ui
+        original_refresh = self.controller._refresh_all
+
+        def sync_with_models() -> None:
+            original_sync()
+            self.controller.project.extensions[MODEL_WORKSPACE_EXTENSION_KEY] = self.models.serialize()
+
+        def refresh_with_models() -> None:
+            original_refresh()
+            self._restore_extension_state()
+            self.crig_mapping.reload_clips()
+
+        self.controller._sync_project_from_ui = sync_with_models
+        self.controller._refresh_all = refresh_with_models
+
+    def _restore_extension_state(self) -> None:
+        payload = self.controller.project.extensions.get(MODEL_WORKSPACE_EXTENSION_KEY, {})
+        self.models.restore(payload if isinstance(payload, dict) else {})
+
+    def _mark_dirty(self) -> None:
+        self.controller.dirty = True
+        self.controller._update_title()
+
+    def _add_animation(self) -> None:
+        self.main_tabs.setCurrentIndex(0)
+        self.animation_tabs.setCurrentIndex(max(0, self._animation_tab_index("Animations")))
+        self.controller.add_animations()
+        self.crig_mapping.reload_clips()
+
+    def _add_model(self) -> None:
+        self.main_tabs.setCurrentIndex(1)
+        self.models.tabs.setCurrentIndex(0)
+        self.models.add_models()
+
+    def _build_animations(self) -> None:
+        self.main_tabs.setCurrentIndex(0)
+        self.controller._sync_project_from_ui()
+        self.controller.build_rpack()
+
+    def _build_models(self) -> None:
+        self.main_tabs.setCurrentIndex(1)
+        self.models.tabs.setCurrentIndex(2)
+        self.models.compile_and_install()
+
+    def _animation_tab_index(self, title: str) -> int:
+        for index in range(self.animation_tabs.count()):
+            if self.animation_tabs.tabText(index) == title:
+                return index
+        return -1
+
+    def _animation_subtab_changed(self, index: int) -> None:
+        if index >= 0 and self.animation_tabs.tabText(index) == "Root & .crig Mapping":
+            self.controller._sync_project_from_ui()
+            self.crig_mapping.reload_clips()
+
+    def _workspace_changed(self, index: int) -> None:
+        if index == 0:
+            self.crig_mapping.reload_clips()
+        elif index == 1:
+            self.models._refresh_mapping_model_combo()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

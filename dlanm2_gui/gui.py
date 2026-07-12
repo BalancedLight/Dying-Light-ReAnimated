@@ -7,12 +7,14 @@ GUI replaceable and makes later versions able to migrate old projects.
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import os
 from pathlib import Path
 import shutil
 import struct
 import sys
+import threading
 from typing import Any
 
 from . import __version__
@@ -22,6 +24,7 @@ from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
 from .anm2 import Anm2Header, HEADER_LENGTH
 from .anm2_fbx import chrome_rig_from_fbx_skeleton
 from .blender_fbx import discover_blender, export_anm2_to_fbx
+from .background_tasks import BackgroundTaskRunner, TaskFailure
 from .bone_maps import GenericBoneMap, BoneMapPair, auto_map_skeletons
 from .oracle.binary_fbx_mixamo import _FbxDocument
 from .project_builder import build_project, export_project_anm2_files
@@ -143,12 +146,21 @@ class MainWindow:
 
         class _ProjectWindow(qt["QMainWindow"]):
             def closeEvent(self, event) -> None:  # type: ignore[override]
+                if controller._background_work_active():
+                    controller.qt["QMessageBox"].information(
+                        self,
+                        "Work still running",
+                        "Wait for the active build or export to finish before closing DL ReAnimated.",
+                    )
+                    event.ignore()
+                    return
                 if controller._confirm_discard_changes():
                     event.accept()
                 else:
                     event.ignore()
 
         self.window = _ProjectWindow()
+        self.background_tasks = BackgroundTaskRunner(self.window)
         self.window.setWindowTitle(f"DL ReAnimated {__version__}")
         self.window.resize(1380, 900)
         self.window.setMinimumSize(1050, 700)
@@ -172,10 +184,10 @@ class MainWindow:
         self._build_export_tab()
         self._build_anm2_to_fbx_tab()
         self._build_help_tab()
-        # DLR_MIMIC_PROTOTYPE_BEGIN
+        # Facial workspace integration
         from .mimic_gui import install_mimic_ui
         install_mimic_ui(self)
-        # DLR_MIMIC_PROTOTYPE_END
+        # End facial workspace integration
         self._refresh_all()
 
     def show(self) -> None:
@@ -191,9 +203,8 @@ class MainWindow:
         project.rig.stock_writer_control_anm2 = str(
             self.resource_root / "reference" / "stock_writer_control.anm2"
         )
-        project.rig.trusted_source_rest_json = str(
-            self.resource_root / "reference" / "same_model_tpose_20260619.json"
-        )
+        trusted_rest = self.resource_root / "reference" / "same_model_tpose_20260619.json"
+        project.rig.trusted_source_rest_json = str(trusted_rest) if trusted_rest.is_file() else ""
         project.export.output_directory = str(self.root / "build")
         project.anm2_to_fbx.output_directory = str(self.root / "build" / "fbx")
         project.export.default_script_target = DEFAULT_SCRIPT_TARGET_ID
@@ -837,6 +848,7 @@ class MainWindow:
         layout.addLayout(export_row)
         layout.addWidget(self.reverse_log)
         self._reverse_cancel_requested = False
+        self._reverse_cancel_event = threading.Event()
         self.tabs.addTab(page, "ANM2 → FBX")
 
     def _build_help_tab(self) -> None:
@@ -1333,7 +1345,7 @@ class MainWindow:
                 combo.setMinimumHeight(30)
                 combo.setToolTip(
                     f"Source FBX bone assigned to the {role.label} humanoid role. Mouse-wheel changes "
-                    "are disabled unless the dropdown is open."
+                    "are disabled unless the dropdown is open. Type a custom bone name and press Enter to apply it."
                 )
                 combo.addItem("")
                 combo.addItems(source_bones)
@@ -1345,7 +1357,12 @@ class MainWindow:
                     )
                 )
                 if combo.lineEdit() is not None:
-                    combo.lineEdit().editingFinished.connect(
+                    # editingFinished also fires when focus moves from the line
+                    # editor into its own popup. Rebuilding the table there
+                    # destroys the open combo after roughly a second. Typed
+                    # values commit explicitly with Enter; list choices use
+                    # the activated signal above.
+                    combo.lineEdit().returnPressed.connect(
                         lambda widget=combo, role_id=role.role_id, aid=animation.animation_id: self._mapping_changed(
                             aid, role_id, widget.currentText()
                         )
@@ -1353,6 +1370,14 @@ class MainWindow:
                 self.mapping_table.setCellWidget(row_index, 2, combo)
         finally:
             self._refreshing = False
+        self._update_mapping_summary(profile, source_bones)
+        self._filter_mapping_rows()
+
+    def _update_mapping_summary(
+        self,
+        profile: SourceBoneMappingProfile,
+        source_bones: list[str],
+    ) -> None:
         errors = profile.validate(source_bones)
         mapped = len(profile.role_to_bone)
         required_count = sum(1 for role in HUMANOID_ROLES if role.required)
@@ -1367,7 +1392,6 @@ class MainWindow:
             + ("<br>" + "<br>".join(errors[:8]) if errors else "")
         )
         self.ignored_bones.setPlainText("\n".join(profile.ignored_bones))
-        self._filter_mapping_rows()
 
     def _mapping_changed(self, animation_id: str, role_id: str, value: str) -> None:
         if self._refreshing:
@@ -1385,7 +1409,20 @@ class MainWindow:
         profile.ignored_bones = [bone for bone in sorted(document.limb_models) if bone not in used]
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
         self._mark_dirty()
-        self._refresh_mapping_table(animation, document, profile)
+        # Keep every embedded combo alive. Rebuilding the entire table here
+        # replaces all 64 dropdowns immediately after each selection and makes
+        # subsequent popups appear to close themselves.
+        for row in range(self.mapping_table.rowCount()):
+            role_item = self.mapping_table.item(row, 1)
+            if role_item is None or role_item.data(self.qt["Qt"].UserRole) != role_id:
+                continue
+            self.mapping_table.item(row, 4).setText(
+                f"{profile.confidence_by_role.get(role_id, 0.0):.2f}"
+            )
+            self.mapping_table.item(row, 5).setText(profile.method_by_role.get(role_id, ""))
+            break
+        self._update_mapping_summary(profile, sorted(document.limb_models))
+        self._filter_mapping_rows()
 
     def auto_map_selected(self) -> None:
         if self.project.rig.retarget_mode == "exact":
@@ -1547,18 +1584,21 @@ class MainWindow:
             return
 
         self.build_log.clear()
-        self.progress_bar.setRange(0, 0)
-        self.build_button.setEnabled(False)
-        self.export_anm2_button.setEnabled(False)
-        self.qt["QApplication"].setOverrideCursor(self.qt["Qt"].WaitCursor)
-        try:
+        self._set_animation_build_busy(True, "Exporting ANM2 files in the background…")
+        project = deepcopy(self.project)
+
+        def work(progress):
             export_warnings: list[str] = []
             paths = export_project_anm2_files(
-                self.project,
+                project,
                 destination,
-                progress=self._append_build_log,
+                progress=progress,
                 warning=export_warnings.append,
             )
+            return paths, export_warnings
+
+        def succeeded(payload) -> None:
+            paths, export_warnings = payload
             self._append_build_log("")
             self._append_build_log("Exported ANM2 files:")
             for path in paths:
@@ -1578,15 +1618,16 @@ class MainWindow:
                 self.qt["QMessageBox"].information(
                     self.window, "ANM2 export complete", message
                 )
-        except Exception as exc:
-            self._append_build_log(f"ERROR: {exc}")
-            self._show_error("ANM2 export failed", exc)
-        finally:
-            self.qt["QApplication"].restoreOverrideCursor()
-            self.progress_bar.setRange(0, 1)
-            self.progress_bar.setValue(0)
-            self.build_button.setEnabled(True)
-            self.export_anm2_button.setEnabled(True)
+
+        if not self.background_tasks.start(
+            work,
+            progress=self._append_build_log,
+            succeeded=succeeded,
+            failed=lambda failure: self._background_build_error("ANM2 export failed", failure),
+            finished=lambda: self._set_animation_build_busy(False),
+        ):
+            self._set_animation_build_busy(False)
+            self.status.showMessage("Another animation build or export is already running.", 5000)
 
     def build_rpack(self) -> None:
         self._sync_project_from_ui()
@@ -1601,13 +1642,19 @@ class MainWindow:
             self.save_project_as()
             if self.project_path is None:
                 return
+        # Persist the exact build input before starting. Edits made while the
+        # worker runs remain dirty and are never overwritten on completion.
+        self.project.save(self.project_path)
+        self.dirty = False
+        self._update_title()
+        project = deepcopy(self.project)
         self.build_log.clear()
-        self.progress_bar.setRange(0, 0)
-        self.build_button.setEnabled(False)
-        self.export_anm2_button.setEnabled(False)
-        self.qt["QApplication"].setOverrideCursor(self.qt["Qt"].WaitCursor)
-        try:
-            result = build_project(self.project, progress=self._append_build_log)
+        self._set_animation_build_busy(True, "Building the animation RPack in the background…")
+
+        def work(progress):
+            return build_project(project, progress=progress)
+
+        def succeeded(result) -> None:
             self._append_build_log("")
             self._append_build_log(json.dumps(result.to_dict(), indent=2))
             self.status.showMessage(f"Built {result.pack_path}", 10000)
@@ -1627,22 +1674,38 @@ class MainWindow:
                 self.qt["QMessageBox"].information(
                     self.window, "RPack built", message
                 )
-            self.project.save(self.project_path)
-            self.dirty = False
-            self._update_title()
-        except Exception as exc:
-            self._append_build_log(f"ERROR: {exc}")
-            self._show_error("Build failed", exc)
-        finally:
-            self.qt["QApplication"].restoreOverrideCursor()
-            self.progress_bar.setRange(0, 1)
-            self.progress_bar.setValue(0)
-            self.build_button.setEnabled(True)
-            self.export_anm2_button.setEnabled(True)
+
+        if not self.background_tasks.start(
+            work,
+            progress=self._append_build_log,
+            succeeded=succeeded,
+            failed=lambda failure: self._background_build_error("Build failed", failure),
+            finished=lambda: self._set_animation_build_busy(False),
+        ):
+            self._set_animation_build_busy(False)
+            self.status.showMessage("Another animation build or export is already running.", 5000)
 
     def _append_build_log(self, message: str) -> None:
         self.build_log.appendPlainText(message)
-        self.qt["QApplication"].processEvents()
+
+    def _set_animation_build_busy(self, busy: bool, message: str = "") -> None:
+        self.progress_bar.setRange(0, 0 if busy else 1)
+        if not busy:
+            self.progress_bar.setValue(0)
+        self.build_button.setEnabled(not busy)
+        self.export_anm2_button.setEnabled(not busy)
+        if message:
+            self.status.showMessage(message)
+        elif not busy:
+            self.status.showMessage("Ready", 3000)
+
+    def _background_build_error(self, title: str, failure: TaskFailure) -> None:
+        self._append_build_log(failure.traceback)
+        self._show_error(title, RuntimeError(failure.message))
+
+    def _background_work_active(self) -> bool:
+        runners = [self.background_tasks, *getattr(self, "extra_task_runners", [])]
+        return any(runner.busy for runner in runners)
 
     def _export_mode_changed(self) -> None:
         if self._refreshing:
@@ -1936,6 +1999,7 @@ class MainWindow:
 
     def _reverse_cancel(self) -> None:
         self._reverse_cancel_requested = True
+        self._reverse_cancel_event.set()
         self.reverse_log.appendPlainText("Cancelling Blender export…")
 
     def _reverse_export(self) -> None:
@@ -1952,11 +2016,33 @@ class MainWindow:
             try: mapping = self._reverse_profile_from_table()
             except Exception as exc: self._show_error("Bone mapping is not ready", exc); return
         output = Path(settings.output_directory); output.mkdir(parents=True, exist_ok=True)
+        items = deepcopy(enabled)
+        mode = settings.mode
+        target_fbx = settings.target_fbx
+        translation_scale = settings.translation_scale
+        mapping = deepcopy(mapping)
+        rig_paths = dict(getattr(self, "_rig_paths_by_ref", {}))
+        resource_root_path = Path(self.resource_root)
         self.reverse_log.clear(); self._reverse_cancel_requested = False
+        self._reverse_cancel_event.clear()
         self.reverse_export_button.setEnabled(False); self.reverse_cancel_button.setEnabled(True)
-        try:
-            for item in enabled:
-                if self._reverse_cancel_requested: break
+        self.status.showMessage("Exporting FBX files in the background…")
+
+        def work(progress):
+            warnings: list[str] = []
+
+            def load_rig(rig_ref: str, rig_path: str = "") -> ChromeRig:
+                if rig_ref == BUILTIN_MALE_RIG_REF:
+                    return ChromeRig.load(resource_root_path / "reference" / "male_npc_infected.crig")
+                path = rig_path or rig_paths.get(rig_ref, "")
+                if not path:
+                    raise FileNotFoundError(f"Installed Chrome Rig not found: {rig_ref}")
+                return ChromeRig.load(path)
+
+            exported = 0
+            for item in items:
+                if self._reverse_cancel_event.is_set():
+                    break
                 if (
                     not item.output_name.strip()
                     or Path(item.output_name).name != item.output_name
@@ -1964,31 +2050,56 @@ class MainWindow:
                     or "\\" in item.output_name
                 ):
                     raise ValueError(f"Invalid FBX output name: {item.output_name!r}")
-                rig = self._reverse_load_rig(item.source_rig_ref, item.source_rig_path)
-                scale: str | float = settings.translation_scale
+                rig = load_rig(item.source_rig_ref, item.source_rig_path)
+                scale: str | float = translation_scale
                 if scale != "auto": scale = float(scale)
                 result = export_anm2_to_fbx(
                     item.source_anm2, rig, output / f"{item.output_name}.fbx",
                     fps=item.fps, start_frame=item.start_frame, end_frame=item.end_frame,
-                    target_fbx=settings.target_fbx if settings.mode == "retarget" else None,
+                    target_fbx=target_fbx if mode == "retarget" else None,
                     bone_map=mapping, translation_scale=scale, blender_executable=blender,
-                    progress=self.reverse_log.appendPlainText,
-                    cancel_check=lambda: self._reverse_process_cancel(),
+                    progress=progress,
+                    cancel_check=self._reverse_cancel_event.is_set,
                 )
-                for warning in result.warnings: self.reverse_log.appendPlainText("WARNING: " + warning)
-            if not self._reverse_cancel_requested:
-                self.qt["QMessageBox"].information(self.window, "FBX export complete", f"Exported FBX files to:\n{output}")
-            if self.project_path:
-                self.project.save(self.project_path); self.dirty = False; self._update_title()
-        except Exception as exc:
-            self.reverse_log.appendPlainText("ERROR: " + str(exc))
-            if "cancelled" not in str(exc).lower(): self._show_error("ANM2 to FBX export failed", exc)
-        finally:
-            self.reverse_export_button.setEnabled(True); self.reverse_cancel_button.setEnabled(False)
+                warnings.extend(result.warnings)
+                exported += 1
+            return exported, warnings, self._reverse_cancel_event.is_set()
 
-    def _reverse_process_cancel(self) -> bool:
-        self.qt["QApplication"].processEvents()
-        return bool(self._reverse_cancel_requested)
+        def succeeded(payload) -> None:
+            exported, warnings, cancelled = payload
+            for warning in warnings:
+                self.reverse_log.appendPlainText("WARNING: " + warning)
+            if cancelled:
+                self.reverse_log.appendPlainText("Export cancelled.")
+                self.status.showMessage("FBX export cancelled", 5000)
+            else:
+                self.status.showMessage(f"Exported {exported} FBX file(s)", 10000)
+                self.qt["QMessageBox"].information(
+                    self.window, "FBX export complete", f"Exported {exported} FBX file(s) to:\n{output}"
+                )
+
+        def failed(failure: TaskFailure) -> None:
+            self.reverse_log.appendPlainText(failure.traceback)
+            if not self._reverse_cancel_event.is_set():
+                self._show_error("ANM2 to FBX export failed", RuntimeError(failure.message))
+
+        def finished() -> None:
+            self.reverse_export_button.setEnabled(True); self.reverse_cancel_button.setEnabled(False)
+            self._reverse_cancel_requested = self._reverse_cancel_event.is_set()
+
+        if self.project_path:
+            self.project.save(self.project_path)
+            self.dirty = False
+            self._update_title()
+        if not self.background_tasks.start(
+            work,
+            progress=self.reverse_log.appendPlainText,
+            succeeded=succeeded,
+            failed=failed,
+            finished=finished,
+        ):
+            finished()
+            self.status.showMessage("Another animation build or export is already running.", 5000)
 
     # --------------------------------------------------------------- helpers
     def _refresh_all(self) -> None:
@@ -2337,7 +2448,6 @@ class MainWindow:
             combo.setCurrentIndex(index)
         elif combo.isEditable():
             combo.setEditText(str(value))
-
     def _browse_file(self, edit: Any, file_filter: str) -> None:
         start = edit.text().strip() or str(self.root)
         path, _ = self.qt["QFileDialog"].getOpenFileName(

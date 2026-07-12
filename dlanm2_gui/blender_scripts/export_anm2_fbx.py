@@ -13,9 +13,7 @@ import zlib
 import bpy
 from mathutils import Matrix, Quaternion, Vector
 
-
 Y_UP_TO_BLENDER = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
-
 
 def trs(row):
     translation = Matrix.Translation(Vector(row["translation"]))
@@ -23,10 +21,8 @@ def trs(row):
     scale = Matrix.Diagonal((*row["scale"], 1.0))
     return translation @ rotation @ scale
 
-
 def convert(matrix):
     return Y_UP_TO_BLENDER @ matrix @ Y_UP_TO_BLENDER.inverted()
-
 
 def global_matrices(locals_, bones):
     result = [None] * len(bones)
@@ -37,7 +33,6 @@ def global_matrices(locals_, bones):
         result[index] = resolve(parent) @ locals_[index] if parent >= 0 else locals_[index]
         return result[index]
     return [resolve(index) for index in range(len(bones))]
-
 
 def topological_indices(bones):
     result = []
@@ -54,7 +49,6 @@ def topological_indices(bones):
         visit(index)
     return result
 
-
 def child_indices(bones):
     children = [[] for _ in bones]
     for index, row in enumerate(bones):
@@ -63,21 +57,12 @@ def child_indices(bones):
             children[parent].append(index)
     return children
 
-
 def descendant_depth(index, children):
     if not children[index]:
         return 0
     return 1 + max(descendant_depth(child, children) for child in children[index])
 
-
 def display_child(index, bones, heads, children):
-    """Choose a useful joint for a Blender display bone's tail.
-
-    Chrome rigs commonly contain zero-length twist/helper nodes between the
-    visible joints. Walk through coincident nodes and prefer the continuing
-    chain over a terminal helper. This changes only Blender's bone display;
-    the exact bind and animated matrices remain independent of the tail.
-    """
     origin = heads[index]
     candidates = []
     pending = list(children[index])
@@ -100,9 +85,7 @@ def display_child(index, bones, heads, children):
         candidates.append((helper_penalty, -descendant_depth(child, children), vector.length, child))
     return min(candidates)[3] if candidates else None
 
-
 def action_fcurves(action):
-    """Yield curves from both legacy and Blender 4.4+/5 layered Actions."""
     legacy = getattr(action, "fcurves", None)
     if legacy is not None:
         yield from legacy
@@ -111,7 +94,6 @@ def action_fcurves(action):
         for strip in layer.strips:
             for channelbag in getattr(strip, "channelbags", ()):
                 yield from channelbag.fcurves
-
 
 def main(argv=None):
     parser = argparse.ArgumentParser()
@@ -131,12 +113,8 @@ def main(argv=None):
     scene.frame_end = len(job["frames"]) - 1
 
     bones = job["bones"]
-    armature_indices = [
-        index for index, row in enumerate(bones) if not row.get("helper", False)
-    ]
-    helper_indices = [
-        index for index, row in enumerate(bones) if row.get("helper", False)
-    ]
+    armature_indices = [index for index, row in enumerate(bones) if not row.get("helper", False)]
+    helper_indices = [index for index, row in enumerate(bones) if row.get("helper", False)]
     bind_local = [
         trs({"translation": row["bind_translation"], "rotation_wxyz": row["bind_rotation_wxyz"], "scale": row["bind_scale"]})
         for row in bones
@@ -157,13 +135,8 @@ def main(argv=None):
     for index in armature_indices:
         row = bones[index]
         head = bind_heads[index]
-        child_index = None if row.get("helper", False) else display_child(
-            index, bones, bind_heads, children
-        )
+        child_index = None if row.get("helper", False) else display_child(index, bones, bind_heads, children)
         if child_index is not None:
-            # Point the display bone at a real downstream joint. Bone tails do
-            # not encode Chrome transforms, but this makes the exported rig
-            # readable and keeps ordinary chains visually connected.
             tail = bind_heads[child_index].copy()
         else:
             parent = int(row["parent_index"])
@@ -196,12 +169,6 @@ def main(argv=None):
         row = bones[index]
         parent = int(row["parent_index"])
         name = str(row["name"]).lower()
-        # Zero-length upper-arm/thigh twist nodes share their parent's head.
-        # Leaving them as direct children makes Blender average the parent's
-        # visible tail between the zero-length twist and the real elbow/knee,
-        # shortening major limb bones by exactly one half. Move only the
-        # display parent to the grandparent; keyed armature-space matrices keep
-        # the twist transform itself unchanged.
         if (
             parent in edit_bones
             and "twist" in name
@@ -212,9 +179,6 @@ def main(argv=None):
                 parent = grandparent
         if parent in edit_bones:
             edit_bones[index].parent = edit_bones[parent]
-            # Geometrically touching heads/tails are enough for a readable
-            # hierarchy. FBX importers can shorten parent bones when Blender's
-            # connected flag is exported across branching/zero-length chains.
             edit_bones[index].use_connect = False
     bpy.ops.object.mode_set(mode="POSE")
     for index in armature_indices:
@@ -225,10 +189,6 @@ def main(argv=None):
     action = bpy.data.actions.new(job["name"])
     armature.animation_data_create()
     armature.animation_data.action = action
-    # Blender 4.4+/5 creates the layered Action slot/channel bag lazily on the
-    # first keyframe insertion. That initialization can reset the pose and key
-    # the rest transform instead of ANM2 frame 0. Seed the channels first; the
-    # real frame-1 insertion below replaces these keys at the same time.
     scene.frame_set(0)
     for index in armature_indices:
         row = bones[index]
@@ -243,34 +203,20 @@ def main(argv=None):
         fcurve.update()
     previous_quaternions = {}
     evaluation_order = [index for index in topological_indices(bones) if index in edit_bones]
-    # Chrome bind rotations describe the engine's transform basis, which is
-    # not necessarily aimed down the visible bone. Blender, however, displays
-    # every bone along its local Y axis. Preserve the fixed difference between
-    # those bases so animated heads retain the exact ANM2 joint transforms
-    # while bone tails continue to point toward their anatomical children.
     display_basis_corrections = {}
     for index in armature_indices:
         row = bones[index]
         display_rest_global = armature.data.bones[row["name"]].matrix_local.copy()
-        display_basis_corrections[index] = (
-            bind_global[index].inverted_safe() @ display_rest_global
-        )
+        display_basis_corrections[index] = bind_global[index].inverted_safe() @ display_rest_global
     native_metadata = {
         "version": 1,
         "display_basis_corrections": {
-            bones[index]["name"]: [
-                float(value)
-                for matrix_row in display_basis_corrections[index]
-                for value in matrix_row
-            ]
+            bones[index]["name"]: [float(value) for matrix_row in display_basis_corrections[index] for value in matrix_row]
             for index in armature_indices
         },
         "helper_tracks": {
-            f"{int(bones[index]['descriptor']):08X}": [
-                frame[index] for frame in job["frames"]
-            ]
-            for index in helper_indices
-            if bones[index].get("descriptor") is not None
+            f"{int(bones[index]['descriptor']):08X}": [frame[index] for frame in job["frames"]]
+            for index in helper_indices if bones[index].get("descriptor") is not None
         },
     }
     armature["dlr_native_metadata_zlib_b64"] = base64.b64encode(
@@ -281,11 +227,6 @@ def main(argv=None):
         scene.frame_set(blender_frame)
         animated_local = [convert(trs(row)) for row in frame_rows]
         animated_global = global_matrices(animated_local, bones)
-        # ANM2 rows are absolute parent-local transforms. Assign their exact
-        # armature-space matrices in hierarchy order. Updating after each bone
-        # is intentional: Blender 5 evaluates pose parents lazily, and a batch
-        # matrix assignment can otherwise convert children against stale parent
-        # state (correct rotations but badly displaced joints).
         for index in evaluation_order:
             row = bones[index]
             pose_bone = armature.pose.bones[row["name"]]
@@ -314,16 +255,13 @@ def main(argv=None):
         helper = bpy.data.objects.new(row["name"], None)
         helper.empty_display_type = "ARROWS"
         helper.empty_display_size = 0.05
-        helper["dlr_descriptor"] = (
-            "" if row.get("descriptor") is None else f"0x{int(row['descriptor']):08X}"
-        )
+        helper["dlr_descriptor"] = "" if row.get("descriptor") is None else f"0x{int(row['descriptor']):08X}"
         helper["dlr_helper"] = True
         bpy.context.collection.objects.link(helper)
         helper.animation_data_create()
         helper_action = bpy.data.actions.new(f"{job['name']}__{row['name']}")
         helper.animation_data.action = helper_action
         helper.rotation_mode = "QUATERNION"
-        # Seed layered Action channels before writing the actual frames.
         helper.keyframe_insert("location", frame=0)
         helper.keyframe_insert("rotation_quaternion", frame=0)
         helper.keyframe_insert("scale", frame=0)
@@ -363,7 +301,6 @@ def main(argv=None):
         primary_bone_axis="Y", secondary_bone_axis="X", use_custom_props=True,
     )
     print(f"DLR_EXPORT_COMPLETE:{output}")
-
 
 if __name__ == "__main__":
     separator = sys.argv.index("--") if "--" in sys.argv else len(sys.argv) - 1
