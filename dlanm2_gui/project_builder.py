@@ -122,7 +122,8 @@ def export_project_anm2_files(
         return exported
 
 
-def build_project(
+# DLR_MIMIC_PROTOTYPE_BODY_CORE
+def _build_project_body_core(
     project: DlReanimatedProject,
     *,
     progress: ProgressCallback | None = None,
@@ -753,6 +754,20 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
         if os.path.exists(temp_name):
             os.unlink(temp_name)
 
+
+
+# DLR_MIMIC_PROTOTYPE_BEGIN
+def build_project(project, *, progress=None):
+    """Build through the local facial/mimic feature wrapper."""
+
+    from .mimic_project_builder import build_project_with_mimics
+
+    return build_project_with_mimics(
+        project,
+        progress=progress,
+        body_builder=_build_project_body_core,
+    )
+# DLR_MIMIC_PROTOTYPE_END
 
 __all__ = [
     "BuiltAnimation",

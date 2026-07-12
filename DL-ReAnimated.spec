@@ -22,6 +22,14 @@ for filename in (
         datas.append((str(source), "."))
 
 hiddenimports = [
+    # DLR_MIMIC_PROTOTYPE_HIDDENIMPORTS_BEGIN
+    "dlanm2_gui.mimic_gui",
+    "dlanm2_gui.mimic_project_builder",
+    "dlanm2_gui.mimic_builder",
+    "dlanm2_gui.mimic_profiles",
+    "dlanm2_gui.fbx_blendshapes",
+    "dlanm2_gui.root_motion_override",
+    # DLR_MIMIC_PROTOTYPE_HIDDENIMPORTS_END
     "dlanm2_gui.oracle.custom_fbx_release_candidate_editor_rpack",
 ]
 
