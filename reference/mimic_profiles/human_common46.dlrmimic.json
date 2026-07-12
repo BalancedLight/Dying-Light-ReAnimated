@@ -1,0 +1,1017 @@
+{
+  "format": "dl-reanimated-mimic-profile",
+  "schema_version": 1,
+  "profile_id": "builtin:human_common46",
+  "name": "Dying Light human / infected common 46",
+  "description": "Common 46-track facial ANM2 profile validated on player and infected models. Morph weights use ANM2 tx.",
+  "author": "DL ReAnimated research",
+  "license": "Unlicense metadata/profile; contains no game code or geometry",
+  "track_count": 46,
+  "weight_component": "tx",
+  "default_components": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "source_alias_sets": {
+    "arkit": "ARKit-style aliases are included per target where confidence is high",
+    "speech": "Dying Light mouth-control aliases include w, fv, pbm, open, and wide"
+  },
+  "tracks": [
+    {
+      "index": 0,
+      "descriptor": "0x00000077",
+      "name": "w",
+      "label": "Speech: W / rounded lips",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "speech",
+      "side": "center",
+      "aliases": [
+        "w",
+        "viseme_w",
+        "mouth_w",
+        "phoneme_w"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "speech"
+      ]
+    },
+    {
+      "index": 1,
+      "descriptor": "0x000010CC",
+      "name": "fv",
+      "label": "Speech: F/V",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "speech",
+      "side": "center",
+      "aliases": [
+        "fv",
+        "viseme_fv",
+        "phoneme_fv",
+        "mouth_fv"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "speech"
+      ]
+    },
+    {
+      "index": 2,
+      "descriptor": "0x0002EF8F",
+      "name": "pbm",
+      "label": "Speech: P/B/M",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "speech",
+      "side": "center",
+      "aliases": [
+        "pbm",
+        "viseme_pbm",
+        "phoneme_pbm",
+        "mouth_close"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "speech"
+      ]
+    },
+    {
+      "index": 3,
+      "descriptor": "0x0077ABC2",
+      "name": "open",
+      "label": "Speech: open mouth",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "speech",
+      "side": "center",
+      "aliases": [
+        "open",
+        "mouth_open",
+        "viseme_open"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "speech"
+      ]
+    },
+    {
+      "index": 4,
+      "descriptor": "0x007BABC6",
+      "name": "unknown_morph_007BABC6",
+      "label": "Speech mouth control (unresolved)",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "speech",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.5,
+      "tags": [
+        "speech"
+      ]
+    },
+    {
+      "index": 5,
+      "descriptor": "0x007FE761",
+      "name": "wide",
+      "label": "Speech: wide mouth",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "speech",
+      "side": "center",
+      "aliases": [
+        "wide",
+        "mouth_wide",
+        "viseme_wide"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "speech"
+      ]
+    },
+    {
+      "index": 6,
+      "descriptor": "0x0E731582",
+      "name": "unknown_morph_0E731582",
+      "label": "Left mouth / jaw inverse",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "left",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.58,
+      "tags": [
+        "mouth_jaw",
+        "left"
+      ]
+    },
+    {
+      "index": 7,
+      "descriptor": "0x13F343FD",
+      "name": "unknown_morph_13F343FD",
+      "label": "Subtle brow / whole-face shaping",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "brow",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.45,
+      "tags": [
+        "brow"
+      ]
+    },
+    {
+      "index": 8,
+      "descriptor": "0x14047562",
+      "name": "unknown_morph_14047562",
+      "label": "Subtle brow / whole-face shaping",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "brow",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.45,
+      "tags": [
+        "brow"
+      ]
+    },
+    {
+      "index": 9,
+      "descriptor": "0x18310B8A",
+      "name": "morph_lips_u_open",
+      "label": "Upper-lip opening",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "upper_lip",
+      "side": "center",
+      "aliases": [
+        "upper_lip_open",
+        "mouth_upper_open"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "upper_lip"
+      ]
+    },
+    {
+      "index": 10,
+      "descriptor": "0x1D947B22",
+      "name": "morph_l_b_lid",
+      "label": "Left lower eyelid",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eyelid",
+      "side": "left",
+      "aliases": [
+        "lower_lid_left",
+        "left_lower_lid"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "eyelid",
+        "left"
+      ]
+    },
+    {
+      "index": 11,
+      "descriptor": "0x1DC8E1B0",
+      "name": "unknown_morph_1DC8E1B0",
+      "label": "Left upper-lip / cheek",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "cheek_mouth",
+      "side": "left",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.64,
+      "tags": [
+        "cheek_mouth",
+        "left"
+      ]
+    },
+    {
+      "index": 12,
+      "descriptor": "0x20C7B795",
+      "name": "morph_l_u_lid",
+      "label": "Left upper eyelid",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eyelid",
+      "side": "left",
+      "aliases": [
+        "eye_blink_left",
+        "blink_left",
+        "left_eye_blink",
+        "eyeBlinkLeft"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "eyelid",
+        "left"
+      ]
+    },
+    {
+      "index": 13,
+      "descriptor": "0x2C6E41DA",
+      "name": "unknown_morph_2C6E41DA",
+      "label": "Right brow / eye / nose lift",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "brow_eye",
+      "side": "right",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.7,
+      "tags": [
+        "brow_eye",
+        "right"
+      ]
+    },
+    {
+      "index": 14,
+      "descriptor": "0x350245B6",
+      "name": "unknown_morph_350245B6",
+      "label": "Upper lip / mouth shaping",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "upper_lip",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.6,
+      "tags": [
+        "upper_lip"
+      ]
+    },
+    {
+      "index": 15,
+      "descriptor": "0x3EA893FC",
+      "name": "unknown_morph_3EA893FC",
+      "label": "Right mouth corner inverse",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_corner",
+      "side": "right",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.58,
+      "tags": [
+        "mouth_corner",
+        "right"
+      ]
+    },
+    {
+      "index": 16,
+      "descriptor": "0x55DD3590",
+      "name": "unknown_morph_55DD3590",
+      "label": "Left brow / eye / nose lift",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "brow_eye",
+      "side": "left",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.7,
+      "tags": [
+        "brow_eye",
+        "left"
+      ]
+    },
+    {
+      "index": 17,
+      "descriptor": "0x6A9579FB",
+      "name": "unknown_morph_6A9579FB",
+      "label": "Lower mouth / jaw, right-biased",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.62,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 18,
+      "descriptor": "0x729BF19A",
+      "name": "morph_lips_L_dimple",
+      "label": "Left lip dimple",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_corner",
+      "side": "left",
+      "aliases": [
+        "mouth_dimple_left",
+        "mouthDimpleLeft"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "mouth_corner",
+        "left"
+      ]
+    },
+    {
+      "index": 19,
+      "descriptor": "0x842A3FB0",
+      "name": "morph_lips_R_dimple",
+      "label": "Right lip dimple",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_corner",
+      "side": "right",
+      "aliases": [
+        "mouth_dimple_right",
+        "mouthDimpleRight"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "mouth_corner",
+        "right"
+      ]
+    },
+    {
+      "index": 20,
+      "descriptor": "0x8F21C037",
+      "name": "morph_lips_R_smile",
+      "label": "Right smile",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_corner",
+      "side": "right",
+      "aliases": [
+        "mouth_smile_right",
+        "mouthSmileRight",
+        "smile_right"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "mouth_corner",
+        "right"
+      ]
+    },
+    {
+      "index": 21,
+      "descriptor": "0x8FBC19D2",
+      "name": "unknown_morph_8FBC19D2",
+      "label": "Lower-right mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "right",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.64,
+      "tags": [
+        "mouth_jaw",
+        "right"
+      ]
+    },
+    {
+      "index": 22,
+      "descriptor": "0x94F0C7FD",
+      "name": "morph_lips_B_down",
+      "label": "Lower lip down",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "lower_lip",
+      "side": "center",
+      "aliases": [
+        "mouth_lower_down",
+        "mouthLowerDownLeft",
+        "mouthLowerDownRight",
+        "lower_lip_down"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "lower_lip"
+      ]
+    },
+    {
+      "index": 23,
+      "descriptor": "0x94FC5D1F",
+      "name": "unknown_morph_94FC5D1F",
+      "label": "Lower mouth / jaw inverse",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.56,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 24,
+      "descriptor": "0xA065E20A",
+      "name": "morph_nose",
+      "label": "Nose / upper-lip compression",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "nose",
+      "side": "center",
+      "aliases": [
+        "morph_nose",
+        "nose",
+        "nose_wrinkle",
+        "nose_sneer"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 0.95,
+      "tags": [
+        "nose"
+      ]
+    },
+    {
+      "index": 25,
+      "descriptor": "0xAB777A08",
+      "name": "unknown_morph_AB777A08",
+      "label": "Brows / eyes compression",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "brow_eye",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.64,
+      "tags": [
+        "brow_eye"
+      ]
+    },
+    {
+      "index": 26,
+      "descriptor": "0xAFE9CB73",
+      "name": "morph_l_eye",
+      "label": "Left eye compression",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eye",
+      "side": "left",
+      "aliases": [
+        "eye_squint_left",
+        "left_eye_squint",
+        "eyeSquintLeft"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "eye",
+        "left"
+      ]
+    },
+    {
+      "index": 27,
+      "descriptor": "0xB0EC8039",
+      "name": "morph_r_eye",
+      "label": "Right eye compression",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eye",
+      "side": "right",
+      "aliases": [
+        "eye_squint_right",
+        "right_eye_squint",
+        "eyeSquintRight"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "eye",
+        "right"
+      ]
+    },
+    {
+      "index": 28,
+      "descriptor": "0xB24F5877",
+      "name": "unknown_morph_B24F5877",
+      "label": "Right mouth corner",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_corner",
+      "side": "right",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.62,
+      "tags": [
+        "mouth_corner",
+        "right"
+      ]
+    },
+    {
+      "index": 29,
+      "descriptor": "0xB253F65D",
+      "name": "unknown_morph_B253F65D",
+      "label": "Right mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "right",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.6,
+      "tags": [
+        "mouth_jaw",
+        "right"
+      ]
+    },
+    {
+      "index": 30,
+      "descriptor": "0xB258AA75",
+      "name": "morph_lips_U_up",
+      "label": "Upper lip raise",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "upper_lip",
+      "side": "center",
+      "aliases": [
+        "mouth_upper_up",
+        "mouthUpperUpLeft",
+        "mouthUpperUpRight",
+        "upper_lip_up"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "upper_lip"
+      ]
+    },
+    {
+      "index": 31,
+      "descriptor": "0xB44F26BC",
+      "name": "morph_lips_funnel",
+      "label": "Lip funnel / pucker",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth",
+      "side": "center",
+      "aliases": [
+        "mouth_funnel",
+        "mouthFunnel",
+        "mouth_pucker",
+        "mouthPucker"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "mouth"
+      ]
+    },
+    {
+      "index": 32,
+      "descriptor": "0xBFBF5180",
+      "name": "unknown_morph_BFBF5180",
+      "label": "Right eye / nose-side compression",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eye_nose",
+      "side": "right",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.66,
+      "tags": [
+        "eye_nose",
+        "right"
+      ]
+    },
+    {
+      "index": 33,
+      "descriptor": "0xC0598348",
+      "name": "morph_r_b_lid",
+      "label": "Right lower eyelid",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eyelid",
+      "side": "right",
+      "aliases": [
+        "lower_lid_right",
+        "right_lower_lid"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "eyelid",
+        "right"
+      ]
+    },
+    {
+      "index": 34,
+      "descriptor": "0xC08DE9D6",
+      "name": "unknown_morph_C08DE9D6",
+      "label": "Left cheek / mouth corner",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "cheek_mouth",
+      "side": "left",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.6,
+      "tags": [
+        "cheek_mouth",
+        "left"
+      ]
+    },
+    {
+      "index": 35,
+      "descriptor": "0xC38CBFBB",
+      "name": "morph_r_u_lid",
+      "label": "Right upper eyelid",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eyelid",
+      "side": "right",
+      "aliases": [
+        "eye_blink_right",
+        "blink_right",
+        "right_eye_blink",
+        "eyeBlinkRight"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "eyelid",
+        "right"
+      ]
+    },
+    {
+      "index": 36,
+      "descriptor": "0xCDEFF656",
+      "name": "unknown_morph_CDEFF656",
+      "label": "Left eye / nose-side compression",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "eye_nose",
+      "side": "left",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.66,
+      "tags": [
+        "eye_nose",
+        "left"
+      ]
+    },
+    {
+      "index": 37,
+      "descriptor": "0xD37F792D",
+      "name": "unknown_morph_D37F792D",
+      "label": "Mouth / jaw inverse",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.56,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 38,
+      "descriptor": "0xD38C4C58",
+      "name": "morph_jaw_open",
+      "label": "Jaw open",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "jaw",
+      "side": "center",
+      "aliases": [
+        "jaw_open",
+        "jawOpen",
+        "mouth_open",
+        "mouthOpen",
+        "viseme_aa"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "jaw"
+      ]
+    },
+    {
+      "index": 39,
+      "descriptor": "0xD3905313",
+      "name": "unknown_morph_D3905313",
+      "label": "Mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.58,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 40,
+      "descriptor": "0xDA618E63",
+      "name": "unknown_morph_DA618E63",
+      "label": "Lower lip / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "lower_lip",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.6,
+      "tags": [
+        "lower_lip"
+      ]
+    },
+    {
+      "index": 41,
+      "descriptor": "0xDDD17D86",
+      "name": "unknown_morph_DDD17D86",
+      "label": "Lower mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.62,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 42,
+      "descriptor": "0xDFF6877F",
+      "name": "unknown_morph_DFF6877F",
+      "label": "Mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.58,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 43,
+      "descriptor": "0xE760CB90",
+      "name": "unknown_morph_E760CB90",
+      "label": "Mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.58,
+      "tags": [
+        "mouth_jaw"
+      ]
+    },
+    {
+      "index": 44,
+      "descriptor": "0xEC5CB811",
+      "name": "morph_lips_L_smile",
+      "label": "Left smile",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_corner",
+      "side": "left",
+      "aliases": [
+        "mouth_smile_left",
+        "mouthSmileLeft",
+        "smile_left"
+      ],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "resolved",
+      "confidence": 1.0,
+      "tags": [
+        "mouth_corner",
+        "left"
+      ]
+    },
+    {
+      "index": 45,
+      "descriptor": "0xF951C276",
+      "name": "unknown_morph_F951C276",
+      "label": "Mouth / jaw",
+      "semantic": "morph_scalar_tx",
+      "component": "tx",
+      "region": "mouth_jaw",
+      "side": "center",
+      "aliases": [],
+      "neutral": 0.0,
+      "recommended_min": -1.5,
+      "recommended_max": 1.5,
+      "name_status": "video_region_only",
+      "confidence": 0.58,
+      "tags": [
+        "mouth_jaw"
+      ]
+    }
+  ],
+  "extensions": {
+    "video_sweep_review": "weights.mp4 unknown sweeps A/B, reviewed 2026-07-11",
+    "unresolved_names_are_not_claimed_as_exact_facs": true
+  }
+}
