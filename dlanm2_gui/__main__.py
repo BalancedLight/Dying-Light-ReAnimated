@@ -14,7 +14,7 @@ def main() -> int:
                 args.extend(["--report", sys.argv[index + 1]])
         return check_main(args)
 
-    from .gui import main as gui_main
+    from .unified_gui import main as gui_main
 
     return gui_main()
 

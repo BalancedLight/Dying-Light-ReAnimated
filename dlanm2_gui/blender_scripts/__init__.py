@@ -1,1 +1,1 @@
-"""Data-only Blender background helpers bundled with source and frozen builds."""
+"""Blender helper scripts bundled with DL ReAnimated."""
