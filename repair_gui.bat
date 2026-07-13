@@ -3,7 +3,7 @@ setlocal EnableExtensions
 cd /d "%~dp0"
 
 echo ============================================================
-echo  DL ReAnimated 0.4.0a2 - repair and launch
+echo  DL ReAnimated 0.5.0 - repair and launch
  echo ============================================================
 
 if exist ".venv\.dl_reanimated_ready" del /q ".venv\.dl_reanimated_ready" >nul 2>nul
