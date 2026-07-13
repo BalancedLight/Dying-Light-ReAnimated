@@ -47,7 +47,9 @@ def _role(
 
 
 _BASE_ROLES = [
-    _role("hips", "Hips", "mixamorig:Hips", "Body", "bip01", aliases=("hips", "pelvis", "root", "hip")),
+    # A scene root is not a hips transform. Treating "root" as a hips alias
+    # caused rigs with both root and pelvis to bind the body to the wrong node.
+    _role("hips", "Hips", "mixamorig:Hips", "Body", "bip01", aliases=("hips", "pelvis", "hip")),
     _role("pelvis", "Pelvis", "mixamorig:Hips", "Body", "pelvis", required=False, parent="hips", aliases=("pelvis", "hips")),
     _role("spine", "Spine", "mixamorig:Spine", "Body", "hspine", parent="hips", aliases=("spine0", "lower_spine")),
     _role("chest", "Chest", "mixamorig:Spine1", "Body", "spine1", parent="spine", aliases=("spine1", "chest", "mid_spine")),
@@ -232,6 +234,63 @@ def auto_map_source_bones(source_bones: Iterable[str], *, parents: Mapping[str, 
             score, bone = max(candidates, key=lambda row: (row[0], -bones.index(row[1])))
             profile.set_mapping(role.role_id, bone, confidence=score, method="exact" if score == 1.0 else "alias")
             used.add(bone)
+
+    # Fill the remaining roles with the same anatomical scan used by model
+    # import and the animation workspace. Exact/canonical matches above always
+    # win, so this only improves previously unresolved rows.
+    from .retarget_mapping import scan_humanoid_bones
+
+    role_for_semantic = {
+        "pelvis": "hips",
+        "spine_1": "spine",
+        "spine_2": "chest",
+        "spine_3": "upper_chest",
+        "neck_1": "neck",
+        "head": "head",
+        "l_clavicle": "left_shoulder",
+        "l_upperarm": "left_upper_arm",
+        "l_forearm": "left_lower_arm",
+        "l_hand": "left_hand",
+        "r_clavicle": "right_shoulder",
+        "r_upperarm": "right_upper_arm",
+        "r_forearm": "right_lower_arm",
+        "r_hand": "right_hand",
+        "l_thigh": "left_upper_leg",
+        "l_calf": "left_lower_leg",
+        "l_foot": "left_foot",
+        "l_toe": "left_toes",
+        "r_thigh": "right_upper_leg",
+        "r_calf": "right_lower_leg",
+        "r_foot": "right_foot",
+        "r_toe": "right_toes",
+    }
+    for side, role_side in (("l", "left"), ("r", "right")):
+        for digit in ("thumb", "index", "middle", "ring", "pinky"):
+            for segment in range(1, 4):
+                role_for_semantic[f"{side}_{digit}_{segment}"] = (
+                    f"{role_side}_{digit}_{segment}"
+                )
+
+    by_role: dict[str, list[tuple[tuple[int, int, int], str, float, str]]] = {}
+    for bone, match in scan_humanoid_bones(bones, parents).items():
+        role_id = role_for_semantic.get(match.role)
+        if not role_id or bone in used or role_id in profile.role_to_bone:
+            continue
+        plain = normalize_bone_name(bone)
+        decorated = int(any(token in plain for token in ("base", "armature", "def")))
+        exact_role_name = int(plain.replace("_", "") != match.role.replace("_", ""))
+        by_role.setdefault(role_id, []).append(
+            ((decorated, exact_role_name, len(plain)), bone, match.confidence, match.method)
+        )
+    for role_id, candidates in by_role.items():
+        _priority, bone, confidence, method = min(candidates, key=lambda row: row[0])
+        profile.set_mapping(
+            role_id,
+            bone,
+            confidence=confidence,
+            method=f"shared_{method}",
+        )
+        used.add(bone)
     profile.ignored_bones = [bone for bone in bones if bone not in used]
     return profile
 

@@ -81,6 +81,9 @@ class FbxCluster:
     weights: tuple[float, ...]
     transform: np.ndarray | None
     transform_link: np.ndarray | None
+    # Optional in older exporters.  When present this is the mesh/associate
+    # model's bind transform, not the linked bone transform.
+    transform_associate_model: np.ndarray | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -570,15 +573,11 @@ class FbxScene:
             material_names = tuple(self.material_names.get(row, f"material_{row}") for row in material_ids)
             layers = _read_layer_elements(node)
             clusters = self._geometry_clusters(geometry_id)
-            bind = None
-            for cluster in clusters:
-                if cluster.transform is not None:
-                    bind = cluster.transform
-                    break
-            if bind is None and model_id is not None:
-                bind = self.object_bind_matrix(model_id)
-            if bind is None:
-                bind = np.eye(4, dtype=float)
+            bind = self._resolve_geometry_mesh_bind(
+                geometry_name=_clean_name(node.properties[1]),
+                model_id=model_id,
+                clusters=clusters,
+            )
             geometric = self.model_geometric_matrix(model_id) if model_id is not None else np.eye(4, dtype=float)
             shapes = self._geometry_blend_shape_names(geometry_id)
             result.append(
@@ -601,6 +600,154 @@ class FbxScene:
             )
         return tuple(result)
 
+    def _resolve_geometry_mesh_bind(
+        self,
+        *,
+        geometry_name: str,
+        model_id: int | None,
+        clusters: Sequence[FbxCluster],
+    ) -> np.ndarray:
+        """Resolve the mesh model's bind transform without confusing it with a cluster offset.
+
+        FBX Cluster ``Transform`` is exporter-dependent.  In common Blender
+        files it is the offset from the associate mesh model to the linked
+        bone, and can be identity even when the mesh object has a non-identity
+        bind transform.  The mesh bind is instead available from the mesh
+        Model's BindPose, ``TransformAssociateModel``, or (when both cluster
+        matrices exist) ``TransformLink @ Transform``.
+
+        Candidate sources are compared as groups.  A candidate supported by
+        the other independent sources wins; deterministic source priority is
+        used only for ties.  This keeps the usual BindPose path while allowing
+        a corrupt/mismatched pose entry to be outvoted by cluster evidence.
+        """
+
+        def usable(label: str, matrix: np.ndarray | None) -> np.ndarray | None:
+            if matrix is None:
+                return None
+            value = np.asarray(matrix, dtype=float)
+            if value.shape != (4, 4) or not np.all(np.isfinite(value)):
+                self.warnings.append(
+                    f"{geometry_name}: ignored invalid {label} mesh-bind matrix."
+                )
+                return None
+            if not np.allclose(value[3], (0.0, 0.0, 0.0, 1.0), rtol=0.0, atol=1.0e-7):
+                self.warnings.append(
+                    f"{geometry_name}: ignored non-affine {label} mesh-bind matrix."
+                )
+                return None
+            determinant = float(np.linalg.det(value[:3, :3]))
+            if not math.isfinite(determinant) or abs(determinant) <= 1.0e-12:
+                self.warnings.append(
+                    f"{geometry_name}: ignored singular {label} mesh-bind matrix."
+                )
+                return None
+            return value
+
+        def agree(left: np.ndarray, right: np.ndarray) -> bool:
+            # FBX exporters commonly serialize independently calculated bind
+            # matrices with low-order float noise.  The testnohara fixture has
+            # a worst valid reconstruction delta of about 1.5e-5.
+            return bool(np.allclose(left, right, rtol=1.0e-5, atol=5.0e-5))
+
+        def representative(
+            label: str,
+            rows: Sequence[tuple[str, np.ndarray | None]],
+        ) -> np.ndarray | None:
+            valid: list[tuple[str, np.ndarray]] = []
+            for row_label, row_matrix in rows:
+                value = usable(row_label, row_matrix)
+                if value is not None:
+                    valid.append((row_label, value))
+            if not valid:
+                return None
+
+            # A malformed first cluster must not control the whole mesh.  Pick
+            # the matrix agreeing with the most peers, preserving input order
+            # only when the group has no stronger consensus.
+            scores = [
+                sum(agree(matrix, other) for _, other in valid)
+                for _, matrix in valid
+            ]
+            chosen_index = max(range(len(valid)), key=lambda index: scores[index])
+            chosen_label, chosen = valid[chosen_index]
+            disagreeing = [
+                row_label
+                for row_label, matrix in valid
+                if not agree(chosen, matrix)
+            ]
+            if disagreeing:
+                self.warnings.append(
+                    f"{geometry_name}: {label} mesh-bind candidates disagree; "
+                    f"using {chosen_label}, disagreeing candidates: {', '.join(disagreeing)}."
+                )
+            return chosen
+
+        bind_pose = usable(
+            "mesh Model BindPose",
+            self.bind_pose_matrices.get(model_id) if model_id is not None else None,
+        )
+        associate = representative(
+            "TransformAssociateModel",
+            tuple(
+                (f"cluster {cluster.name} TransformAssociateModel", cluster.transform_associate_model)
+                for cluster in clusters
+            ),
+        )
+        reconstructed = representative(
+            "reconstructed TransformLink @ Transform",
+            tuple(
+                (
+                    f"cluster {cluster.name} TransformLink @ Transform",
+                    (
+                        cluster.transform_link @ cluster.transform
+                        if cluster.transform_link is not None and cluster.transform is not None
+                        else None
+                    ),
+                )
+                for cluster in clusters
+            ),
+        )
+        evaluated = usable(
+            "evaluated mesh Model transform",
+            self.model_global_matrix(model_id) if model_id is not None else None,
+        )
+
+        candidates = [
+            ("mesh Model BindPose", bind_pose),
+            ("TransformAssociateModel", associate),
+            ("TransformLink @ Transform reconstruction", reconstructed),
+            ("evaluated mesh Model transform", evaluated),
+        ]
+        valid_candidates = [(label, matrix) for label, matrix in candidates if matrix is not None]
+        if not valid_candidates:
+            if clusters:
+                self.warnings.append(
+                    f"{geometry_name}: no usable mesh-bind evidence was found; using identity."
+                )
+            return np.eye(4, dtype=float)
+
+        support = [
+            sum(agree(matrix, other) for _, other in valid_candidates)
+            for _, matrix in valid_candidates
+        ]
+        selected_index = max(range(len(valid_candidates)), key=lambda index: support[index])
+        selected_label, selected = valid_candidates[selected_index]
+        disagreeing = [
+            (label, float(np.max(np.abs(selected - matrix))))
+            for label, matrix in valid_candidates
+            if not agree(selected, matrix)
+        ]
+        if disagreeing:
+            details = ", ".join(
+                f"{label} (max delta {delta:.6g})"
+                for label, delta in disagreeing
+            )
+            self.warnings.append(
+                f"{geometry_name}: mesh-bind sources disagree; using {selected_label}; {details}."
+            )
+        return selected.copy()
+
     def _geometry_clusters(self, geometry_id: int) -> tuple[FbxCluster, ...]:
         skin_ids = self._linked_object_ids(geometry_id, object_name="Deformer", subtype="Skin")
         clusters: list[FbxCluster] = []
@@ -622,6 +769,9 @@ class FbxScene:
                         weights=weights,
                         transform=_matrix_from_array(_child_value(node, "Transform", [])),
                         transform_link=_matrix_from_array(_child_value(node, "TransformLink", [])),
+                        transform_associate_model=_matrix_from_array(
+                            _child_value(node, "TransformAssociateModel", [])
+                        ),
                     )
                 )
         return tuple(dict((row.object_id, row) for row in clusters).values())
@@ -710,22 +860,19 @@ class FbxScene:
     def coordinate_conversion_matrix(self, policy: str = "auto") -> np.ndarray:
         """Return the explicit FBX-scene to Chrome model-space basis matrix.
 
-        ``auto`` is intentionally conservative: for the validated X-right,
-        Y-up, Z-front contract it selects the recovered FBX-to-Dying-Light
-        basis.  Manual quarter-turn policies exist for unusual authoring files
-        and are recorded in build reports instead of requiring editor-side
-        object rotation.
+        FBX Model and BindPose matrices are already evaluated in the coordinate
+        system declared by ``GlobalSettings``.  The supported automatic
+        contract is X-right/Y-up/Z-front, which is also the axis layout used by
+        the Dying Light source skeletons, so ``auto`` must not add a second
+        quarter-turn.  Manual policies remain available for deliberately
+        unusual assets and legacy projects.
         """
 
-        value = str(policy or "auto").strip().lower()
-        if value not in ORIENTATION_POLICIES:
-            raise ValueError(f"unknown orientation policy {policy!r}")
-        if value == "auto":
-            value = "fbx_y_up_to_dying_light"
-        if value == "fbx_y_up_to_dying_light":
-            return FBX_Y_UP_TO_DYING_LIGHT.copy()
+        value = self.resolved_orientation_policy(policy)
         if value == "none":
             return np.eye(4, dtype=float)
+        if value == "fbx_y_up_to_dying_light":
+            return FBX_Y_UP_TO_DYING_LIGHT.copy()
         axis, sign = {
             "rotate_x_90": ("X", 90.0),
             "rotate_x_minus_90": ("X", -90.0),
@@ -735,6 +882,22 @@ class FbxScene:
             "rotate_z_minus_90": ("Z", -90.0),
         }[value]
         return _axis_rotation(axis, sign)
+
+    def resolved_orientation_policy(self, policy: str = "auto") -> str:
+        """Resolve a requested orientation policy to the transform actually used.
+
+        ``FbxScene.from_path`` rejects axis layouts outside the supported
+        X-right/Y-up/Z-front contract.  Consequently a valid scene needs no
+        additional scene-basis rotation in automatic mode; object-level export
+        wrappers are already present in Model/BindPose matrices.
+        """
+
+        value = str(policy or "auto").strip().lower()
+        if value not in ORIENTATION_POLICIES:
+            raise ValueError(f"unknown orientation policy {policy!r}")
+        if value == "auto":
+            return "none"
+        return value
 
     def to_chrome_global_matrix(self, matrix: np.ndarray, policy: str = "auto") -> np.ndarray:
         conversion = self.coordinate_conversion_matrix(policy)

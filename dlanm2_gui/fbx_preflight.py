@@ -40,9 +40,56 @@ class FbxPreflightReport:
     def blocking(self) -> bool:
         return any(row.severity == ERROR for row in self.findings)
 
-    def add(self, severity: str, code: str, detected: str, why: str, action: str) -> None:
+    @property
+    def import_blocking(self) -> bool:
+        """Whether the file is too broken to add to a project for repair.
+
+        Target-skeleton incompatibilities are build blockers in strict mode,
+        but they are intentionally importable because the mapped-.crig editor
+        is the place where users repair them.
+        """
+
+        return any(
+            row.severity == ERROR and not row.can_continue for row in self.findings
+        )
+
+    @property
+    def repairable_findings(self) -> list[FbxPreflightFinding]:
+        return [
+            row for row in self.findings if row.severity == ERROR and row.can_continue
+        ]
+
+    def add(
+        self,
+        severity: str,
+        code: str,
+        detected: str,
+        why: str,
+        action: str,
+        *,
+        can_continue: bool | None = None,
+    ) -> None:
         self.findings.append(
-            FbxPreflightFinding(severity, code, detected, why, severity != ERROR, action)
+            FbxPreflightFinding(
+                severity,
+                code,
+                detected,
+                why,
+                severity != ERROR if can_continue is None else bool(can_continue),
+                action,
+            )
+        )
+
+    def actionable_message(
+        self,
+        findings: Iterable[FbxPreflightFinding] | None = None,
+    ) -> str:
+        rows = list(self.findings if findings is None else findings)
+        if not rows:
+            return "No FBX preflight issues were found."
+        return "\n\n".join(
+            f"{row.detected}\nWhy this matters: {row.why_it_matters}\nWhat to do: {row.action}"
+            for row in rows
         )
 
     def require_buildable(self) -> None:
@@ -59,6 +106,8 @@ class FbxPreflightReport:
             "path": self.path,
             "purpose": self.purpose,
             "blocking": self.blocking,
+            "import_blocking": self.import_blocking,
+            "repairable": bool(self.repairable_findings),
             "findings": [asdict(row) for row in self.findings],
             "inventory": self.inventory,
         }
@@ -246,13 +295,27 @@ def preflight_fbx(
         compatibility = classify_target_compatibility(document, target_rig)
         report.inventory["target_compatibility"] = compatibility
         if compatibility["required_missing_bones"]:
-            report.add(ERROR, "required_target_bones_missing", f"Required target bones are missing: {', '.join(compatibility['required_missing_bones'][:20])}", "Required deform tracks cannot be reconstructed.", "Use a compatible source FBX or a reviewed mapped-rig profile.")
+            report.add(
+                ERROR,
+                "required_target_bones_missing",
+                f"Required target bones are missing: {', '.join(compatibility['required_missing_bones'][:20])}",
+                "The FBX is not the same skeleton as the selected target .crig, so strict exact-rig export cannot reconstruct those tracks by name.",
+                "Add the clip, then review the generated map in Root & .crig Mapping. Unmapped helpers can stay at bind pose; map every body bone that must animate.",
+                can_continue=True,
+            )
         if compatibility["optional_helper_missing_bones"]:
             report.add(WARNING, "optional_target_bones_missing", f"Optional/helper target bones are missing: {', '.join(compatibility['optional_helper_missing_bones'][:20])}", "Those helpers will remain at target bind pose.", "Continue if they are intentionally absent; otherwise export them from the source rig.")
         if compatibility["extra_source_bones"]:
             report.add(INFO, "source_has_extra_bones", f"The source contains {len(compatibility['extra_source_bones'])} extra bones.", "Facial, cloth, weapon and secondary chains are safe in a target-compatible superset.", "No change is required unless a required target bone is missing.")
         if compatibility["hierarchy_mismatches"]:
-            report.add(ERROR, "target_hierarchy_mismatch", f"Target ancestry differs for {len(compatibility['hierarchy_mismatches'])} bones.", "Global-to-local reconstruction would use a different parent basis.", "Use a reviewed mapped-rig profile or a hierarchy-compatible source.")
+            report.add(
+                ERROR,
+                "target_hierarchy_mismatch",
+                f"Target ancestry differs for {len(compatibility['hierarchy_mismatches'])} bones.",
+                "Strict name-based transfer would use a different parent basis and can produce incorrect local transforms.",
+                "Add the clip, then review the generated map in Root & .crig Mapping, or use an animation exported from the exact target hierarchy.",
+                can_continue=True,
+            )
     return report
 
 

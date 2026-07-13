@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import math
 from pathlib import Path
+from types import SimpleNamespace
 import zipfile
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 
 from dlanm2_gui.anm2_components import decode_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
+from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
 from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.chrome_rig_builder import (
     build_chrome_rig_from_fbx,
@@ -17,6 +19,7 @@ from dlanm2_gui.chrome_rig_builder import (
 )
 from dlanm2_gui.oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND
 from dlanm2_gui.retarget_engines.exact_rig import build_exact_rig_anm2
+from dlanm2_gui.retarget_engines.mapped_rig import build_mapped_rig_anm2
 from dlanm2_gui.retarget_engines.base import RetargetBuild
 from dlanm2_gui.rp6l import extract_animation_library
 from dlanm2_gui.workspace_project import (
@@ -108,6 +111,29 @@ def test_exact_rig_rejects_parent_mismatch(tmp_path: Path) -> None:
         )
 
 
+def test_crig_marks_only_skinned_bones_and_their_ancestors_as_required(
+    tmp_path: Path,
+) -> None:
+    document = _ObjectFbx(tmp_path / "model.fbx", ("root", "deform", "end_marker"))
+    parents = {1: None, 2: 1, 3: 2}
+    document.scene = SimpleNamespace(
+        geometries=(
+            SimpleNamespace(clusters=(SimpleNamespace(bone_id=2),)),
+        ),
+        model_parent_id=lambda object_id: parents[object_id],
+    )
+
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "model.fbx", document_factory=lambda _path: document
+    )
+
+    by_name = {bone.name: bone for bone in rig.bones}
+    assert by_name["root"].deform and not by_name["root"].helper
+    assert by_name["deform"].deform and not by_name["deform"].helper
+    assert not by_name["end_marker"].deform and by_name["end_marker"].helper
+    assert rig.extensions["deform_classification"] == "skin_cluster_ancestry"
+
+
 def test_exact_rig_default_pose_mismatch_warns_and_exports(tmp_path: Path) -> None:
     rig = build_chrome_rig_from_fbx(
         tmp_path / "door.fbx",
@@ -153,6 +179,44 @@ def test_exact_rig_roundtrips_synthetic_motion_helper(tmp_path: Path) -> None:
     decoded = decode_samples(build.payload, [2.0])
     helper_index = rig.descriptors.index(0xCCC3CDDF)
     assert decoded.frames[0].tracks[helper_index][3] == pytest.approx(0.02, abs=1e-4)
+
+
+def test_rotation_delta_manual_root_mapping_keeps_root_displacement(
+    tmp_path: Path,
+) -> None:
+    names = ("root", "bone_door")
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "door.fbx",
+        document_factory=_factory(names),
+    )
+    document = _ObjectFbx(tmp_path / "animated.fbx", names)
+    bone_map = GenericBoneMap.create(
+        "Manual same-name map",
+        rig.skeleton_hash,
+        skeleton_signature(
+            (name, document.parent_by_name.get(name))
+            for name in sorted(document.limb_models)
+        ),
+        source_rig_ref=rig.rig_id,
+    )
+    bone_map.pairs = [
+        BoneMapPair(bone.descriptor, bone.name, bone.name, 1.0, "manual")
+        for bone in rig.bones
+    ]
+
+    build = build_mapped_rig_anm2(
+        tmp_path / "animated.fbx",
+        rig,
+        bone_map,
+        document_factory=lambda _path: document,
+        transfer_policy="mapped_local_rotation_delta",
+        root_policy="bip01",
+    )
+    decoded = decode_samples(build.payload, [0.0, 2.0])
+    root_index = rig.descriptors.index(rig.bones[0].descriptor)
+
+    assert decoded.frames[0].tracks[root_index][3] == pytest.approx(0.0, abs=1e-5)
+    assert decoded.frames[1].tracks[root_index][3] == pytest.approx(0.02, abs=1e-5)
 
 
 def test_crig_rejects_unsafe_or_executable_members() -> None:
@@ -256,3 +320,92 @@ def test_project_builder_dispatches_exact_rig_without_humanoid_mapping(
     assert "dl_reanimated_open_door" in library.animations
     assert result.built_animations[0].mapping_profile_id == ""
     assert any("not compatible with custom Chrome Rigs" in row for row in result.warnings)
+
+
+def test_project_builder_uses_reviewed_crig_map_instead_of_strict_exact_engine(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dlanm2_gui import project_builder
+
+    source = tmp_path / "different_skeleton.fbx"
+    source.write_bytes(b"fixture")
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "door_model.fbx",
+        document_factory=_factory(("root", "bone_door")),
+    )
+    rig_path = rig.save(tmp_path / "door.crig")
+    values = [rig.bind_track_values(), rig.bind_track_values()]
+    payload = build_payload_from_values(
+        rig.make_header(frame_count=2),
+        rig.descriptors,
+        values,
+        [[False] * 9 for _ in rig.descriptors],
+    )
+    document = _ObjectFbx(source, ("source_root", "source_hinge"))
+    monkeypatch.setattr(project_builder, "_FbxDocument", lambda _path: document)
+
+    called: dict[str, object] = {}
+
+    def mapped_builder(path, selected_rig, bone_map, **kwargs):
+        called.update(path=path, rig=selected_rig, map=bone_map, kwargs=kwargs)
+        return RetargetBuild(
+            payload,
+            2,
+            {
+                "retarget_mode": "mapped_crig",
+                "frame_count": 2,
+                "candidate_path": None,
+            },
+        )
+
+    monkeypatch.setattr(project_builder, "build_mapped_rig_anm2", mapped_builder)
+    monkeypatch.setattr(
+        project_builder,
+        "build_exact_rig_anm2",
+        lambda *_args, **_kwargs: pytest.fail("strict exact engine should not be used"),
+    )
+
+    profile = GenericBoneMap.create(
+        "Reviewed door map",
+        rig.skeleton_hash,
+        skeleton_signature(
+            (name, document.parent_by_name.get(name))
+            for name in sorted(document.limb_models)
+        ),
+        source_rig_ref=rig.rig_id,
+    )
+    profile.pairs = [
+        BoneMapPair(rig.bones[0].descriptor, "root", "source_root"),
+        BoneMapPair(rig.bones[1].descriptor, "bone_door", "source_hinge"),
+    ]
+
+    project = DlReanimatedProject.new("Mapped door")
+    project.rig.target_rig_ref = rig.rig_id
+    project.rig.target_rig_path = str(rig_path)
+    project.rig.retarget_mode = "exact"
+    project.export.output_directory = str(tmp_path / "build")
+    project.export.pack_filename = "door.rpack"
+    animation = ProjectAnimation.create(str(source), resource_name="open_door")
+    animation.mapping_profile_id = profile.profile_id
+    project.animations.append(animation)
+    project.mapping_profiles[profile.profile_id] = profile.to_dict()
+
+    result = project_builder.build_project(project)
+
+    assert isinstance(called["map"], GenericBoneMap)
+    assert called["kwargs"]["transfer_policy"] == "mapped_local_rotation_delta"
+    assert result.built_animations[0].mapping_profile_id == profile.profile_id
+
+
+def test_reviewed_mapping_identity_rejects_cross_wired_pairs() -> None:
+    from dlanm2_gui.project_builder import _reviewed_mapping_is_name_identity
+
+    profile = GenericBoneMap.create("Identity check", "target", "source")
+    profile.pairs = [
+        BoneMapPair(1, "root", "root"),
+        BoneMapPair(2, "left_arm", "left_arm"),
+    ]
+    assert _reviewed_mapping_is_name_identity(profile)
+
+    profile.pairs[1] = BoneMapPair(2, "left_arm", "right_arm")
+    assert not _reviewed_mapping_is_name_identity(profile)

@@ -10,22 +10,42 @@ checks the actual compiler result.
 """
 
 from dataclasses import dataclass
+import math
 from pathlib import Path
 from typing import Any
 import struct
 
+from .math3d import (
+    IDENTITY_MATRIX4X4,
+    Matrix4x4,
+    matrix3x4_from_matrix4,
+    matrix4_from_matrix3x4,
+    matrix4_multiply,
+    matrix4_transform_point,
+)
 from .rp6l import MESH_PAYLOAD_TYPE, Rp6lError, load_rp6l_link_input
 
 COMPACT_HEADER_ENTITY_TABLE_PTR = 0x08
 COMPACT_HEADER_ENTITY_COUNT = 0x64
 COMPACT_HEADER_ROOT_COUNT = 0x68
 COMPACT_ENTITY_STRIDE = 0xD0
+COMPACT_ENTITY_LOCAL_MATRIX = 0x00
+COMPACT_ENTITY_REFERENCE_MATRIX = 0x30
+COMPACT_ENTITY_BOUNDS = 0x60
 COMPACT_ENTITY_NAME_PTR = 0x78
 COMPACT_ENTITY_FLAGS = 0xC0
 COMPACT_ENTITY_PARENT_INDEX = 0xC6
 COMPACT_ENTITY_TYPE = 0xC8
 COMPACT_ENTITY_CHILD_COUNT = 0xC9
 COMPACT_ENTITY_LOD_COUNT = 0xCA
+
+# ``CMeshFileBase::CalculateBoundingBox`` rejects entity extents whose full
+# diagonal squared is below the float-epsilon threshold.  Keeping that rule in
+# the inspector makes its aggregate match what ChromeEd can use for the model
+# bounding box instead of treating position-only/zero-sized bones as geometry.
+COMPACT_BOUND_DIAGONAL_SQUARED_EPSILON = 1.1920928955078125e-7
+
+IDENTITY_MATRIX3X4 = matrix3x4_from_matrix4(IDENTITY_MATRIX4X4)
 
 # Compact entities retain the source node-type bit values. The 0.3.0
 # validator incorrectly treated these as a dense 1/2/3/4 enum, which
@@ -37,6 +57,7 @@ RUNTIME_ENTITY_TYPE_NAMES = {
     8: "BONE",
     16: "HULL",
 }
+RUNTIME_ENTITY_MESH = 1
 RUNTIME_ENTITY_BONE = 8
 RUNTIME_ENTITY_MESH_SKINNED = 2
 
@@ -50,10 +71,13 @@ class CompactMeshEntity:
     index: int
     name: str
     flags: int
+    bounds: tuple[float, float, float, float, float, float]
     parent_index: int
     element_type: int
     child_count: int
     lod_count: int
+    local_matrix: tuple[float, ...] = IDENTITY_MATRIX3X4
+    reference_matrix: tuple[float, ...] = IDENTITY_MATRIX3X4
 
     @property
     def element_type_name(self) -> str:
@@ -61,17 +85,36 @@ class CompactMeshEntity:
             self.element_type, f"UNKNOWN_{self.element_type}"
         )
 
-    def to_dict(self) -> dict[str, Any]:
-        return {
+    def to_dict(self, *, global_matrix: Matrix4x4 | None = None) -> dict[str, Any]:
+        value: dict[str, Any] = {
             "index": self.index,
             "name": self.name,
             "flags": f"0x{self.flags:08X}",
+            "local_matrix3x4": list(self.local_matrix),
+            "reference_matrix3x4": list(self.reference_matrix),
+            "bounds_center_half_extents": list(self.bounds),
             "parent_index": self.parent_index,
             "element_type": self.element_type,
             "element_type_name": self.element_type_name,
             "child_count": self.child_count,
             "lod_count": self.lod_count,
         }
+        if global_matrix is not None:
+            value["global_matrix3x4"] = list(matrix3x4_from_matrix4(global_matrix))
+            value["global_translation_xyz"] = [
+                global_matrix[0][3],
+                global_matrix[1][3],
+                global_matrix[2][3],
+            ]
+            identity_candidate = matrix4_multiply(
+                global_matrix, matrix4_from_matrix3x4(self.reference_matrix)
+            )
+            value["global_reference_identity_max_abs_error"] = max(
+                abs(identity_candidate[row][column] - IDENTITY_MATRIX4X4[row][column])
+                for row in range(4)
+                for column in range(4)
+            )
+        return value
 
 
 @dataclass(frozen=True)
@@ -111,6 +154,185 @@ class CompactMesh:
                 return entity.index or self.entity_count
         return self.entity_count
 
+    def reconstruct_global_matrices(self) -> tuple[Matrix4x4, ...]:
+        """Reconstruct compact global bind transforms from local matrices.
+
+        Compact entities are normally serialized parent-first, but resolving
+        recursively also handles a valid table whose parent appears later.  A
+        malformed parent reference is reported explicitly rather than silently
+        producing misleading global bounds.
+        """
+
+        entity_count = len(self.entities)
+        resolved: list[Matrix4x4 | None] = [None] * entity_count
+        visiting: set[int] = set()
+
+        def resolve(index: int) -> Matrix4x4:
+            matrix = resolved[index]
+            if matrix is not None:
+                return matrix
+            if index in visiting:
+                raise CompactMeshError(
+                    f"compact entity hierarchy contains a cycle at index {index}"
+                )
+            visiting.add(index)
+            entity = self.entities[index]
+            local = matrix4_from_matrix3x4(entity.local_matrix)
+            if entity.parent_index < 0:
+                matrix = local
+            elif entity.parent_index >= entity_count:
+                raise CompactMeshError(
+                    f"compact entity {index} parent {entity.parent_index} is outside "
+                    f"the {entity_count}-entity table"
+                )
+            else:
+                matrix = matrix4_multiply(resolve(entity.parent_index), local)
+            visiting.remove(index)
+            resolved[index] = matrix
+            return matrix
+
+        return tuple(resolve(index) for index in range(entity_count))
+
+    def aggregate_bone_bounds(
+        self,
+        global_matrices: tuple[Matrix4x4, ...] | None = None,
+    ) -> dict[str, Any]:
+        """Aggregate usable BONE AABBs in compact-mesh global bind space."""
+
+        matrices = global_matrices or self.reconstruct_global_matrices()
+        minimum = [math.inf, math.inf, math.inf]
+        maximum = [-math.inf, -math.inf, -math.inf]
+        bone_count = 0
+        contributing_count = 0
+        collapsed_count = 0
+        invalid_count = 0
+
+        for entity, global_matrix in zip(self.entities, matrices):
+            if entity.element_type != RUNTIME_ENTITY_BONE:
+                continue
+            bone_count += 1
+            center = entity.bounds[:3]
+            half = entity.bounds[3:]
+            if not all(math.isfinite(value) for value in (*center, *half)):
+                invalid_count += 1
+                continue
+            half = tuple(abs(value) for value in half)
+            diagonal_squared = 4.0 * sum(value * value for value in half)
+            if diagonal_squared < COMPACT_BOUND_DIAGONAL_SQUARED_EPSILON:
+                collapsed_count += 1
+                continue
+            contributing_count += 1
+            for x_sign in (-1.0, 1.0):
+                for y_sign in (-1.0, 1.0):
+                    for z_sign in (-1.0, 1.0):
+                        point = matrix4_transform_point(
+                            global_matrix,
+                            (
+                                center[0] + x_sign * half[0],
+                                center[1] + y_sign * half[1],
+                                center[2] + z_sign * half[2],
+                            ),
+                        )
+                        for axis in range(3):
+                            minimum[axis] = min(minimum[axis], point[axis])
+                            maximum[axis] = max(maximum[axis], point[axis])
+
+        result: dict[str, Any] = {
+            "coordinate_space": "compact_mesh_global_bind",
+            "bone_count": bone_count,
+            "contributing_bone_count": contributing_count,
+            "collapsed_bone_count": collapsed_count,
+            "invalid_bone_count": invalid_count,
+            "minimum_diagonal_squared": COMPACT_BOUND_DIAGONAL_SQUARED_EPSILON,
+            "minimum_xyz": None,
+            "maximum_xyz": None,
+            "center_xyz": None,
+            "half_extents_xyz": None,
+            "diagonal_length": 0.0,
+        }
+        if contributing_count:
+            center = [(minimum[axis] + maximum[axis]) * 0.5 for axis in range(3)]
+            half = [(maximum[axis] - minimum[axis]) * 0.5 for axis in range(3)]
+            result.update(
+                {
+                    "minimum_xyz": minimum,
+                    "maximum_xyz": maximum,
+                    "center_xyz": center,
+                    "half_extents_xyz": half,
+                    "diagonal_length": math.sqrt(
+                        sum((maximum[axis] - minimum[axis]) ** 2 for axis in range(3))
+                    ),
+                }
+            )
+        return result
+
+    def aggregate_reference_bounds(
+        self,
+        global_matrices: tuple[Matrix4x4, ...] | None = None,
+    ) -> dict[str, Any]:
+        """Mirror ``CMeshFileBase::CalculateBoundingBox`` reference extents.
+
+        Chrome 6 deliberately excludes element types 2 and 3 from this pass,
+        so a skinned model cannot obtain its editor/model box from the
+        MESH_SKINNED entity itself.  Generated imports append an empty ordinary
+        MESH carrying the exact emitted-vertex AABB after the skinned meshes.
+        """
+
+        matrices = global_matrices or self.reconstruct_global_matrices()
+        minimum = [math.inf, math.inf, math.inf]
+        maximum = [-math.inf, -math.inf, -math.inf]
+        contributors: list[str] = []
+        for entity, global_matrix in zip(self.entities, matrices):
+            if entity.element_type in {2, 3}:
+                continue
+            center = entity.bounds[:3]
+            half = tuple(abs(value) for value in entity.bounds[3:])
+            if not all(math.isfinite(value) for value in (*center, *half)):
+                continue
+            diagonal_squared = 4.0 * sum(value * value for value in half)
+            if diagonal_squared < COMPACT_BOUND_DIAGONAL_SQUARED_EPSILON:
+                continue
+            contributors.append(entity.name)
+            for x_sign in (-1.0, 1.0):
+                for y_sign in (-1.0, 1.0):
+                    for z_sign in (-1.0, 1.0):
+                        point = matrix4_transform_point(
+                            global_matrix,
+                            (
+                                center[0] + x_sign * half[0],
+                                center[1] + y_sign * half[1],
+                                center[2] + z_sign * half[2],
+                            ),
+                        )
+                        for axis in range(3):
+                            minimum[axis] = min(minimum[axis], point[axis])
+                            maximum[axis] = max(maximum[axis], point[axis])
+        result: dict[str, Any] = {
+            "coordinate_space": "compact_mesh_global_bind",
+            "contributing_entity_count": len(contributors),
+            "contributing_entity_names": contributors,
+            "minimum_xyz": None,
+            "maximum_xyz": None,
+            "center_xyz": None,
+            "half_extents_xyz": None,
+            "diagonal_length": 0.0,
+        }
+        if contributors:
+            center = [(minimum[axis] + maximum[axis]) * 0.5 for axis in range(3)]
+            half = [(maximum[axis] - minimum[axis]) * 0.5 for axis in range(3)]
+            result.update(
+                {
+                    "minimum_xyz": minimum,
+                    "maximum_xyz": maximum,
+                    "center_xyz": center,
+                    "half_extents_xyz": half,
+                    "diagonal_length": math.sqrt(
+                        sum((maximum[axis] - minimum[axis]) ** 2 for axis in range(3))
+                    ),
+                }
+            )
+        return result
+
     def to_dict(self, *, include_entities: bool = True) -> dict[str, Any]:
         value: dict[str, Any] = {
             "format": "chrome_mesh_tools_compact_mesh_entity_audit_v1",
@@ -125,8 +347,26 @@ class CompactMesh:
             "skinned_mesh_names": list(self.skinned_mesh_names),
             "animation_entity_count_candidate": self.animation_entity_count_candidate,
         }
+        global_matrices: tuple[Matrix4x4, ...] | None = None
+        try:
+            global_matrices = self.reconstruct_global_matrices()
+            value["bone_bounds_global_aggregate"] = self.aggregate_bone_bounds(
+                global_matrices
+            )
+            value["reference_bounds_global_aggregate"] = self.aggregate_reference_bounds(
+                global_matrices
+            )
+        except (CompactMeshError, ValueError) as error:
+            # Preserve the rest of the compact audit for damaged inputs while
+            # making the transform failure explicit.
+            value["global_transform_error"] = str(error)
         if include_entities:
-            value["entities"] = [row.to_dict() for row in self.entities]
+            value["entities"] = [
+                row.to_dict(
+                    global_matrix=(global_matrices[index] if global_matrices else None)
+                )
+                for index, row in enumerate(self.entities)
+            ]
         return value
 
 
@@ -184,12 +424,21 @@ def parse_compact_mesh_payload(payload: bytes) -> CompactMesh:
                 flags=struct.unpack_from(
                     "<I", payload, base + COMPACT_ENTITY_FLAGS
                 )[0],
+                bounds=struct.unpack_from(
+                    "<6f", payload, base + COMPACT_ENTITY_BOUNDS
+                ),
                 parent_index=struct.unpack_from(
                     "<h", payload, base + COMPACT_ENTITY_PARENT_INDEX
                 )[0],
                 element_type=payload[base + COMPACT_ENTITY_TYPE],
                 child_count=payload[base + COMPACT_ENTITY_CHILD_COUNT],
                 lod_count=payload[base + COMPACT_ENTITY_LOD_COUNT],
+                local_matrix=struct.unpack_from(
+                    "<12f", payload, base + COMPACT_ENTITY_LOCAL_MATRIX
+                ),
+                reference_matrix=struct.unpack_from(
+                    "<12f", payload, base + COMPACT_ENTITY_REFERENCE_MATRIX
+                ),
             )
         )
 

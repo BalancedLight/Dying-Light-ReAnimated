@@ -21,6 +21,8 @@ from dlanm2_gui.retarget_engines.mapped_rig import (
     apply_global_root_policy,
     corrected_target_global,
     global_bind_basis_correction,
+    mapped_local_from_rotation_delta,
+    source_global_to_target_basis,
 )
 from dlanm2_gui.retarget_engines.exact_rig import build_exact_rig_anm2
 from dlanm2_gui.workspace_project import DlReanimatedProject, ProjectAnimation
@@ -137,6 +139,56 @@ def test_global_bind_basis_correction_reconstructs_target_bind_with_wrapper_scal
     assert not np.allclose(corrected, target_bind)
 
 
+def test_global_bind_basis_correction_normalizes_fbx_centimeters_before_animation() -> None:
+    source_bind_raw = np.eye(4)
+    source_bind_raw[:3, 3] = (100.0, 200.0, 300.0)
+    source_animation_raw = source_bind_raw.copy()
+    source_animation_raw[0, 3] += 25.0
+    target_bind = np.eye(4)
+    target_bind[:3, 3] = (1.5, 2.5, 3.5)
+
+    source_bind = source_global_to_target_basis(
+        source_bind_raw,
+        meters_per_unit=0.01,
+        convert_y_up_to_dying_light=False,
+    )
+    source_animation = source_global_to_target_basis(
+        source_animation_raw,
+        meters_per_unit=0.01,
+        convert_y_up_to_dying_light=False,
+    )
+    correction = global_bind_basis_correction(source_bind, target_bind)
+
+    assert np.allclose(corrected_target_global(source_bind, correction), target_bind)
+    corrected = corrected_target_global(source_animation, correction)
+    assert corrected[0, 3] == pytest.approx(target_bind[0, 3] + 0.25)
+    assert np.allclose(corrected[1:3, 3], target_bind[1:3, 3])
+
+
+def test_cross_rig_rotation_delta_preserves_target_translation_and_scale() -> None:
+    target = np.eye(4)
+    target[:3, 3] = (0.31, -0.07, 0.12)
+    target[:3, :3] = np.diag((1.1, 1.1, 1.1))
+    source_bind = np.eye(4)
+    source_bind[:3, 3] = (45.0, 12.0, -8.0)
+    angle = np.deg2rad(65.0)
+    source_animation = source_bind.copy()
+    source_animation[:3, :3] = np.asarray(
+        (
+            (np.cos(angle), -np.sin(angle), 0.0),
+            (np.sin(angle), np.cos(angle), 0.0),
+            (0.0, 0.0, 1.0),
+        )
+    )
+    source_animation[:3, 3] = (90.0, -30.0, 70.0)
+
+    result = mapped_local_from_rotation_delta(target, source_bind, source_animation)
+
+    assert np.allclose(result[:3, 3], target[:3, 3], atol=1.0e-12)
+    assert np.allclose(np.linalg.norm(result[:3, :3], axis=0), (1.1, 1.1, 1.1))
+    assert not np.allclose(result[:3, :3], target[:3, :3])
+
+
 def test_dl2_root_policies_keep_pelvis_and_independent_motion_tracks_coherent() -> None:
     rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_shadow_caster.crig")
     bind = rig.bind_track_values()
@@ -154,9 +206,11 @@ def test_dl2_root_policies_keep_pelvis_and_independent_motion_tracks_coherent() 
     assert values[1][motion_track][5] == pytest.approx(4.0 - first[2])
 
     inplace = [[list(row) for row in bind] for _ in range(2)]
+    inplace[0][pelvis_track][3:6] = [90.0, 80.0, 70.0]
     inplace[1][pelvis_track][3:6] = [9.0, 8.0, 7.0]
     apply_global_root_policy(inplace, rig, "pelvis", "inplace")
-    assert inplace[1][pelvis_track][3:6] == inplace[0][pelvis_track][3:6]
+    assert inplace[0][pelvis_track][3:6] == list(pelvis.bind_translation)
+    assert inplace[1][pelvis_track][3:6] == list(pelvis.bind_translation)
 
 
 def test_fbx_scene_bind_priority_pose_then_transformlink_then_fallback() -> None:
