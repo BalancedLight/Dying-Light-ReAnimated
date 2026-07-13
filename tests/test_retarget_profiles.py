@@ -57,3 +57,35 @@ def test_common_non_mixamo_names_are_recognized() -> None:
     profile = auto_map_source_bones(bones)
     required_errors = [error for error in profile.validate(bones) if "Required role" in error]
     assert not required_errors
+
+
+def test_character_creator_and_dl_suffix_names_use_shared_scan() -> None:
+    bones = [
+        "root", "pelvis", "CC_Base_Pelvis",
+        "spine_01", "spine_02", "spine_03", "neck_01", "head",
+        "clavicle_l", "upperarm_l", "lowerarm_l", "hand_l",
+        "clavicle_r", "upperarm_r", "lowerarm_r", "hand_r",
+        "thigh_l", "calf_l", "foot_l", "ball_l",
+        "thigh_r", "calf_r", "foot_r", "ball_r",
+        "middle_01_l", "middle_02_l", "middle_03_l",
+        "CC_Base_L_ForearmTwist01", "CC_Base_FacialBone",
+    ]
+    profile = auto_map_source_bones(bones)
+
+    assert profile.mapped_bone("hips") == "pelvis"
+    assert profile.mapped_bone("spine") == "spine_01"
+    assert profile.mapped_bone("chest") == "spine_02"
+    assert profile.mapped_bone("upper_chest") == "spine_03"
+    assert profile.mapped_bone("left_lower_arm") == "lowerarm_l"
+    assert profile.mapped_bone("left_middle_3") == "middle_03_l"
+    assert profile.mapped_bone("right_toes") == "ball_r"
+    assert "CC_Base_L_ForearmTwist01" in profile.ignored_bones
+    assert not [error for error in profile.validate(bones) if "Required role" in error]
+
+
+def test_mixamo_short_arm_and_leg_names_are_semantic_roles() -> None:
+    from dlanm2_gui.retarget_mapping import scan_humanoid_bones
+
+    scan = scan_humanoid_bones(["mixamorig:LeftArm", "mixamorig:LeftLeg"])
+    assert scan["mixamorig:LeftArm"].role == "l_upperarm"
+    assert scan["mixamorig:LeftLeg"].role == "l_calf"

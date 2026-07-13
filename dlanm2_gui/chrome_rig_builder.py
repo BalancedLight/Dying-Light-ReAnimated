@@ -35,11 +35,32 @@ def build_chrome_rig_from_fbx(model_fbx,*,name=None,category="Generic Object",au
  source=Path(model_fbx); document=document_factory(source)
  if not document.limb_models:raise ValueError("The model has no LimbNode armature. Add one root bone and skin the object to it.")
  names=_topological_bone_names(document); index_by_name={n:i for i,n in enumerate(names)}; meters=float(document.meters_per_unit); bones=[]
+
+ # Skin clusters identify deforming bones. Their LimbNode ancestors are also
+ # required because animation on an unweighted parent moves weighted children.
+ # Unrelated end markers/display helpers remain in the track layout, but exact
+ # compatibility may safely leave them at bind pose.
+ scene=getattr(document,"scene",None); limb_ids=set(document.limb_models.values()); required_ids=set()
+ if scene is not None:
+  required_ids={
+   int(cluster.bone_id)
+   for geometry in getattr(scene,"geometries",())
+   for cluster in getattr(geometry,"clusters",())
+   if getattr(cluster,"bone_id",None) in limb_ids
+  }
+  for object_id in tuple(required_ids):
+   parent=scene.model_parent_id(object_id)
+   while parent in limb_ids:
+    required_ids.add(parent); parent=scene.model_parent_id(parent)
+ classification="skin_cluster_ancestry" if required_ids else "all_limb_nodes_fallback"
+
  for index,bone_name in enumerate(names):
-  matrix=document._local_matrix(document.limb_models[bone_name],tick=0,use_animation=False); t,q,s=decompose_local_matrix(matrix); parent_name=document.parent_by_name.get(bone_name)
-  bones.append(ChromeRigBone(index,bone_name,index_by_name.get(str(parent_name),-1),dl_name_hash(bone_name),tuple(float(v*meters) for v in t),tuple(float(v) for v in q),tuple(float(v) for v in s),True,False))
+  object_id=document.limb_models[bone_name]
+  matrix=document._local_matrix(object_id,tick=0,use_animation=False); t,q,s=decompose_local_matrix(matrix); parent_name=document.parent_by_name.get(bone_name)
+  deform=object_id in required_ids if required_ids else True
+  bones.append(ChromeRigBone(index,bone_name,index_by_name.get(str(parent_name),-1),dl_name_hash(bone_name),tuple(float(v*meters) for v in t),tuple(float(v) for v in q),tuple(float(v) for v in s),deform,not deform))
  roots=[b.index for b in bones if b.parent_index<0]; fingerprint=hashlib.sha256("\n".join(f"{b.index}|{b.name}|{b.parent_index}|{b.descriptor:08x}" for b in bones).encode()).hexdigest()[:24]
- rig=ChromeRig(f"custom:{fingerprint}",(name or source.stem).strip() or "Custom Rig",category,tuple(bones),roots[0],source_model_name=source.name,author=author,description=description,extensions={"source_unit_meters":meters,"builder":"binary_fbx_limb_nodes_v1","deform_classification":"all_limb_nodes"})
+ rig=ChromeRig(f"custom:{fingerprint}",(name or source.stem).strip() or "Custom Rig",category,tuple(bones),roots[0],source_model_name=source.name,author=author,description=description,extensions={"source_unit_meters":meters,"builder":"binary_fbx_limb_nodes_v1","deform_classification":classification,"deform_bone_count":sum(bone.deform for bone in bones),"helper_bone_count":sum(bone.helper for bone in bones)})
  rig.validate().require_valid();return rig
 
 def create_chrome_rig_file(model_fbx,output_path,**kwargs):return build_chrome_rig_from_fbx(model_fbx,**kwargs).save(output_path)

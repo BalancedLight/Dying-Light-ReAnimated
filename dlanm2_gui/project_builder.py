@@ -32,6 +32,8 @@ from .pack_manifest import (
 )
 from .retarget_profiles import SourceBoneMappingProfile, auto_map_source_bones
 from .retarget_engines.exact_rig import build_exact_rig_anm2
+from .retarget_engines.mapped_rig import build_mapped_rig_anm2
+from .bone_maps import GenericBoneMap
 from .runtime_paths import resource_root
 from .rp6l import (
     AnimationLibrary,
@@ -40,7 +42,11 @@ from .rp6l import (
 )
 from .script_targets import AnimationScriptTarget, ScriptTargetRegistry
 from .workspace_project import DlReanimatedProject, ProjectAnimation
-from .fbx_preflight import preflight_fbx
+from .fbx_preflight import (
+    classify_target_compatibility,
+    normalized_bone_name,
+    preflight_fbx,
+)
 from .game_profiles import DL2_GAME_ID, get_game_profile
 from .root_mapping import RootMappingSelection
 
@@ -48,6 +54,22 @@ from .root_mapping import RootMappingSelection
 
 
 ProgressCallback = Callable[[str], None]
+
+
+def _reviewed_mapping_is_name_identity(bone_map: GenericBoneMap) -> bool:
+    """Return true only when every reviewed row preserves bone identity.
+
+    A source skeleton can contain the complete target hierarchy while a user
+    deliberately maps different anatomical bones.  Global bind correction is
+    safe only for identity/name-equivalent rows; cross-wired rows must retain
+    target pivots and use the local rotation-delta solver.
+    """
+
+    return bool(bone_map.pairs) and all(
+        normalized_bone_name(row.source_bone)
+        == normalized_bone_name(row.target_bone)
+        for row in bone_map.pairs
+    )
 
 
 @dataclass(slots=True)
@@ -297,16 +319,88 @@ def _build_body_project(
         if retarget_mode == "exact":
             assert exact_rig is not None
             source_rest_for_clip = source_path
-            source_rest_policy = "exact_same_rig"
             clip_out.mkdir(parents=True, exist_ok=True)
-            exact_build = build_exact_rig_anm2(
-                source_path,
-                exact_rig,
-                fps=animation.fps,
-                animation_stack=animation.source_animation_stack or None,
-                root_mapping=RootMappingSelection.from_animation(animation),
-                root_policy=animation.root_policy,
+            mapping_payload = project.mapping_profiles.get(
+                str(animation.mapping_profile_id or ""), {}
             )
+            if animation.mapping_profile_id and not mapping_payload:
+                raise ValueError(
+                    f"Animation {animation.display_name!r} references missing mapping profile "
+                    f"{animation.mapping_profile_id}. Click Create .crig map for this clip."
+                )
+            if (
+                animation.mapping_profile_id
+                and mapping_payload.get("format") != "dl-reanimated-bone-map"
+            ):
+                raise ValueError(
+                    f"Animation {animation.display_name!r} still references a humanoid or "
+                    "incompatible mapping from a previous target rig. Click Create .crig map "
+                    "to generate an editable map for the selected custom target."
+                )
+            if mapping_payload.get("format") == "dl-reanimated-bone-map":
+                bone_map = GenericBoneMap.from_dict(mapping_payload)
+                mapping_document = _FbxDocument(source_path)
+                if animation.source_animation_stack:
+                    mapping_document.select_animation_stack(
+                        animation.source_animation_stack
+                    )
+                compatibility = classify_target_compatibility(
+                    mapping_document, exact_rig
+                )
+                same_target_topology = not (
+                    compatibility.get("required_missing_bones")
+                    or compatibility.get("hierarchy_mismatches")
+                )
+                identity_mapping = _reviewed_mapping_is_name_identity(bone_map)
+                transfer_policy = (
+                    "global_bind_basis_correction"
+                    if same_target_topology
+                    and identity_mapping
+                    and getattr(mapping_document, "bind_global_matrices", None)
+                    and hasattr(mapping_document, "global_matrices")
+                    else "mapped_local_rotation_delta"
+                )
+                source_rest_policy = "reviewed_mapped_crig"
+                exact_build = build_mapped_rig_anm2(
+                    source_path,
+                    exact_rig,
+                    bone_map,
+                    fps=animation.fps,
+                    animation_stack=animation.source_animation_stack or None,
+                    root_mapping=RootMappingSelection.from_animation(animation),
+                    transfer_policy=transfer_policy,
+                    root_policy=animation.root_policy,
+                )
+                exact_build.report["mapping_transfer_selection"] = {
+                    "policy": transfer_policy,
+                    "reason": (
+                        "source hierarchy is target-compatible; preserve authoritative "
+                        "global bind pivots"
+                        if transfer_policy == "global_bind_basis_correction"
+                        else "reviewed cross-rig map; preserve target local translations/scales "
+                        "and apply source rest-relative rotation"
+                    ),
+                    "source_target_classification": compatibility.get(
+                        "classification", "cross_rig"
+                    ),
+                    "required_missing_bone_count": len(
+                        compatibility.get("required_missing_bones", ())
+                    ),
+                    "hierarchy_mismatch_count": len(
+                        compatibility.get("hierarchy_mismatches", ())
+                    ),
+                    "identity_mapping": identity_mapping,
+                }
+            else:
+                source_rest_policy = "exact_same_rig"
+                exact_build = build_exact_rig_anm2(
+                    source_path,
+                    exact_rig,
+                    fps=animation.fps,
+                    animation_stack=animation.source_animation_stack or None,
+                    root_mapping=RootMappingSelection.from_animation(animation),
+                    root_policy=animation.root_policy,
+                )
             payload = exact_build.payload
             candidate_path = clip_out / f"{resource_name}.anm2"
             candidate_path.write_bytes(payload)
@@ -455,7 +549,7 @@ def _build_body_project(
             script_resource=script_resource,
             root_policy=animation.root_policy,
             ik_preset=animation.ik_preset,
-            mapping_profile_id=profile.profile_id if profile is not None else "",
+            mapping_profile_id=animation.mapping_profile_id,
             frame_count=frame_count,
             fps=animation.fps,
             page_count=page_layout.page_count,
@@ -474,7 +568,7 @@ def _build_body_project(
                 frame_count=frame_count,
                 fps=animation.fps,
                 sha256=built.sha256,
-                mapping_profile_id=profile.profile_id if profile is not None else "",
+                mapping_profile_id=animation.mapping_profile_id,
                 ik_preset=animation.ik_preset,
                 extensions={
                     "source_rest_policy": source_rest_policy,

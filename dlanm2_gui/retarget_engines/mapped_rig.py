@@ -12,7 +12,7 @@ rest-relative delta:
                           * source_local(frame)
 
 Unmapped target bones remain at their target bind transform.  This allows a
-Wada/CC-base target rig to consume a Mixamo animation without pretending the
+CC-base target rig to consume a Mixamo animation without pretending the
 skeletons are byte-identical.
 """
 
@@ -92,6 +92,45 @@ def source_local_to_target_basis(
     return value
 
 
+def source_global_to_target_basis(
+    matrix: np.ndarray,
+    *,
+    meters_per_unit: float,
+    convert_y_up_to_dying_light: bool,
+) -> np.ndarray:
+    """Normalize an FBX global matrix before bind-basis correction.
+
+    FBX global bind/animation matrices are expressed in the document's native
+    linear unit.  Chrome animation tracks are expressed in metres.  The old
+    global-correction path skipped this conversion (and, for imported model
+    rigs, also skipped the FBX Y-up -> Chrome basis change).  Rest pose happened
+    to cancel algebraically, but the first animated rotation turned centimetre
+    bind offsets into translations hundreds of metres long.
+
+    A homogeneous global transform uses the same unit/basis conversion as a
+    local transform, so keep one implementation and a separately named entry
+    point to make this required normalization hard to omit at call sites.
+    """
+
+    return source_local_to_target_basis(
+        matrix,
+        meters_per_unit=meters_per_unit,
+        convert_y_up_to_dying_light=convert_y_up_to_dying_light,
+    )
+
+
+def _joint_pivot_extent(globals_by_name: Mapping[str, np.ndarray]) -> float:
+    if not globals_by_name:
+        return 0.0
+    points = np.asarray(
+        [np.asarray(matrix, dtype=float)[:3, 3] for matrix in globals_by_name.values()],
+        dtype=float,
+    )
+    if not np.isfinite(points).all():
+        raise ValueError("animated joint hierarchy contains non-finite pivots")
+    return float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
+
+
 def mapped_local_from_rest_delta(
     target_bind_local: np.ndarray,
     source_bind_local: np.ndarray,
@@ -116,6 +155,60 @@ def mapped_local_from_rest_delta(
     result = target @ source_delta
     if not np.isfinite(result).all():
         raise ValueError("mapped local transform became non-finite")
+    return result
+
+
+def _orthonormal_rotation(matrix: np.ndarray, label: str) -> np.ndarray:
+    linear = np.asarray(matrix, dtype=float)[:3, :3]
+    if linear.shape != (3, 3) or not np.isfinite(linear).all():
+        raise ValueError(f"{label} rotation basis must be finite")
+    u, _singular, vt = np.linalg.svd(linear)
+    rotation = u @ vt
+    if float(np.linalg.det(rotation)) < 0.0:
+        u[:, -1] *= -1.0
+        rotation = u @ vt
+    return rotation
+
+
+def mapped_local_from_rotation_delta(
+    target_bind_local: np.ndarray,
+    source_bind_local: np.ndarray,
+    source_animated_local: np.ndarray,
+) -> np.ndarray:
+    """Transfer source local rotation while preserving target bone geometry.
+
+    Reviewed cross-skeleton maps connect anatomical roles, not identical bind
+    pivots.  Importing source translations/scales changes target bone lengths
+    and can tear a skinned mesh even when all units are correct.  Apply the
+    source rest-relative rotation to the target bind rotation, while keeping
+    the target's authored local translation and scale exactly unchanged.  Root
+    displacement is handled independently by ``apply_global_root_policy``.
+    """
+
+    target = np.asarray(target_bind_local, dtype=float)
+    source_bind = np.asarray(source_bind_local, dtype=float)
+    source_anim = np.asarray(source_animated_local, dtype=float)
+    for label, matrix in (
+        ("target bind", target),
+        ("source bind", source_bind),
+        ("source animation", source_anim),
+    ):
+        if matrix.shape != (4, 4) or not np.isfinite(matrix).all():
+            raise ValueError(f"{label} matrix must be finite 4x4")
+    target_rotation = _orthonormal_rotation(target, "target bind")
+    source_bind_rotation = _orthonormal_rotation(source_bind, "source bind")
+    source_anim_rotation = _orthonormal_rotation(source_anim, "source animation")
+    target_scale = np.linalg.norm(target[:3, :3], axis=0)
+    if np.any(target_scale <= 1.0e-12):
+        raise ValueError("target bind matrix has singular scale")
+    result = np.eye(4, dtype=float)
+    result[:3, :3] = (
+        target_rotation
+        @ source_bind_rotation.T
+        @ source_anim_rotation
+        @ np.diag(target_scale)
+    )
+    result[:3, 3] = target[:3, 3]
     return result
 
 
@@ -149,9 +242,13 @@ def apply_global_root_policy(
     root_bone = next(bone for bone in rig.bones if bone.name == target_root_name)
     root_track = rig.descriptors.index(root_bone.descriptor)
     first_translation = np.asarray(values[0][root_track][3:6], dtype=float)
+    bind_translation = np.asarray(root_bone.bind_translation, dtype=float)
     if policy == "inplace":
         for frame in values:
-            frame[root_track][3:6] = [float(value) for value in first_translation]
+            # In-place means the target model root stays at its authored bind
+            # position.  Freezing the first source-animation sample preserves
+            # a source rig offset and can move an otherwise valid custom model.
+            frame[root_track][3:6] = [float(value) for value in bind_translation]
     elif policy == "motion":
         motion_descriptor = 0xCCC3CDDF
         if motion_descriptor not in rig.descriptors:
@@ -171,6 +268,9 @@ def apply_global_root_policy(
 def _target_uses_dying_light_basis(rig: ChromeRig) -> bool:
     convention = str(getattr(rig.writer_profile, "coordinate_convention", "")).lower()
     extensions = dict(getattr(rig, "extensions", {}) or {})
+    resolved = extensions.get("resolved_model_axis_conversion")
+    if resolved is not None:
+        return str(resolved).strip().lower() == "fbx_y_up_to_dying_light"
     orientation = str(extensions.get("model_axis_conversion", "")).lower()
     builder = str(extensions.get("builder", "")).lower()
     return (
@@ -296,27 +396,71 @@ def build_mapped_rig_anm2(
         document.parent_by_name,
         requested_bone=root_selection.source_bone,
     )
-    previous_root_source = mapped.get(target_root_name)
-    mapped[target_root_name] = source_root_name
-    if previous_root_source and previous_root_source != source_root_name:
+    target_root_bone = next(bone for bone in rig.bones if bone.name == target_root_name)
+
+    # Repair maps created by the early unified GUI, which consumed Hips as the
+    # pose of a non-deforming wrapper root.  Hips rotation belongs on the pelvis
+    # pose; its displacement is sampled separately below for the selected root
+    # policy.  Explicit/manual wrapper mappings remain respected.
+    legacy_root_pair = next(
+        (
+            row
+            for row in bone_map.pairs
+            if row.source_bone == target_root_name
+            and row.target_bone == source_root_name
+            and row.method == "hierarchy_root"
+        ),
+        None,
+    )
+    if legacy_root_pair is not None and target_root_bone.helper and not target_root_bone.deform:
+        mapped.pop(target_root_name, None)
+        if source_root_name not in mapped.values():
+            from ..retarget_mapping import canonical_humanoid_role
+
+            pelvis_candidates = [
+                bone
+                for bone in rig.bones
+                if bone.name not in mapped
+                and canonical_humanoid_role(bone.name) == "pelvis"
+            ]
+            pelvis_candidates.sort(
+                key=lambda bone: (
+                    0 if bone.deform and not bone.helper else 1,
+                    bone.index,
+                )
+            )
+            if pelvis_candidates:
+                mapped[pelvis_candidates[0].name] = source_root_name
+                warnings.append(
+                    f"Migrated legacy wrapper mapping {target_root_name!r} <- "
+                    f"{source_root_name!r} to pelvis pose {pelvis_candidates[0].name!r}; "
+                    "root displacement remains controlled separately."
+                )
         warnings.append(
-            f"Bip01/root mapping overrides {target_root_name!r}: "
-            f"{previous_root_source!r} -> {source_root_name!r}."
+            f"Removed legacy pose rotation from helper root {target_root_name!r}; "
+            "the selected root policy now controls displacement without duplicating pelvis pose."
         )
     if not mapped:
         raise ValueError(
             "Mapped-rig retarget has no valid bone rows. Use Auto-map or assign bones manually."
         )
 
-    if transfer_policy not in {"mapped_local_rest_delta", "global_bind_basis_correction"}:
+    if transfer_policy not in {
+        "mapped_local_rest_delta",
+        "mapped_local_rotation_delta",
+        "global_bind_basis_correction",
+    }:
         raise ValueError(f"Unsupported retarget transfer policy {transfer_policy!r}")
     if root_policy not in {"inplace", "bip01", "motion"}:
         raise ValueError(f"Unsupported root-motion policy {root_policy!r}")
     use_global_correction = transfer_policy == "global_bind_basis_correction"
-    convert_basis = _target_uses_dying_light_basis(rig) and not use_global_correction
+    use_rotation_only = transfer_policy == "mapped_local_rotation_delta"
+    # Unit conversion is mandatory for both paths.  Basis conversion depends
+    # only on the target rig convention, not on which retarget solver is used.
+    convert_basis = _target_uses_dying_light_basis(rig)
     meters_per_unit = float(document.meters_per_unit)
     source_bind_local: dict[str, np.ndarray] = {}
-    for source_name in sorted(set(mapped.values())):
+    for source_name in sorted(set(mapped.values()).union({source_root_name})):
         source_bind_local[source_name] = source_local_to_target_basis(
             document._local_matrix(
                 document.limb_models[source_name], tick=0, use_animation=False
@@ -341,12 +485,31 @@ def build_mapped_rig_anm2(
                 "Global bind-basis correction requires authoritative/fallback FBX global bind matrices."
             )
         for target_name, source_name in mapped.items():
-            source_global = np.asarray(source_globals[source_name], dtype=float)
+            source_global = source_global_to_target_basis(
+                source_globals[source_name],
+                meters_per_unit=meters_per_unit,
+                convert_y_up_to_dying_light=convert_basis,
+            )
             if not np.isfinite(source_global).all() or abs(float(np.linalg.det(source_global[:3, :3]))) <= 1.0e-12:
                 raise ValueError(f"Source bind matrix for {source_name!r} is singular or non-finite.")
             basis_corrections[target_name] = global_bind_basis_correction(
                 source_global, target_bind_global[target_name]
             )
+    source_bind_globals = getattr(document, "bind_global_matrices", None)
+    if source_bind_globals and source_root_name in source_bind_globals:
+        source_root_bind_global = source_global_to_target_basis(
+            source_bind_globals[source_root_name],
+            meters_per_unit=meters_per_unit,
+            convert_y_up_to_dying_light=convert_basis,
+        )
+    elif hasattr(document, "global_matrices"):
+        source_root_bind_global = source_global_to_target_basis(
+            document.global_matrices(tick=0, use_animation=False)[source_root_name],
+            meters_per_unit=meters_per_unit,
+            convert_y_up_to_dying_light=convert_basis,
+        )
+    else:
+        source_root_bind_global = source_bind_local[source_root_name]
     if hasattr(document, "frame_ticks"):
         ticks = list(document.frame_ticks(fps=sample_fps))
     else:
@@ -365,6 +528,11 @@ def build_mapped_rig_anm2(
     }
     movement_ranges: dict[str, float] = {bone.name: 0.0 for bone in rig.bones}
     bind_deltas: list[dict[str, Any]] = []
+    bind_joint_extent = _joint_pivot_extent(target_bind_global)
+    maximum_animated_joint_extent = 0.0
+    maximum_animated_joint_extent_frame = 0
+    maximum_non_root_translation_delta = 0.0
+    source_root_displacements: list[np.ndarray] = []
 
     # Record rest-pose differences for the UI/report, but they are not a build blocker.
     for bone in rig.bones:
@@ -394,7 +562,51 @@ def build_mapped_rig_anm2(
     for tick in ticks:
         rows_by_descriptor: dict[int, list[float]] = {}
         target_animated_globals: dict[str, np.ndarray] = {}
-        source_animated_globals = document.global_matrices(tick=tick, use_animation=True) if use_global_correction else {}
+        raw_source_animated_globals = (
+            document.global_matrices(tick=tick, use_animation=True)
+            if hasattr(document, "global_matrices")
+            else {}
+        )
+        source_animated_globals = (
+            {
+                name: source_global_to_target_basis(
+                    matrix,
+                    meters_per_unit=meters_per_unit,
+                    convert_y_up_to_dying_light=convert_basis,
+                )
+                for name, matrix in raw_source_animated_globals.items()
+            }
+            if use_global_correction
+            else {}
+        )
+        if source_root_name in raw_source_animated_globals:
+            root_animated_global = source_global_to_target_basis(
+                raw_source_animated_globals[source_root_name],
+                meters_per_unit=meters_per_unit,
+                convert_y_up_to_dying_light=convert_basis,
+            )
+        else:
+            root_animated_global = source_local_to_target_basis(
+                document._local_matrix(
+                    document.limb_models[source_root_name],
+                    tick=tick,
+                    use_animation=True,
+                ),
+                meters_per_unit=meters_per_unit,
+                convert_y_up_to_dying_light=convert_basis,
+            )
+        root_displacement_global = (
+            root_animated_global[:3, 3] - source_root_bind_global[:3, 3]
+        )
+        if target_root_bone.parent_index >= 0:
+            parent_name = rig.bones[target_root_bone.parent_index].name
+            root_displacement_local = (
+                np.linalg.inv(target_bind_global[parent_name][:3, :3])
+                @ root_displacement_global
+            )
+        else:
+            root_displacement_local = root_displacement_global
+        source_root_displacements.append(root_displacement_local)
         for bone in rig.bones:
             target_bind_local = target_bind[bone.name]
             source_name = mapped.get(bone.name)
@@ -423,12 +635,36 @@ def build_mapped_rig_anm2(
                     meters_per_unit=meters_per_unit,
                     convert_y_up_to_dying_light=convert_basis,
                 )
-                local = mapped_local_from_rest_delta(
-                    target_bind_local,
-                    source_bind_local[source_name],
-                    source_anim_local,
+                local = (
+                    mapped_local_from_rotation_delta(
+                        target_bind_local,
+                        source_bind_local[source_name],
+                        source_anim_local,
+                    )
+                    if use_rotation_only
+                    else mapped_local_from_rest_delta(
+                        target_bind_local,
+                        source_bind_local[source_name],
+                        source_anim_local,
+                    )
+                )
+            if not use_global_correction:
+                target_animated_globals[bone.name] = (
+                    target_animated_globals[parent_name] @ local
+                    if parent_name is not None
+                    else local.copy()
                 )
             translation, quaternion, scale = decompose_local_matrix(local)
+            if use_rotation_only and bone.name != target_root_name:
+                maximum_non_root_translation_delta = max(
+                    maximum_non_root_translation_delta,
+                    float(
+                        np.linalg.norm(
+                            translation
+                            - np.asarray(bone.bind_translation, dtype=float)
+                        )
+                    ),
+                )
             cayley = anm2_cayley_vector_from_quaternion(quaternion)
             row = [
                 *map(float, cayley),
@@ -441,6 +677,10 @@ def build_mapped_rig_anm2(
                 movement_ranges[bone.name],
                 max(abs(float(a) - float(b)) for a, b in zip(row, bind_row)),
             )
+        frame_extent = _joint_pivot_extent(target_animated_globals)
+        if frame_extent > maximum_animated_joint_extent:
+            maximum_animated_joint_extent = frame_extent
+            maximum_animated_joint_extent_frame = len(values)
         frame = [
             rows_by_descriptor.get(
                 descriptor,
@@ -450,8 +690,37 @@ def build_mapped_rig_anm2(
         ]
         values.append(frame)
 
-    if use_global_correction:
-        apply_global_root_policy(values, rig, target_root_name, root_policy)
+    if target_root_name not in mapped or use_rotation_only:
+        root_track = rig.descriptors.index(target_root_bone.descriptor)
+        root_bind_translation = np.asarray(target_root_bone.bind_translation, dtype=float)
+        for frame, displacement in zip(values, source_root_displacements):
+            frame[root_track][3:6] = [
+                float(value) for value in root_bind_translation + displacement
+            ]
+
+    # Root policies are target-track policies and apply to both the global and
+    # local-delta solvers.  Previously mapped cross-rig clips silently ignored
+    # the user's in-place/motion selection.
+    apply_global_root_policy(values, rig, target_root_name, root_policy)
+
+    # Reject the exact failure mode that used to produce apparently valid ANM2
+    # files with bones spread over hundreds of metres.  Root motion translates
+    # the whole hierarchy and therefore does not affect this pivot-AABB diagonal.
+    extent_limit = max(bind_joint_extent * 32.0, bind_joint_extent + 10.0, 1.0)
+    if maximum_animated_joint_extent > extent_limit:
+        raise ValueError(
+            "Retargeted joint hierarchy is catastrophically larger than its bind pose: "
+            f"{maximum_animated_joint_extent:.3f} m at frame "
+            f"{maximum_animated_joint_extent_frame}, versus "
+            f"{bind_joint_extent:.3f} m in bind pose (limit {extent_limit:.3f} m). "
+            "Check the selected .crig, FBX units, bind pose, and bone mapping."
+        )
+    if use_rotation_only and maximum_non_root_translation_delta > 1.0e-6:
+        raise ValueError(
+            "Cross-rig rotation transfer changed a target bone length by "
+            f"{maximum_non_root_translation_delta:.9f} m. This violates the "
+            "target-bind preservation contract; no ANM2 was emitted."
+        )
 
     for bone in rig.bones:
         track_index = rig.descriptors.index(bone.descriptor)
@@ -490,7 +759,9 @@ def build_mapped_rig_anm2(
     unmapped = [bone.name for bone in rig.bones if bone.name not in mapped_target_names]
     if unmapped:
         warnings.append(
-            f"{len(unmapped)} target .crig bone(s) are unmapped and remain at bind pose."
+            f"{len(unmapped)} target .crig bone(s) use their bind-local tracks and inherit "
+            "mapped parent motion. Review unmapped twist, face, or accessory rows in Root & "
+            ".crig Mapping if those tracks need independent motion."
         )
     moving = [name for name, delta in movement_ranges.items() if delta > 1.0e-8]
     if not moving:
@@ -520,6 +791,16 @@ def build_mapped_rig_anm2(
                 "target_bone": target_root_name,
                 "target_method": target_root_method,
                 "always_retained": True,
+                "pose_target_bone": next(
+                    (
+                        target_name
+                        for target_name, source_name in mapped.items()
+                        if source_name == source_root_name
+                    ),
+                    "",
+                ),
+                "translation_target_bone": target_root_name,
+                "pose_and_root_motion_separated": True,
             },
             "mapped_bone_count": len(mapped),
             "unmapped_bone_count": len(unmapped),
@@ -541,25 +822,30 @@ def build_mapped_rig_anm2(
             "decoded_max_component_error": maximum_error,
             "source_unit_meters": meters_per_unit,
             "source_basis_conversion": (
-                "FBX (x,y,z) -> Dying Light (x,z,-y)"
-                if convert_basis
-                else (
-                    "per-bone inverse(sourceBindGlobal) * targetBindGlobal"
-                    if use_global_correction else "none (target .crig uses FBX-local convention)"
+                f"FBX native units * {meters_per_unit:g} m/unit; "
+                + (
+                    "FBX (x,y,z) -> Dying Light (x,z,-y)"
+                    if convert_basis
+                    else "source basis preserved"
                 )
             ),
             "bind_source": getattr(document, "bind_source", "unanimated Model transforms"),
             "bind_coverage": dict(getattr(document, "bind_coverage", {}) or {}),
             "basis_correction_policy": transfer_policy,
+            "preserves_target_non_root_translation_and_scale": use_rotation_only,
+            "bind_joint_extent_meters": bind_joint_extent,
+            "maximum_animated_joint_extent_meters": maximum_animated_joint_extent,
+            "maximum_animated_joint_extent_frame": maximum_animated_joint_extent_frame,
+            "maximum_non_root_translation_delta_meters": (
+                maximum_non_root_translation_delta
+            ),
             "multiple_root_inventory": [
                 bone.name for bone in rig.bones if bone.parent_index < 0
             ],
             "warnings": list(dict.fromkeys(warnings)),
-            "root_policy": (
-                "global_bind_basis_correction" if use_global_correction else "mapped_rest_delta"
-            ),
+            "root_policy": root_policy,
             "root_motion_policy_requested": root_policy,
-            "root_motion_policy_applied": root_policy if use_global_correction else "mapped_rest_delta_legacy",
+            "root_motion_policy_applied": root_policy,
             "candidate_path": None,
         },
     )
@@ -573,7 +859,9 @@ __all__ = [
     "corrected_target_global",
     "global_bind_basis_correction",
     "mapped_local_from_rest_delta",
+    "mapped_local_from_rotation_delta",
     "quaternion_wxyz_to_matrix",
     "source_local_to_target_basis",
+    "source_global_to_target_basis",
     "target_bind_local_matrix",
 ]

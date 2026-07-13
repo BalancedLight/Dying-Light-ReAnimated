@@ -11,6 +11,7 @@ from PySide6.QtCore import QEventLoop, QSettings, QThread, QTimer
 
 from dlanm2_gui import gui
 from dlanm2_gui.background_tasks import BackgroundTaskRunner
+from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
 from dlanm2_gui.retarget_profiles import SourceBoneMappingProfile
 from dlanm2_gui.unified_gui import UnifiedMainWindow
 from dlanm2_gui.workspace_project import ProjectAnimation
@@ -115,6 +116,78 @@ def test_background_runner_keeps_qt_event_loop_responsive(tmp_path) -> None:
     assert ui_ticks == ["responsive"]
     assert results == ["done"]
     assert callback_on_gui_thread == [True]
+
+
+def test_cross_rig_animation_is_added_with_editable_map_and_opens_editor(
+    tmp_path, monkeypatch
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    source = tmp_path / "mixamo.fbx"
+    source.write_bytes(b"fixture")
+    target = Path(__file__).resolve().parents[1] / "reference" / "male_npc_infected.crig"
+    controller.project.rig.retarget_mode = "exact"
+    controller.project.rig.target_rig_ref = "test:custom"
+    controller.project.rig.target_rig_path = str(target)
+    controller.target_rig_combo.addItem("Test custom rig", "test:custom")
+    controller._rig_paths_by_ref["test:custom"] = str(target)
+    controller._set_combo_data(controller.target_rig_combo, "test:custom")
+    shell._set_crig_tab_visible(False)
+
+    stack = SimpleNamespace(name="Take 001")
+    document = SimpleNamespace(
+        animation_stacks=(stack,),
+        animation_stack_names=(stack.name,),
+        limb_models={
+            "mixamorig:Hips": 1,
+            "mixamorig:Spine": 2,
+            "mixamorig:Head": 3,
+        },
+        parent_by_name={
+            "mixamorig:Hips": None,
+            "mixamorig:Spine": "mixamorig:Hips",
+            "mixamorig:Head": "mixamorig:Spine",
+        },
+    )
+    monkeypatch.setattr(controller, "_source_document", lambda _path: document)
+    monkeypatch.setattr(shell.crig_mapping, "_document", lambda _animation: document)
+    monkeypatch.setattr(
+        qt["QFileDialog"], "getOpenFileNames", lambda *_args: ([str(source)], "")
+    )
+    monkeypatch.setattr(qt["QMessageBox"], "warning", lambda *_args: None)
+
+    def repairable_preflight(path, **_kwargs):
+        report = FbxPreflightReport(str(path), "animation")
+        report.add(
+            ERROR,
+            "required_target_bones_missing",
+            "The source uses a different skeleton.",
+            "Strict exact matching cannot transfer it by name.",
+            "Review the generated .crig map.",
+            can_continue=True,
+        )
+        return report
+
+    monkeypatch.setattr(gui, "preflight_fbx", repairable_preflight)
+
+    controller.add_animations()
+
+    assert len(controller.project.animations) == 1
+    animation = controller.project.animations[0]
+    assert animation.mapping_profile_id
+    assert controller.project.mapping_profiles[animation.mapping_profile_id]["format"] == (
+        "dl-reanimated-bone-map"
+    )
+    assert shell._animation_tab_index("Root & .crig Mapping") >= 0
+
+    controller._open_mapping_for_animation(animation.animation_id)
+    assert shell.animation_tabs.tabText(shell.animation_tabs.currentIndex()) == (
+        "Root & .crig Mapping"
+    )
+    assert shell.crig_mapping.table.rowCount() > 0, shell.crig_mapping.status.text()
+    controller.dirty = False
+    shell.window.close()
 
 
 def test_animation_build_uses_background_runner(tmp_path, monkeypatch) -> None:

@@ -13,13 +13,14 @@ import traceback
 
 from ..model_importer.compiler_bridge import CompilerSettings, compile_and_install_model
 from ..background_tasks import BackgroundTaskRunner, TaskFailure
-from ..model_importer.crig import create_crig_file
+from ..model_importer.crig import create_crig_from_source_msh
 from ..model_importer.fbx_model import FbxScene, ORIENTATION_POLICIES
 from ..model_importer.msh_builder import (
     ModelBuildOptions,
     build_source_from_fbx,
     humanoid_bone_mapping,
     sanitize_name,
+    source_skin_weight_usage,
 )
 from ..model_importer.vendor.chrome_mesh_tools.smd import SmdFile
 from ..fbx_preflight import preflight_fbx
@@ -40,6 +41,8 @@ class ModelEntry:
     build_report: dict[str, Any] | None = None
     source_msh: Path | None = None
     crig_path: Path | None = None
+    installed_crig_ref: str = ""
+    installed_crig_path: Path | None = None
     status: str = "Not analyzed"
 
     def to_dict(self) -> dict[str, Any]:
@@ -50,6 +53,10 @@ class ModelEntry:
             "enabled": self.enabled,
             "orientation_policy": self.orientation_policy,
             "humanoid_bone_map": dict(self.humanoid_bone_map),
+            "generated_crig_ref": self.installed_crig_ref,
+            "generated_crig_path": (
+                str(self.installed_crig_path) if self.installed_crig_path else ""
+            ),
         }
 
     @classmethod
@@ -64,6 +71,12 @@ class ModelEntry:
                 str(key): str(row)
                 for key, row in dict(value.get("humanoid_bone_map", {})).items()
             },
+            installed_crig_ref=str(value.get("generated_crig_ref", "")),
+            installed_crig_path=(
+                Path(str(value["generated_crig_path"]))
+                if value.get("generated_crig_path")
+                else None
+            ),
         )
 
 
@@ -76,12 +89,14 @@ class ModelWorkspace:
         root: Path,
         mark_dirty: Callable[[], None],
         status_callback: Callable[[str], None] | None = None,
+        rigs_installed_callback: Callable[[list["ModelEntry"]], None] | None = None,
     ) -> None:
         self.qt = qt
         self.parent_window = parent_window
         self.root = Path(root)
         self.mark_dirty = mark_dirty
         self.status_callback = status_callback or (lambda _message: None)
+        self.rigs_installed_callback = rigs_installed_callback
         self.settings = qt["QSettings"]("DL ReAnimated", "Unified Model Workspace")
         self.entries: list[ModelEntry] = []
         self.busy = False
@@ -131,9 +146,9 @@ class ModelWorkspace:
         page = qt["QWidget"]()
         layout = qt["QVBoxLayout"](page)
         intro = qt["QLabel"](
-            "Import static props or skinned FBX models. Auto orientation applies the validated "
-            "FBX Y-up → Dying Light basis conversion, so imported objects should be upright at "
-            "identity rotation in ChromeEd."
+            "Import static props or skinned FBX models. Auto orientation respects the FBX scene "
+            "axis metadata and evaluated Model/BindPose transforms, so ordinary Y-up objects "
+            "should be upright at identity rotation in ChromeEd."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -231,10 +246,12 @@ class ModelWorkspace:
         self.flip_v = qt["QCheckBox"]("Flip UV V")
         self.retain_skeleton = qt["QCheckBox"]("Retain every rig bone")
         self.retain_skeleton.setChecked(True)
-        self.create_crig = qt["QCheckBox"]("Create/install .crig for exact-rig models")
+        self.create_crig = qt["QCheckBox"]("Create/install .crig for every skinned model")
         self.create_crig.setChecked(True)
         self.animation_script = qt["QLineEdit"]()
-        self.animation_script.setPlaceholderText("Auto: anims_man_all.scr for skinned imports")
+        self.animation_script.setPlaceholderText(
+            "Optional: script containing animations retargeted to this model"
+        )
         self.target_smd = self._path_row(
             form, "Dying Light target SMD", directory=False, file_filter="SMD (*.smd)"
         )
@@ -306,15 +323,15 @@ class ModelWorkspace:
         text.setReadOnly(True)
         text.setPlainText(
             "AUTO ORIENTATION\n"
-            "  Converts common FBX Y-up coordinates to Dying Light model space. Test the model "
-            "at identity rotation in ChromeEd. Manual ±90° policies are diagnostics for unusual FBXs.\n\n"
+            "  Respects the FBX axis metadata and evaluated bind transforms. Test the model at "
+            "identity rotation in ChromeEd. Manual ±90° policies are diagnostics for unusual FBXs.\n\n"
             "EXACT RIG\n"
             "  Preserves the FBX skeleton and creates a matching .crig. Animations may use exact "
             "matching skeletons or the mapped-.crig workspace under Animations.\n\n"
             "DYING LIGHT HUMANOID\n"
-            "  Transfers every source influence with its own bind-transfer matrix, then combines "
-            "only the final target weights. This replaces the old matrix-collapse path that could "
-            "explode The Boss. Review Bone Mapping before compiling.\n\n"
+            "  Preserves the FBX bind-pose surface and remaps only skin weights onto the Dying "
+            "Light bones. Per-bone bind reshaping is intentionally not applied because different "
+            "body proportions can shred an otherwise valid mesh. Review Bone Mapping before compiling.\n\n"
             "DELIVERY\n"
             "  Use the normal loose data/assets_pc project layout. Keep animation ANM2 resources "
             "in common_anims_sp_pc.rpack through the Animations workspace."
@@ -444,7 +461,8 @@ class ModelWorkspace:
             self.model_table.setCellWidget(row, 3, mode)
             orientation = qt["QComboBox"]()
             labels = (
-                ("Auto: FBX Y-up → Dying Light", "auto"),
+                ("Auto: respect FBX axis metadata", "auto"),
+                ("Legacy FBX Y-up → Dying Light", "fbx_y_up_to_dying_light"),
                 ("No conversion", "none"),
                 ("Rotate X +90°", "rotate_x_90"),
                 ("Rotate X -90°", "rotate_x_minus_90"),
@@ -571,7 +589,13 @@ class ModelWorkspace:
             if cluster.bone_id is not None
         }
         source_ids = entry.scene.depth_first_bones_for_weighted_ids(weighted)
-        mapping, report = humanoid_bone_mapping(entry.scene, source_ids, nodes)
+        usage = source_skin_weight_usage(entry.scene, source_ids)
+        mapping, report = humanoid_bone_mapping(
+            entry.scene,
+            source_ids,
+            nodes,
+            source_weight_totals=usage["bone_weight_totals"],
+        )
         entry.humanoid_bone_map = {
             entry.scene.model_names[bone_id]: nodes[target].name
             for bone_id, target in mapping.items()
@@ -611,7 +635,13 @@ class ModelWorkspace:
                 if cluster.bone_id is not None
             }
             source_ids = entry.scene.depth_first_bones_for_weighted_ids(weighted)
-            auto, report = humanoid_bone_mapping(entry.scene, source_ids, nodes)
+            usage = source_skin_weight_usage(entry.scene, source_ids)
+            auto, report = humanoid_bone_mapping(
+                entry.scene,
+                source_ids,
+                nodes,
+                source_weight_totals=usage["bone_weight_totals"],
+            )
         except Exception as exc:
             self.model_mapping_table.setRowCount(0)
             self.mapping_note.setText(str(exc))
@@ -707,6 +737,8 @@ class ModelWorkspace:
         result.build_report = deepcopy(entry.build_report)
         result.source_msh = entry.source_msh
         result.crig_path = entry.crig_path
+        result.installed_crig_ref = entry.installed_crig_ref
+        result.installed_crig_path = entry.installed_crig_path
         result.status = entry.status
         return result
 
@@ -715,9 +747,6 @@ class ModelWorkspace:
             entry.scene = FbxScene.from_path(entry.path)
             entry.inventory = entry.scene.inventory()
         script = str(config["animation_script"])
-        detected_skinned = bool((entry.inventory or {}).get("detected_mode") == "skinned")
-        if not script and (entry.mode in {"exact_rig", "dying_light_humanoid"} or (entry.mode == "auto" and detected_skinned)):
-            script = "anims_man_all.scr"
         options = ModelBuildOptions(
             resource_name=entry.resource_name,
             mode=entry.mode,
@@ -738,12 +767,30 @@ class ModelWorkspace:
         paths = result.write(output)
         entry.source_msh = paths["msh"]
         entry.build_report = json.loads(paths["report"].read_text(encoding="utf-8"))
-        if bool(config["create_crig"]) and result.report["effective_mode"] == "exact_rig":
-            entry.crig_path, crig_report = create_crig_file(
-                entry.scene,
+        if bool(config["create_crig"]) and result.report["effective_mode"] != "static":
+            aliases_by_name: dict[str, list[str]] = {}
+            coverage = (
+                result.report.get("humanoid_mapping", {})
+                .get("weighted_coverage", {})
+                .get("rows", [])
+            )
+            for row in coverage if isinstance(coverage, list) else []:
+                target = str(row.get("effective_target_bone", "")).strip()
+                source_name = str(row.get("source_bone", "")).strip()
+                if target and source_name and source_name.casefold() != target.casefold():
+                    aliases_by_name.setdefault(target, []).append(source_name)
+            entry.crig_path, crig_report = create_crig_from_source_msh(
+                result.source,
                 output / f"{entry.resource_name}.crig",
                 name=entry.resource_name,
-                orientation_policy=entry.orientation_policy,
+                source_model_name=Path(entry.path).name,
+                source_sha256=str(result.report.get("source_fbx_sha256", "")),
+                aliases_by_name=aliases_by_name,
+                resolved_orientation_policy=str(
+                    result.report.get("coordinate_contract", {}).get(
+                        "resolved_orientation_policy", "none"
+                    )
+                ),
             )
             (output / f"{entry.resource_name}.crig_build.json").write_text(
                 json.dumps(crig_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -751,11 +798,36 @@ class ModelWorkspace:
             try:
                 from ..chrome_rig_registry import ChromeRigRegistry
                 from ..runtime_paths import writable_application_root
-                ChromeRigRegistry(writable_application_root() / "rigs").import_rig(entry.crig_path)
-                progress(f"Installed .crig: {entry.crig_path}")
+                record = ChromeRigRegistry(
+                    writable_application_root() / "rigs"
+                ).import_rig(entry.crig_path)
+                entry.installed_crig_ref = record.rig_ref
+                entry.installed_crig_path = Path(record.path)
+                progress(
+                    f"Installed .crig target {record.rig_ref}: {record.path}"
+                )
             except Exception as exc:
                 progress(f".crig built but not installed automatically: {exc}")
         entry.status = "Source built; expected editor rotation = identity"
+        fitted = result.report.get("humanoid_fitted_bind")
+        if isinstance(fitted, dict):
+            progress(
+                "Humanoid geometry pivot fit: "
+                f"{int(fitted.get('anchor_count', 0))} FBX pivot anchors, "
+                f"{int(fitted.get('interpolated_hierarchy_node_count', 0))} "
+                "interpolated hierarchy nodes, "
+                f"mean weighted pivot error "
+                f"{float(fitted.get('weighted_mean_pivot_distance_m', 0.0)) * 100.0:.2f} cm"
+            )
+        bone_bounds = result.report.get("bone_bounds")
+        if isinstance(bone_bounds, dict):
+            progress(
+                "Bone bounds: "
+                f"{int(bone_bounds.get('nonzero_bound_count', 0))}/"
+                f"{int(bone_bounds.get('bone_count', 0))} usable; "
+                f"aggregate diagonal "
+                f"{float(bone_bounds.get('aggregate_model_diagonal_m', 0.0)):.3f} m"
+            )
         progress(
             f"Built {entry.source_msh}: {result.report['total_vertices']} vertices, "
             f"{result.report['total_triangles']} triangles, {result.report.get('bone_count', 0)} bones"
@@ -957,11 +1029,16 @@ class ModelWorkspace:
             entry.build_report = result.build_report
             entry.source_msh = result.source_msh
             entry.crig_path = result.crig_path
+            entry.installed_crig_ref = result.installed_crig_ref
+            entry.installed_crig_path = result.installed_crig_path
             entry.status = result.status
         self.progress.setRange(0, max(1, len(results)))
         self.progress.setValue(len(results))
         self._refresh_table()
         self._refresh_mapping_model_combo()
+        installed = [row for row in results if row.installed_crig_ref]
+        if installed and self.rigs_installed_callback is not None:
+            self.rigs_installed_callback(installed)
 
     def _model_job_failed(self, title: str, failure: TaskFailure) -> None:
         self._append_log(failure.traceback)

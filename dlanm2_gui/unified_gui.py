@@ -7,6 +7,8 @@ import sys
 from typing import Any
 
 from . import __version__
+from .chrome_rig import ChromeRig
+from .retarget_mapping import canonical_humanoid_role
 from .workspaces.animation_mapping import CrigMappingWorkspace
 from .workspaces.models import MODEL_WORKSPACE_EXTENSION_KEY, ModelWorkspace
 
@@ -99,6 +101,7 @@ class UnifiedMainWindow:
             root=Path(self.controller.root),
             mark_dirty=self._mark_dirty,
             status_callback=lambda message: self.controller.status.showMessage(message),
+            rigs_installed_callback=self._model_rigs_installed,
         )
         self.controller.extra_task_runners = [self.models.background_tasks]
         self._remove_tab(self.models.tabs, "Help")
@@ -137,6 +140,12 @@ class UnifiedMainWindow:
         self._build_menu_bar()
         self.controller.advanced_mode_toggle.toggled.connect(self._advanced_visibility_changed)
         self._set_crig_tab_visible(self.controller.advanced_mode_toggle.isChecked())
+        self.controller.mapping_navigation_callback = self._open_animation_mapping
+        self.controller.target_rig_combo.currentIndexChanged.connect(
+            lambda *_args: self._set_crig_tab_visible(
+                self.controller.advanced_mode_toggle.isChecked()
+            )
+        )
         self._install_project_sync_hooks()
         if hasattr(self.controller, "game_combo"):
             self.controller.game_combo.currentIndexChanged.connect(self._game_profile_changed)
@@ -249,6 +258,10 @@ class UnifiedMainWindow:
         self._set_crig_tab_visible(bool(checked))
 
     def _set_crig_tab_visible(self, visible: bool) -> None:
+        # A custom .crig makes this editor part of the normal recovery path,
+        # not an advanced/developer feature. Keep it visible even when the
+        # global Advanced Settings toggle is off.
+        visible = bool(visible or self.controller.project.rig.retarget_mode == "exact")
         index = self._animation_tab_index("Root & .crig Mapping")
         if visible and index < 0:
             insert_at = self._animation_tab_index("Export")
@@ -276,6 +289,7 @@ class UnifiedMainWindow:
         def refresh_with_models() -> None:
             original_refresh()
             self._restore_extension_state()
+            self._set_crig_tab_visible(self.controller.advanced_mode_toggle.isChecked())
             self.crig_mapping.reload_clips()
 
         self.controller._sync_project_from_ui = sync_with_models
@@ -294,6 +308,33 @@ class UnifiedMainWindow:
         self.animation_tabs.setCurrentIndex(max(0, self._animation_tab_index("Animations")))
         self.controller.add_animations()
         self.crig_mapping.reload_clips()
+
+    def _open_animation_mapping(self, animation_id: str) -> None:
+        self.main_tabs.setCurrentIndex(0)
+        if self.controller.project.rig.retarget_mode == "exact":
+            self._set_crig_tab_visible(True)
+            self.crig_mapping.reload_clips()
+            index = self.crig_mapping.clip_combo.findData(animation_id)
+            if index >= 0:
+                self.crig_mapping.clip_combo.setCurrentIndex(index)
+            mapping_tab = self._animation_tab_index("Root & .crig Mapping")
+            if mapping_tab >= 0:
+                self.animation_tabs.setCurrentIndex(mapping_tab)
+            animation = self.controller.project.animation_by_id(animation_id)
+            if animation is not None and self.crig_mapping._current_profile(animation) is None:
+                # "Create .crig map" must persist the suggestions immediately;
+                # merely rendering an unsaved preview leaves strict build mode
+                # active and recreates the original import/build dead end.
+                self.crig_mapping.auto_map()
+            else:
+                self.crig_mapping.refresh()
+            return
+
+        self.controller._set_combo_data(self.controller.retarget_clip_combo, animation_id)
+        retarget_tab = self._animation_tab_index("Retargeting")
+        if retarget_tab >= 0:
+            self.animation_tabs.setCurrentIndex(retarget_tab)
+        self.controller._retarget_clip_changed()
 
     def _add_model(self) -> None:
         self.main_tabs.setCurrentIndex(1)
@@ -326,6 +367,126 @@ class UnifiedMainWindow:
             self.crig_mapping.reload_clips()
         elif index == 1:
             self.models._refresh_mapping_model_combo()
+
+    def _model_rigs_installed(self, results: list[Any]) -> None:
+        """Select a newly generated model rig and migrate compatible maps.
+
+        A model rebuild may change authored local bone frames while retaining
+        the same names/descriptors.  Leaving the animation project pointed at
+        the older registry entry is especially dangerous because Chrome accepts
+        the stale descriptors and only fails visually at playback.  For a
+        single-model build, make the model's freshly generated .crig the active
+        project target and carry reviewed name mappings to its new bind hash.
+        """
+
+        self.controller._sync_project_from_ui()
+        old_ref = self.controller.project.rig.target_rig_ref
+        old_path = self.controller.project.rig.target_rig_path
+        old_hash = ""
+        if old_path and Path(old_path).is_file():
+            try:
+                old_hash = ChromeRig.load(old_path).skeleton_hash
+            except (OSError, ValueError):
+                pass
+
+        self.controller._reload_target_rig_combo()
+        if len(results) != 1:
+            self.controller.status.showMessage(
+                "Installed model .crig targets. Select the intended target on "
+                "Animations > Project before building animations."
+            )
+            return
+
+        result = results[0]
+        new_path = Path(result.installed_crig_path or result.crig_path or "")
+        if not new_path.is_file():
+            return
+        new_rig = ChromeRig.load(new_path)
+        new_by_name = {bone.name: bone.descriptor for bone in new_rig.bones}
+        migrated = 0
+        for profile_id, payload in list(
+            self.controller.project.mapping_profiles.items()
+        ):
+            if not isinstance(payload, dict) or payload.get("format") != "dl-reanimated-bone-map":
+                continue
+            rows = payload.get("pairs", ())
+            compatible_rows = bool(rows) and all(
+                str(row.get("source_bone", "")) in new_by_name
+                and int(row.get("source_descriptor", -1))
+                == new_by_name[str(row.get("source_bone", ""))]
+                for row in rows
+                if isinstance(row, dict)
+            )
+            belongs_to_previous_target = (
+                str(payload.get("source_rig_ref", "")) == old_ref
+                or (
+                    bool(old_hash)
+                    and str(payload.get("source_skeleton_hash", "")) == old_hash
+                )
+            )
+            if compatible_rows and belongs_to_previous_target:
+                updated = dict(payload)
+                updated["source_rig_ref"] = new_rig.rig_id
+                updated["source_skeleton_hash"] = new_rig.skeleton_hash
+                extensions = dict(updated.get("extensions", {}))
+                extensions["migrated_after_model_rig_rebuild"] = {
+                    "previous_rig_ref": old_ref,
+                    "previous_skeleton_hash": old_hash,
+                    "new_rig_ref": new_rig.rig_id,
+                    "new_skeleton_hash": new_rig.skeleton_hash,
+                }
+                updated["extensions"] = extensions
+                migrated_rows = [dict(row) for row in rows]
+                target_root = new_rig.bones[new_rig.root_index]
+                legacy_rows = [
+                    row
+                    for row in migrated_rows
+                    if str(row.get("source_bone", "")) == target_root.name
+                    and str(row.get("method", "")) == "hierarchy_root"
+                ]
+                pelvis_candidates = [
+                    bone
+                    for bone in new_rig.bones
+                    if canonical_humanoid_role(bone.name) == "pelvis"
+                ]
+                pelvis_candidates.sort(
+                    key=lambda bone: (
+                        0 if bone.deform and not bone.helper else 1,
+                        bone.index,
+                    )
+                )
+                for legacy in legacy_rows:
+                    source_root = str(legacy.get("target_bone", ""))
+                    already_used = any(
+                        row is not legacy
+                        and str(row.get("target_bone", "")) == source_root
+                        for row in migrated_rows
+                    )
+                    if pelvis_candidates and not already_used:
+                        pelvis = pelvis_candidates[0]
+                        legacy["source_bone"] = pelvis.name
+                        legacy["source_descriptor"] = pelvis.descriptor
+                        legacy["confidence"] = 0.98
+                        legacy["method"] = "model_rig_rebuild:pelvis_pose"
+                    else:
+                        migrated_rows.remove(legacy)
+                updated["pairs"] = migrated_rows
+                self.controller.project.mapping_profiles[profile_id] = updated
+                migrated += 1
+
+        self.controller._reload_target_rig_combo()
+        self.controller._set_combo_data(
+            self.controller.target_rig_combo, new_rig.rig_id
+        )
+        self.controller._target_rig_changed()
+        self._set_crig_tab_visible(True)
+        self.crig_mapping.reload_clips()
+        self._mark_dirty()
+        self.controller.status.showMessage(
+            f"Selected rebuilt model rig {new_rig.name!r} and migrated "
+            f"{migrated} compatible animation bone map(s). Save and rebuild the "
+            "animation RPack before testing playback."
+        )
 
 
 if __name__ == "__main__":

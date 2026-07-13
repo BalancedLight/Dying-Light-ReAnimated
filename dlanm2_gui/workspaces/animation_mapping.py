@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from ..bone_maps import BoneMapPair, GenericBoneMap
+from ..bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
 from ..chrome_rig import ChromeRig
 from ..oracle.binary_fbx_mixamo import _FbxDocument
 from ..retarget_mapping import auto_map_crig_to_fbx, mapping_rows_for_ui
@@ -84,6 +84,16 @@ class CrigMappingWorkspace:
         actions.addWidget(self.save_button)
         actions.addStretch(1)
         layout.addLayout(actions)
+
+        filters = qt["QHBoxLayout"]()
+        self.filter_edit = qt["QLineEdit"]()
+        self.filter_edit.setPlaceholderText("Filter target, source, role, or status")
+        self.filter_edit.textChanged.connect(self._filter_rows)
+        self.only_unmapped = qt["QCheckBox"]("Show only unmapped")
+        self.only_unmapped.toggled.connect(self._filter_rows)
+        filters.addWidget(self.filter_edit, 1)
+        filters.addWidget(self.only_unmapped)
+        layout.addLayout(filters)
 
         self.table = qt["QTableWidget"](0, 7)
         self.table.setHorizontalHeaderLabels(
@@ -194,9 +204,22 @@ class CrigMappingWorkspace:
         animation = self._selected_animation()
         if animation is None:
             return
-        animation.mapping_profile_id = ""
-        self.mark_dirty()
-        self.refresh()
+        try:
+            rig = self._load_rig()
+            document = self._document(animation)
+            profile = GenericBoneMap.create(
+                f"Manual map: {animation.display_name}",
+                rig.skeleton_hash,
+                skeleton_signature(
+                    (name, document.parent_by_name.get(name))
+                    for name in sorted(document.limb_models)
+                ),
+                source_rig_ref=rig.rig_id,
+            )
+            self._store_profile(animation, profile)
+            self.refresh()
+        except Exception as exc:
+            self.status.setText(f"Could not clear the mapping: {exc}")
 
     def _refresh_root_controls(self, animation, document: _FbxDocument) -> None:
         self._refreshing_root = True
@@ -282,7 +305,10 @@ class CrigMappingWorkspace:
         animation = self._selected_animation()
         if animation is None:
             self.table.setRowCount(0)
-            self.status.setText("Add an animation FBX first.")
+            self.status.setText(
+                "Add an animation FBX first. Files with a different skeleton are allowed: "
+                "they will be added with an editable auto-map instead of being rejected."
+            )
             self.root_status.setText("Add an animation FBX first.")
             return
         try:
@@ -340,15 +366,60 @@ class CrigMappingWorkspace:
             self.table.setItem(index, 5, qt["QTableWidgetItem"](row["method"]))
             self.table.setItem(
                 index, 6,
-                qt["QTableWidgetItem"]("Mapped" if row["source_bone"] else "Bind pose"),
+                qt["QTableWidgetItem"](
+                    "Mapped"
+                    if row["source_bone"]
+                    else (
+                        "Review: body role is unmapped"
+                        if row["role"]
+                        else "Bind pose (helper/extra)"
+                    )
+                ),
             )
         mapped = len(profile.pairs)
         errors = profile.validate()
+        mapped_source_names = {pair.target_bone for pair in profile.pairs}
+        source_body_names = {
+            row.target_bone
+            for row in auto_map_crig_to_fbx(
+                rig, document.limb_models.keys(), document.parent_by_name
+            ).pairs
+        }
+        unused_body_sources = sorted(source_body_names - mapped_source_names, key=str.casefold)
+        review = (
+            f" Review {len(unused_body_sources)} recognized source body bone(s) not used by this map: "
+            + ", ".join(unused_body_sources[:8])
+            + ("…" if len(unused_body_sources) > 8 else "")
+            + "."
+            if unused_body_sources
+            else " All recognized source body bones are covered."
+        )
         self.status.setText(
             f"Mapped {mapped} of {len(rig.bones)} target bones. "
-            + ("Mapping is valid." if not errors else "Validation: " + "; ".join(errors))
-            + " The selected Bip01/root pair is always injected even when the remaining map is partial."
+            f"Recognized source coverage: "
+            f"{len(source_body_names & mapped_source_names)}/{len(source_body_names)} bones. "
+            + ("Mapping is structurally valid." if not errors else "Validation: " + "; ".join(errors))
+            + review
+            + " Unmapped helpers keep their bind-local transform and inherit parent motion; "
+            "use the filter above to review them."
         )
+        self._filter_rows()
+
+    def _filter_rows(self, *_args) -> None:
+        text = self.filter_edit.text().strip().casefold()
+        only_unmapped = self.only_unmapped.isChecked()
+        for row in range(self.table.rowCount()):
+            combo = self.table.cellWidget(row, 3)
+            mapped = bool(combo and combo.currentData())
+            values = [
+                self.table.item(row, column).text()
+                for column in (0, 1, 2, 4, 5, 6)
+                if self.table.item(row, column) is not None
+            ]
+            if combo is not None:
+                values.append(combo.currentText())
+            matches = not text or text in " ".join(values).casefold()
+            self.table.setRowHidden(row, not matches or (only_unmapped and mapped))
 
     def _set_pair(self, target_rig_bone: str, source_fbx_bone: str) -> None:
         animation = self._selected_animation()
