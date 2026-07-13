@@ -34,14 +34,26 @@ class TrackMapReport:
 def dl_name_hash(name: str) -> int:
     """Engine hash used for animation descriptors and pose element names."""
 
+    if not str(name).isascii():
+        raise ValueError(
+            f"Bone name {name!r} is non-ASCII. Chrome's implicit descriptor hash is "
+            "ASCII-oriented; provide an explicit descriptor in a custom .crig."
+        )
     value = 0
-    for byte in name.lower().encode("ascii", errors="ignore"):
+    for byte in name.lower().encode("ascii"):
         value = (byte + 41 * value) & 0xFFFFFFFF
     return value
 
 
 def read_track_descriptors(path: str | Path) -> tuple[anm2.Anm2Header, list[int]]:
     data = Path(path).read_bytes()
+    from .dl2_anm2 import detect_anm2_format
+    detected = detect_anm2_format(data)
+    if detected == 42:
+        raise ValueError(
+            "Dying Light 2 format-42 descriptors use the DL2 inspection path and cannot be "
+            "read as a DL1 format-1 track table."
+        )
     header = anm2.Anm2Header.parse(data)
     descriptors = list(struct.unpack_from(f"<{header.track_count}I", data, anm2.HEADER_LENGTH))
     return header, descriptors

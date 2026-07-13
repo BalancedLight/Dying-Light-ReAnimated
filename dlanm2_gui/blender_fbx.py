@@ -96,7 +96,7 @@ def run_blender_export(
     with tempfile.TemporaryDirectory(prefix="dlr_anm2_fbx_") as temp_dir:
         job_path = Path(temp_dir) / "job.json"
         job = scene.to_job_dict(temporary_output_name)
-        job_path.write_text(json.dumps(job, separators=(",", ":")), encoding="utf-8")
+        job_path.write_text(json.dumps(job, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
         command = [
             str(blender), "--background", "--factory-startup", "--python", str(helper),
             "--", "--job", str(job_path),
