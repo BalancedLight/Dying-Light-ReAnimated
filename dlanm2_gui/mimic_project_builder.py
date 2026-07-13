@@ -155,7 +155,7 @@ def _report_root_override(built: Any, root_report: dict[str, Any]) -> None:
     payload["anm2_sha256"] = built.sha256
     payload["anm2_page_count"] = built.page_count
     payload["anm2_page_frame_spans"] = list(built.page_frame_spans)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _make_built_animation(pb: Any, **values: Any) -> Any:
@@ -380,7 +380,7 @@ def build_project_with_mimics(
                 ),
             })
             mimic_report_path = retarget_dir / f"{resource_name}.json"
-            mimic_report_path.write_text(json.dumps(mimic_report, indent=2) + "\n", encoding="utf-8")
+            mimic_report_path.write_text(json.dumps(mimic_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             if project.export.write_intermediate_anm2:
                 (animation_dir / f"{resource_name}.anm2").write_bytes(build.payload)
             layout = pb._validate_generated_anm2_payload(build.payload, resource_name=resource_name)
@@ -484,7 +484,7 @@ def build_project_with_mimics(
         },
     })
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     log(f"Build complete: {output_pack}")
     return pb.ProjectBuildResult(
         status="ok",

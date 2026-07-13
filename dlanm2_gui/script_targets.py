@@ -39,10 +39,10 @@ class ScriptTargetRegistry:
     def load(cls,path):
         source=Path(path)
         if not source.exists():return cls()
-        payload=json.loads(source.read_text(encoding='utf-8'));rows=payload.get('targets',payload) if isinstance(payload,dict) else payload
+        payload=json.loads(source.read_text(encoding='utf-8-sig'));rows=payload.get('targets',payload) if isinstance(payload,dict) else payload
         if not isinstance(rows,list):raise ValueError('script target file must contain a list of targets')
         return cls(AnimationScriptTarget(**row) for row in rows)
     def save_user_targets(self,path):
-        destination=Path(path);destination.parent.mkdir(parents=True,exist_ok=True);builtins={target.target_id for target in BUILTIN_SCRIPT_TARGETS};rows=[target.to_dict() for target in self._targets.values() if target.target_id not in builtins];destination.write_text(json.dumps({'schema_version':1,'targets':rows},indent=2)+'\n',encoding='utf-8');return destination
+        destination=Path(path);destination.parent.mkdir(parents=True,exist_ok=True);builtins={target.target_id for target in BUILTIN_SCRIPT_TARGETS};rows=[target.to_dict() for target in self._targets.values() if target.target_id not in builtins];destination.write_text(json.dumps({'schema_version':1,'targets':rows},indent=2,ensure_ascii=False)+'\n',encoding='utf-8');return destination
 DEFAULT_SCRIPT_TARGET_ID='npc_male_dlc60'
 __all__=['AnimationScriptTarget','BUILTIN_SCRIPT_TARGETS','DEFAULT_SCRIPT_TARGET_ID','ScriptTargetRegistry']

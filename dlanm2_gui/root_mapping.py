@@ -31,8 +31,12 @@ ROOT_MAPPING_EXTENSION_KEY = "root_mapping_v1"
 def dl_name_hash(name: str) -> int:
     """Chrome descriptor hash used for target bone track lookup."""
 
+    if not str(name).isascii():
+        raise ValueError(
+            f"Bone name {name!r} is non-ASCII and requires an explicit .crig descriptor."
+        )
     value = 0
-    for byte in str(name).lower().encode("ascii", errors="ignore"):
+    for byte in str(name).lower().encode("ascii"):
         value = (byte + 41 * value) & 0xFFFFFFFF
     return value
 

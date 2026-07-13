@@ -22,6 +22,7 @@ from ..model_importer.msh_builder import (
     sanitize_name,
 )
 from ..model_importer.vendor.chrome_mesh_tools.smd import SmdFile
+from ..fbx_preflight import preflight_fbx
 
 MODEL_WORKSPACE_EXTENSION_KEY = "model_workspace_v2"
 
@@ -389,6 +390,9 @@ class ModelWorkspace:
                 try:
                     entry.scene = FbxScene.from_path(entry.path)
                     entry.inventory = entry.scene.inventory()
+                    preflight = preflight_fbx(entry.path, purpose="model")
+                    entry.inventory["preflight"] = preflight.to_dict()
+                    preflight.require_buildable()
                     entry.status = f"Ready ({entry.inventory['detected_mode']})"
                 except Exception as exc:
                     entry.status = f"ERROR: {exc}"
@@ -552,6 +556,10 @@ class ModelWorkspace:
         if entry.scene is None:
             entry.scene = FbxScene.from_path(entry.path)
             entry.inventory = entry.scene.inventory()
+        preflight = preflight_fbx(entry.path, purpose="model")
+        preflight.require_buildable()
+        entry.inventory = dict(entry.inventory or {})
+        entry.inventory["preflight"] = preflight.to_dict()
         nodes = self._target_smd_nodes()
         if not nodes:
             self._message("Target SMD missing", "Choose a valid player_1_tpp target SMD.", critical=True)
@@ -738,7 +746,7 @@ class ModelWorkspace:
                 orientation_policy=entry.orientation_policy,
             )
             (output / f"{entry.resource_name}.crig_build.json").write_text(
-                json.dumps(crig_report, indent=2) + "\n", encoding="utf-8"
+                json.dumps(crig_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
             )
             try:
                 from ..chrome_rig_registry import ChromeRigRegistry

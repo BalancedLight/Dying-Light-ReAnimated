@@ -22,12 +22,14 @@ from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_fbx
 from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
 from .anm2 import Anm2Header, HEADER_LENGTH
+from .dl2_anm2 import detect_anm2_format, parse_dl2_header42
 from .anm2_fbx import chrome_rig_from_fbx_skeleton
 from .blender_fbx import discover_blender, export_anm2_to_fbx
 from .background_tasks import BackgroundTaskRunner, TaskFailure
 from .bone_maps import GenericBoneMap, BoneMapPair, auto_map_skeletons
 from .oracle.binary_fbx_mixamo import _FbxDocument
 from .project_builder import build_project, export_project_anm2_files
+from .fbx_preflight import preflight_fbx
 from .retarget_profiles import (
     HUMANOID_ROLES,
     ROLE_BY_ID,
@@ -41,6 +43,10 @@ from .script_targets import (
     ScriptTargetRegistry,
 )
 from .runtime_paths import resource_root, writable_application_root
+from .game_profiles import (
+    DL1_GAME_ID, DL2_GAME_ID, DL2_RIG_REF, GAME_PROFILES,
+    apply_game_profile_defaults, get_game_profile,
+)
 from .workspace_project import (
     DlReanimatedProject,
     Anm2ToFbxItem,
@@ -184,10 +190,10 @@ class MainWindow:
         self._build_export_tab()
         self._build_anm2_to_fbx_tab()
         self._build_help_tab()
-        # Facial workspace integration
+        # DLR_MIMIC_PROTOTYPE_BEGIN - facial workspace integration
         from .mimic_gui import install_mimic_ui
         install_mimic_ui(self)
-        # End facial workspace integration
+        # DLR_MIMIC_PROTOTYPE_END - facial workspace integration
         self._refresh_all()
 
     def show(self) -> None:
@@ -208,6 +214,7 @@ class MainWindow:
         project.export.output_directory = str(self.root / "build")
         project.anm2_to_fbx.output_directory = str(self.root / "build" / "fbx")
         project.export.default_script_target = DEFAULT_SCRIPT_TARGET_ID
+        apply_game_profile_defaults(project, self.resource_root, force=True)
         return project
 
     def _build_toolbar(self) -> None:
@@ -265,6 +272,15 @@ class MainWindow:
         self.project_notes.setMaximumHeight(84)
         self.project_notes.setPlaceholderText("Optional notes about this animation set…")
         self.project_notes.textChanged.connect(self._mark_dirty)
+        self.game_combo = self._combo_box()
+        self.game_combo.addItem("Dying Light 1", DL1_GAME_ID)
+        self.game_combo.addItem("Dying Light 2", DL2_GAME_ID)
+        self.game_combo.setToolTip("Selects one coherent target rig, root policy, reference ANM2 format, and workspace profile.")
+        self.game_combo.currentIndexChanged.connect(self._game_changed)
+        self.game_status = qt["QLabel"]()
+        self.game_status.setWordWrap(True)
+        form.addRow("Game", self.game_combo)
+        form.addRow("Target status", self.game_status)
         form.addRow("Project name", self.project_name)
         form.addRow("Notes", self.project_notes)
         layout.addWidget(basics)
@@ -1035,6 +1051,27 @@ class MainWindow:
                 prefix = self.project.export.resource_prefix.strip()
                 if prefix:
                     row.resource_name = f"{prefix}_{row.resource_name}"
+                target_rig = None
+                try:
+                    if self.project.rig.retarget_mode == "exact" and self.project.rig.target_rig_path:
+                        target_rig = ChromeRig.load(self.project.rig.target_rig_path)
+                    elif self.project.game_id == DL1_GAME_ID:
+                        target_rig = ChromeRig.load(self.resource_root / "reference" / "male_npc_infected.crig")
+                except (OSError, ValueError):
+                    target_rig = None
+                preflight = preflight_fbx(
+                    path, purpose="animation", animation_stack=stack_name or None,
+                    target_rig=target_rig, game_id=self.project.game_id,
+                )
+                row.extensions["fbx_preflight"] = preflight.to_dict()
+                if preflight.blocking:
+                    self._show_error(
+                        f"Could not add {path.name}",
+                        ValueError("FBX preflight blocked import:\n- " + "\n- ".join(
+                            finding.detected for finding in preflight.findings if finding.severity == "error"
+                        )),
+                    )
+                    continue
                 self.project.animations.append(row)
                 existing.add(key)
         self._mark_dirty()
@@ -1722,11 +1759,13 @@ class MainWindow:
         records = self.rig_registry.records()
         self._rig_paths_by_ref = {row.rig_ref: row.path for row in records}
         for row in records:
+            if row.rig_ref.startswith("builtin:") and row.rig_ref != GAME_PROFILES[self.project.game_id].target_rig_ref:
+                continue
             suffix = "" if row.builtin else f" [{row.category}]"
             self.reverse_source_rig.addItem(row.display_name + suffix, row.rig_ref)
         selected = current or (
             self.project.anm2_to_fbx.items[0].source_rig_ref
-            if self.project.anm2_to_fbx.items else BUILTIN_MALE_RIG_REF
+            if self.project.anm2_to_fbx.items else GAME_PROFILES[self.project.game_id].target_rig_ref
         )
         self._set_combo_data(self.reverse_source_rig, selected)
 
@@ -1740,6 +1779,8 @@ class MainWindow:
 
     def _reverse_detect_rig(self, path: str | Path) -> tuple[str, str]:
         data = Path(path).read_bytes()
+        if detect_anm2_format(data) == 42:
+            return DL2_RIG_REF, str(self.resource_root / "reference" / "dl2" / "player_shadow_caster.crig")
         header = Anm2Header.parse(data)
         descriptors = set(struct.unpack_from(f"<{header.track_count}I", data, HEADER_LENGTH))
         matches: list[tuple[int, str, str]] = []
@@ -1764,12 +1805,22 @@ class MainWindow:
             return
         for path in paths:
             try:
-                header = Anm2Header.parse(Path(path).read_bytes())
+                data = Path(path).read_bytes()
+                detected = detect_anm2_format(data)
+                if detected == 42:
+                    inspected = parse_dl2_header42(data)
+                    frame_count = inspected.frame_count
+                else:
+                    frame_count = Anm2Header.parse(data).frame_count
                 rig_ref, rig_path = self._reverse_detect_rig(path)
                 item = Anm2ToFbxItem.create(path)
                 item.source_rig_ref = rig_ref
                 item.source_rig_path = rig_path
-                item.end_frame = header.frame_count - 1
+                item.end_frame = frame_count - 1
+                item.extensions["detected_anm2_format"] = detected
+                if detected == 42:
+                    item.enabled = False
+                    item.extensions["conversion_status"] = "inspection_only_curve_decoder_incomplete"
                 self.project.anm2_to_fbx.items.append(item)
             except Exception as exc:
                 self._show_error(f"Could not add {Path(path).name}", exc)
@@ -1796,6 +1847,9 @@ class MainWindow:
         for row_index, item in enumerate(self.project.anm2_to_fbx.items):
             enabled = qt["QCheckBox"]()
             enabled.setChecked(item.enabled)
+            if item.extensions.get("detected_anm2_format") == 42:
+                enabled.setEnabled(False)
+                enabled.setToolTip("DL2 format 42 detected: descriptor inspection is available, but animated curve decoding is incomplete.")
             enabled.toggled.connect(self._mark_dirty)
             self.reverse_table.setCellWidget(row_index, 0, enabled)
             source_item = qt["QTableWidgetItem"](item.source_anm2)
@@ -1805,8 +1859,8 @@ class MainWindow:
             self.reverse_table.setItem(row_index, 2, output_item)
             frames = "?"
             try:
-                header = Anm2Header.parse(Path(item.source_anm2).read_bytes())
-                frames = str(header.frame_count)
+                data = Path(item.source_anm2).read_bytes()
+                frames = str(parse_dl2_header42(data).frame_count if detect_anm2_format(data) == 42 else Anm2Header.parse(data).frame_count)
             except (OSError, ValueError):
                 pass
             frame_item = qt["QTableWidgetItem"](frames)
@@ -2106,6 +2160,8 @@ class MainWindow:
         self._refreshing = True
         try:
             self.project_name.setText(self.project.name)
+            self._set_combo_data(self.game_combo, self.project.game_id)
+            self._refresh_game_status()
             self.project_notes.setPlainText(self.project.notes)
             self._reload_target_rig_combo()
             self._set_combo_data(self.target_rig_combo, self.project.rig.target_rig_ref)
@@ -2169,6 +2225,7 @@ class MainWindow:
         self._update_title()
 
     def _sync_project_from_ui(self) -> None:
+        self.project.game_id = str(self.game_combo.currentData() or DL1_GAME_ID)
         self.project.name = self.project_name.text().strip() or "Untitled Animation Project"
         self.project.notes = self.project_notes.toPlainText()
         selected_rig_ref = str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
@@ -2247,7 +2304,10 @@ class MainWindow:
         self.target_rig_combo.clear()
         records = self.rig_registry.records()
         self._rig_paths_by_ref = {row.rig_ref: row.path for row in records}
+        game_id = getattr(getattr(self, "project", None), "game_id", DL1_GAME_ID)
         for row in records:
+            if row.rig_ref.startswith("builtin:") and row.rig_ref != GAME_PROFILES[game_id].target_rig_ref:
+                continue
             suffix = "" if row.builtin else f" [{row.category}]"
             self.target_rig_combo.addItem(row.display_name + suffix, row.rig_ref)
         project = getattr(self, "project", None)
@@ -2273,9 +2333,7 @@ class MainWindow:
             return
         selected = str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
         self.project.rig.target_rig_ref = selected
-        self.project.rig.retarget_mode = (
-            "humanoid" if selected == BUILTIN_MALE_RIG_REF else "exact"
-        )
+        self.project.rig.retarget_mode = "humanoid" if selected == BUILTIN_MALE_RIG_REF else "exact"
         selected_path = getattr(self, "_rig_paths_by_ref", {}).get(selected, "")
         self.project.rig.target_rig_path = selected_path
         if selected_path:
@@ -2286,6 +2344,38 @@ class MainWindow:
         self._mark_dirty()
         self._bind_pose_mode_changed()
         self._retarget_clip_changed()
+
+    def _refresh_game_status(self) -> None:
+        if not hasattr(self, "game_status"):
+            return
+        profile = get_game_profile(self.project.game_id)
+        self.game_status.setText(
+            f"{profile.display_name} • {profile.target_rig_name} • {profile.anm2_format_label} • "
+            f"primary root: {profile.primary_root} • {profile.output_status}"
+        )
+
+    def _game_changed(self, *_args) -> None:
+        if self._refreshing:
+            return
+        previous = self.project.game_id
+        selected = str(self.game_combo.currentData() or DL1_GAME_ID)
+        if selected == previous:
+            return
+        self.project.game_id = selected
+        result = apply_game_profile_defaults(
+            self.project, self.resource_root, previous_game_id=previous, force=False
+        )
+        if result["retained"]:
+            self.qt["QMessageBox"].warning(
+                self.window,
+                "Custom target retained",
+                "The game changed, but deliberate custom settings were retained: "
+                + ", ".join(result["retained"])
+                + ". Review them before building to avoid a cross-game target mixture.",
+            )
+        self._reload_target_rig_combo()
+        self._refresh_all()
+        self._mark_dirty()
 
     def import_chrome_rig(self) -> None:
         path, _ = self.qt["QFileDialog"].getOpenFileName(

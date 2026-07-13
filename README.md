@@ -6,7 +6,7 @@
   />
 </p>
 
-DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI for animation authoring, model import, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light, and contains experimental support for Dying Light 2. It provides a desktop GUI for animation authoring, model import, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
 ## Start
 
@@ -30,12 +30,13 @@ build_exe.bat
 
 ## Normal workflow
 
-1. Add one or more animation FBXs.
-2. Leave **Use imported animation FBX bind pose (recommended)** enabled.
-3. Choose the target animation script and root-motion policy.
-4. Review the automatic humanoid mapping.
-5. Save the `.dlraproj` project.
-6. Build a new RPack or append to a previous DL ReAnimated RPack.
+1. Select Dying Light 1 or Dying Light 2 in the Project workspace.
+2. Add one or more animation FBXs.
+3. Leave **Use imported animation FBX bind pose (recommended)** enabled.
+4. Choose the target animation script and root-motion policy.
+5. Review the automatic or exact/subset mapping report.
+6. Save the `.dlraproj` project.
+7. Build a new RPack or append to a previous DL ReAnimated RPack.
 
 Advanced target files, diagnostic controls, intermediate reports, developer options, and **Root & .crig Mapping** are hidden unless **Advanced settings** is enabled in the top-right corner or the View menu.
 
@@ -87,6 +88,8 @@ common_anims_sp_pc.rpack     example output
 - [Model import and installation](docs/MODEL_IMPORT.md)
 - [Project compatibility](docs/PROJECT_FORMAT.md)
 - [Building the Windows EXE](docs/BUILDING_WINDOWS_EXE.md)
+- [Dying Light 2 preview workflow](docs/DYING_LIGHT_2.md)
+- [FBX preflight checks](docs/FBX_PREFLIGHT.md)
 
 Contributor material is kept under `docs/project/`; generated diagnostics and scratch research are not shipped in the release tree.
 
@@ -94,7 +97,7 @@ More technical documentation can also be found in the `docs` folder.
 
 ## Current status
 
-The full-body Mixamo retarget, exact-rig object workflow, deterministic `.crig` packages, full ANM2 decoding, Blender-assisted ANM2-to-FBX export, reviewed generic cross-rig mapping, Cayley rotation encoding, packed multi-page ANM2 writer, and animation-script packaging are implemented. Finger retargeting and semantic quadruped retargeting remain active/future validation areas.
+DL1 full-body retargeting, mimic, root motion, exact-rig objects, deterministic `.crig` packages, ANM2 decoding, Blender-assisted ANM2-to-FBX export, generic cross-rig mapping, the packed multi-page writer, and RPack packaging remain validated. DL2 FBX import uses authoritative global bind-basis correction and source-superset matching. Native DL2 format-42 curve decoding and writing remain disabled; DL2 FBX export is labeled experimental format-1 compatibility output.
 
 ## Disclaimer
 Dying Light ReAnimated was developed with assistance from AI tools.

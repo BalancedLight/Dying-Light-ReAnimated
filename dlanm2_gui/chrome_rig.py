@@ -144,7 +144,7 @@ class ChromeRig:
             if not math.isfinite(norm) or abs(norm - 1.0) > 1.0e-4: errors.append(f"Bone {bone.name!r} has a non-unit bind quaternion.")
             if any(value <= 0.0 for value in bone.bind_scale): errors.append(f"Bone {bone.name!r} has zero or negative bind scale.")
             if max(bone.bind_scale) - min(bone.bind_scale) > 1.0e-5: warnings.append(f"Bone {bone.name!r} uses non-uniform bind scale.")
-            if not bone.name.isascii(): warnings.append(f"Bone {bone.name!r} is non-ASCII; descriptor hashing ignores some bytes.")
+            if not bone.name.isascii(): warnings.append(f"Bone {bone.name!r} is non-ASCII; its explicit .crig descriptor will be used.")
         parents = {bone.index: bone.parent_index for bone in self.bones}
         for bone in self.bones:
             seen: set[int] = set(); cursor = bone.index
@@ -154,8 +154,14 @@ class ChromeRig:
                 seen.add(cursor); cursor = parents[cursor]
         descriptor_names: dict[int, str] = {}
         for bone in self.bones:
-            expected = dl_name_hash(bone.name)
-            if bone.descriptor != expected: warnings.append(f"Bone {bone.name!r} uses descriptor 0x{bone.descriptor:08X}; the generated name hash is 0x{expected:08X}.")
+            if bone.name.isascii():
+                expected = dl_name_hash(bone.name)
+                if bone.descriptor != expected: warnings.append(f"Bone {bone.name!r} uses descriptor 0x{bone.descriptor:08X}; the generated name hash is 0x{expected:08X}.")
+            else:
+                warnings.append(
+                    f"Bone {bone.name!r} is non-ASCII and uses the explicit descriptor "
+                    f"0x{bone.descriptor:08X} from this .crig."
+                )
             previous = descriptor_names.get(bone.descriptor)
             if previous is not None and previous != bone.name: errors.append(f"Descriptor collision: {previous!r} and {bone.name!r} both hash to 0x{bone.descriptor:08X}.")
             descriptor_names[bone.descriptor] = bone.name

@@ -196,12 +196,12 @@ class SourceBoneMappingProfile:
     def save(self, path: str | Path) -> Path:
         destination = Path(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(json.dumps(self.to_dict(), indent=2) + "\n", encoding="utf-8")
+        destination.write_text(json.dumps(self.to_dict(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         return destination
 
     @classmethod
     def load(cls, path: str | Path) -> "SourceBoneMappingProfile":
-        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        payload = json.loads(Path(path).read_text(encoding="utf-8-sig"))
         if not isinstance(payload, dict):
             raise ValueError("mapping profile root must be an object")
         return cls.from_dict(payload)

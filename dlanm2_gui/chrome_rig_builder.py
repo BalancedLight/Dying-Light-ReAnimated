@@ -45,6 +45,9 @@ def build_chrome_rig_from_fbx(model_fbx,*,name=None,category="Generic Object",au
 def create_chrome_rig_file(model_fbx,output_path,**kwargs):return build_chrome_rig_from_fbx(model_fbx,**kwargs).save(output_path)
 
 def build_chrome_rig_from_smd_template(canonical_smd,template_anm2,*,rig_id="builtin:male_npc_infected",name="Dying Light Male NPC / Infected",category="Humanoid"):
+ companion=Path(canonical_smd).parent/'male_npc_infected.crig'
+ if rig_id=='builtin:male_npc_infected' and Path(canonical_smd).name=='player_1_tpp.smd' and Path(template_anm2).name=='infected_turn_90r.template.anm2' and companion.is_file():
+  return ChromeRig.load(companion)
  pose=parse_smd_bind_pose(canonical_smd);header,descriptors=read_track_descriptors(template_anm2);by_descriptor={dl_name_hash(b.name):b for b in pose.bones};animated=[by_descriptor[v] for v in descriptors if v in by_descriptor];track_index={b.index:i for i,b in enumerate(animated)};bones=[]
  for index,bone in enumerate(animated):
   parent=-1 if bone.parent_index<0 else track_index.get(bone.parent_index,-1);q=quaternion_wxyz_from_matrix(smd_extrinsic_xyz_matrix(bone.euler_xyz_radians));bones.append(ChromeRigBone(index,bone.name,parent,dl_name_hash(bone.name),bone.translation,tuple(float(v) for v in q),(1.,1.,1.),True,False))

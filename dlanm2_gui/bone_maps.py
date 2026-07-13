@@ -48,7 +48,7 @@ class GenericBoneMap:
    if os.path.exists(tmp): os.unlink(tmp)
   return d
  @classmethod
- def load(cls,path): return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+ def load(cls,path): return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 def skeleton_signature(rows:Iterable[tuple[str,str|None]])->str:
  import hashlib
  return hashlib.sha256("\n".join(f"{n}|{p or ''}" for n,p in rows).encode()).hexdigest()
