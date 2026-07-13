@@ -1,6 +1,6 @@
 # FBX preflight checks
 
-DL ReAnimated validates an animation FBX when it is imported and immediately before a build.
+DL ReAnimated validates an animation FBX when it is imported and immediately before a build. Import and build readiness are intentionally different: a readable cross-rig clip can be added so its mapping can be repaired, while export remains blocked until the saved mapping is usable.
 
 ## Blocking errors
 
@@ -9,7 +9,7 @@ A build is stopped for conditions that cannot produce a reliable animation:
 - the file cannot be parsed as the supported binary FBX form;
 - no usable skeleton exists;
 - the selected animation stack does not exist;
-- required target deform bones are missing;
+- required target deform bones are missing and no reviewed `.crig` map is being used;
 - bind matrices are non-finite or singular;
 - two bone names collapse to the same Unicode-normalized identifier;
 - the selected game, target rig, and ANM2 template are incoherent.
@@ -30,6 +30,6 @@ Warnings do not necessarily make the FBX invalid:
 
 ## Reading the report
 
-The GUI displays a short summary and provides the full report in the build output. Each finding includes a code, severity, explanation, and suggested correction where possible.
+The GUI displays what was detected, why it matters, and the next action. A source-data failure such as an unreadable FBX still blocks import. A target mismatch adds the clip, generates an editable map, and directs you to **Root & .crig Mapping**. The full report remains available in build output.
 
-Extra source bones are normally safe when using exact/subset retargeting. Missing target bones are more serious. A hierarchy warning should be reviewed when the affected node lies inside a mapped deform chain.
+Extra source bones are normally safe. In a reviewed mapped-rig build, unmapped target helpers stay at bind pose. Map every body/deform bone whose motion is required; use the filter in the mapping editor to find unresolved rows. A hierarchy warning should be reviewed when the affected node lies inside a mapped deform chain.

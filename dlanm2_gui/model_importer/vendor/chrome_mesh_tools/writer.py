@@ -25,6 +25,13 @@ IDENTITY_MATRIX3X4: tuple[float, ...] = (
     0.0,
 )
 
+# Source node v3 payload +0xC4 is ``msh_node.flags``. These names are
+# recovered from the Dead Island linker/debug dump and Dying Light's editor
+# compiler. Bit 0 is copied to the compact entity and gates the engine's
+# animation-root/default-transform path; bit 1 requests collision-tree use.
+MSH_NODE_FLAG_ANIMATED = 0x1
+MSH_NODE_FLAG_COLLTREE = 0x2
+
 
 def pack_chunk(
     chunk_id: int,

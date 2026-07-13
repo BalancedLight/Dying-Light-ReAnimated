@@ -36,6 +36,7 @@ from .retarget_profiles import (
     SourceBoneMappingProfile,
     auto_map_source_bones,
 )
+from .retarget_mapping import auto_map_crig_to_fbx
 from .script_targets import (
     AnimationScriptTarget,
     BUILTIN_SCRIPT_TARGETS,
@@ -180,6 +181,7 @@ class MainWindow:
         self.dirty = False
         self._refreshing = False
         self._source_cache: dict[str, _FbxDocument] = {}
+        self.mapping_navigation_callback = None
         self.script_registry = ScriptTargetRegistry()
         self.rig_registry = ChromeRigRegistry(self.root / "rigs")
 
@@ -1030,11 +1032,38 @@ class MainWindow:
             (Path(row.source_fbx).resolve(), row.source_animation_stack)
             for row in self.project.animations
         }
+        added_rows: list[ProjectAnimation] = []
+        repair_messages: list[str] = []
+        blocked_messages: list[str] = []
         for raw in paths:
             path = Path(raw).resolve()
-            document = self._source_document(str(path))
+            try:
+                document = self._source_document(str(path))
+            except Exception:
+                preflight = preflight_fbx(
+                    path, purpose="animation", game_id=self.project.game_id
+                )
+                blocked_messages.append(
+                    f"{path.name}\n{preflight.actionable_message()}"
+                )
+                continue
             stacks = list(document.animation_stacks)
             selections = [stack.name for stack in stacks] or [""]
+            target_rig = None
+            target_rig_error = ""
+            try:
+                if self.project.rig.retarget_mode == "exact":
+                    if not self.project.rig.target_rig_path:
+                        raise FileNotFoundError(
+                            "No target .crig is selected. Choose or import one on the Project tab."
+                        )
+                    target_rig = ChromeRig.load(self.project.rig.target_rig_path)
+                elif self.project.game_id == DL1_GAME_ID:
+                    target_rig = ChromeRig.load(
+                        self.resource_root / "reference" / "male_npc_infected.crig"
+                    )
+            except (OSError, ValueError) as exc:
+                target_rig_error = str(exc)
             for stack_name in selections:
                 key = (path, stack_name)
                 if key in existing:
@@ -1051,34 +1080,118 @@ class MainWindow:
                 prefix = self.project.export.resource_prefix.strip()
                 if prefix:
                     row.resource_name = f"{prefix}_{row.resource_name}"
-                target_rig = None
-                try:
-                    if self.project.rig.retarget_mode == "exact" and self.project.rig.target_rig_path:
-                        target_rig = ChromeRig.load(self.project.rig.target_rig_path)
-                    elif self.project.game_id == DL1_GAME_ID:
-                        target_rig = ChromeRig.load(self.resource_root / "reference" / "male_npc_infected.crig")
-                except (OSError, ValueError):
-                    target_rig = None
                 preflight = preflight_fbx(
                     path, purpose="animation", animation_stack=stack_name or None,
                     target_rig=target_rig, game_id=self.project.game_id,
                 )
                 row.extensions["fbx_preflight"] = preflight.to_dict()
-                if preflight.blocking:
-                    self._show_error(
-                        f"Could not add {path.name}",
-                        ValueError("FBX preflight blocked import:\n- " + "\n- ".join(
-                            finding.detected for finding in preflight.findings if finding.severity == "error"
-                        )),
+                if preflight.import_blocking:
+                    blocked_messages.append(
+                        f"{row.display_name}\n"
+                        + preflight.actionable_message(
+                            finding
+                            for finding in preflight.findings
+                            if finding.severity == "error" and not finding.can_continue
+                        )
                     )
                     continue
+
+                attention_findings = [
+                    finding
+                    for finding in preflight.findings
+                    if finding.severity == "warning"
+                    and finding.code != "multiple_animation_stacks"
+                ]
+                if any(
+                    finding.code == "no_changing_skeletal_channels"
+                    for finding in attention_findings
+                ):
+                    row.enabled = False
+
+                mapping_note = ""
+                try:
+                    if self.project.rig.retarget_mode == "exact" and target_rig is not None:
+                        if preflight.repairable_findings:
+                            profile = auto_map_crig_to_fbx(
+                                target_rig,
+                                document.limb_models.keys(),
+                                document.parent_by_name,
+                            )
+                            self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
+                            row.mapping_profile_id = profile.profile_id
+                            mapping_note = (
+                                f"Created an editable .crig map with {len(profile.pairs)} "
+                                f"suggestion(s) for {len(target_rig.bones)} target bones."
+                            )
+                    elif self.project.rig.retarget_mode == "humanoid":
+                        profile = auto_map_source_bones(
+                            document.limb_models,
+                            parents=document.parent_by_name,
+                            profile_name=f"Humanoid mapping: {row.display_name}",
+                        )
+                        self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
+                        row.mapping_profile_id = profile.profile_id
+                except Exception as exc:
+                    mapping_note = (
+                        f"The clip was added, but automatic mapping failed: {exc}. "
+                        "Open its mapping editor and assign bones manually."
+                    )
+
+                repairable = preflight.repairable_findings
+                if repairable or attention_findings or target_rig_error or mapping_note:
+                    row.extensions["import_state"] = {
+                        "status": (
+                            "mapping_review"
+                            if (repairable or attention_findings or target_rig_error)
+                            else "ready"
+                        ),
+                        "repairable_codes": [finding.code for finding in repairable],
+                        "warning_codes": [finding.code for finding in attention_findings],
+                        "mapping_note": mapping_note,
+                        "target_rig_error": target_rig_error,
+                    }
+                if repairable or attention_findings:
+                    explanation = preflight.actionable_message(
+                        [*repairable, *attention_findings]
+                    )
+                    disabled_note = (
+                        " This stack was disabled automatically because it has no changing "
+                        "skeletal channels; enable it only if a bind-pose clip is intentional."
+                        if not row.enabled
+                        else ""
+                    )
+                    repair_messages.append(
+                        f"{row.display_name}\n{mapping_note}{disabled_note}\n\n{explanation}"
+                    )
+                elif target_rig_error:
+                    repair_messages.append(
+                        f"{row.display_name}\nThe clip was added, but the selected target .crig "
+                        f"could not be loaded: {target_rig_error}\nChoose a valid target rig, then open mapping."
+                    )
                 self.project.animations.append(row)
+                added_rows.append(row)
                 existing.add(key)
-        self._mark_dirty()
+        if added_rows:
+            self._mark_dirty()
         self._refresh_animation_table()
         self._refresh_retarget_clip_combo()
         if self.project.animations:
             self.animation_table.selectRow(len(self.project.animations) - 1)
+        if blocked_messages:
+            self.qt["QMessageBox"].critical(
+                self.window,
+                "Some FBX clips could not be added",
+                "These files have source-data problems that cannot be repaired in the mapping editor:\n\n"
+                + "\n\n---\n\n".join(blocked_messages),
+            )
+        if repair_messages:
+            self.qt["QMessageBox"].warning(
+                self.window,
+                "Clips added — mapping review needed",
+                "The clips were added and remain editable. They are not exact skeleton matches, "
+                "so review the generated suggestions with the Edit mapping button before export.\n\n"
+                + "\n\n---\n\n".join(repair_messages),
+            )
 
     def remove_selected_animation(self) -> None:
         animation = self._selected_animation()
@@ -1213,12 +1326,35 @@ class MainWindow:
                 )
                 table.setCellWidget(row_index, 7, ik)
 
+                exact_mapping = self.project.rig.retarget_mode == "exact"
+                mapping_payload = self.project.mapping_profiles.get(
+                    animation.mapping_profile_id, {}
+                )
+                expected_mapping_format = (
+                    "dl-reanimated-bone-map"
+                    if exact_mapping
+                    else "dl-reanimated-retarget-profile"
+                )
+                has_editable_mapping = (
+                    mapping_payload.get("format") == expected_mapping_format
+                )
                 mapping = qt["QPushButton"](
-                    "Edit mapping" if animation.mapping_profile_id else "Create mapping"
+                    (
+                        "Review .crig map"
+                        if has_editable_mapping
+                        else "Create .crig map"
+                    )
+                    if exact_mapping
+                    else ("Edit mapping" if has_editable_mapping else "Create mapping")
                 )
                 mapping.setMinimumHeight(32)
                 mapping.setToolTip(
-                    "Open the Retargeting tab for this clip and review source-bone assignments."
+                    (
+                        "Open Root & .crig Mapping for this clip. Every target bone can be assigned "
+                        "to a source FBX bone; intentionally unmapped helpers stay at bind pose."
+                        if exact_mapping
+                        else "Open the Retargeting tab for this clip and review source-bone assignments."
+                    )
                 )
                 mapping.clicked.connect(
                     lambda _checked=False, aid=animation.animation_id: self._open_mapping_for_animation(aid)
@@ -1591,6 +1727,9 @@ class MainWindow:
         return self.project.animation_by_id(str(self.retarget_clip_combo.currentData() or ""))
 
     def _open_mapping_for_animation(self, animation_id: str) -> None:
+        if self.mapping_navigation_callback is not None:
+            self.mapping_navigation_callback(animation_id)
+            return
         self._set_combo_data(self.retarget_clip_combo, animation_id)
         self.tabs.setCurrentIndex(2)
         self._retarget_clip_changed()
