@@ -344,7 +344,10 @@ def stage_compiler_bootstrap(
             str(selected_devtools_data) if selected_devtools_data is not None else None
         ),
         "searched_devtools_data_dirs": searched,
-        "files": unique_written,
+        # This structure is embedded directly in compile/install JSON reports.
+        # Keep the public diagnostic payload JSON-native instead of leaking
+        # pathlib objects from the internal staging implementation.
+        "files": [str(path) for path in unique_written],
     }
 
 
@@ -566,6 +569,5 @@ def compiler_commands(
             output_name=output_name,
         ),
     ]
-
 
 

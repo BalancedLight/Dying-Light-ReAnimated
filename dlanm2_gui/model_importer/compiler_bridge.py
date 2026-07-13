@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -74,6 +75,8 @@ def compile_and_install_model(
     resource_name = str(source_report["resource_name"])
     effective_mode = str(source_report["effective_mode"])
     expected_bones = int(source_report.get("bone_count", 0))
+    expected_helpers = int(source_report.get("helper_count", 0))
+    expected_model_bounds = source_report.get("model_bounds")
     compiler = Path(settings.compiler)
     workshop = Path(settings.workshop_root)
     active_project = Path(settings.active_project)
@@ -175,11 +178,26 @@ def compile_and_install_model(
         compact,
         mode=effective_mode,
         expected_bones=expected_bones,
+        expected_helpers=expected_helpers,
+        expected_model_bounds=(
+            expected_model_bounds if isinstance(expected_model_bounds, dict) else None
+        ),
     )
     if not validation["ready"]:
         raise ModelCompileError(
             "Compiled mesh did not satisfy the expected entity contract: "
             + "; ".join(validation["errors"])
+        )
+    mesh_audit = compact["mesh_resources"][0]
+    aggregate = mesh_audit.get("bone_bounds_global_aggregate", {})
+    if effective_mode != "static":
+        _log(
+            log_callback,
+            "Compiled rig validation: "
+            f"{int(mesh_audit.get('bone_count', 0))} bones, "
+            f"{int(mesh_audit.get('skinned_mesh_count', 0))} skinned meshes, "
+            f"{int(aggregate.get('contributing_bone_count', 0))} usable bone bounds, "
+            f"aggregate diagonal {float(aggregate.get('diagonal_length', 0.0)):.3f} m",
         )
 
     data_target = active_project / Path(virtual_path)
@@ -190,10 +208,32 @@ def compile_and_install_model(
     ).with_suffix(".msh_obj")
     data_target.parent.mkdir(parents=True, exist_ok=True)
     assets_target.parent.mkdir(parents=True, exist_ok=True)
+    backup_dir = out_root / "install_backup" / time.strftime("%Y%m%d_%H%M%S")
+    backed_up_files: list[str] = []
+    for existing in (
+        data_target,
+        data_target.with_suffix(".ascr"),
+        data_target.with_suffix(".bscr"),
+        assets_target,
+    ):
+        if existing.is_file():
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup = backup_dir / existing.name
+            shutil.copy2(existing, backup)
+            backed_up_files.append(str(backup))
+    removed_stale_companions: list[str] = []
     for suffix in (".msh", ".ascr", ".bscr"):
         staged = staged_msh.with_suffix(suffix)
+        target = data_target.with_suffix(suffix)
         if staged.is_file():
-            shutil.copy2(staged, data_target.with_suffix(suffix))
+            shutil.copy2(staged, target)
+        elif suffix != ".msh" and target.is_file():
+            # A previous build may have auto-attached anims_man_all.ascr.  If
+            # the current exact/fitted bind intentionally has no alias, leaving
+            # that stale file beside the new MSH makes the next editor compile
+            # silently reintroduce incompatible stock tracks.
+            target.unlink()
+            removed_stale_companions.append(str(target))
     shutil.copy2(object_path, assets_target)
 
     report = {
@@ -209,6 +249,8 @@ def compile_and_install_model(
         "compiled_object": str(object_path),
         "installed_source": str(data_target),
         "installed_object": str(assets_target),
+        "install_backups": backed_up_files,
+        "removed_stale_companions": removed_stale_companions,
         "bootstrap": bootstrap,
         "commands": command_results,
         "compact_audit": compact,
@@ -217,7 +259,13 @@ def compile_and_install_model(
         "timestamp_unix": time.time(),
     }
     report_path = out_root / "compile_and_install_report.json"
-    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    # Report contributors should return JSON-native values, but accept
+    # os.PathLike diagnostics defensively so a successful compile can never be
+    # reported as failed merely because metadata contains a Path.
+    report_path.write_text(
+        json.dumps(report, indent=2, default=os.fspath) + "\n",
+        encoding="utf-8",
+    )
     report["report_path"] = str(report_path)
     _log(log_callback, f"Installed source: {data_target}")
     _log(log_callback, f"Installed compiled object: {assets_target}")
@@ -266,6 +314,8 @@ def _validate_compact_result(
     *,
     mode: str,
     expected_bones: int,
+    expected_helpers: int = 0,
+    expected_model_bounds: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     errors: list[str] = []
     resources = report.get("mesh_resources", [])
@@ -277,12 +327,32 @@ def _validate_compact_result(
             if int(counts.get("MESH", 0)) < 1:
                 errors.append("static import contains no runtime MESH entity")
         else:
+            if row.get("global_transform_error"):
+                errors.append(
+                    "compiled compact hierarchy cannot reconstruct global transforms: "
+                    + str(row["global_transform_error"])
+                )
             bones = int(counts.get("BONE", 0))
+            helpers = int(counts.get("HELPER", 0))
             skinned = int(counts.get("MESH_SKINNED", 0))
             if bones != expected_bones:
                 errors.append(f"compiled object retained {bones} bones; expected {expected_bones}")
             if skinned < 1:
                 errors.append("compiled object contains no MESH_SKINNED entity")
+            if helpers != expected_helpers:
+                errors.append(
+                    f"compiled object retained {helpers} helpers; expected {expected_helpers}"
+                )
+            animation_entities = expected_bones + expected_helpers
+            if (
+                "animation_entity_count_candidate" in row
+                and int(row.get("animation_entity_count_candidate", -1)) != animation_entities
+            ):
+                errors.append(
+                    "compiled animation-entity prefix is "
+                    f"{int(row.get('animation_entity_count_candidate', -1))}; "
+                    f"expected {animation_entities} BONE/HELPER entities before geometry"
+                )
             body_flags = [
                 int(entity["flags"], 16)
                 for entity in row.get("entities", [])
@@ -290,9 +360,163 @@ def _validate_compact_result(
             ]
             if body_flags and not all(value & 0x4700 == 0x4700 for value in body_flags):
                 errors.append("one or more skinned mesh entities lost the 0x4700 render/animation defaults")
+            if body_flags and not all(value & 0x1 for value in body_flags):
+                errors.append("one or more skinned mesh entities lost the animated-node flag")
+            bone_entities = [
+                entity
+                for entity in row.get("entities", [])
+                if entity.get("element_type_name") == "BONE"
+            ]
+            helper_entities = [
+                entity
+                for entity in row.get("entities", [])
+                if entity.get("element_type_name") == "HELPER"
+            ]
+            nonanimated_bones = [
+                str(entity.get("name", "<unnamed>"))
+                for entity in bone_entities
+                if not (int(str(entity.get("flags", "0")), 16) & 0x1)
+            ]
+            if nonanimated_bones:
+                names = ", ".join(nonanimated_bones[:8])
+                suffix = "..." if len(nonanimated_bones) > 8 else ""
+                errors.append(
+                    f"compiled object contains {len(nonanimated_bones)} bones without the "
+                    f"animated-node flag ({names}{suffix})"
+                )
+            reference_errors = [
+                float(entity.get("global_reference_identity_max_abs_error", math.inf))
+                for entity in [*bone_entities, *helper_entities]
+            ]
+            if (
+                not reference_errors
+                or not all(math.isfinite(value) for value in reference_errors)
+                or max(reference_errors) > 1.0e-3
+            ):
+                errors.append(
+                    "compiled animation globals and inverse-global reference matrices are not "
+                    "mutual inverses"
+                )
+            invalid_bounds: list[str] = []
+            for entity in bone_entities:
+                values = entity.get("bounds_center_half_extents", [])
+                if len(values) != 6:
+                    invalid_bounds.append(str(entity.get("name", "<unnamed>")))
+                    continue
+                try:
+                    numbers = [float(value) for value in values]
+                except (TypeError, ValueError):
+                    invalid_bounds.append(str(entity.get("name", "<unnamed>")))
+                    continue
+                if (
+                    not all(math.isfinite(value) for value in numbers)
+                    or max(numbers[3:]) <= 1.0e-6
+                ):
+                    invalid_bounds.append(str(entity.get("name", "<unnamed>")))
+            if invalid_bounds:
+                names = ", ".join(invalid_bounds[:8])
+                suffix = "..." if len(invalid_bounds) > 8 else ""
+                errors.append(
+                    f"compiled object contains {len(invalid_bounds)} bones with collapsed "
+                    f"bounds ({names}{suffix}); ChromeEd would show tiny bone markers and "
+                    "an invalid aggregate model box"
+                )
+            aggregate = row.get("bone_bounds_global_aggregate")
+            if not isinstance(aggregate, dict):
+                errors.append("compiled object is missing the aggregate bone-bound audit")
+            else:
+                contributing = int(aggregate.get("contributing_bone_count", 0))
+                collapsed = int(aggregate.get("collapsed_bone_count", 0))
+                invalid = int(aggregate.get("invalid_bone_count", 0))
+                diagonal = float(aggregate.get("diagonal_length", 0.0))
+                if (
+                    contributing != expected_bones
+                    or collapsed
+                    or invalid
+                    or not math.isfinite(diagonal)
+                    or diagonal <= 0.1
+                ):
+                    errors.append(
+                        "compiled aggregate bone bounds are unusable "
+                        f"(contributing={contributing}/{expected_bones}, "
+                        f"collapsed={collapsed}, invalid={invalid}, diagonal={diagonal:.6g} m)"
+                    )
+            if mode == "dying_light_humanoid":
+                invalid_animation_flags = [
+                    str(entity.get("name", "<unnamed>"))
+                    for entity in bone_entities
+                    if (
+                        int(str(entity.get("flags", "0")), 16) & 0x700
+                    ) not in {0x200, 0x300, 0x700}
+                ]
+                if invalid_animation_flags:
+                    names = ", ".join(invalid_animation_flags[:8])
+                    suffix = "..." if len(invalid_animation_flags) > 8 else ""
+                    errors.append(
+                        f"compiled fitted humanoid contains {len(invalid_animation_flags)} "
+                        f"bones with unsupported animation flags ({names}{suffix}); expected "
+                        "the stock ROT, POS|ROT, or root POS|ROT|SCL policies"
+                    )
+            if expected_model_bounds is not None:
+                expected_name = str(expected_model_bounds.get("node_name", "")).casefold()
+                entities = list(row.get("entities", []))
+                carrier = next(
+                    (
+                        entity
+                        for entity in entities
+                        if str(entity.get("name", "")).casefold() == expected_name
+                        and entity.get("element_type_name") == "MESH"
+                    ),
+                    None,
+                )
+                if carrier is None:
+                    errors.append(
+                        "compiled object is missing the ordinary-MESH model-bounds carrier"
+                    )
+                else:
+                    first_skinned = min(
+                        (
+                            int(entity.get("index", 1 << 30))
+                            for entity in entities
+                            if entity.get("element_type_name") == "MESH_SKINNED"
+                        ),
+                        default=1 << 30,
+                    )
+                    if int(carrier.get("index", -1)) <= first_skinned:
+                        errors.append(
+                            "model-bounds carrier appears before skinned geometry and would "
+                            "inflate the animation-entity prefix"
+                        )
+                    actual = [
+                        float(value)
+                        for value in carrier.get("bounds_center_half_extents", [])
+                    ]
+                    expected = [
+                        *[float(value) for value in expected_model_bounds.get("center_xyz", [])],
+                        *[float(value) for value in expected_model_bounds.get("half_extents_xyz", [])],
+                    ]
+                    if len(actual) != 6 or len(expected) != 6:
+                        errors.append("model-bounds carrier has an incomplete compact AABB")
+                    elif max(abs(left - right) for left, right in zip(actual, expected)) > 1.0e-3:
+                        errors.append(
+                            "compiled model-bounds carrier differs from the emitted geometry AABB"
+                        )
+                reference_bounds = row.get("reference_bounds_global_aggregate", {})
+                actual_diagonal = float(reference_bounds.get("diagonal_length", 0.0))
+                expected_diagonal = float(expected_model_bounds.get("diagonal_m", 0.0))
+                if (
+                    not math.isfinite(actual_diagonal)
+                    or actual_diagonal < expected_diagonal * 0.95
+                ):
+                    errors.append(
+                        "compiled reference bounds do not enclose the emitted mesh "
+                        f"(actual diagonal={actual_diagonal:.6g} m, "
+                        f"mesh diagonal={expected_diagonal:.6g} m)"
+                    )
     return {
         "mode": mode,
         "expected_bones": expected_bones,
+        "expected_helpers": expected_helpers,
         "errors": errors,
         "ready": not errors,
     }
