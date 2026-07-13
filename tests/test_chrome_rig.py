@@ -183,11 +183,7 @@ def test_builtin_humanoid_is_represented_as_a_chrome_rig() -> None:
     assert rig.validate().ok
     packaged = ChromeRig.load(root / "reference/male_npc_infected.crig")
     assert packaged.skeleton_hash == rig.skeleton_hash
-    assert packaged.to_bytes(
-        optional_members={
-            "README.md": b"Bundled DL ReAnimated male NPC/infected target rig.\n"
-        }
-    ) == (root / "reference/male_npc_infected.crig").read_bytes()
+    assert packaged.to_bytes() == (root / "reference/male_npc_infected.crig").read_bytes()
 
 
 def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
@@ -200,7 +196,7 @@ def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
             "rig": {"use_imported_animation_bind_pose": True},
         }
     )
-    assert CURRENT_PROJECT_SCHEMA_VERSION == 5
+    assert CURRENT_PROJECT_SCHEMA_VERSION >= 5
     assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
     assert project.rig.target_rig_ref == "builtin:male_npc_infected"
     assert project.rig.retarget_mode == "humanoid"

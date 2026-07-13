@@ -115,6 +115,13 @@ def decode_anm2_animation(
 ) -> DecodedAnm2Animation:
     source = Path(path)
     data = source.read_bytes()
+    from .dl2_anm2 import detect_anm2_format
+    detected_format = detect_anm2_format(data)
+    if detected_format == 42:
+        raise ValueError(
+            "Dying Light 2 ANM2 format 42 detected. Header and descriptor inspection is "
+            "available, but the animation curve decoder is incomplete; no static FBX was exported."
+        )
     header = anm2.Anm2Header.parse(data)
     layout = anm2.probe_v1_layout(header, data)
     if layout is None:

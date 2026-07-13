@@ -10,6 +10,7 @@ from ..bone_maps import GenericBoneMap, auto_map_skeletons
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import build_chrome_rig_from_smd_template
 from ..chrome_rig_registry import BUILTIN_MALE_RIG_REF
+from ..game_profiles import DL2_RIG_REF
 from ..anm2_fbx import chrome_rig_from_fbx_skeleton
 from ..runtime_paths import resource_root
 
@@ -24,6 +25,8 @@ def load_source_rig(value: str) -> ChromeRig:
             root / "reference" / "player_1_tpp.smd",
             root / "reference" / "infected_turn_90r.template.anm2",
         )
+    if value == DL2_RIG_REF:
+        return ChromeRig.load(resource_root() / "reference" / "dl2" / "player_shadow_caster.crig")
     return ChromeRig.load(value)
 
 
