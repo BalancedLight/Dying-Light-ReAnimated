@@ -157,7 +157,7 @@ def test_v4_project_adds_reverse_workspace() -> None:
         "format": "dl-reanimated-project", "schema_version": 4,
         "minimum_reader_version": 1, "name": "Forward only",
     })
-    assert project.schema_version == 5
+    assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
     assert project.anm2_to_fbx.mode == "native"
     assert project.anm2_to_fbx.items == []
 

@@ -1,0 +1,34 @@
+{
+  "package": "DL ReAnimated DL1/DL2 Preview",
+  "version": "0.6.0a1",
+  "source_basis": "BalancedLight/Dying-Light-ReAnimated model-testing branch, modified locally only",
+  "git_operations_performed": false,
+  "games": {
+    "dying_light_1": "existing validated format-1 workflow",
+    "dying_light_2": "preview bind-corrected target/profile and format-42 inspection"
+  },
+  "native_dl2_format42_curve_decode": false,
+  "native_dl2_format42_write": false,
+  "key_files": [
+    {
+      "path": "reference/dl2/player_shadow_caster.smd",
+      "size": 6566,
+      "sha256": "28469EB5447C1E8AEFF0A6095A263B35E1C6005230450984C9F048E9C9E9AB69"
+    },
+    {
+      "path": "reference/dl2/0_m_fpp_farjump.anm2",
+      "size": 108032,
+      "sha256": "9368914A4C59521BDD31FED064DF93A5D2D287E793FDC9447BE24ACD4A3FFF6D"
+    },
+    {
+      "path": "reference/dl2/player_shadow_caster.crig",
+      "size": 46566,
+      "sha256": "BD57D04C970E781F177BE2E1203CE7E3089F0D40985338598EFAA341C5909FB1"
+    },
+    {
+      "path": "examples/dl2_player_shadow_caster.example.dlraproj",
+      "size": 42628,
+      "sha256": "5FD4B63C9B0ED6BAC8AE8DD6AF6762B5884EAEDF73B587C3643B9CE245AF9F60"
+    }
+  ]
+}

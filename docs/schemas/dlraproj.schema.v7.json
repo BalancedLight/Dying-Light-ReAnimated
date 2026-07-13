@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/dlraproj.schema.v7.json",
+  "title": "DL ReAnimated Project v7",
+  "type": "object",
+  "required": ["format", "schema_version", "minimum_reader_version", "game_id", "rig", "animations", "anm2_to_fbx"],
+  "properties": {
+    "format": {"const": "dl-reanimated-project"},
+    "schema_version": {"const": 7},
+    "minimum_reader_version": {"type": "integer", "minimum": 1},
+    "game_id": {"enum": ["dying_light_1", "dying_light_2"]},
+    "rig": {"type": "object", "additionalProperties": true},
+    "export": {"type": "object", "additionalProperties": true},
+    "animations": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
+    "anm2_to_fbx": {"type": "object", "additionalProperties": true},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "additionalProperties": true
+}

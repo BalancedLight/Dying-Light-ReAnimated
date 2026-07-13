@@ -66,6 +66,10 @@ dl_reanimated_build/
 !/reference/*.anm2
 !/reference/*.smd
 !/reference/*.crig
+!/reference/dl2/
+!/reference/dl2/*.anm2
+!/reference/dl2/*.smd
+!/reference/dl2/*.crig
 !/examples/*.dlraproj
 !/examples/*.dlrmap.json
 !/tests/fixtures/*.smd

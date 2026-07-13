@@ -119,6 +119,55 @@ def mapped_local_from_rest_delta(
     return result
 
 
+def global_bind_basis_correction(source_bind_global: np.ndarray, target_bind_global: np.ndarray) -> np.ndarray:
+    source = np.asarray(source_bind_global, dtype=float)
+    target = np.asarray(target_bind_global, dtype=float)
+    if source.shape != (4, 4) or target.shape != (4, 4) or not np.isfinite(source).all() or not np.isfinite(target).all():
+        raise ValueError("source and target global bind matrices must be finite 4x4 matrices")
+    try:
+        correction = np.linalg.inv(source) @ target
+    except np.linalg.LinAlgError as exc:
+        raise ValueError("source global bind matrix is singular") from exc
+    return correction
+
+
+def corrected_target_global(source_animated_global: np.ndarray, correction: np.ndarray) -> np.ndarray:
+    value = np.asarray(source_animated_global, dtype=float) @ np.asarray(correction, dtype=float)
+    if value.shape != (4, 4) or not np.isfinite(value).all():
+        raise ValueError("corrected target global matrix is non-finite")
+    return value
+
+
+def apply_global_root_policy(
+    values: list[list[list[float]]],
+    rig: ChromeRig,
+    target_root_name: str,
+    policy: str,
+) -> None:
+    if policy not in {"inplace", "bip01", "motion"}:
+        raise ValueError(f"Unsupported root-motion policy {policy!r}")
+    root_bone = next(bone for bone in rig.bones if bone.name == target_root_name)
+    root_track = rig.descriptors.index(root_bone.descriptor)
+    first_translation = np.asarray(values[0][root_track][3:6], dtype=float)
+    if policy == "inplace":
+        for frame in values:
+            frame[root_track][3:6] = [float(value) for value in first_translation]
+    elif policy == "motion":
+        motion_descriptor = 0xCCC3CDDF
+        if motion_descriptor not in rig.descriptors:
+            raise ValueError(
+                "Motion-accumulator root policy requires descriptor 0xCCC3CDDF in the target .crig."
+            )
+        motion_track = rig.descriptors.index(motion_descriptor)
+        motion_base = np.asarray(values[0][motion_track][3:6], dtype=float)
+        for frame in values:
+            current = np.asarray(frame[root_track][3:6], dtype=float)
+            horizontal = current - first_translation
+            horizontal[1] = 0.0
+            frame[root_track][3:6] = [float(value) for value in current - horizontal]
+            frame[motion_track][3:6] = [float(value) for value in motion_base + horizontal]
+
+
 def _target_uses_dying_light_basis(rig: ChromeRig) -> bool:
     convention = str(getattr(rig.writer_profile, "coordinate_convention", "")).lower()
     extensions = dict(getattr(rig, "extensions", {}) or {})
@@ -191,6 +240,8 @@ def build_mapped_rig_anm2(
     animation_stack: str | None = None,
     document_factory: Any = _FbxDocument,
     root_mapping: RootMappingSelection | Mapping[str, Any] | None = None,
+    transfer_policy: str = "mapped_local_rest_delta",
+    root_policy: str = "bip01",
 ) -> MappedRigBuild:
     """Retarget an arbitrary mapped FBX skeleton onto a Chrome Rig."""
 
@@ -257,7 +308,12 @@ def build_mapped_rig_anm2(
             "Mapped-rig retarget has no valid bone rows. Use Auto-map or assign bones manually."
         )
 
-    convert_basis = _target_uses_dying_light_basis(rig)
+    if transfer_policy not in {"mapped_local_rest_delta", "global_bind_basis_correction"}:
+        raise ValueError(f"Unsupported retarget transfer policy {transfer_policy!r}")
+    if root_policy not in {"inplace", "bip01", "motion"}:
+        raise ValueError(f"Unsupported root-motion policy {root_policy!r}")
+    use_global_correction = transfer_policy == "global_bind_basis_correction"
+    convert_basis = _target_uses_dying_light_basis(rig) and not use_global_correction
     meters_per_unit = float(document.meters_per_unit)
     source_bind_local: dict[str, np.ndarray] = {}
     for source_name in sorted(set(mapped.values())):
@@ -270,6 +326,27 @@ def build_mapped_rig_anm2(
         )
 
     target_bind = {bone.name: target_bind_local_matrix(bone) for bone in rig.bones}
+    target_bind_global: dict[str, np.ndarray] = {}
+    for bone in rig.bones:
+        parent_name = rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
+        target_bind_global[bone.name] = (
+            target_bind_global[parent_name] @ target_bind[bone.name]
+            if parent_name is not None else target_bind[bone.name].copy()
+        )
+    basis_corrections: dict[str, np.ndarray] = {}
+    if use_global_correction:
+        source_globals = getattr(document, "bind_global_matrices", None)
+        if not source_globals:
+            raise ValueError(
+                "Global bind-basis correction requires authoritative/fallback FBX global bind matrices."
+            )
+        for target_name, source_name in mapped.items():
+            source_global = np.asarray(source_globals[source_name], dtype=float)
+            if not np.isfinite(source_global).all() or abs(float(np.linalg.det(source_global[:3, :3]))) <= 1.0e-12:
+                raise ValueError(f"Source bind matrix for {source_name!r} is singular or non-finite.")
+            basis_corrections[target_name] = global_bind_basis_correction(
+                source_global, target_bind_global[target_name]
+            )
     if hasattr(document, "frame_ticks"):
         ticks = list(document.frame_ticks(fps=sample_fps))
     else:
@@ -282,6 +359,10 @@ def build_mapped_rig_anm2(
 
     values: list[list[list[float]]] = []
     bind_track_values = rig.bind_track_values()
+    bind_row_by_descriptor = {
+        descriptor: bind_track_values[index]
+        for index, descriptor in enumerate(rig.descriptors)
+    }
     movement_ranges: dict[str, float] = {bone.name: 0.0 for bone in rig.bones}
     bind_deltas: list[dict[str, Any]] = []
 
@@ -312,10 +393,27 @@ def build_mapped_rig_anm2(
 
     for tick in ticks:
         rows_by_descriptor: dict[int, list[float]] = {}
+        target_animated_globals: dict[str, np.ndarray] = {}
+        source_animated_globals = document.global_matrices(tick=tick, use_animation=True) if use_global_correction else {}
         for bone in rig.bones:
             target_bind_local = target_bind[bone.name]
             source_name = mapped.get(bone.name)
-            if source_name is None:
+            parent_name = rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
+            if use_global_correction:
+                if source_name is not None:
+                    animated_global = corrected_target_global(
+                        source_animated_globals[source_name], basis_corrections[bone.name]
+                    )
+                elif parent_name is not None:
+                    animated_global = target_animated_globals[parent_name] @ target_bind_local
+                else:
+                    animated_global = target_bind_global[bone.name].copy()
+                if parent_name is None:
+                    local = animated_global
+                else:
+                    local = np.linalg.inv(target_animated_globals[parent_name]) @ animated_global
+                target_animated_globals[bone.name] = animated_global
+            elif source_name is None:
                 local = target_bind_local
             else:
                 source_anim_local = source_local_to_target_basis(
@@ -338,7 +436,7 @@ def build_mapped_rig_anm2(
                 *map(float, scale),
             ]
             rows_by_descriptor[bone.descriptor] = row
-            bind_row = bind_track_values[bone.index]
+            bind_row = bind_row_by_descriptor[bone.descriptor]
             movement_ranges[bone.name] = max(
                 movement_ranges[bone.name],
                 max(abs(float(a) - float(b)) for a, b in zip(row, bind_row)),
@@ -351,6 +449,17 @@ def build_mapped_rig_anm2(
             for descriptor in rig.descriptors
         ]
         values.append(frame)
+
+    if use_global_correction:
+        apply_global_root_policy(values, rig, target_root_name, root_policy)
+
+    for bone in rig.bones:
+        track_index = rig.descriptors.index(bone.descriptor)
+        bind_row = bind_row_by_descriptor[bone.descriptor]
+        movement_ranges[bone.name] = max(
+            max(abs(float(a) - float(b)) for a, b in zip(frame[track_index], bind_row))
+            for frame in values
+        )
 
     packed_flags: list[list[bool]] = []
     for track_index in range(len(rig.descriptors)):
@@ -416,7 +525,14 @@ def build_mapped_rig_anm2(
             "unmapped_bone_count": len(unmapped),
             "unmapped_target_bones": unmapped,
             "moving_target_bones": moving,
+            "static_target_bones": [bone.name for bone in rig.bones if bone.name not in moving],
             "bind_delta_summary": bind_deltas,
+            "maximum_bind_position_discrepancy": max(
+                (float(row["translation_delta_meters"]) for row in bind_deltas), default=0.0
+            ),
+            "maximum_bind_rotation_discrepancy_degrees": max(
+                (float(row["rotation_delta_degrees"]) for row in bind_deltas), default=0.0
+            ),
             "frame_count": len(values),
             "fps": sample_fps,
             "track_count": len(rig.descriptors),
@@ -427,10 +543,23 @@ def build_mapped_rig_anm2(
             "source_basis_conversion": (
                 "FBX (x,y,z) -> Dying Light (x,z,-y)"
                 if convert_basis
-                else "none (target .crig uses FBX-local convention)"
+                else (
+                    "per-bone inverse(sourceBindGlobal) * targetBindGlobal"
+                    if use_global_correction else "none (target .crig uses FBX-local convention)"
+                )
             ),
+            "bind_source": getattr(document, "bind_source", "unanimated Model transforms"),
+            "bind_coverage": dict(getattr(document, "bind_coverage", {}) or {}),
+            "basis_correction_policy": transfer_policy,
+            "multiple_root_inventory": [
+                bone.name for bone in rig.bones if bone.parent_index < 0
+            ],
             "warnings": list(dict.fromkeys(warnings)),
-            "root_policy": "mapped_rest_delta",
+            "root_policy": (
+                "global_bind_basis_correction" if use_global_correction else "mapped_rest_delta"
+            ),
+            "root_motion_policy_requested": root_policy,
+            "root_motion_policy_applied": root_policy if use_global_correction else "mapped_rest_delta_legacy",
             "candidate_path": None,
         },
     )
@@ -438,8 +567,11 @@ def build_mapped_rig_anm2(
 
 __all__ = [
     "MappedRigBuild",
+    "apply_global_root_policy",
     "build_mapped_rig_anm2",
     "compose_local_matrix",
+    "corrected_target_global",
+    "global_bind_basis_correction",
     "mapped_local_from_rest_delta",
     "quaternion_wxyz_to_matrix",
     "source_local_to_target_basis",

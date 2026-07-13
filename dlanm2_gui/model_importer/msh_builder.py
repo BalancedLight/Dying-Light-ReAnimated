@@ -142,7 +142,7 @@ class ModelBuildResult:
         report["parsed_has_skinning"] = parsed.has_skinning
         report["compiler_preflight"] = audit_source_msh_for_compiler(msh_path)
         report_path = output / f"{resource_name}.model_import.json"
-        report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         paths["report"] = report_path
         return paths
 

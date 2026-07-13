@@ -10,7 +10,7 @@ class PackResourceManifest:
 @dataclass(slots=True)
 class PackManifest:
  pack_name:str; pack_sha256:str; project_id:str; animation_resources:list[PackResourceManifest]; animation_scripts:list[str]; build_mode:str='new'; extensions:dict=field(default_factory=dict)
- def save_for_pack(self,p): q=manifest_path_for_pack(p); q.write_text(json.dumps(asdict(self),indent=2)+'\n'); return q
+ def save_for_pack(self,p): q=manifest_path_for_pack(p); q.write_text(json.dumps(asdict(self),indent=2,ensure_ascii=False)+'\n',encoding='utf-8'); return q
  @classmethod
  def load_for_pack(cls,p):
   q=manifest_path_for_pack(p)

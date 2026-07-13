@@ -10,6 +10,8 @@ import shutil
 import tempfile
 
 from .chrome_rig import CRIG_EXTENSION, ChromeRig
+from .game_profiles import DL2_RIG_REF
+from .runtime_paths import resource_root
 
 
 BUILTIN_MALE_RIG_REF = "builtin:male_npc_infected"
@@ -38,6 +40,15 @@ class ChromeRigRegistry:
                 True,
             )
         ]
+        dl2_path = resource_root() / "reference" / "dl2" / "player_shadow_caster.crig"
+        if dl2_path.is_file():
+            rows.append(ChromeRigRecord(
+                DL2_RIG_REF,
+                "Dying Light 2 Player / Shadow Caster (bundled)",
+                "Humanoid",
+                str(dl2_path),
+                True,
+            ))
         if self.root.is_dir():
             for path in sorted(self.root.glob(f"*{CRIG_EXTENSION}"), key=lambda p: p.name.lower()):
                 try:
@@ -72,6 +83,9 @@ class ChromeRigRegistry:
     def resolve(self, rig_ref: str, explicit_path: str = "") -> Path | None:
         if rig_ref == BUILTIN_MALE_RIG_REF:
             return None
+        if rig_ref == DL2_RIG_REF:
+            path = resource_root() / "reference" / "dl2" / "player_shadow_caster.crig"
+            return path if path.is_file() else None
         if explicit_path:
             path = Path(explicit_path)
             if path.is_file():

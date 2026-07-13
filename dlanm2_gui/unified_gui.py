@@ -138,12 +138,28 @@ class UnifiedMainWindow:
         self.controller.advanced_mode_toggle.toggled.connect(self._advanced_visibility_changed)
         self._set_crig_tab_visible(self.controller.advanced_mode_toggle.isChecked())
         self._install_project_sync_hooks()
+        if hasattr(self.controller, "game_combo"):
+            self.controller.game_combo.currentIndexChanged.connect(self._game_profile_changed)
         self._restore_extension_state()
         self.crig_mapping.reload_clips()
         self.main_tabs.currentChanged.connect(self._workspace_changed)
 
     def show(self) -> None:
         self.window.show()
+
+    def _game_profile_changed(self, *_args) -> None:
+        """Keep model defaults coherent while preserving deliberate custom SMD paths."""
+
+        if not hasattr(self.models, "target_smd"):
+            return
+        current = self.models.target_smd.text().strip().replace("\\", "/").casefold()
+        default_like = (
+            not current
+            or current.endswith("reference/player_1_tpp.smd")
+            or current.endswith("reference/dl2/player_shadow_caster.smd")
+        )
+        if default_like:
+            self.models.target_smd.setText(self.controller.project.rig.canonical_smd)
 
     def _build_menu_bar(self) -> None:
         qt = self.qt
