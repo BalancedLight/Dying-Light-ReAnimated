@@ -16,9 +16,7 @@ from .chrome_rig import ChromeRig, ChromeRigBone
 from .chrome_rig_builder import decompose_local_matrix, _topological_bone_names
 from .oracle.binary_fbx_mixamo import _FbxDocument
 
-
 MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
-
 
 @dataclass(frozen=True, slots=True)
 class DecodedAnm2Animation:
@@ -28,14 +26,13 @@ class DecodedAnm2Animation:
     source_frame_start: int
     source_frame_end: int
     descriptors: tuple[int, ...]
-    values: np.ndarray  # frame, track, component (Cayley XYZ, translation, scale)
-    quaternions_wxyz: np.ndarray  # frame, track, WXYZ
+    values: np.ndarray
+    quaternions_wxyz: np.ndarray
     warnings: tuple[str, ...] = ()
 
     @property
     def frame_count(self) -> int:
         return int(self.values.shape[0])
-
 
 @dataclass(frozen=True, slots=True)
 class SceneBone:
@@ -48,15 +45,14 @@ class SceneBone:
     deform: bool = True
     helper: bool = False
 
-
 @dataclass(slots=True)
 class AnimationScene:
     name: str
     fps: int
     bones: list[SceneBone]
-    translations: np.ndarray  # frame, bone, xyz
-    rotations_wxyz: np.ndarray  # frame, bone, wxyz
-    scales: np.ndarray  # frame, bone, xyz
+    translations: np.ndarray
+    rotations_wxyz: np.ndarray
+    scales: np.ndarray
     source_frame_start: int = 0
     warnings: list[str] = field(default_factory=list)
 
@@ -101,18 +97,14 @@ class AnimationScene:
             "warnings": list(self.warnings),
         }
 
-
 def cayley_to_quaternion_wxyz(vector: Iterable[float]) -> np.ndarray:
     value = np.asarray(tuple(vector), dtype=float)
     d = float(value @ value)
-    result = np.asarray(
-        [(1.0 - d) / (1.0 + d), *(2.0 * value / (1.0 + d))], dtype=float
-    )
+    result = np.asarray([(1.0 - d) / (1.0 + d), *(2.0 * value / (1.0 + d))], dtype=float)
     norm = float(np.linalg.norm(result))
     if not math.isfinite(norm) or norm <= 1.0e-12:
         raise ValueError("ANM2 rotation decoded to a singular quaternion")
     return result / norm
-
 
 def decode_anm2_animation(
     path: str | Path,
@@ -151,7 +143,6 @@ def decode_anm2_animation(
         sample.descriptors, values, quaternions,
     )
 
-
 def _matrix_from_trs(translation, rotation_wxyz, scale) -> np.ndarray:
     w, x, y, z = map(float, rotation_wxyz)
     rotation = np.asarray(
@@ -166,14 +157,12 @@ def _matrix_from_trs(translation, rotation_wxyz, scale) -> np.ndarray:
     result[:3, 3] = np.asarray(translation, dtype=float)
     return result
 
-
 def _scene_bone_from_crig(bone: ChromeRigBone, *, parent_index: int | None = None) -> SceneBone:
     return SceneBone(
         bone.name, bone.parent_index if parent_index is None else parent_index, bone.descriptor,
         bone.bind_translation, bone.bind_rotation_wxyz, bone.bind_scale,
         bone.deform, bone.helper,
     )
-
 
 def reconstruct_native_scene(
     animation: DecodedAnm2Animation,
@@ -232,9 +221,7 @@ def reconstruct_native_scene(
         animation.source_frame_start, warnings,
     )
 
-
 def chrome_rig_from_fbx_skeleton(path: str | Path) -> ChromeRig:
-    """Read a binary target FBX into an in-memory generic Chrome Rig."""
     document = _FbxDocument(Path(path))
     names = _topological_bone_names(document)
     index_by_name = {name: index for index, name in enumerate(names)}
@@ -261,7 +248,6 @@ def chrome_rig_from_fbx_skeleton(path: str | Path) -> ChromeRig:
         source_model_name=Path(path).name,
     )
 
-
 def _global_matrices(local: list[np.ndarray], bones: list[SceneBone]) -> list[np.ndarray]:
     result: list[np.ndarray | None] = [None] * len(bones)
     def resolve(index: int) -> np.ndarray:
@@ -271,7 +257,6 @@ def _global_matrices(local: list[np.ndarray], bones: list[SceneBone]) -> list[np
         result[index] = resolve(parent) @ local[index] if parent >= 0 else local[index]
         return result[index]  # type: ignore[return-value]
     return [resolve(index) for index in range(len(bones))]
-
 
 def _translation_scale(source: ChromeRig, target: ChromeRig, mapping: GenericBoneMap) -> float:
     source_by_descriptor = {bone.descriptor: bone for bone in source.bones}
@@ -291,7 +276,6 @@ def _translation_scale(source: ChromeRig, target: ChromeRig, mapping: GenericBon
         if sl > 1.0e-8 and tl > 1.0e-8:
             ratios.append(tl / sl)
     return float(np.median(ratios)) if ratios else 1.0
-
 
 def retarget_decoded_animation(
     animation: DecodedAnm2Animation,
@@ -383,7 +367,6 @@ def retarget_decoded_animation(
         animation.name, animation.fps, target_bones, translations, rotations, scales,
         animation.source_frame_start, warnings,
     )
-
 
 __all__ = [
     "AnimationScene", "DecodedAnm2Animation", "MOTION_HELPER_DESCRIPTOR", "SceneBone",

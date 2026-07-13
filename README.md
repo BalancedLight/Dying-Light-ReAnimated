@@ -6,7 +6,7 @@
   />
 </p>
 
-DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light. It provides a desktop GUI for animation authoring, model import, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
 ## Start
 
@@ -37,11 +37,21 @@ build_exe.bat
 5. Save the `.dlraproj` project.
 6. Build a new RPack or append to a previous DL ReAnimated RPack.
 
-Advanced target files, diagnostic controls, intermediate reports, and developer options are hidden unless **Show advanced settings** is enabled.
+Advanced target files, diagnostic controls, intermediate reports, developer options, and **Root & .crig Mapping** are hidden unless **Advanced settings** is enabled in the top-right corner or the View menu.
 
 For a custom object, animal, or model that already exists in a mod, Advanced mode can create a shareable `.crig` from one binary model FBX. Animations using that exact skeleton can then be exported without humanoid roles or additional target files.
 
 The dedicated **ANM2 → FBX** workspace converts extracted animations back into editable skeleton FBXs. Native export supports any matching `.crig`, including doors and props; cross-rig mode provides conservative automatic mapping plus manual review.
+
+## Workspaces and tabs
+
+- **Animations:** Project, Animations, Retargeting, Facial, Export, and animation Help. Advanced settings also shows Root & `.crig` Mapping.
+- **Models:** Models, Bone Mapping, Build & Install, DevTools, and model Help.
+- **ANM2 → FBX:** Convert and conversion Help.
+
+The File, Import, Build, Workspace, View, and Help menus contain project-wide commands. Each workspace Help tab contains only the documentation for that workspace; general setup, troubleshooting, and project compatibility are in the top Help menu.
+
+Builds and exports run in the background. Their workspace log and status bar report progress while the rest of the interface remains available.
 
 ## Output
 
@@ -74,6 +84,7 @@ common_anims_sp_pc.rpack     example output
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [ANM2 format](docs/ANM2_FORMAT.md)
 - [ANM2 to FBX](docs/ANM2_TO_FBX.md)
+- [Model import and installation](docs/MODEL_IMPORT.md)
 - [Project compatibility](docs/PROJECT_FORMAT.md)
 - [Building the Windows EXE](docs/BUILDING_WINDOWS_EXE.md)
 

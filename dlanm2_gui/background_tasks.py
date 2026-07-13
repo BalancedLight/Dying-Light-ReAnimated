@@ -1,0 +1,118 @@
+"""Small Qt worker-thread bridge for long-running GUI operations."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import traceback
+from typing import Any, Callable
+
+from PySide6.QtCore import QObject, QThread, Signal, Slot
+
+
+@dataclass(frozen=True, slots=True)
+class TaskFailure:
+    message: str
+    traceback: str
+
+
+class _TaskWorker(QObject):
+    progress = Signal(str)
+    succeeded = Signal(object)
+    failed = Signal(object)
+    finished = Signal()
+
+    def __init__(self, work: Callable[[Callable[[str], None]], Any]) -> None:
+        super().__init__()
+        self.work = work
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            result = self.work(self.progress.emit)
+        except Exception as exc:
+            self.failed.emit(TaskFailure(str(exc), traceback.format_exc()))
+        else:
+            self.succeeded.emit(result)
+        finally:
+            self.finished.emit()
+
+
+class BackgroundTaskRunner(QObject):
+    """Run one callable at a time and marshal callbacks onto the GUI thread."""
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._thread: QThread | None = None
+        self._worker: _TaskWorker | None = None
+        self._progress_callback: Callable[[str], None] | None = None
+        self._succeeded_callback: Callable[[Any], None] | None = None
+        self._failed_callback: Callable[[TaskFailure], None] | None = None
+        self._finished_callback: Callable[[], None] | None = None
+
+    @property
+    def busy(self) -> bool:
+        return self._thread is not None
+
+    def start(
+        self,
+        work: Callable[[Callable[[str], None]], Any],
+        *,
+        progress: Callable[[str], None] | None = None,
+        succeeded: Callable[[Any], None] | None = None,
+        failed: Callable[[TaskFailure], None] | None = None,
+        finished: Callable[[], None] | None = None,
+    ) -> bool:
+        if self.busy:
+            return False
+        thread = QThread(self)
+        worker = _TaskWorker(work)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        self._progress_callback = progress
+        self._succeeded_callback = succeeded
+        self._failed_callback = failed
+        self._finished_callback = finished
+        worker.progress.connect(self._handle_progress)
+        worker.succeeded.connect(self._handle_succeeded)
+        worker.failed.connect(self._handle_failed)
+        worker.finished.connect(self._handle_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear)
+        self._thread = thread
+        self._worker = worker
+        thread.start()
+        return True
+
+    @Slot(str)
+    def _handle_progress(self, message: str) -> None:
+        if self._progress_callback is not None:
+            self._progress_callback(message)
+
+    @Slot(object)
+    def _handle_succeeded(self, result: Any) -> None:
+        if self._succeeded_callback is not None:
+            self._succeeded_callback(result)
+
+    @Slot(object)
+    def _handle_failed(self, failure: TaskFailure) -> None:
+        if self._failed_callback is not None:
+            self._failed_callback(failure)
+
+    @Slot()
+    def _handle_finished(self) -> None:
+        if self._finished_callback is not None:
+            self._finished_callback()
+
+    @Slot()
+    def _clear(self) -> None:
+        self._thread = None
+        self._worker = None
+        self._progress_callback = None
+        self._succeeded_callback = None
+        self._failed_callback = None
+        self._finished_callback = None
+
+
+__all__ = ["BackgroundTaskRunner", "TaskFailure"]
