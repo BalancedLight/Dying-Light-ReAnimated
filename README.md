@@ -10,11 +10,15 @@ DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** a
 
 ## Start
 
-Windows source build:
+All you need to get started is a recent build of Python installed and a download of the code from this repo.
+
+Run on Windows:
 
 ```
 run_gui.bat
 ```
+
+This should handle installing everything you need easily, and then run the app.
 
 Repair/update the local environment:
 
