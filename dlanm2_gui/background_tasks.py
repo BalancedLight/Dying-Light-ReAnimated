@@ -13,6 +13,41 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 class TaskFailure:
     message: str
     traceback: str
+    exception_type: str = ""
+
+    @classmethod
+    def from_exception(cls, exc: Exception) -> "TaskFailure":
+        return cls(str(exc), traceback.format_exc(), type(exc).__name__)
+
+    def display_message(self) -> str:
+        """Return a useful dialog message while the traceback stays in the log."""
+
+        if self.exception_type == "KeyError":
+            missing = self.message.strip().strip("'\"") or "(unknown item)"
+            if missing.casefold().endswith("headtop_end"):
+                return (
+                    "The imported skeleton does not contain the optional Head End "
+                    "helper bone.\n\n"
+                    f"Missing item: {missing}\n\n"
+                    "HeadTop_End is a non-deforming marker above the head that some "
+                    "rigs use to indicate which direction the head points. It is not "
+                    "an actual body part and its absence should not block export. The "
+                    "full technical traceback is in the build log."
+                )
+            return (
+                "The exporter tried to use data that is not present.\n\n"
+                f"Missing item: {missing}\n\n"
+                "This usually means a bone, resource, or mapping entry was treated as "
+                "required even though the imported file does not contain it. The full "
+                "technical traceback is in the build log."
+            )
+        if self.message.strip():
+            return self.message
+        label = self.exception_type or "Unknown error"
+        return (
+            f"{label}: the operation failed without an explanatory message. "
+            "See the log for details."
+        )
 
 
 class _TaskWorker(QObject):
@@ -30,7 +65,7 @@ class _TaskWorker(QObject):
         try:
             result = self.work(self.progress.emit)
         except Exception as exc:
-            self.failed.emit(TaskFailure(str(exc), traceback.format_exc()))
+            self.failed.emit(TaskFailure.from_exception(exc))
         else:
             self.succeeded.emit(result)
         finally:

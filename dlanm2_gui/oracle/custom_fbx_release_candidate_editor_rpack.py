@@ -592,13 +592,16 @@ def _build_clip_candidate(
     ]
     desired_globals_by_frame: list[dict[str, np.ndarray]] = [dict() for _ in range(frame_count)]
 
-    _add_absolute_torso_globals(
+    torso_details = _add_absolute_torso_globals(
         desired_globals_by_frame,
         source_positions=source_positions,
         source_body_frames=source_body_frames,
         target_body_frames=target_body_frames,
         target_body_bind=target_body_bind,
         target_global=target_global,
+        source_globals=source_globals,
+        source_rest_globals=source_rest_globals,
+        source_rest_positions=source_rest_positions,
     )
     _add_absolute_clavicle_globals(
         desired_globals_by_frame,
@@ -610,6 +613,7 @@ def _build_clip_candidate(
         sides=("right", "left"),
     )
     limb_details: dict[str, Any] = {}
+    terminal_details: dict[str, str] = {}
     for limb_name in ("right_arm", "left_arm", "right_leg", "left_leg"):
         detail, _frames = _add_absolute_limb_globals(
             desired_globals_by_frame,
@@ -620,13 +624,18 @@ def _build_clip_candidate(
             target_global=target_global,
         )
         limb_details[limb_name] = detail
-        _add_absolute_terminal_global(
+        terminal_animated = _add_absolute_terminal_global(
             desired_globals_by_frame,
             limb=LIMBS[limb_name],
             source_positions=source_positions,
             source_body_frames=source_body_frames,
             target_body_frames=target_body_frames,
             target_global=target_global,
+        )
+        terminal_details[limb_name] = (
+            "animated_from_source_terminal"
+            if terminal_animated
+            else "held_at_bind_missing_optional_source_terminal"
         )
 
     finger_details = _add_anatomical_finger_globals(
@@ -738,6 +747,8 @@ def _build_clip_candidate(
         "finger_strategy": "absolute source phalanx directions in anatomical palm space; target lengths/bind roll retained; ring and pinky parented through hand1",
         "finger_details": finger_details,
         "finger_direction_parity": finger_direction_parity,
+        "torso_details": torso_details,
+        "terminal_details": terminal_details,
         "selected_target_tracks": selected_names,
         "frame0_max_component_delta_from_smd_bind": frame0_error,
         "moving_named_tracks": moving,

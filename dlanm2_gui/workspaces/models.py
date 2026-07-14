@@ -1042,7 +1042,7 @@ class ModelWorkspace:
 
     def _model_job_failed(self, title: str, failure: TaskFailure) -> None:
         self._append_log(failure.traceback)
-        self._message(title, failure.message, critical=True)
+        self._message(title, failure.display_message(), critical=True)
 
     def _model_jobs_finished(self) -> None:
         self._set_busy(False)
