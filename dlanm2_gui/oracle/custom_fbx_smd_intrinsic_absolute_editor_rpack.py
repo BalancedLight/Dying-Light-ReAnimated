@@ -689,7 +689,20 @@ def _add_absolute_torso_globals(
     target_body_frames: list[np.ndarray],
     target_body_bind: np.ndarray,
     target_global: dict[str, np.ndarray],
-) -> None:
+    source_globals: list[dict[str, np.ndarray]] | None = None,
+    source_rest_globals: dict[str, np.ndarray] | None = None,
+    source_rest_positions: dict[str, np.ndarray] | None = None,
+) -> dict[str, Any]:
+    """Add torso rotations without requiring optional source end markers.
+
+    ``mixamorig:HeadTop_End`` is useful for recovering the source head's
+    anatomical axis, but many otherwise complete humanoid rigs do not contain
+    that leaf node. When it is absent, recover the same axis from the animated
+    Head transform and its rest-pose incoming Neck -> Head direction. This
+    preserves head animation instead of either crashing or silently freezing
+    the target head at bind pose.
+    """
+
     pelvis_roll_offset = target_body_bind.T @ target_global["pelvis"][:3, :3]
     for frame_index, target_body in enumerate(target_body_frames):
         desired_globals_by_frame[frame_index]["pelvis"] = _orthogonalize(
@@ -700,8 +713,52 @@ def _add_absolute_torso_globals(
         row["mixamorig:RightShoulder"] - row["mixamorig:LeftShoulder"]
         for row in source_positions
     ]
+    direction_strategy_by_target: dict[str, str] = {}
     target_right = target_global["r_clavicle"][:3, 3] - target_global["l_clavicle"][:3, 3]
     for target_bone, target_child, source_bone, source_child in AXIAL_MAP:
+        source_directions: list[np.ndarray] | None = None
+        if source_positions and all(
+            source_bone in row and source_child in row for row in source_positions
+        ):
+            source_directions = [
+                row[source_child] - row[source_bone] for row in source_positions
+            ]
+            direction_strategy_by_target[target_bone] = "source_child_position"
+        elif (
+            source_bone == "mixamorig:Head"
+            and source_globals is not None
+            and source_rest_globals is not None
+            and source_rest_positions is not None
+            and len(source_globals) == len(source_positions)
+            and source_bone in source_rest_globals
+            and source_bone in source_rest_positions
+            and "mixamorig:Neck" in source_rest_positions
+            and all(source_bone in row for row in source_globals)
+        ):
+            rest_head_rotation = _orthogonalize(
+                source_rest_globals[source_bone][:3, :3]
+            )
+            rest_incoming_direction = _unit(
+                source_rest_positions[source_bone]
+                - source_rest_positions["mixamorig:Neck"]
+            )
+            head_axis_in_local_space = rest_head_rotation.T @ rest_incoming_direction
+            source_directions = [
+                _orthogonalize(row[source_bone][:3, :3]) @ head_axis_in_local_space
+                for row in source_globals
+            ]
+            direction_strategy_by_target[target_bone] = (
+                "animated_head_rotation_from_rest_incoming_axis"
+            )
+        else:
+            # All non-head AXIAL_MAP children are required humanoid roles. A
+            # missing optional helper must not make an otherwise usable clip
+            # unexportable; leave this one target track at bind instead.
+            direction_strategy_by_target[target_bone] = (
+                f"held_at_bind_missing_source_helper:{source_child}"
+            )
+            continue
+
         target_bind_frame = _frame_from_primary_secondary(
             target_global[target_child][:3, 3] - target_global[target_bone][:3, 3],
             target_right,
@@ -709,7 +766,7 @@ def _add_absolute_torso_globals(
         roll_offset = target_bind_frame.T @ target_global[target_bone][:3, :3]
         for frame_index, row in enumerate(source_positions):
             source_frame = _frame_from_primary_secondary(
-                row[source_child] - row[source_bone],
+                source_directions[frame_index],
                 source_right_vectors[frame_index],
             )
             source_relative = source_body_frames[frame_index].T @ source_frame
@@ -717,6 +774,8 @@ def _add_absolute_torso_globals(
             desired_globals_by_frame[frame_index][target_bone] = _orthogonalize(
                 target_frame @ roll_offset
             )
+
+    return {"direction_strategy_by_target": direction_strategy_by_target}
 
 
 def _add_absolute_terminal_global(
@@ -727,9 +786,16 @@ def _add_absolute_terminal_global(
     source_body_frames: list[np.ndarray],
     target_body_frames: list[np.ndarray],
     target_global: dict[str, np.ndarray],
-) -> None:
+) -> bool:
     if limb.source_terminal is None or limb.target_terminal is None:
-        return
+        return False
+    if not source_positions or not all(
+        limb.source_terminal in row for row in source_positions
+    ):
+        # Toe bases and finger roots are optional humanoid mapping roles. The
+        # limb itself remains valid; only its terminal hand/foot orientation is
+        # held at bind when the direction helper is unavailable.
+        return False
     target_root = target_global[limb.target_root][:3, 3]
     target_mid = target_global[limb.target_mid][:3, 3]
     target_end = target_global[limb.target_end][:3, 3]
@@ -756,6 +822,7 @@ def _add_absolute_terminal_global(
         desired_globals_by_frame[frame_index][limb.target_end] = _orthogonalize(
             target_terminal_frame @ roll_offset
         )
+    return True
 
 
 def _sample_source_positions(
@@ -774,60 +841,7 @@ def _sample_source_positions(
 
 
 def _guide() -> str:
-    return """# Corrected FBX intrinsic-Euler + absolute-pose test
-
-## What changed
-
-The binary FBX evaluator previously multiplied Euler rotations in the written order. For FBX/column-vector matrices, `XYZ` must evaluate as `Rz @ Ry @ Rx`. The old order severely rotated Mixamo shoulder axes before retargeting.
-
-The uploaded `T-Pose.fbx` now matches the Blender-derived trusted rest matrices across all 65 bones. The custom candidates then transfer corrected animated limb directions **absolutely in body space** rather than forcing animation frame 0 to equal the Dying Light bind pose.
-
-## Test order
-
-1. `dl_reanimated_fbxfix_stock_rebuilt_control`
-2. `dl_reanimated_fbxfix_target_bind_control`
-3. `dl_reanimated_fbxfix_rightarm_absolute_locked`
-4. `dl_reanimated_fbxfix_rightarm_absolute_hand`
-5. `dl_reanimated_fbxfix_rightarm_absolute_clav_hand`
-6. `dl_reanimated_fbxfix_full_limbs_absolute`
-7. `dl_reanimated_fbxfix_fullbody_absolute`
-8. `dl_reanimated_fbxfix_fullbody_hf_absolute`
-
-## Frame 0
-
-Custom candidates intentionally do **not** start at target bind. Frame 0 should look like frame 0 of `Standing Greeting.fbx`. The target-bind resource remains a separate control.
-
-## Frame 70
-
-The corrected source right-arm directions are approximately:
-
-```
-upper arm, source body space:  +0.967, +0.032, -0.254
-forearm, source body space:    -0.611, +0.623, -0.488
-```
-
-Therefore the target upper arm should extend mostly outward, while the forearm folds inward and upward toward the head. The previous downward/cross-body result came from the FBX Euler-order bug.
-
-## Sequence trimming
-
-The generated AnimationScr entries advertise frames `0..153` at 30 FPS. Dying Light exposes sequence start/end controls both in compiled AnimationScr records and on `CClipNode` (`Start`, `End`, and `LatestStart`). Trimming can be applied later without changing the ANM2 values once the pose itself is correct.
-"""
-
+    return 
 
 def _findings(validation: dict[str, Any]) -> str:
-    return f"""# FBX Euler-order finding
-
-The remaining arm-direction fault was upstream of retargeting. The binary FBX evaluator used `Rx @ Ry @ Rz` for an `XYZ` channel. FBX uses intrinsic order under this project matrix convention, so the correct matrix is `Rz @ Ry @ Rx`.
-
-Validation against the matching Blender-derived `T-Pose.fbx` oracle:
-
-```
-bones compared:                 {validation['bone_count']}
-legacy max matrix delta:        {validation['legacy_max_abs_matrix_delta']:.9f}
-legacy max position error:      {validation['legacy_max_position_error']:.9f}
-fixed max matrix delta:         {validation['fixed_max_abs_matrix_delta']:.9f}
-fixed max position error:       {validation['fixed_max_position_error']:.9f}
-```
-
-The fix changes only FBX transform evaluation. ANM2 packing, descriptor mapping, SMD target bind, hierarchy reconstruction, and Cayley rotation encoding remain unchanged.
-"""
+    return

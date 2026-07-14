@@ -1877,7 +1877,7 @@ class MainWindow:
 
     def _background_build_error(self, title: str, failure: TaskFailure) -> None:
         self._append_build_log(failure.traceback)
-        self._show_error(title, RuntimeError(failure.message))
+        self._show_error(title, RuntimeError(failure.display_message()))
 
     def _background_work_active(self) -> bool:
         runners = [self.background_tasks, *getattr(self, "extra_task_runners", [])]
@@ -2274,7 +2274,10 @@ class MainWindow:
         def failed(failure: TaskFailure) -> None:
             self.reverse_log.appendPlainText(failure.traceback)
             if not self._reverse_cancel_event.is_set():
-                self._show_error("ANM2 to FBX export failed", RuntimeError(failure.message))
+                self._show_error(
+                    "ANM2 to FBX export failed",
+                    RuntimeError(failure.display_message()),
+                )
 
         def finished() -> None:
             self.reverse_export_button.setEnabled(True); self.reverse_cancel_button.setEnabled(False)
