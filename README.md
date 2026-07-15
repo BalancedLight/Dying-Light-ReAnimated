@@ -101,10 +101,13 @@ More technical documentation can also be found in the `docs` folder.
 
 ## Current status
 
-DL1 full-body retargeting, mimic, root motion, exact-rig objects, deterministic `.crig` packages, ANM2 decoding, Blender-assisted ANM2-to-FBX export, generic cross-rig mapping, the packed multi-page writer, and RPack packaging remain validated. DL2 FBX import uses authoritative global bind-basis correction and source-superset matching. Native DL2 format-42 curve decoding and writing remain disabled; DL2 FBX export is labeled experimental format-1 compatibility output.
+DL1 full-body retargeting, mimic, root motion, exact-rig objects, deterministic `.crig` packages, ANM2 decoding, Blender-assisted ANM2-to-FBX export, generic cross-rig mapping, the packed multi-page writer, and RPack packaging remain validated. DL2 FBX import uses authoritative global bind-basis correction and source-superset matching. Native DL2 format-42 curve decoding and writing remain disabled; DL2 FBX export is labeled experimental format-1 compatibility output. Custom models and rigs are currently very experimental.
 
 ## Disclaimer
 Dying Light ReAnimated was developed with assistance from AI tools.
+
+## Contributing
+All I ask is that you keep forks or commits of this project open-source. I believe modding should be for the community and a benefit to everyone, regardless of skill or background. 
 
 
 *Yes, ReAnimated is a pun.*

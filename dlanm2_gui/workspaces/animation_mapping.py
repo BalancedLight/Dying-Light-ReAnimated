@@ -5,10 +5,31 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from ..bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
+from ..bone_maps import (
+    BoneMapPair,
+    COMPONENT_POLICIES,
+    GenericBoneMap,
+    MAPPING_KINDS,
+    TRANSFER_POLICIES,
+    mapping_profile_origin,
+    set_mapping_profile_origin,
+    skeleton_signature,
+)
 from ..chrome_rig import ChromeRig
+from ..fbx_preflight import classify_target_compatibility
+from ..helper_profiles import (
+    recognized_helper_names,
+    suggested_helper_source,
+)
+from ..helper_retarget import (
+    HelperRetargetRule,
+    helper_rules_from_dicts,
+    helper_rules_to_dicts,
+)
 from ..oracle.binary_fbx_mixamo import _FbxDocument
 from ..retarget_mapping import auto_map_crig_to_fbx, mapping_rows_for_ui
+from ..retarget_profiles import HUMANOID_ROLES
+from ..retarget_routing import select_exact_solver
 from ..root_mapping import (
     RootMappingSelection,
     choose_hierarchy_root,
@@ -16,6 +37,51 @@ from ..root_mapping import (
     read_smd_hierarchy,
     resolve_source_root,
 )
+
+
+_TRANSFER_LABELS = {
+    "default": "Default body solver",
+    "rest_relative": "Rest-relative",
+    "rotation_delta": "Rotation delta",
+    "global_bind_basis": "Global bind basis",
+    "copy_local": "Copy local (advanced)",
+}
+_COMPONENT_LABELS = {
+    "rotation": "Rotation",
+    "translation": "Translation",
+    "rotation_translation": "Rotation + translation",
+    "scale": "Scale",
+    "full_transform": "Full transform",
+}
+
+
+def shared_source_status(source_name: str, mapping_kind: str, use_count: int) -> str:
+    if not source_name:
+        return "Unmapped — keep bind / inherit parent"
+    if mapping_kind == "helper_override":
+        return (
+            f"Helper override — shared by {use_count} targets"
+            if use_count > 1
+            else "Helper override"
+        )
+    return "Mapped — shared source" if use_count > 1 else "Mapped"
+
+
+def mapping_row_visible(
+    *,
+    is_helper: bool,
+    show_helpers: bool,
+    matches_filter: bool,
+    only_unmapped: bool,
+    mapped: bool,
+) -> bool:
+    """Pure visibility rule used by the retargeting table and GUI tests."""
+
+    if is_helper and not show_helpers:
+        return False
+    if not matches_filter:
+        return False
+    return not (only_unmapped and mapped)
 
 
 class CrigMappingWorkspace:
@@ -78,10 +144,17 @@ class CrigMappingWorkspace:
         self.load_button.clicked.connect(self.load_mapping)
         self.save_button = qt["QPushButton"]("Save mapping…")
         self.save_button.clicked.connect(self.save_mapping)
+        self.review_button = qt["QPushButton"]("Approve mapped solver")
+        self.review_button.setToolTip(
+            "Marks automatic cross-rig suggestions as explicitly reviewed. Incompatible "
+            "hierarchies cannot build through the mapped solver until approved."
+        )
+        self.review_button.clicked.connect(self.approve_mapping)
         actions.addWidget(self.auto_button)
         actions.addWidget(self.clear_button)
         actions.addWidget(self.load_button)
         actions.addWidget(self.save_button)
+        actions.addWidget(self.review_button)
         actions.addStretch(1)
         layout.addLayout(actions)
 
@@ -95,11 +168,29 @@ class CrigMappingWorkspace:
         filters.addWidget(self.only_unmapped)
         layout.addLayout(filters)
 
-        self.table = qt["QTableWidget"](0, 7)
+        helper_options = qt["QHBoxLayout"]()
+        self.show_helper_bones = qt["QCheckBox"]("Show helper bones")
+        self.show_helper_bones.setToolTip(
+            "Shows helper targets from the selected target rig, including refcamera, "
+            "eyecamera, hand holders, and twist helpers. Mapping remains optional."
+        )
+        self.show_helper_bones.toggled.connect(self._filter_rows)
+        self.advanced_helpers = qt["QCheckBox"]("Show advanced helper policies")
+        self.advanced_helpers.setToolTip(
+            "Shows mapping-kind, transfer, and component controls. Helper mappings remain opt-in."
+        )
+        self.advanced_helpers.toggled.connect(self._advanced_helpers_changed)
+        helper_options.addWidget(self.show_helper_bones)
+        helper_options.addWidget(self.advanced_helpers)
+        helper_options.addStretch(1)
+        layout.addLayout(helper_options)
+
+        self.table = qt["QTableWidget"](0, 10)
         self.table.setHorizontalHeaderLabels(
             (
                 "Target .crig bone", "Target parent", "Role", "Source FBX bone",
-                "Confidence", "Method", "Status",
+                "Mapping kind", "Transfer", "Components", "Confidence", "Method",
+                "Status",
             )
         )
         header = self.table.horizontalHeader()
@@ -107,13 +198,14 @@ class CrigMappingWorkspace:
         header.setSectionResizeMode(1, qt["QHeaderView"].Stretch)
         header.setSectionResizeMode(2, qt["QHeaderView"].ResizeToContents)
         header.setSectionResizeMode(3, qt["QHeaderView"].Stretch)
-        for column in (4, 5, 6):
+        for column in (4, 5, 6, 7, 8, 9):
             header.setSectionResizeMode(column, qt["QHeaderView"].ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         layout.addWidget(self.table, 1)
         self.status = qt["QLabel"]()
         self.status.setWordWrap(True)
         layout.addWidget(self.status)
+        self._advanced_helpers_changed(False)
         self.reload_clips()
 
     @property
@@ -215,6 +307,7 @@ class CrigMappingWorkspace:
                     for name in sorted(document.limb_models)
                 ),
                 source_rig_ref=rig.rig_id,
+                origin="manually_reviewed",
             )
             self._store_profile(animation, profile)
             self.refresh()
@@ -300,6 +393,56 @@ class CrigMappingWorkspace:
         except Exception as exc:
             self.root_status.setText(str(exc))
 
+    def _advanced_helpers_changed(self, *_args) -> None:
+        if not hasattr(self, "table"):
+            return
+        visible = bool(self.advanced_helpers.isChecked())
+        for column in (4, 5, 6):
+            self.table.setColumnHidden(column, not visible)
+
+    def _normal_helper_rows(
+        self, animation: Any, document: _FbxDocument
+    ) -> tuple[list[dict[str, Any]], str]:
+        hierarchy = read_smd_hierarchy(Path(self.project.rig.canonical_smd))
+        by_name = {row.name: row for row in hierarchy}
+        parent_names = parent_names_from_smd(hierarchy)
+        rules = {
+            rule.target_bone: rule
+            for rule in helper_rules_from_dicts(
+                animation.extensions.get("helper_retarget_rules", ()) or ()
+            )
+        }
+        source_names = sorted(document.limb_models, key=str.casefold)
+        rows: list[dict[str, Any]] = []
+        for name in recognized_helper_names(by_name):
+            rule = rules.get(name)
+            suggestion = suggested_helper_source(name, source_names)
+            rows.append(
+                {
+                    "target_bone": name,
+                    "target_parent": parent_names.get(name),
+                    "role": "helper",
+                    "source_bone": rule.source_bone if rule else "",
+                    "mapping_kind": "helper_override",
+                    "transfer_policy": (
+                        rule.transfer_policy if rule else "rest_relative"
+                    ),
+                    "component_policy": (
+                        rule.component_policy
+                        if rule
+                        else (suggestion[1] if suggestion else "full_transform")
+                    ),
+                    "confidence": 1.0 if rule else 0.0,
+                    "method": "manual" if rule else "suggested_not_enabled",
+                    "suggested_source": suggestion[0] if suggestion else "",
+                    "target_helper": True,
+                }
+            )
+        return (
+            rows,
+            "Helper bones come directly from the selected target rig's canonical SMD.",
+        )
+
     def refresh(self) -> None:
         qt = self.qt
         animation = self._selected_animation()
@@ -321,61 +464,158 @@ class CrigMappingWorkspace:
             return
 
         exact_mode = self.project.rig.retarget_mode == "exact"
-        for widget in (self.auto_button, self.clear_button, self.load_button, self.save_button):
+        for widget in (
+            self.auto_button,
+            self.clear_button,
+            self.load_button,
+            self.save_button,
+            self.review_button,
+        ):
             widget.setEnabled(exact_mode)
-        self.table.setEnabled(exact_mode)
-        if not exact_mode:
-            self.table.setRowCount(0)
-            self.status.setText(
-                "Humanoid body and finger roles are edited in the Retargeting tab. The Bip01/root "
-                "mapping above is active for this clip and prevents custom SMDs without a literal "
-                "bip01 from failing with a vague KeyError."
-            )
-            return
+        self.table.setEnabled(True)
 
+        rig: ChromeRig | None = None
+        profile: GenericBoneMap | None = None
+        helper_profile_description = ""
         try:
-            rig = self._load_rig()
-            profile, rows = mapping_rows_for_ui(
-                rig,
-                document.limb_models.keys(),
-                document.parent_by_name,
-                self._current_profile(animation),
-            )
+            if exact_mode:
+                rig = self._load_rig()
+                profile, rows = mapping_rows_for_ui(
+                    rig,
+                    document.limb_models.keys(),
+                    document.parent_by_name,
+                    self._current_profile(animation),
+                )
+            else:
+                rows, helper_profile_description = self._normal_helper_rows(
+                    animation, document
+                )
         except Exception as exc:
             self.table.setRowCount(0)
             self.status.setText(str(exc))
             return
         source_names = sorted(document.limb_models, key=str.casefold)
+        normal_body_targets_by_source: dict[str, list[str]] = {}
+        if not exact_mode:
+            aliases = self._humanoid_aliases(animation)
+            for role in HUMANOID_ROLES:
+                source_name = aliases.get(role.canonical_source_name)
+                if source_name:
+                    normal_body_targets_by_source.setdefault(source_name, []).append(
+                        role.target_name
+                    )
+        source_use_counts = {
+            name: sum(1 for row in rows if row["source_bone"] == name)
+            + len(normal_body_targets_by_source.get(name, ()))
+            for name in source_names
+        }
+        targets_by_source = {
+            name: [
+                *normal_body_targets_by_source.get(name, ()),
+                *(row["target_bone"] for row in rows if row["source_bone"] == name),
+            ]
+            for name in source_names
+        }
         self.table.setRowCount(len(rows))
         for index, row in enumerate(rows):
             self.table.setItem(index, 0, qt["QTableWidgetItem"](row["target_bone"]))
             self.table.setItem(index, 1, qt["QTableWidgetItem"](row["target_parent"] or ""))
             self.table.setItem(index, 2, qt["QTableWidgetItem"](row["role"]))
-            combo = qt["QComboBox"]()
-            combo.addItem("Unmapped (keep bind pose)", "")
+            source_combo = qt["QComboBox"]()
+            suggested = str(row.get("suggested_source", "") or "")
+            unmapped_label = "Unmapped (keep bind / inherit parent)"
+            if suggested:
+                unmapped_label += f" — Suggested: {suggested} (not enabled)"
+            source_combo.addItem(unmapped_label, "")
             for name in source_names:
-                combo.addItem(name, name)
-            combo.setCurrentIndex(max(0, combo.findData(row["source_bone"])))
-            combo.currentIndexChanged.connect(
-                lambda _value, bone=row["target_bone"], widget=combo: self._set_pair(
-                    bone, str(widget.currentData())
+                source_combo.addItem(name, name)
+            source_combo.setCurrentIndex(
+                max(0, source_combo.findData(row["source_bone"]))
+            )
+            if row["source_bone"]:
+                driven = targets_by_source[row["source_bone"]]
+                source_combo.setToolTip(
+                    f"{row['source_bone']} drives:\n- " + "\n- ".join(driven)
+                )
+            self.table.setCellWidget(index, 3, source_combo)
+
+            kind_combo = qt["QComboBox"]()
+            for value in MAPPING_KINDS:
+                kind_combo.addItem(
+                    "Helper override" if value == "helper_override" else "Body/bone map",
+                    value,
+                )
+            kind_combo.setCurrentIndex(max(0, kind_combo.findData(row["mapping_kind"])))
+            kind_combo.setEnabled(exact_mode)
+            self.table.setCellWidget(index, 4, kind_combo)
+
+            transfer_combo = qt["QComboBox"]()
+            for value in TRANSFER_POLICIES:
+                if row["mapping_kind"] == "helper_override" and value == "default":
+                    continue
+                transfer_combo.addItem(_TRANSFER_LABELS[value], value)
+            transfer_combo.setCurrentIndex(
+                max(0, transfer_combo.findData(row["transfer_policy"]))
+            )
+            self.table.setCellWidget(index, 5, transfer_combo)
+
+            component_combo = qt["QComboBox"]()
+            for value in COMPONENT_POLICIES:
+                component_combo.addItem(_COMPONENT_LABELS[value], value)
+            component_combo.setCurrentIndex(
+                max(0, component_combo.findData(row["component_policy"]))
+            )
+            self.table.setCellWidget(index, 6, component_combo)
+
+            callback = (
+                lambda _value,
+                bone=row["target_bone"],
+                source=source_combo,
+                kind=kind_combo,
+                transfer=transfer_combo,
+                components=component_combo,
+                exact=exact_mode: self._row_mapping_changed(
+                    exact,
+                    bone,
+                    str(source.currentData() or ""),
+                    str(kind.currentData() or "bone"),
+                    str(transfer.currentData() or "rest_relative"),
+                    str(components.currentData() or "full_transform"),
                 )
             )
-            self.table.setCellWidget(index, 3, combo)
-            self.table.setItem(index, 4, qt["QTableWidgetItem"](f"{row['confidence']:.2f}"))
-            self.table.setItem(index, 5, qt["QTableWidgetItem"](row["method"]))
-            self.table.setItem(
-                index, 6,
-                qt["QTableWidgetItem"](
-                    "Mapped"
-                    if row["source_bone"]
-                    else (
-                        "Review: body role is unmapped"
-                        if row["role"]
-                        else "Bind pose (helper/extra)"
-                    )
-                ),
+            for widget in (source_combo, kind_combo, transfer_combo, component_combo):
+                widget.currentIndexChanged.connect(callback)
+
+            self.table.setItem(index, 7, qt["QTableWidgetItem"](f"{row['confidence']:.2f}"))
+            self.table.setItem(index, 8, qt["QTableWidgetItem"](row["method"]))
+            status_text = shared_source_status(
+                row["source_bone"],
+                row["mapping_kind"],
+                source_use_counts.get(row["source_bone"], 0),
             )
+            if not row["source_bone"] and suggested:
+                status_text = "Suggested — not enabled"
+            self.table.setItem(index, 9, qt["QTableWidgetItem"](status_text))
+
+        self._advanced_helpers_changed()
+        if not exact_mode:
+            active = sum(1 for row in rows if row["source_bone"])
+            shared = sum(1 for count in source_use_counts.values() if count > 1)
+            visibility_note = (
+                "Helper rows are visible below."
+                if self.show_helper_bones.isChecked()
+                else "Enable Show helper bones to display and map them."
+            )
+            self.status.setText(
+                f"{helper_profile_description} Active helper overrides: {active}. "
+                f"Shared source bones: {shared}. Suggestions are never enabled automatically. "
+                "Humanoid body/finger retargeting and root-motion policy remain unchanged. "
+                + visibility_note
+            )
+            self._filter_rows()
+            return
+
+        assert rig is not None and profile is not None
         mapped = len(profile.pairs)
         errors = profile.validate()
         mapped_source_names = {pair.target_bone for pair in profile.pairs}
@@ -386,6 +626,13 @@ class CrigMappingWorkspace:
             ).pairs
         }
         unused_body_sources = sorted(source_body_names - mapped_source_names, key=str.casefold)
+        compatibility = classify_target_compatibility(document, rig)
+        solver = select_exact_solver(compatibility, profile)
+        solver_text = (
+            f"Selected solver: {solver.selected_engine} / {solver.selected_policy}."
+            if solver.build_allowed
+            else f"Build blocked: {solver.blocking_error}"
+        )
         review = (
             f" Review {len(unused_body_sources)} recognized source body bone(s) not used by this map: "
             + ", ".join(unused_body_sources[:8])
@@ -401,27 +648,77 @@ class CrigMappingWorkspace:
             + ("Mapping is structurally valid." if not errors else "Validation: " + "; ".join(errors))
             + review
             + " Unmapped helpers keep their bind-local transform and inherit parent motion; "
-            "use the filter above to review them."
+            "use the filter above to review them. "
+            + f"Map origin: {mapping_profile_origin(profile)}. {solver_text}"
         )
         self._filter_rows()
+
+    def _row_mapping_changed(
+        self,
+        exact_mode: bool,
+        target_rig_bone: str,
+        source_fbx_bone: str,
+        mapping_kind: str,
+        transfer_policy: str,
+        component_policy: str,
+    ) -> None:
+        if exact_mode:
+            self._set_pair(
+                target_rig_bone,
+                source_fbx_bone,
+                mapping_kind=mapping_kind,
+                transfer_policy=transfer_policy,
+                component_policy=component_policy,
+            )
+        else:
+            self._set_helper_pair(
+                target_rig_bone,
+                source_fbx_bone,
+                transfer_policy=transfer_policy,
+                component_policy=component_policy,
+            )
 
     def _filter_rows(self, *_args) -> None:
         text = self.filter_edit.text().strip().casefold()
         only_unmapped = self.only_unmapped.isChecked()
+        show_helpers = self.show_helper_bones.isChecked()
         for row in range(self.table.rowCount()):
             combo = self.table.cellWidget(row, 3)
             mapped = bool(combo and combo.currentData())
+            role_item = self.table.item(row, 2)
+            is_helper = bool(
+                role_item and role_item.text().strip().casefold() == "helper"
+            )
             values = [
                 self.table.item(row, column).text()
-                for column in (0, 1, 2, 4, 5, 6)
+                for column in (0, 1, 2, 7, 8, 9)
                 if self.table.item(row, column) is not None
             ]
-            if combo is not None:
-                values.append(combo.currentText())
+            for column in (3, 4, 5, 6):
+                widget = self.table.cellWidget(row, column)
+                if widget is not None:
+                    values.append(widget.currentText())
             matches = not text or text in " ".join(values).casefold()
-            self.table.setRowHidden(row, not matches or (only_unmapped and mapped))
+            self.table.setRowHidden(
+                row,
+                not mapping_row_visible(
+                    is_helper=is_helper,
+                    show_helpers=show_helpers,
+                    matches_filter=matches,
+                    only_unmapped=only_unmapped,
+                    mapped=mapped,
+                ),
+            )
 
-    def _set_pair(self, target_rig_bone: str, source_fbx_bone: str) -> None:
+    def _set_pair(
+        self,
+        target_rig_bone: str,
+        source_fbx_bone: str,
+        *,
+        mapping_kind: str = "bone",
+        transfer_policy: str = "default",
+        component_policy: str = "full_transform",
+    ) -> None:
         animation = self._selected_animation()
         if animation is None:
             return
@@ -435,9 +732,6 @@ class CrigMappingWorkspace:
                 row for row in profile.pairs if row.source_bone != target_rig_bone
             ]
             if source_fbx_bone:
-                profile.pairs = [
-                    row for row in profile.pairs if row.target_bone != source_fbx_bone
-                ]
                 target = next(bone for bone in rig.bones if bone.name == target_rig_bone)
                 profile.pairs.append(
                     BoneMapPair(
@@ -446,6 +740,9 @@ class CrigMappingWorkspace:
                         source_fbx_bone,
                         1.0,
                         "manual",
+                        transfer_policy,
+                        component_policy,
+                        mapping_kind,
                     )
                 )
             profile.pairs.sort(
@@ -453,7 +750,39 @@ class CrigMappingWorkspace:
                     bone.index for bone in rig.bones if bone.name == pair.source_bone
                 )
             )
+            set_mapping_profile_origin(profile, "manually_reviewed")
             self._store_profile(animation, profile)
+            self.refresh()
+        except Exception as exc:
+            self.status.setText(str(exc))
+
+    def _set_helper_pair(
+        self,
+        target_bone: str,
+        source_bone: str,
+        *,
+        transfer_policy: str,
+        component_policy: str,
+    ) -> None:
+        animation = self._selected_animation()
+        if animation is None:
+            return
+        try:
+            rules = helper_rules_from_dicts(
+                animation.extensions.get("helper_retarget_rules", ()) or ()
+            )
+            rules = [rule for rule in rules if rule.target_bone != target_bone]
+            if source_bone:
+                rules.append(
+                    HelperRetargetRule(
+                        target_bone,
+                        source_bone,
+                        transfer_policy,
+                        component_policy,
+                    )
+                )
+            animation.extensions["helper_retarget_rules"] = helper_rules_to_dicts(rules)
+            self.mark_dirty()
             self.refresh()
         except Exception as exc:
             self.status.setText(str(exc))
@@ -482,6 +811,20 @@ class CrigMappingWorkspace:
                 self.controller.window, "Could not load mapping", str(exc)
             )
 
+    def approve_mapping(self) -> None:
+        animation = self._selected_animation()
+        profile = self._current_profile(animation) if animation else None
+        if profile is None:
+            self.qt["QMessageBox"].information(
+                self.controller.window,
+                "No mapping",
+                "Run Auto-map or assign at least one target bone before approving the mapped solver.",
+            )
+            return
+        set_mapping_profile_origin(profile, "manually_reviewed")
+        self._store_profile(animation, profile)
+        self.refresh()
+
     def save_mapping(self) -> None:
         animation = self._selected_animation()
         profile = self._current_profile(animation) if animation else None
@@ -500,4 +843,4 @@ class CrigMappingWorkspace:
             profile.save(path)
 
 
-__all__ = ["CrigMappingWorkspace"]
+__all__ = ["CrigMappingWorkspace", "mapping_row_visible", "shared_source_status"]

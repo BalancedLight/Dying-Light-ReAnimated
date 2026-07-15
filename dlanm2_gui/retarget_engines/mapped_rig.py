@@ -16,7 +16,7 @@ CC-base target rig to consume a Mixamo animation without pretending the
 skeletons are byte-identical.
 """
 
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 import math
@@ -28,9 +28,18 @@ from ..anm2_writer import build_payload_from_values
 from ..bone_maps import GenericBoneMap, skeleton_signature
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import decompose_local_matrix
+from ..helper_retarget import (
+    HelperApplyReport,
+    apply_helper_retarget_overrides,
+    helper_rules_from_pairs,
+    include_base_source_fanout,
+)
 from ..model_importer.fbx_model import FBX_Y_UP_TO_DYING_LIGHT
 from ..oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND, _FbxDocument
-from ..oracle.smd_bind_pose import anm2_cayley_vector_from_quaternion
+from ..oracle.smd_bind_pose import (
+    anm2_cayley_vector_from_quaternion,
+    quaternion_wxyz_from_anm2_cayley,
+)
 from ..root_mapping import RootMappingSelection, choose_hierarchy_root, resolve_source_root
 from .base import RetargetBuild
 
@@ -119,6 +128,77 @@ def source_global_to_target_basis(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class SourceGlobalNormalization:
+    """One immutable normalization contract shared by bind and animation globals."""
+
+    meters_per_unit: float
+    convert_y_up_to_dying_light: bool
+    wrapper_scale_normalization_factor: float = 1.0
+    wrapper_axis_conversion: bool = False
+    unit_conversion_count: int = 1
+    axis_conversion_count: int = -1
+    wrapper_policy: str = "retained_and_scale_normalized"
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.meters_per_unit) or self.meters_per_unit <= 0.0:
+            raise ValueError("FBX meters_per_unit must be finite and positive")
+        if (
+            not math.isfinite(self.wrapper_scale_normalization_factor)
+            or self.wrapper_scale_normalization_factor <= 0.0
+        ):
+            raise ValueError("Wrapper scale normalization factor must be finite and positive")
+        if self.unit_conversion_count != 1:
+            raise ValueError("Source global unit conversion must be applied exactly once")
+        expected_axis_count = (
+            1
+            if self.convert_y_up_to_dying_light or self.wrapper_axis_conversion
+            else 0
+        )
+        if self.axis_conversion_count == -1:
+            object.__setattr__(self, "axis_conversion_count", expected_axis_count)
+        elif self.axis_conversion_count != expected_axis_count:
+            raise ValueError("Source global axis conversion must be applied exactly once")
+
+    def apply(self, matrix: np.ndarray) -> np.ndarray:
+        return source_global_to_target_basis(
+            matrix,
+            meters_per_unit=(
+                self.meters_per_unit / self.wrapper_scale_normalization_factor
+            ),
+            convert_y_up_to_dying_light=self.convert_y_up_to_dying_light,
+        )
+
+    def apply_local(self, matrix: np.ndarray) -> np.ndarray:
+        return self.apply(matrix)
+
+    def to_report(self) -> dict[str, Any]:
+        return {
+            "meters_per_unit": self.meters_per_unit,
+            "unit_conversion_count": self.unit_conversion_count,
+            "wrapper_scale_normalization_factor": self.wrapper_scale_normalization_factor,
+            "effective_post_wrapper_translation_scale": (
+                self.meters_per_unit / self.wrapper_scale_normalization_factor
+            ),
+            "axis_conversion": (
+                "fbx_y_up_to_dying_light"
+                if self.convert_y_up_to_dying_light or self.wrapper_axis_conversion
+                else "none"
+            ),
+            "axis_conversion_count": self.axis_conversion_count,
+            "axis_conversion_source": (
+                "retained_wrapper"
+                if self.wrapper_axis_conversion
+                else "explicit_basis_conjugation"
+                if self.convert_y_up_to_dying_light
+                else "none"
+            ),
+            "wrapper_policy": self.wrapper_policy,
+            "bind_and_animation_share_normalizer": True,
+            "target_crig_bind_conversion_count": 0,
+        }
+
+
 def _joint_pivot_extent(globals_by_name: Mapping[str, np.ndarray]) -> float:
     if not globals_by_name:
         return 0.0
@@ -129,6 +209,199 @@ def _joint_pivot_extent(globals_by_name: Mapping[str, np.ndarray]) -> float:
     if not np.isfinite(points).all():
         raise ValueError("animated joint hierarchy contains non-finite pivots")
     return float(np.linalg.norm(points.max(axis=0) - points.min(axis=0)))
+
+
+def _frame_local_matrices(
+    rig: ChromeRig, frame: list[list[float]]
+) -> dict[str, np.ndarray]:
+    result: dict[str, np.ndarray] = {}
+    for bone in rig.bones:
+        row = np.asarray(frame[rig.descriptors.index(bone.descriptor)], dtype=float)
+        if row.shape != (9,) or not np.isfinite(row).all():
+            raise ValueError(f"Bone {bone.name!r} has non-finite or malformed track values")
+        result[bone.name] = compose_local_matrix(
+            row[3:6], quaternion_wxyz_from_anm2_cayley(row[:3]), row[6:9]
+        )
+    return result
+
+
+def _globals_from_locals(
+    rig: ChromeRig, locals_by_name: Mapping[str, np.ndarray]
+) -> dict[str, np.ndarray]:
+    result: dict[str, np.ndarray] = {}
+    visiting: set[int] = set()
+
+    def calculate(index: int) -> np.ndarray:
+        bone = rig.bones[index]
+        if bone.name in result:
+            return result[bone.name]
+        if index in visiting:
+            raise ValueError(f"Target hierarchy contains a parent cycle at {bone.name!r}")
+        visiting.add(index)
+        local = np.asarray(locals_by_name[bone.name], dtype=float)
+        value = (
+            calculate(bone.parent_index) @ local
+            if bone.parent_index >= 0
+            else local.copy()
+        )
+        visiting.remove(index)
+        if value.shape != (4, 4) or not np.isfinite(value).all():
+            raise ValueError(f"Target global matrix for {bone.name!r} is non-finite")
+        result[bone.name] = value
+        return value
+
+    for bone in rig.bones:
+        calculate(bone.index)
+    return result
+
+
+def reconstruct_target_globals(
+    rig: ChromeRig, frame: list[list[float]]
+) -> dict[str, np.ndarray]:
+    """Reconstruct target globals from one unpacked ANM2 track frame."""
+
+    return _globals_from_locals(rig, _frame_local_matrices(rig, frame))
+
+
+def validate_hierarchy_safety(
+    rig: ChromeRig,
+    values: list[list[list[float]]],
+    *,
+    preserve_non_root_translations: bool,
+    allowed_non_root_translation_bones: set[str] | None = None,
+) -> dict[str, Any]:
+    """Reconstruct output globals and reject detached/stretched hierarchies."""
+
+    if not values:
+        raise ValueError("Hierarchy safety validation requires at least one frame")
+    rig_validation = rig.validate(test_writer_capacity=False)
+    rig_validation.require_valid()
+    bind_locals = {bone.name: target_bind_local_matrix(bone) for bone in rig.bones}
+    bind_globals = _globals_from_locals(rig, bind_locals)
+    bind_extent = _joint_pivot_extent(bind_globals)
+    bind_lengths = {
+        bone.name: float(
+            np.linalg.norm(
+                bind_globals[bone.name][:3, 3]
+                - bind_globals[rig.bones[bone.parent_index].name][:3, 3]
+            )
+        )
+        for bone in rig.bones
+        if bone.parent_index >= 0
+    }
+
+    maximum_extent = 0.0
+    maximum_extent_frame = 0
+    maximum_translation_delta = 0.0
+    worst_translation_bone = ""
+    worst_translation_frame = 0
+    maximum_length_ratio = 1.0
+    minimum_length_ratio = 1.0
+    worst_length_bone = ""
+    worst_length_frame = 0
+    maximum_scale = 0.0
+    minimum_scale = float("inf")
+    violations: list[str] = []
+    allowed_translation_bones = set(allowed_non_root_translation_bones or ())
+
+    for frame_index, frame in enumerate(values):
+        globals_by_name = reconstruct_target_globals(rig, frame)
+        extent = _joint_pivot_extent(globals_by_name)
+        if extent > maximum_extent:
+            maximum_extent = extent
+            maximum_extent_frame = frame_index
+        for bone in rig.bones:
+            track = np.asarray(
+                frame[rig.descriptors.index(bone.descriptor)], dtype=float
+            )
+            scale = np.abs(track[6:9])
+            if not np.isfinite(scale).all() or np.any(scale <= 1.0e-5):
+                violations.append(
+                    f"{bone.name!r} has singular/non-finite scale at frame {frame_index}."
+                )
+                continue
+            maximum_scale = max(maximum_scale, float(np.max(scale)))
+            minimum_scale = min(minimum_scale, float(np.min(scale)))
+            bind_scale = np.asarray(bone.bind_scale, dtype=float)
+            scale_ratio = scale / bind_scale
+            if np.any(scale_ratio > 4.0) or np.any(scale_ratio < 0.25):
+                violations.append(
+                    f"{bone.name!r} scale changed by more than 4x at frame {frame_index}."
+                )
+            if bone.parent_index < 0:
+                continue
+            if bone.name not in allowed_translation_bones:
+                translation_delta = float(
+                    np.linalg.norm(track[3:6] - np.asarray(bone.bind_translation))
+                )
+                if translation_delta > maximum_translation_delta:
+                    maximum_translation_delta = translation_delta
+                    worst_translation_bone = bone.name
+                    worst_translation_frame = frame_index
+            parent_name = rig.bones[bone.parent_index].name
+            animated_length = float(
+                np.linalg.norm(
+                    globals_by_name[bone.name][:3, 3]
+                    - globals_by_name[parent_name][:3, 3]
+                )
+            )
+            bind_length = bind_lengths[bone.name]
+            if bind_length > 1.0e-5:
+                ratio = animated_length / bind_length
+                if ratio > maximum_length_ratio:
+                    maximum_length_ratio = ratio
+                    worst_length_bone = bone.name
+                    worst_length_frame = frame_index
+                minimum_length_ratio = min(minimum_length_ratio, ratio)
+                if ratio > 2.0 or ratio < 0.5:
+                    violations.append(
+                        f"{bone.name!r} parent-child length changed to {ratio:.3f}x bind "
+                        f"at frame {frame_index}."
+                    )
+            elif animated_length > 0.02:
+                violations.append(
+                    f"Zero-length bind joint {bone.name!r} separated by "
+                    f"{animated_length:.6f} m at frame {frame_index}."
+                )
+
+    extent_limit = max(bind_extent * 4.0, bind_extent + 5.0, 1.0)
+    if maximum_extent > extent_limit:
+        violations.append(
+            f"Hierarchy extent reached {maximum_extent:.3f} m at frame "
+            f"{maximum_extent_frame}; bind extent is {bind_extent:.3f} m and the "
+            f"limit is {extent_limit:.3f} m."
+        )
+    translation_limit = 1.0e-5 if preserve_non_root_translations else 0.05
+    if maximum_translation_delta > translation_limit:
+        violations.append(
+            f"Non-root local translation changed by {maximum_translation_delta:.6f} m "
+            f"on {worst_translation_bone!r} at frame {worst_translation_frame}; "
+            f"the limit is {translation_limit:.6f} m."
+        )
+    if violations:
+        raise ValueError(
+            "Retargeted hierarchy failed safety validation before ANM2/RPack output:\n- "
+            + "\n- ".join(dict.fromkeys(violations))
+        )
+    return {
+        "status": "pass",
+        "validated_frame_count": len(values),
+        "bind_hierarchy_extent_meters": bind_extent,
+        "maximum_animated_hierarchy_extent_meters": maximum_extent,
+        "maximum_animated_hierarchy_extent_frame": maximum_extent_frame,
+        "extent_limit_meters": extent_limit,
+        "maximum_non_root_translation_delta_meters": maximum_translation_delta,
+        "worst_non_root_translation_bone": worst_translation_bone,
+        "worst_non_root_translation_frame": worst_translation_frame,
+        "non_root_translation_limit_meters": translation_limit,
+        "maximum_parent_child_length_ratio": maximum_length_ratio,
+        "minimum_parent_child_length_ratio": minimum_length_ratio,
+        "worst_parent_child_length_bone": worst_length_bone,
+        "worst_parent_child_length_frame": worst_length_frame,
+        "maximum_scale": maximum_scale,
+        "minimum_scale": minimum_scale,
+        "root_inventory": [bone.name for bone in rig.bones if bone.parent_index < 0],
+    }
 
 
 def mapped_local_from_rest_delta(
@@ -289,7 +562,9 @@ def _mapped_pairs_by_target_rig_bone(
     source_names = set(document.limb_models)
     result: dict[str, str] = {}
     warnings: list[str] = []
-    for row in bone_map.pairs:
+    # Helper fan-out rows are evaluated only after the main mapped-rig/root
+    # solver.  They must not participate in its topology or policy selection.
+    for row in bone_map.base_pairs:
         target_rig_bone = str(row.source_bone)
         source_fbx_bone = str(row.target_bone)
         if target_rig_bone not in rig_names:
@@ -364,6 +639,7 @@ def build_mapped_rig_anm2(
     warnings = _validate_mapping_identity(rig, bone_map, document)
     mapped, pair_warnings = _mapped_pairs_by_target_rig_bone(rig, bone_map, document)
     warnings.extend(pair_warnings)
+    helper_rules = helper_rules_from_pairs(bone_map.helper_pairs)
 
     if isinstance(root_mapping, RootMappingSelection):
         root_selection = root_mapping
@@ -405,7 +681,7 @@ def build_mapped_rig_anm2(
     legacy_root_pair = next(
         (
             row
-            for row in bone_map.pairs
+            for row in bone_map.base_pairs
             if row.source_bone == target_root_name
             and row.target_bone == source_root_name
             and row.method == "hierarchy_root"
@@ -455,18 +731,75 @@ def build_mapped_rig_anm2(
         raise ValueError(f"Unsupported root-motion policy {root_policy!r}")
     use_global_correction = transfer_policy == "global_bind_basis_correction"
     use_rotation_only = transfer_policy == "mapped_local_rotation_delta"
-    # Unit conversion is mandatory for both paths.  Basis conversion depends
-    # only on the target rig convention, not on which retarget solver is used.
-    convert_basis = _target_uses_dying_light_basis(rig)
+    # Unit/axis normalization is one contract shared by bind and animation.
+    # A retained Armature wrapper can already contain the FBX-Y-up -> Chrome
+    # rotation and a uniform unit scale; detect both so neither is applied twice.
+    target_requires_dying_light_basis = _target_uses_dying_light_basis(rig)
     meters_per_unit = float(document.meters_per_unit)
+    wrapper_scale_factor = 1.0
+    wrapper_axis_conversion = False
+    if hasattr(document, "_scene_scale_normalizer"):
+        wrapper_normalizer = np.asarray(
+            document._scene_scale_normalizer(document.limb_models[source_root_name]),
+            dtype=float,
+        )
+        wrapper_scales = np.linalg.norm(wrapper_normalizer[:3, :3], axis=0)
+        if (
+            np.isfinite(wrapper_scales).all()
+            and min(wrapper_scales) > 1.0e-12
+            and max(wrapper_scales) - min(wrapper_scales) <= 1.0e-6
+        ):
+            wrapper_scale_factor = float(np.mean(wrapper_scales))
+        scene = getattr(document, "scene", None)
+        if scene is not None:
+            limb_ids = set(getattr(scene, "limb_ids", ()))
+            parent_id = scene.model_parent_id(
+                document.limb_models[source_root_name]
+            )
+            wrapper_id = None
+            while parent_id in limb_ids:
+                parent_id = scene.model_parent_id(parent_id)
+            while parent_id in getattr(scene, "model_names", {}) and parent_id not in limb_ids:
+                wrapper_id = parent_id
+                parent_id = scene.model_parent_id(parent_id)
+            if wrapper_id is not None:
+                wrapper_matrix = np.asarray(
+                    scene.model_global_matrix(wrapper_id), dtype=float
+                )
+                wrapper_linear = wrapper_matrix[:3, :3]
+                wrapper_linear_scales = np.linalg.norm(wrapper_linear, axis=0)
+                if np.all(wrapper_linear_scales > 1.0e-12):
+                    wrapper_rotation = wrapper_linear / wrapper_linear_scales
+                    wrapper_axis_conversion = bool(
+                        np.allclose(
+                            wrapper_rotation,
+                            FBX_Y_UP_TO_DYING_LIGHT[:3, :3],
+                            atol=1.0e-5,
+                            rtol=1.0e-5,
+                        )
+                    )
+    convert_basis = (
+        target_requires_dying_light_basis and not wrapper_axis_conversion
+    )
+    global_normalization = SourceGlobalNormalization(
+        meters_per_unit=meters_per_unit,
+        convert_y_up_to_dying_light=convert_basis,
+        wrapper_scale_normalization_factor=wrapper_scale_factor,
+        wrapper_axis_conversion=wrapper_axis_conversion,
+    )
+    helper_source_names = {
+        rule.source_bone
+        for rule in helper_rules
+        if rule.source_bone in document.limb_models
+    }
     source_bind_local: dict[str, np.ndarray] = {}
-    for source_name in sorted(set(mapped.values()).union({source_root_name})):
-        source_bind_local[source_name] = source_local_to_target_basis(
+    for source_name in sorted(
+        set(mapped.values()).union({source_root_name}, helper_source_names)
+    ):
+        source_bind_local[source_name] = global_normalization.apply_local(
             document._local_matrix(
                 document.limb_models[source_name], tick=0, use_animation=False
-            ),
-            meters_per_unit=meters_per_unit,
-            convert_y_up_to_dying_light=convert_basis,
+            )
         )
 
     target_bind = {bone.name: target_bind_local_matrix(bone) for bone in rig.bones}
@@ -485,28 +818,27 @@ def build_mapped_rig_anm2(
                 "Global bind-basis correction requires authoritative/fallback FBX global bind matrices."
             )
         for target_name, source_name in mapped.items():
-            source_global = source_global_to_target_basis(
-                source_globals[source_name],
-                meters_per_unit=meters_per_unit,
-                convert_y_up_to_dying_light=convert_basis,
-            )
+            source_global = global_normalization.apply(source_globals[source_name])
             if not np.isfinite(source_global).all() or abs(float(np.linalg.det(source_global[:3, :3]))) <= 1.0e-12:
                 raise ValueError(f"Source bind matrix for {source_name!r} is singular or non-finite.")
             basis_corrections[target_name] = global_bind_basis_correction(
                 source_global, target_bind_global[target_name]
             )
     source_bind_globals = getattr(document, "bind_global_matrices", None)
+    helper_source_bind_global: dict[str, np.ndarray] = {}
+    if source_bind_globals:
+        helper_source_bind_global = {
+            source_name: global_normalization.apply(source_bind_globals[source_name])
+            for source_name in helper_source_names
+            if source_name in source_bind_globals
+        }
     if source_bind_globals and source_root_name in source_bind_globals:
-        source_root_bind_global = source_global_to_target_basis(
-            source_bind_globals[source_root_name],
-            meters_per_unit=meters_per_unit,
-            convert_y_up_to_dying_light=convert_basis,
+        source_root_bind_global = global_normalization.apply(
+            source_bind_globals[source_root_name]
         )
     elif hasattr(document, "global_matrices"):
-        source_root_bind_global = source_global_to_target_basis(
-            document.global_matrices(tick=0, use_animation=False)[source_root_name],
-            meters_per_unit=meters_per_unit,
-            convert_y_up_to_dying_light=convert_basis,
+        source_root_bind_global = global_normalization.apply(
+            document.global_matrices(tick=0, use_animation=False)[source_root_name]
         )
     else:
         source_root_bind_global = source_bind_local[source_root_name]
@@ -533,6 +865,8 @@ def build_mapped_rig_anm2(
     maximum_animated_joint_extent_frame = 0
     maximum_non_root_translation_delta = 0.0
     source_root_displacements: list[np.ndarray] = []
+    helper_source_local_frames: list[dict[str, np.ndarray]] = []
+    helper_source_global_frames: list[dict[str, np.ndarray]] = []
 
     # Record rest-pose differences for the UI/report, but they are not a build blocker.
     for bone in rig.bones:
@@ -560,6 +894,16 @@ def build_mapped_rig_anm2(
         )
 
     for tick in ticks:
+        helper_source_local_frames.append(
+            {
+                source_name: global_normalization.apply_local(
+                    document._local_matrix(
+                        document.limb_models[source_name], tick=tick, use_animation=True
+                    )
+                )
+                for source_name in helper_source_names
+            }
+        )
         rows_by_descriptor: dict[int, list[float]] = {}
         target_animated_globals: dict[str, np.ndarray] = {}
         raw_source_animated_globals = (
@@ -567,33 +911,34 @@ def build_mapped_rig_anm2(
             if hasattr(document, "global_matrices")
             else {}
         )
+        helper_source_global_frames.append(
+            {
+                source_name: global_normalization.apply(
+                    raw_source_animated_globals[source_name]
+                )
+                for source_name in helper_source_names
+                if source_name in raw_source_animated_globals
+            }
+        )
         source_animated_globals = (
             {
-                name: source_global_to_target_basis(
-                    matrix,
-                    meters_per_unit=meters_per_unit,
-                    convert_y_up_to_dying_light=convert_basis,
-                )
+                name: global_normalization.apply(matrix)
                 for name, matrix in raw_source_animated_globals.items()
             }
             if use_global_correction
             else {}
         )
         if source_root_name in raw_source_animated_globals:
-            root_animated_global = source_global_to_target_basis(
-                raw_source_animated_globals[source_root_name],
-                meters_per_unit=meters_per_unit,
-                convert_y_up_to_dying_light=convert_basis,
+            root_animated_global = global_normalization.apply(
+                raw_source_animated_globals[source_root_name]
             )
         else:
-            root_animated_global = source_local_to_target_basis(
+            root_animated_global = global_normalization.apply_local(
                 document._local_matrix(
                     document.limb_models[source_root_name],
                     tick=tick,
                     use_animation=True,
-                ),
-                meters_per_unit=meters_per_unit,
-                convert_y_up_to_dying_light=convert_basis,
+                )
             )
         root_displacement_global = (
             root_animated_global[:3, 3] - source_root_bind_global[:3, 3]
@@ -613,27 +958,45 @@ def build_mapped_rig_anm2(
             parent_name = rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
             if use_global_correction:
                 if source_name is not None:
-                    animated_global = corrected_target_global(
+                    desired_global = corrected_target_global(
                         source_animated_globals[source_name], basis_corrections[bone.name]
                     )
-                elif parent_name is not None:
-                    animated_global = target_animated_globals[parent_name] @ target_bind_local
+                    desired_rotation = _orthonormal_rotation(
+                        desired_global, f"corrected global {bone.name}"
+                    )
+                    if parent_name is None:
+                        local_rotation = desired_rotation
+                    else:
+                        parent_rotation = _orthonormal_rotation(
+                            target_animated_globals[parent_name],
+                            f"animated parent {parent_name}",
+                        )
+                        local_rotation = parent_rotation.T @ desired_rotation
+                    # Global bind-basis correction selects the orientation, but
+                    # target local translations/scales own the skinned geometry.
+                    # Reusing independently corrected child pivots here detached
+                    # joints whenever the source FBX bind lengths differed.
+                    local = np.eye(4, dtype=float)
+                    local[:3, :3] = local_rotation @ np.diag(
+                        np.asarray(bone.bind_scale, dtype=float)
+                    )
+                    local[:3, 3] = np.asarray(
+                        bone.bind_translation, dtype=float
+                    )
                 else:
-                    animated_global = target_bind_global[bone.name].copy()
-                if parent_name is None:
-                    local = animated_global
-                else:
-                    local = np.linalg.inv(target_animated_globals[parent_name]) @ animated_global
-                target_animated_globals[bone.name] = animated_global
+                    local = target_bind_local
+                target_animated_globals[bone.name] = (
+                    target_animated_globals[parent_name] @ local
+                    if parent_name is not None
+                    else local.copy()
+                )
             elif source_name is None:
                 local = target_bind_local
             else:
-                source_anim_local = source_local_to_target_basis(
+                source_anim_local = global_normalization.apply_local(
                     document._local_matrix(
                         document.limb_models[source_name], tick=tick, use_animation=True
-                    ),
-                    meters_per_unit=meters_per_unit,
-                    convert_y_up_to_dying_light=convert_basis,
+                    )
                 )
                 local = (
                     mapped_local_from_rotation_delta(
@@ -703,24 +1066,51 @@ def build_mapped_rig_anm2(
     # the user's in-place/motion selection.
     apply_global_root_policy(values, rig, target_root_name, root_policy)
 
-    # Reject the exact failure mode that used to produce apparently valid ANM2
-    # files with bones spread over hundreds of metres.  Root motion translates
-    # the whole hierarchy and therefore does not affect this pivot-AABB diagonal.
-    extent_limit = max(bind_joint_extent * 32.0, bind_joint_extent + 10.0, 1.0)
-    if maximum_animated_joint_extent > extent_limit:
-        raise ValueError(
-            "Retargeted joint hierarchy is catastrophically larger than its bind pose: "
-            f"{maximum_animated_joint_extent:.3f} m at frame "
-            f"{maximum_animated_joint_extent_frame}, versus "
-            f"{bind_joint_extent:.3f} m in bind pose (limit {extent_limit:.3f} m). "
-            "Check the selected .crig, FBX units, bind pose, and bone mapping."
+    helper_report = HelperApplyReport()
+    if helper_rules:
+        helper_report = apply_helper_retarget_overrides(
+            values,
+            helper_rules,
+            target_bind_local=target_bind,
+            target_track_indices={
+                bone.name: rig.descriptors.index(bone.descriptor) for bone in rig.bones
+            },
+            target_parents=rig_parents,
+            source_bind_local={
+                name: source_bind_local[name]
+                for name in helper_source_names
+                if name in source_bind_local
+            },
+            source_animated_local_frames=helper_source_local_frames,
+            target_descriptors={bone.name: bone.descriptor for bone in rig.bones},
+            source_bind_global=helper_source_bind_global,
+            source_animated_global_frames=helper_source_global_frames,
+            target_roots=(bone.name for bone in rig.bones if bone.parent_index < 0),
+            source_roots=(
+                name
+                for name in document.limb_models
+                if document.parent_by_name.get(name) is None
+            ),
+            deforming_primary_targets=(
+                bone.name for bone in rig.bones if bone.deform and not bone.helper
+            ),
         )
-    if use_rotation_only and maximum_non_root_translation_delta > 1.0e-6:
-        raise ValueError(
-            "Cross-rig rotation transfer changed a target bone length by "
-            f"{maximum_non_root_translation_delta:.9f} m. This violates the "
-            "target-bind preservation contract; no ANM2 was emitted."
+        base_targets_by_source: dict[str, list[str]] = {}
+        for target_name, source_name in mapped.items():
+            base_targets_by_source.setdefault(source_name, []).append(target_name)
+        include_base_source_fanout(
+            helper_report, helper_rules, base_targets_by_source
         )
+        warnings.extend(helper_report.warnings)
+
+    hierarchy_safety = validate_hierarchy_safety(
+        rig,
+        values,
+        preserve_non_root_translations=(use_global_correction or use_rotation_only),
+        allowed_non_root_translation_bones={
+            rule.target_bone for rule in helper_rules
+        },
+    )
 
     for bone in rig.bones:
         track_index = rig.descriptors.index(bone.descriptor)
@@ -755,7 +1145,7 @@ def build_mapped_rig_anm2(
                 ),
             )
 
-    mapped_target_names = set(mapped)
+    mapped_target_names = set(mapped).union(helper_report.helper_targets)
     unmapped = [bone.name for bone in rig.bones if bone.name not in mapped_target_names]
     if unmapped:
         warnings.append(
@@ -785,6 +1175,19 @@ def build_mapped_rig_anm2(
             "target_rig_name": rig.name,
             "target_skeleton_hash": rig.skeleton_hash,
             "mapping_profile": bone_map.to_dict(),
+            "base_mapped_bone_count": len(mapped),
+            "helper_override_count": helper_report.helper_override_count,
+            "helper_source_fanout_count": helper_report.helper_source_fanout_count,
+            "helper_targets": helper_report.helper_targets,
+            "shared_source_bones": helper_report.shared_source_bones,
+            "main_transfer_policy": transfer_policy,
+            "helper_transfer_policies": helper_report.helper_transfer_policies,
+            "helper_component_policies": helper_report.helper_component_policies,
+            "helper_movement_ranges": helper_report.helper_movement_ranges,
+            "maximum_helper_translation_delta_meters": (
+                helper_report.maximum_helper_translation_delta_meters
+            ),
+            "skipped_helper_targets": helper_report.skipped_helper_targets,
             "root_mapping": {
                 "source_bone": source_root_name,
                 "source_method": source_root_method,
@@ -802,7 +1205,7 @@ def build_mapped_rig_anm2(
                 "translation_target_bone": target_root_name,
                 "pose_and_root_motion_separated": True,
             },
-            "mapped_bone_count": len(mapped),
+            "mapped_bone_count": len(mapped) + helper_report.helper_override_count,
             "unmapped_bone_count": len(unmapped),
             "unmapped_target_bones": unmapped,
             "moving_target_bones": moving,
@@ -821,24 +1224,37 @@ def build_mapped_rig_anm2(
             "sample_frames": sample_frames,
             "decoded_max_component_error": maximum_error,
             "source_unit_meters": meters_per_unit,
+            "source_global_normalization": global_normalization.to_report(),
             "source_basis_conversion": (
                 f"FBX native units * {meters_per_unit:g} m/unit; "
                 + (
-                    "FBX (x,y,z) -> Dying Light (x,z,-y)"
-                    if convert_basis
+                    "FBX (x,y,z) -> Dying Light (x,z,-y) via "
+                    + global_normalization.to_report()["axis_conversion_source"]
+                    if global_normalization.axis_conversion_count
                     else "source basis preserved"
                 )
             ),
             "bind_source": getattr(document, "bind_source", "unanimated Model transforms"),
             "bind_coverage": dict(getattr(document, "bind_coverage", {}) or {}),
             "basis_correction_policy": transfer_policy,
-            "preserves_target_non_root_translation_and_scale": use_rotation_only,
-            "bind_joint_extent_meters": bind_joint_extent,
-            "maximum_animated_joint_extent_meters": maximum_animated_joint_extent,
-            "maximum_animated_joint_extent_frame": maximum_animated_joint_extent_frame,
-            "maximum_non_root_translation_delta_meters": (
-                maximum_non_root_translation_delta
+            "preserves_target_non_root_translation_and_scale": (
+                use_rotation_only or use_global_correction
             ),
+            "hierarchy_safety": hierarchy_safety,
+            "bind_joint_extent_meters": hierarchy_safety[
+                "bind_hierarchy_extent_meters"
+            ],
+            "maximum_animated_joint_extent_meters": hierarchy_safety[
+                "maximum_animated_hierarchy_extent_meters"
+            ],
+            "maximum_animated_joint_extent_frame": hierarchy_safety[
+                "maximum_animated_hierarchy_extent_frame"
+            ],
+            "maximum_non_root_translation_delta_meters": hierarchy_safety[
+                "maximum_non_root_translation_delta_meters"
+            ],
+            "maximum_scale": hierarchy_safety["maximum_scale"],
+            "minimum_scale": hierarchy_safety["minimum_scale"],
             "multiple_root_inventory": [
                 bone.name for bone in rig.bones if bone.parent_index < 0
             ],
@@ -853,6 +1269,7 @@ def build_mapped_rig_anm2(
 
 __all__ = [
     "MappedRigBuild",
+    "SourceGlobalNormalization",
     "apply_global_root_policy",
     "build_mapped_rig_anm2",
     "compose_local_matrix",
@@ -861,7 +1278,9 @@ __all__ = [
     "mapped_local_from_rest_delta",
     "mapped_local_from_rotation_delta",
     "quaternion_wxyz_to_matrix",
+    "reconstruct_target_globals",
     "source_local_to_target_basis",
     "source_global_to_target_basis",
     "target_bind_local_matrix",
+    "validate_hierarchy_safety",
 ]

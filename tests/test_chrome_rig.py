@@ -21,6 +21,7 @@ from dlanm2_gui.oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND
 from dlanm2_gui.retarget_engines.exact_rig import build_exact_rig_anm2
 from dlanm2_gui.retarget_engines.mapped_rig import build_mapped_rig_anm2
 from dlanm2_gui.retarget_engines.base import RetargetBuild
+from dlanm2_gui.retarget_mapping import auto_map_crig_to_fbx
 from dlanm2_gui.rp6l import extract_animation_library
 from dlanm2_gui.workspace_project import (
     CURRENT_PROJECT_SCHEMA_VERSION,
@@ -219,6 +220,50 @@ def test_rotation_delta_manual_root_mapping_keeps_root_displacement(
     assert decoded.frames[1].tracks[root_index][3] == pytest.approx(0.02, abs=1e-5)
 
 
+def test_mapped_rig_helper_fanout_is_applied_after_base_solver(tmp_path: Path) -> None:
+    names = ("root", "camera_helper")
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "target.fbx", document_factory=_factory(names)
+    )
+    document = _ObjectFbx(tmp_path / "animated.fbx", names)
+    bone_map = GenericBoneMap.create(
+        "Helper fanout",
+        rig.skeleton_hash,
+        skeleton_signature(
+            (name, document.parent_by_name.get(name))
+            for name in sorted(document.limb_models)
+        ),
+        source_rig_ref=rig.rig_id,
+    )
+    bone_map.pairs = [
+        BoneMapPair(rig.bones[0].descriptor, "root", "root"),
+        BoneMapPair(
+            rig.bones[1].descriptor,
+            "camera_helper",
+            "root",
+            mapping_kind="helper_override",
+            transfer_policy="rest_relative",
+            component_policy="translation",
+        ),
+    ]
+
+    build = build_mapped_rig_anm2(
+        tmp_path / "animated.fbx",
+        rig,
+        bone_map,
+        document_factory=lambda _path: document,
+        transfer_policy="mapped_local_rotation_delta",
+        root_policy="bip01",
+    )
+    decoded = decode_samples(build.payload, [0.0, 2.0])
+    helper_index = rig.descriptors.index(rig.bones[1].descriptor)
+
+    assert decoded.frames[1].tracks[helper_index][3] == pytest.approx(0.02, abs=1e-5)
+    assert build.report["base_mapped_bone_count"] == 1
+    assert build.report["helper_override_count"] == 1
+    assert build.report["main_transfer_policy"] == "mapped_local_rotation_delta"
+
+
 def test_crig_rejects_unsafe_or_executable_members() -> None:
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
@@ -267,7 +312,7 @@ def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
     assert "legacy_target_files" in project.rig.extensions
 
 
-def test_project_builder_dispatches_exact_rig_without_humanoid_mapping(
+def test_project_builder_keeps_automatic_identity_superset_on_exact_engine(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from dlanm2_gui import project_builder
@@ -287,11 +332,10 @@ def test_project_builder_dispatches_exact_rig_without_humanoid_mapping(
         [[False] * 9 for _ in rig.descriptors],
     )
 
-    monkeypatch.setattr(
-        project_builder,
-        "_FbxDocument",
-        lambda path: _ObjectFbx(path),
+    document = _ObjectFbx(
+        source, ("root", "bone_door", "bone_handle", "source_extra")
     )
+    monkeypatch.setattr(project_builder, "_FbxDocument", lambda _path: document)
     monkeypatch.setattr(
         project_builder,
         "build_exact_rig_anm2",
@@ -305,6 +349,13 @@ def test_project_builder_dispatches_exact_rig_without_humanoid_mapping(
             },
         ),
     )
+    monkeypatch.setattr(
+        project_builder,
+        "build_mapped_rig_anm2",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an automatic identity map must not change the exact solver"
+        ),
+    )
 
     project = DlReanimatedProject.new("Door")
     project.rig.target_rig_ref = rig.rig_id
@@ -313,12 +364,24 @@ def test_project_builder_dispatches_exact_rig_without_humanoid_mapping(
     project.export.output_directory = str(tmp_path / "build")
     project.export.pack_filename = "door.rpack"
     project.export.include_validation_controls = True
-    project.animations.append(ProjectAnimation.create(str(source), resource_name="open_door"))
+    profile = auto_map_crig_to_fbx(
+        rig, document.limb_models.keys(), document.parent_by_name
+    )
+    assert profile.extensions["origin"] == "automatic_identity"
+    animation = ProjectAnimation.create(str(source), resource_name="open_door")
+    animation.mapping_profile_id = profile.profile_id
+    project.animations.append(animation)
+    project.mapping_profiles[profile.profile_id] = profile.to_dict()
 
     result = project_builder.build_project(project)
     library = extract_animation_library(Path(result.pack_path).read_bytes())
     assert "dl_reanimated_open_door" in library.animations
-    assert result.built_animations[0].mapping_profile_id == ""
+    assert result.built_animations[0].mapping_profile_id == profile.profile_id
+    report = __import__("json").loads(
+        Path(result.built_animations[0].retarget_report).read_text(encoding="utf-8")
+    )
+    assert report["solver_selection"]["selected_engine"] == "ExactRigRetargetEngine"
+    assert report["solver_selection"]["mapping_profile_changed_solver"] is False
     assert any("not compatible with custom Chrome Rigs" in row for row in result.warnings)
 
 
@@ -373,6 +436,7 @@ def test_project_builder_uses_reviewed_crig_map_instead_of_strict_exact_engine(
             for name in sorted(document.limb_models)
         ),
         source_rig_ref=rig.rig_id,
+        origin="manually_reviewed",
     )
     profile.pairs = [
         BoneMapPair(rig.bones[0].descriptor, "root", "source_root"),
@@ -395,6 +459,11 @@ def test_project_builder_uses_reviewed_crig_map_instead_of_strict_exact_engine(
     assert isinstance(called["map"], GenericBoneMap)
     assert called["kwargs"]["transfer_policy"] == "mapped_local_rotation_delta"
     assert result.built_animations[0].mapping_profile_id == profile.profile_id
+    report = __import__("json").loads(
+        Path(result.built_animations[0].retarget_report).read_text(encoding="utf-8")
+    )
+    assert report["solver_selection"]["selected_engine"] == "MappedRigRetargetEngine"
+    assert report["solver_selection"]["mapping_profile_origin"] == "manually_reviewed"
 
 
 def test_reviewed_mapping_identity_rejects_cross_wired_pairs() -> None:

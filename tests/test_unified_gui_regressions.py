@@ -12,7 +12,7 @@ from PySide6.QtCore import QEventLoop, QSettings, QThread, QTimer
 from dlanm2_gui import gui
 from dlanm2_gui.background_tasks import BackgroundTaskRunner
 from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
-from dlanm2_gui.retarget_profiles import SourceBoneMappingProfile
+from dlanm2_gui.retarget_profiles import HUMANOID_ROLES, SourceBoneMappingProfile
 from dlanm2_gui.unified_gui import UnifiedMainWindow
 from dlanm2_gui.workspace_project import ProjectAnimation
 
@@ -90,6 +90,53 @@ def test_retarget_table_popup_does_not_commit_on_focus_transfer(tmp_path) -> Non
     assert shell.controller.mapping_table.cellWidget(0, 2) is combo
     combo.hidePopup()
     shell.controller.dirty = False
+    shell.window.close()
+
+
+def test_normal_retarget_tab_shows_and_edits_target_helpers(tmp_path) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    animation = ProjectAnimation.create(str(tmp_path / "source.fbx"))
+    document = SimpleNamespace(
+        limb_models={"pelvis": object(), "head": object()},
+        parent_by_name={"pelvis": None, "head": "pelvis"},
+    )
+    profile = SourceBoneMappingProfile.empty(document.limb_models)
+    profile.set_mapping("hips", "pelvis")
+    animation.mapping_profile_id = profile.profile_id
+    controller.project.animations = [animation]
+    controller.project.mapping_profiles[profile.profile_id] = profile.to_dict()
+    controller._source_cache[str(Path(animation.source_fbx).resolve())] = document
+
+    assert controller.show_helper_bones.text() == "Show helper bones"
+    controller.show_helper_bones.setChecked(True)
+    controller._refresh_mapping_table(animation, document, profile)
+
+    helper_rows = {
+        controller.mapping_table.item(row, 1).text(): row
+        for row in range(len(HUMANOID_ROLES), controller.mapping_table.rowCount())
+    }
+    assert "refcamera" in helper_rows
+    assert "eyecamera" in helper_rows
+
+    row = helper_rows["refcamera"]
+    source_combo = controller.mapping_table.cellWidget(row, 2)
+    component_combo = controller.mapping_table.cellWidget(row, 6)
+    assert component_combo.currentData() == "translation"
+    source_combo.setCurrentIndex(source_combo.findData("head"))
+    source_combo.activated.emit(source_combo.currentIndex())
+
+    assert animation.extensions["helper_retarget_rules"] == [
+        {
+            "target_bone": "refcamera",
+            "source_bone": "head",
+            "transfer_policy": "rest_relative",
+            "component_policy": "translation",
+        }
+    ]
+    assert controller.mapping_table.cellWidget(row, 2) is source_combo
+    controller.dirty = False
     shell.window.close()
 
 

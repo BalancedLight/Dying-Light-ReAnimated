@@ -50,7 +50,28 @@ from dlanm2_gui.oracle.smd_bind_pose import (
     smd_local_matrices,
 )
 from dlanm2_gui.rp6l import build_common_anims_multi_probe_rpack, extract_animation_library
-from dlanm2_gui.retarget_profiles import apply_canonical_aliases, required_canonical_source_names
+from dlanm2_gui.retarget_profiles import (
+    HUMANOID_ROLES,
+    apply_canonical_aliases,
+    required_canonical_source_names,
+)
+from dlanm2_gui.helper_profiles import (
+    LEGACY_HELPER_PROFILE_ID,
+    extend_track_descriptors_for_helpers,
+    recognized_helper_names,
+)
+from dlanm2_gui.helper_retarget import (
+    HelperApplyReport,
+    HelperRetargetRule,
+    apply_helper_retarget_overrides,
+    helper_rules_from_dicts,
+    include_base_source_fanout,
+    update_helper_packed_flags,
+)
+from dlanm2_gui.retarget_engines.mapped_rig import (
+    source_global_to_target_basis,
+    source_local_to_target_basis,
+)
 
 PACK_NAME = "common_anims_sp_pc.rpack"
 SCRIPT_RESOURCE_NAME = "anims_man_all_DLC60"
@@ -204,6 +225,8 @@ def build_custom_fbx_release_candidate_editor_rpack(
     source_bone_aliases: Mapping[str, str] | None = None,
     animation_script_resource_name: str = SCRIPT_RESOURCE_NAME,
     include_controls: bool = True,
+    helper_rules: Sequence[Mapping[str, Any]] | None = None,
+    helper_target_profile: str = LEGACY_HELPER_PROFILE_ID,
 ) -> dict[str, Any]:
     """Build the post-greeting validation pack.
 
@@ -222,6 +245,11 @@ def build_custom_fbx_release_candidate_editor_rpack(
         raise ValueError(f"unsupported root policies: {', '.join(invalid_root_policies)}")
     if ik_authoring_preset not in {"runtime", "off"}:
         raise ValueError("ik_authoring_preset must be 'runtime' or 'off'")
+    # Retain the argument for callers/projects created by the first helper
+    # implementation, but the selected target SMD now owns the visible helper
+    # inventory. No hidden profile is required to expose or emit a helper.
+    _ = helper_target_profile
+    parsed_helper_rules = helper_rules_from_dicts(helper_rules or ())
 
     out = Path(out_dir)
     if out.exists():
@@ -268,14 +296,42 @@ def build_custom_fbx_release_candidate_editor_rpack(
         for name, matrix in source_rest_globals.items()
     }
     source_rest_body = _source_body_frame(source_rest_positions)
+    helper_source_names = {
+        rule.source_bone
+        for rule in parsed_helper_rules
+        if rule.source_bone in source_rest.limb_models
+    }
+    helper_source_bind_local = {
+        source_name: source_local_to_target_basis(
+            source_rest._local_matrix(
+                source_rest.limb_models[source_name], tick=0, use_animation=False
+            ),
+            meters_per_unit=float(source_rest.meters_per_unit),
+            convert_y_up_to_dying_light=True,
+        )
+        for source_name in helper_source_names
+    }
+    helper_source_bind_global = {
+        source_name: source_global_to_target_basis(
+            source_rest_globals[source_name],
+            meters_per_unit=float(source_rest.meters_per_unit),
+            convert_y_up_to_dying_light=True,
+        )
+        for source_name in helper_source_names
+        if source_name in source_rest_globals
+    }
 
     template_path = Path(target_template_anm2)
     template_payload = template_path.read_bytes()
     template_header = Anm2Header.parse(template_payload)
     template_sample = decode_file_samples(template_path, [0.0])
-    descriptors = list(template_sample.descriptors)
-
     target_pose = parse_smd_bind_pose(canonical_smd)
+    target_bone_names = tuple(bone.name for bone in target_pose.bones)
+    descriptors = extend_track_descriptors_for_helpers(
+        list(template_sample.descriptors),
+        (rule.target_bone for rule in parsed_helper_rules),
+        target_bone_names,
+    )
     target_local = smd_local_matrices(target_pose)
     target_global = smd_global_matrices(target_pose)
     bind_track_rows, names_by_descriptor, fallback_descriptors = bind_track_values(
@@ -287,6 +343,15 @@ def build_custom_fbx_release_candidate_editor_rpack(
         name: descriptors.index(descriptor)
         for descriptor, name in names_by_descriptor.items()
     }
+    base_targets_by_source: dict[str, list[str]] = {}
+    for role in HUMANOID_ROLES:
+        source_name = str(
+            (source_bone_aliases or {}).get(
+                role.canonical_source_name, role.canonical_source_name
+            )
+        )
+        if source_name in source_rest.limb_models and role.target_name in track_index_by_name:
+            base_targets_by_source.setdefault(source_name, []).append(role.target_name)
     target_body_bind = _target_body_frame(target_global)
     motion_track_index = descriptors.index(MOTION_DESCRIPTOR)
     bip01_track_index = track_index_by_name["bip01"]
@@ -331,6 +396,34 @@ def build_custom_fbx_release_candidate_editor_rpack(
         source_body_frames = _continuous_frames([
             _source_body_frame(row) for row in source_positions
         ])
+        helper_source_local_frames = [
+            {
+                source_name: source_local_to_target_basis(
+                    animation._local_matrix(
+                        animation.limb_models[source_name],
+                        tick=tick,
+                        use_animation=True,
+                    ),
+                    meters_per_unit=float(animation.meters_per_unit),
+                    convert_y_up_to_dying_light=True,
+                )
+                for source_name in helper_source_names
+                if source_name in animation.limb_models
+            }
+            for tick in ticks
+        ]
+        helper_source_global_frames = [
+            {
+                source_name: source_global_to_target_basis(
+                    frame[source_name],
+                    meters_per_unit=float(animation.meters_per_unit),
+                    convert_y_up_to_dying_light=True,
+                )
+                for source_name in helper_source_names
+                if source_name in frame
+            }
+            for frame in source_globals
+        ]
         inventory.append(_clip_inventory(
             clip,
             animation=animation,
@@ -362,6 +455,13 @@ def build_custom_fbx_release_candidate_editor_rpack(
                 target_global=target_global,
                 target_body_bind=target_body_bind,
                 out_dir=out / "candidates" / spec.name,
+                helper_rules=parsed_helper_rules,
+                helper_profile_id="selected_target_smd",
+                helper_source_bind_local=helper_source_bind_local,
+                helper_source_local_frames=helper_source_local_frames,
+                helper_source_bind_global=helper_source_bind_global,
+                helper_source_global_frames=helper_source_global_frames,
+                base_targets_by_source=base_targets_by_source,
             )
             packaged.append((spec.resource_name, payload))
             sequences.append(_sequence(spec.resource_name, frame_count))
@@ -417,6 +517,13 @@ def build_custom_fbx_release_candidate_editor_rpack(
         "source_bone_aliases": dict(source_bone_aliases or {}),
         "animation_script_resource_name": animation_script_resource_name.strip(),
         "include_controls": bool(include_controls),
+        "helper_target_profile": "selected_target_smd",
+        "helper_target_profile_name": "Helpers from selected target rig SMD",
+        "helper_target_profile_experimental": False,
+        "helper_descriptor_policy": "explicitly_mapped_helpers_only",
+        "helper_rules": [rule.to_dict() for rule in parsed_helper_rules],
+        "base_track_count": len(template_sample.descriptors),
+        "target_track_count": len(descriptors),
         "canonical_smd": str(canonical_smd),
         "target_template_anm2": str(target_template_anm2),
         "fps": FPS,
@@ -533,7 +640,9 @@ def _add_controls(
         extra={"source": str(control_path)},
     ))
 
-    bind_header = replace(template_header, frame_count=2)
+    bind_header = replace(
+        template_header, frame_count=2, track_count=len(descriptors)
+    )
     bind_values = [[list(track) for track in bind_track_rows] for _ in range(2)]
     bind_payload = build_payload_from_values(
         bind_header,
@@ -580,9 +689,18 @@ def _build_clip_candidate(
     target_global: dict[str, np.ndarray],
     target_body_bind: np.ndarray,
     out_dir: Path,
+    helper_rules: Sequence[HelperRetargetRule] = (),
+    helper_profile_id: str = LEGACY_HELPER_PROFILE_ID,
+    helper_source_bind_local: Mapping[str, np.ndarray] | None = None,
+    helper_source_local_frames: Sequence[Mapping[str, np.ndarray]] = (),
+    helper_source_bind_global: Mapping[str, np.ndarray] | None = None,
+    helper_source_global_frames: Sequence[Mapping[str, np.ndarray]] = (),
+    base_targets_by_source: Mapping[str, Iterable[str]] | None = None,
 ) -> tuple[dict[str, Any], bytes]:
     out_dir.mkdir(parents=True, exist_ok=True)
-    header = replace(template_header, frame_count=frame_count)
+    header = replace(
+        template_header, frame_count=frame_count, track_count=len(descriptors)
+    )
     values = [[list(track) for track in bind_track_rows] for _ in range(frame_count)]
     packed_flags = [[False] * 9 for _ in descriptors]
 
@@ -702,6 +820,50 @@ def _build_clip_candidate(
         target_body_bind=target_body_bind,
     )
 
+    target_parents = {
+        bone.name: (
+            target_pose.by_index[bone.parent_index].name
+            if bone.parent_index in target_pose.by_index
+            else None
+        )
+        for bone in target_pose.bones
+    }
+    profile_helper_names = set(recognized_helper_names(target_local))
+    helper_report = HelperApplyReport()
+    if helper_rules:
+        helper_report = apply_helper_retarget_overrides(
+            values,
+            helper_rules,
+            target_bind_local=target_local,
+            target_track_indices=track_index_by_name,
+            target_parents=target_parents,
+            source_bind_local=dict(helper_source_bind_local or {}),
+            source_animated_local_frames=list(helper_source_local_frames),
+            target_descriptors={
+                name: descriptors[index] for name, index in track_index_by_name.items()
+            },
+            source_bind_global=dict(helper_source_bind_global or {}),
+            source_animated_global_frames=list(helper_source_global_frames),
+            target_roots=(
+                bone.name for bone in target_pose.bones if bone.parent_index < 0
+            ),
+            source_roots=(
+                name
+                for name in (helper_source_bind_local or {})
+                if animation.parent_by_name.get(name) is None
+            ),
+            deforming_primary_targets=set(track_index_by_name) - profile_helper_names,
+        )
+        include_base_source_fanout(
+            helper_report, helper_rules, dict(base_targets_by_source or {})
+        )
+        update_helper_packed_flags(
+            packed_flags,
+            values,
+            track_index_by_name,
+            helper_report.helper_targets,
+        )
+
     payload = build_payload_from_values(header, descriptors, values, packed_flags)
     candidate_path = out_dir / "candidate.anm2"
     candidate_path.write_bytes(payload)
@@ -712,7 +874,9 @@ def _build_clip_candidate(
     moving = _moving_tracks(decoded, descriptors, names_by_descriptor)
     finger_targets = set(FINGER_MAP)
     moving_fingers = sorted(finger_targets.intersection(moving))
-    helper_animated = sorted(HELPER_TRACKS.intersection(moving))
+    helper_animated = sorted(
+        set(HELPER_TRACKS).union(helper_report.helper_targets).intersection(moving)
+    )
 
     hierarchy_samples = {
         str(frame): _hierarchy_sample(target_pose, target_local, local_overrides_by_frame[frame])
@@ -740,6 +904,8 @@ def _build_clip_candidate(
         ),
         "frame_count": frame_count,
         "fps": FPS,
+        "track_count": len(descriptors),
+        "target_track_count": len(descriptors),
         "root_policy": spec.root_policy,
         "source_pose_policy": "absolute corrected-FBX anatomical directions and orientation in animated body space",
         "first_frame_policy": "source animation frame 0 retained, not replaced by target bind",
@@ -750,6 +916,21 @@ def _build_clip_candidate(
         "torso_details": torso_details,
         "terminal_details": terminal_details,
         "selected_target_tracks": selected_names,
+        "helper_target_profile": helper_profile_id,
+        "helper_descriptor_policy": "explicitly_mapped_helpers_only",
+        "base_mapped_bone_count": len(selected_names),
+        "helper_override_count": helper_report.helper_override_count,
+        "helper_source_fanout_count": helper_report.helper_source_fanout_count,
+        "helper_targets": helper_report.helper_targets,
+        "shared_source_bones": helper_report.shared_source_bones,
+        "main_transfer_policy": "absolute_humanoid",
+        "helper_transfer_policies": helper_report.helper_transfer_policies,
+        "helper_component_policies": helper_report.helper_component_policies,
+        "helper_movement_ranges": helper_report.helper_movement_ranges,
+        "maximum_helper_translation_delta_meters": (
+            helper_report.maximum_helper_translation_delta_meters
+        ),
+        "skipped_helper_targets": helper_report.skipped_helper_targets,
         "frame0_max_component_delta_from_smd_bind": frame0_error,
         "moving_named_tracks": moving,
         "moving_finger_tracks": moving_fingers,
@@ -757,6 +938,7 @@ def _build_clip_candidate(
         "unintended_moving_named_tracks": sorted(
             set(moving)
             - set(selected_names)
+            - set(helper_report.helper_targets)
             - (
                 {"bip01", "0xCCC3CDDF"}
                 if spec.root_policy == "motion"
@@ -770,6 +952,7 @@ def _build_clip_candidate(
         "candidate_path": str(candidate_path),
         "size": len(payload),
         "sha256": hashlib.sha256(payload).hexdigest().upper(),
+        "warnings": helper_report.warnings,
     }
     _write_json(out_dir / "retarget_report.json", report)
     return report, payload

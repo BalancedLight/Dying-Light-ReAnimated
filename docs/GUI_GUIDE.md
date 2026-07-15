@@ -67,6 +67,8 @@ For **Root Motion**, use motion accumulator for clips that will involve movement
 
 Click **Auto-map humanoid**, then review the required roles. Change a role by choosing the correct source FBX bone. The status line stays compact, and the mapping table uses the available window height.
 
+Enable **Show helper bones** in this same Retargeting tab to append helper targets from the selected Dying Light target SMD beneath the humanoid roles. Each helper row, including `refcamera` and `eyecamera`, has its own source-FBX dropdown and component policy. Helpers remain unmapped by default, one source bone may drive several helper rows, and only explicitly mapped helper descriptors are added to the ANM2.
+
 With a custom `.crig`, the tab reports **Exact skeleton mode** instead. No humanoid mapping is required; every target bone is checked by exact name and parent during the build.
 
 **Apply to compatible clips** copies the mapping only to clips with the exact same source-skeleton hash.
