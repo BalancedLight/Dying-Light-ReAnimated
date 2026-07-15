@@ -130,6 +130,32 @@ def test_explicit_rest_mode_uses_selected_rest_and_trusted_json(
     )
 
 
+def test_humanoid_project_passes_embedded_helper_rules_to_value_builder(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = _project(tmp_path, embedded=True)
+    # Old projects may still contain this extension. It no longer gates helper
+    # visibility or descriptor emission.
+    project.animations[0].extensions["helper_target_profile"] = "dl1_player_fpp_helpers"
+    project.animations[0].extensions["helper_retarget_rules"] = [
+        {
+            "target_bone": "refcamera",
+            "source_bone": "mixamorig:Hips",
+            "transfer_policy": "rest_relative",
+            "component_policy": "translation",
+        }
+    ]
+    captured: dict[str, object] = {}
+    _install_fakes(monkeypatch, captured)
+
+    project_builder.build_project(project)
+
+    assert "helper_target_profile" not in captured
+    assert captured["helper_rules"] == project.animations[0].extensions[
+        "helper_retarget_rules"
+    ]
+
+
 def test_explicit_rest_mode_rejects_blank_or_directory(tmp_path: Path) -> None:
     project = _project(tmp_path, embedded=False)
     project.rig.source_rest_fbx = ""

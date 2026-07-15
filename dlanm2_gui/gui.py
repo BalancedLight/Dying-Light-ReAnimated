@@ -26,7 +26,18 @@ from .dl2_anm2 import detect_anm2_format, parse_dl2_header42
 from .anm2_fbx import chrome_rig_from_fbx_skeleton
 from .blender_fbx import discover_blender, export_anm2_to_fbx
 from .background_tasks import BackgroundTaskRunner, TaskFailure
-from .bone_maps import GenericBoneMap, BoneMapPair, auto_map_skeletons
+from .bone_maps import (
+    COMPONENT_POLICIES,
+    GenericBoneMap,
+    BoneMapPair,
+    auto_map_skeletons,
+)
+from .helper_profiles import recognized_helper_names, suggested_helper_source
+from .helper_retarget import (
+    HelperRetargetRule,
+    helper_rules_from_dicts,
+    helper_rules_to_dicts,
+)
 from .oracle.binary_fbx_mixamo import _FbxDocument
 from .project_builder import build_project, export_project_anm2_files
 from .fbx_preflight import preflight_fbx
@@ -37,6 +48,7 @@ from .retarget_profiles import (
     auto_map_source_bones,
 )
 from .retarget_mapping import auto_map_crig_to_fbx
+from .root_mapping import read_smd_hierarchy
 from .script_targets import (
     AnimationScriptTarget,
     BUILTIN_SCRIPT_TARGETS,
@@ -54,6 +66,15 @@ from .workspace_project import (
     PROJECT_EXTENSION,
     ProjectAnimation,
 )
+
+
+_HELPER_COMPONENT_LABELS = {
+    "rotation": "Rotation",
+    "translation": "Translation",
+    "rotation_translation": "Rotation + translation",
+    "scale": "Scale",
+    "full_transform": "Full transform",
+}
 
 
 def _load_qt() -> dict[str, Any]:
@@ -519,7 +540,8 @@ class MainWindow:
         layout.setSpacing(8)
         intro = qt["QLabel"](
             "Auto-map handles standard Mixamo and common humanoid names. Review required roles, "
-            "then change any incorrect source-bone dropdown manually."
+            "then change any incorrect source-bone dropdown manually. Enable Show helper bones "
+            "to map refcamera, eyecamera, holders, twists, and other target helpers."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -553,6 +575,14 @@ class MainWindow:
         actions.addWidget(auto_button)
         actions.addWidget(apply_button)
 
+        self.show_helper_bones = qt["QCheckBox"]("Show helper bones")
+        self.show_helper_bones.setToolTip(
+            "Adds helper targets from the selected Dying Light target SMD to this table. "
+            "Helpers remain unmapped until you select a source FBX bone."
+        )
+        self.show_helper_bones.toggled.connect(self._retarget_clip_changed)
+        actions.addWidget(self.show_helper_bones)
+
         self.retarget_advanced_actions = qt["QWidget"]()
         advanced_actions = qt["QHBoxLayout"](self.retarget_advanced_actions)
         advanced_actions.setContentsMargins(0, 0, 0, 0)
@@ -582,9 +612,17 @@ class MainWindow:
 
         splitter = qt["QSplitter"]()
         splitter.setChildrenCollapsible(False)
-        self.mapping_table = qt["QTableWidget"](0, 6)
+        self.mapping_table = qt["QTableWidget"](0, 7)
         self.mapping_table.setHorizontalHeaderLabels(
-            ["Group", "Humanoid role", "Source FBX bone", "Required", "Confidence", "Method"]
+            [
+                "Group",
+                "Target role / helper",
+                "Source FBX bone",
+                "Required",
+                "Confidence",
+                "Method",
+                "Components",
+            ]
         )
         self.mapping_table.setAlternatingRowColors(True)
         self.mapping_table.setShowGrid(False)
@@ -599,6 +637,7 @@ class MainWindow:
         mheader.setSectionResizeMode(3, qt["QHeaderView"].ResizeToContents)
         mheader.setSectionResizeMode(4, qt["QHeaderView"].ResizeToContents)
         mheader.setSectionResizeMode(5, qt["QHeaderView"].ResizeToContents)
+        mheader.setSectionResizeMode(6, qt["QHeaderView"].ResizeToContents)
         splitter.addWidget(self.mapping_table)
 
         self.ignored_bones_panel = qt["QGroupBox"]("Unmapped / ignored source bones")
@@ -1490,6 +1529,19 @@ class MainWindow:
         self._mark_dirty()
         return profile
 
+    def _target_helper_names(self) -> tuple[str, ...]:
+        configured = Path(self.project.rig.canonical_smd)
+        candidates = [configured]
+        if not configured.is_absolute():
+            candidates.append(resource_root() / configured)
+        smd_path = next((path for path in candidates if path.is_file()), None)
+        if smd_path is None:
+            raise FileNotFoundError(
+                f"Target SMD was not found: {self.project.rig.canonical_smd}"
+            )
+        hierarchy = read_smd_hierarchy(smd_path)
+        return recognized_helper_names(row.name for row in hierarchy)
+
     def _refresh_mapping_table(
         self,
         animation: ProjectAnimation,
@@ -1498,9 +1550,18 @@ class MainWindow:
     ) -> None:
         qt = self.qt
         source_bones = sorted(document.limb_models)
+        helper_names = (
+            self._target_helper_names() if self.show_helper_bones.isChecked() else ()
+        )
+        helper_rules = {
+            rule.target_bone: rule
+            for rule in helper_rules_from_dicts(
+                animation.extensions.get("helper_retarget_rules", ()) or ()
+            )
+        }
         self._refreshing = True
         try:
-            self.mapping_table.setRowCount(len(HUMANOID_ROLES))
+            self.mapping_table.setRowCount(len(HUMANOID_ROLES) + len(helper_names))
             for row_index, role in enumerate(HUMANOID_ROLES):
                 for column, text in (
                     (0, role.group),
@@ -1541,15 +1602,180 @@ class MainWindow:
                         )
                     )
                 self.mapping_table.setCellWidget(row_index, 2, combo)
+
+                component_item = qt["QTableWidgetItem"]("Body solver")
+                component_item.setFlags(
+                    component_item.flags() & ~qt["Qt"].ItemIsEditable
+                )
+                self.mapping_table.setItem(row_index, 6, component_item)
+
+            for helper_offset, target_name in enumerate(helper_names):
+                row_index = len(HUMANOID_ROLES) + helper_offset
+                rule = helper_rules.get(target_name)
+                suggestion = suggested_helper_source(target_name, source_bones)
+                component_policy = (
+                    rule.component_policy
+                    if rule is not None
+                    else (suggestion[1] if suggestion else "full_transform")
+                )
+                method = (
+                    "manual helper override"
+                    if rule is not None
+                    else (
+                        f"Suggested: {suggestion[0]} (not enabled)"
+                        if suggestion
+                        else "unmapped helper"
+                    )
+                )
+                for column, text in (
+                    (0, "Helper"),
+                    (1, target_name),
+                    (3, "Optional"),
+                    (4, "1.00" if rule is not None else "0.00"),
+                    (5, method),
+                ):
+                    item = qt["QTableWidgetItem"](text)
+                    item.setData(qt["Qt"].UserRole, f"helper:{target_name}")
+                    item.setFlags(item.flags() & ~qt["Qt"].ItemIsEditable)
+                    self.mapping_table.setItem(row_index, column, item)
+
+                source_combo = self._combo_box()
+                source_combo.setEditable(True)
+                source_combo.setMinimumHeight(30)
+                source_combo.setToolTip(
+                    f"Source FBX bone that drives target helper {target_name}. "
+                    "The same source bone may drive body roles and multiple helpers."
+                )
+                source_combo.addItem("(unmapped — keep bind / inherit parent)", "")
+                for source_name in source_bones:
+                    source_combo.addItem(source_name, source_name)
+                mapped_source = rule.source_bone if rule is not None else ""
+                source_index = source_combo.findData(mapped_source)
+                if source_index >= 0:
+                    source_combo.setCurrentIndex(source_index)
+                else:
+                    source_combo.setEditText(mapped_source)
+
+                component_combo = self._combo_box()
+                component_combo.setMinimumHeight(30)
+                component_combo.setToolTip(
+                    "Choose which parts of the source transform replace this helper track."
+                )
+                for value in COMPONENT_POLICIES:
+                    component_combo.addItem(_HELPER_COMPONENT_LABELS[value], value)
+                component_combo.setCurrentIndex(
+                    max(0, component_combo.findData(component_policy))
+                )
+
+                callback = (
+                    lambda _index,
+                    aid=animation.animation_id,
+                    target=target_name,
+                    source=source_combo,
+                    components=component_combo: self._helper_mapping_widgets_changed(
+                        aid, target, source, components
+                    )
+                )
+                source_combo.activated.connect(callback)
+                component_combo.currentIndexChanged.connect(callback)
+                if source_combo.lineEdit() is not None:
+                    source_combo.lineEdit().returnPressed.connect(
+                        lambda aid=animation.animation_id,
+                        target=target_name,
+                        source=source_combo,
+                        components=component_combo: self._helper_mapping_widgets_changed(
+                            aid, target, source, components
+                        )
+                    )
+                self.mapping_table.setCellWidget(row_index, 2, source_combo)
+                self.mapping_table.setCellWidget(row_index, 6, component_combo)
         finally:
             self._refreshing = False
-        self._update_mapping_summary(profile, source_bones)
+        self._update_mapping_summary(profile, source_bones, animation)
+        self._filter_mapping_rows()
+
+    def _helper_mapping_widgets_changed(
+        self,
+        animation_id: str,
+        target_name: str,
+        source_combo: Any,
+        component_combo: Any,
+    ) -> None:
+        source_data = source_combo.currentData()
+        source_name = (
+            str(source_data)
+            if source_data is not None
+            else source_combo.currentText().strip()
+        )
+        if source_name.startswith("(unmapped"):
+            source_name = ""
+        self._helper_mapping_changed(
+            animation_id,
+            target_name,
+            source_name,
+            str(component_combo.currentData() or "full_transform"),
+        )
+
+    def _helper_mapping_changed(
+        self,
+        animation_id: str,
+        target_name: str,
+        source_name: str,
+        component_policy: str,
+    ) -> None:
+        if self._refreshing:
+            return
+        animation = self.project.animation_by_id(animation_id)
+        if animation is None:
+            return
+        rules = helper_rules_from_dicts(
+            animation.extensions.get("helper_retarget_rules", ()) or ()
+        )
+        rules = [rule for rule in rules if rule.target_bone != target_name]
+        source_name = source_name.strip()
+        if source_name:
+            rules.append(
+                HelperRetargetRule(
+                    target_name,
+                    source_name,
+                    "rest_relative",
+                    component_policy,
+                )
+            )
+        animation.extensions["helper_retarget_rules"] = helper_rules_to_dicts(rules)
+        # Old development builds persisted a hidden profile choice. It no
+        # longer controls visibility or output and is removed on first edit.
+        animation.extensions.pop("helper_target_profile", None)
+        self._mark_dirty()
+
+        for row in range(self.mapping_table.rowCount()):
+            target_item = self.mapping_table.item(row, 1)
+            if (
+                target_item is None
+                or target_item.data(self.qt["Qt"].UserRole)
+                != f"helper:{target_name}"
+            ):
+                continue
+            self.mapping_table.item(row, 4).setText("1.00" if source_name else "0.00")
+            self.mapping_table.item(row, 5).setText(
+                "manual helper override" if source_name else "unmapped helper"
+            )
+            break
+
+        payload = self.project.mapping_profiles.get(animation.mapping_profile_id)
+        if payload is not None:
+            profile = SourceBoneMappingProfile.from_dict(payload)
+            document = self._source_document(animation.source_fbx)
+            self._update_mapping_summary(
+                profile, sorted(document.limb_models), animation
+            )
         self._filter_mapping_rows()
 
     def _update_mapping_summary(
         self,
         profile: SourceBoneMappingProfile,
         source_bones: list[str],
+        animation: ProjectAnimation | None = None,
     ) -> None:
         errors = profile.validate(source_bones)
         mapped = len(profile.role_to_bone)
@@ -1558,13 +1784,31 @@ class MainWindow:
             1 for role in HUMANOID_ROLES if role.required and role.role_id in profile.role_to_bone
         )
         color = "#2e7d32" if not errors else "#b71c1c"
+        helper_rules = (
+            helper_rules_from_dicts(
+                animation.extensions.get("helper_retarget_rules", ()) or ()
+            )
+            if animation is not None
+            else []
+        )
+        helper_sources = {rule.source_bone for rule in helper_rules}
+        helper_note = (
+            f"<br>{len(helper_rules)} helper override(s) mapped from the selected target rig."
+            if helper_rules
+            else ""
+        )
         self.mapping_status.setText(
             f"<b style='color:{color}'>{'Ready' if not errors else 'Needs attention'}</b> — "
             f"{mapped} roles mapped; {required_mapped}/{required_count} required roles. "
             f"Skeleton hash: {profile.source_skeleton_hash[:16]}…"
             + ("<br>" + "<br>".join(errors[:8]) if errors else "")
+            + helper_note
         )
-        self.ignored_bones.setPlainText("\n".join(profile.ignored_bones))
+        self.ignored_bones.setPlainText(
+            "\n".join(
+                bone for bone in profile.ignored_bones if bone not in helper_sources
+            )
+        )
 
     def _mapping_changed(self, animation_id: str, role_id: str, value: str) -> None:
         if self._refreshing:
@@ -1594,7 +1838,9 @@ class MainWindow:
             )
             self.mapping_table.item(row, 5).setText(profile.method_by_role.get(role_id, ""))
             break
-        self._update_mapping_summary(profile, sorted(document.limb_models))
+        self._update_mapping_summary(
+            profile, sorted(document.limb_models), animation
+        )
         self._filter_mapping_rows()
 
     def auto_map_selected(self) -> None:
@@ -1636,6 +1882,8 @@ class MainWindow:
             profile.profile_id = animation.mapping_profile_id
         animation.mapping_profile_id = profile.profile_id
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
+        animation.extensions["helper_retarget_rules"] = []
+        animation.extensions.pop("helper_target_profile", None)
         self._mark_dirty()
         self._refresh_mapping_table(animation, document, profile)
 
@@ -1662,6 +1910,10 @@ class MainWindow:
                 continue
             if candidate.source_skeleton_hash == profile.source_skeleton_hash:
                 row.mapping_profile_id = profile.profile_id
+                row.extensions["helper_retarget_rules"] = deepcopy(
+                    animation.extensions.get("helper_retarget_rules", [])
+                )
+                row.extensions.pop("helper_target_profile", None)
                 applied += 1
             else:
                 skipped += 1

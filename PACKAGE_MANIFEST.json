@@ -12,8 +12,8 @@
   "key_files": [
     {
       "path": "reference/dl2/player_shadow_caster.smd",
-      "size": 6566,
-      "sha256": "28469EB5447C1E8AEFF0A6095A263B35E1C6005230450984C9F048E9C9E9AB69"
+      "size": 6398,
+      "sha256": "EC2D0D2E4FDF221491318E83B9A3FF8AAB82F856A94C6E1E1AAB23784B109A0D"
     },
     {
       "path": "reference/dl2/0_m_fpp_farjump.anm2",
@@ -22,8 +22,8 @@
     },
     {
       "path": "reference/dl2/player_shadow_caster.crig",
-      "size": 46566,
-      "sha256": "BD57D04C970E781F177BE2E1203CE7E3089F0D40985338598EFAA341C5909FB1"
+      "size": 46631,
+      "sha256": "207AA68351447124D155440C6D705272A9B94FA8FF9C188DB254D2EB0993671D"
     },
     {
       "path": "examples/dl2_player_shadow_caster.example.dlraproj",

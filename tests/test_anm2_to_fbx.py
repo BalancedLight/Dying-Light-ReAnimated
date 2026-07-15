@@ -103,14 +103,18 @@ def test_auto_map_then_bind_relative_cross_rig(tmp_path: Path) -> None:
     assert suggested.validate() == []
 
 
-def test_generic_bone_map_roundtrip_and_duplicate_rejection(tmp_path: Path) -> None:
+def test_generic_bone_map_roundtrip_allows_source_fanout_and_rejects_duplicate_target(
+    tmp_path: Path,
+) -> None:
     mapping = GenericBoneMap.create("Map", "source", "target")
     mapping.pairs = [BoneMapPair(1, "door", "hinge", 0.9, "normalized")]
     path = mapping.save(tmp_path / "door-map")
     loaded = GenericBoneMap.load(path)
     assert loaded.pairs[0].target_bone == "hinge"
     loaded.pairs.append(BoneMapPair(2, "handle", "hinge"))
-    assert any("target bone" in row.lower() for row in loaded.validate())
+    assert loaded.validate() == []
+    loaded.pairs.append(BoneMapPair(2, "handle", "other_source"))
+    assert any("target rig" in row.lower() for row in loaded.validate())
 
 
 def test_full_decoder_crosses_physical_page_boundary(tmp_path: Path) -> None:

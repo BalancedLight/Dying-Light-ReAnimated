@@ -264,4 +264,16 @@ def test_private_dl2_fbx_is_superset_bind_corrected_and_builds() -> None:
     assert result.report["root_mapping"]["source_bone"] == "pelvis"
     assert result.report["root_mapping"]["target_bone"] == "pelvis"
     assert result.report["static_target_bones"] == ["player_shadowcaster"]
+    normalization = result.report["source_global_normalization"]
+    assert normalization["meters_per_unit"] == pytest.approx(0.01)
+    assert normalization["unit_conversion_count"] == 1
+    assert normalization["axis_conversion"] == "fbx_y_up_to_dying_light"
+    assert normalization["axis_conversion_count"] == 1
+    assert normalization["axis_conversion_source"] == "retained_wrapper"
+    assert normalization["wrapper_policy"] == "retained_and_scale_normalized"
+    safety = result.report["hierarchy_safety"]
+    assert safety["status"] == "pass"
+    assert safety["maximum_non_root_translation_delta_meters"] < 1.0e-6
+    assert safety["maximum_parent_child_length_ratio"] == pytest.approx(1.0)
+    assert safety["minimum_parent_child_length_ratio"] == pytest.approx(1.0)
     assert result.report["decoded_max_component_error"] < 0.004

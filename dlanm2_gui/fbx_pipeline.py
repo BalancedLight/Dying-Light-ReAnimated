@@ -35,6 +35,8 @@ def build_fbx_rpack(
     source_bone_aliases: Mapping[str, str] | None = None,
     animation_script_resource_name: str = "anims_man_all_DLC60",
     include_controls: bool = True,
+    helper_rules: Sequence[Mapping[str, Any]] | None = None,
+    helper_target_profile: str = "dl1_legacy_70_track",
 ) -> dict[str, Any]:
     """Build custom ANM2 resources and one editor-loadable RPack.
 
@@ -71,6 +73,8 @@ def build_fbx_rpack(
         source_bone_aliases=source_bone_aliases,
         animation_script_resource_name=animation_script_resource_name,
         include_controls=include_controls,
+        helper_rules=helper_rules,
+        helper_target_profile=helper_target_profile,
     )
 
 

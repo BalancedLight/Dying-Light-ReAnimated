@@ -87,6 +87,7 @@ def main() -> int:
         "primary_root": "pelvis",
         "independent_roots": ["l_iktarget", "r_iktarget", "player_shadowcaster"],
         "finger_policy": "dl2_explicit_finger10_20_30_40_roots",
+        "resolved_model_axis_conversion": "fbx_y_up_to_dying_light",
         "writer_compatibility": "format1_compatibility_experimental",
     })
 

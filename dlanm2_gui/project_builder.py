@@ -48,7 +48,10 @@ from .fbx_preflight import (
     preflight_fbx,
 )
 from .game_profiles import DL2_GAME_ID, get_game_profile
+from .helper_retarget import helper_rules_from_dicts, helper_rules_to_dicts
 from .root_mapping import RootMappingSelection
+from .retarget_routing import select_exact_solver
+from .target_package import validate_target_package
 
 # DLR_MIMIC_PROTOTYPE_BODY_CORE
 
@@ -65,10 +68,11 @@ def _reviewed_mapping_is_name_identity(bone_map: GenericBoneMap) -> bool:
     target pivots and use the local rotation-delta solver.
     """
 
-    return bool(bone_map.pairs) and all(
+    base_pairs = bone_map.base_pairs
+    return bool(base_pairs) and all(
         normalized_bone_name(row.source_bone)
         == normalized_bone_name(row.target_bone)
-        for row in bone_map.pairs
+        for row in base_pairs
     )
 
 
@@ -166,6 +170,20 @@ def _build_body_project(
         raise ValueError("Project does not contain any enabled animations")
 
     retarget_mode = project.rig.retarget_mode
+    game_profile = get_game_profile(project.game_id)
+    target_package_coherence: dict[str, Any] = {}
+    if (
+        project.rig.target_rig_ref == game_profile.target_rig_ref
+        and game_profile.target_rig_relative_path
+    ):
+        coherence = validate_target_package(
+            game_profile,
+            smd_path=project.rig.canonical_smd,
+            crig_path=project.rig.target_rig_path,
+            reference_anm2_path=project.rig.target_template_anm2,
+        )
+        coherence.require_valid(game_profile.display_name)
+        target_package_coherence = coherence.to_dict()
     rig_paths: dict[str, Path] = {}
     exact_rig: ChromeRig | None = None
     target_rig_definition: ChromeRig | None = None
@@ -274,6 +292,9 @@ def _build_body_project(
     sequences_by_script: dict[str, list[AnimationScrSequence]] = {}
     built_rows: list[BuiltAnimation] = []
     manifest_rows: list[PackResourceManifest] = []
+    solver_selection_rows: list[dict[str, Any]] = []
+    normalization_rows: list[dict[str, Any]] = []
+    hierarchy_safety_rows: list[dict[str, Any]] = []
     controls_added = False
 
     for index, animation in enumerate(enabled, start=1):
@@ -337,29 +358,27 @@ def _build_body_project(
                     "incompatible mapping from a previous target rig. Click Create .crig map "
                     "to generate an editable map for the selected custom target."
                 )
-            if mapping_payload.get("format") == "dl-reanimated-bone-map":
-                bone_map = GenericBoneMap.from_dict(mapping_payload)
-                mapping_document = _FbxDocument(source_path)
-                if animation.source_animation_stack:
-                    mapping_document.select_animation_stack(
-                        animation.source_animation_stack
-                    )
-                compatibility = classify_target_compatibility(
-                    mapping_document, exact_rig
+            bone_map = (
+                GenericBoneMap.from_dict(mapping_payload)
+                if mapping_payload.get("format") == "dl-reanimated-bone-map"
+                else None
+            )
+            mapping_document = _FbxDocument(source_path)
+            if animation.source_animation_stack:
+                mapping_document.select_animation_stack(
+                    animation.source_animation_stack
                 )
-                same_target_topology = not (
-                    compatibility.get("required_missing_bones")
-                    or compatibility.get("hierarchy_mismatches")
+            compatibility = classify_target_compatibility(
+                mapping_document, exact_rig
+            )
+            solver_selection = select_exact_solver(compatibility, bone_map)
+            if not solver_selection.build_allowed:
+                raise ValueError(
+                    f"Animation {animation.display_name!r} cannot be built: "
+                    + solver_selection.blocking_error
                 )
-                identity_mapping = _reviewed_mapping_is_name_identity(bone_map)
-                transfer_policy = (
-                    "global_bind_basis_correction"
-                    if same_target_topology
-                    and identity_mapping
-                    and getattr(mapping_document, "bind_global_matrices", None)
-                    and hasattr(mapping_document, "global_matrices")
-                    else "mapped_local_rotation_delta"
-                )
+            if solver_selection.selected_engine == "MappedRigRetargetEngine":
+                assert bone_map is not None
                 source_rest_policy = "reviewed_mapped_crig"
                 exact_build = build_mapped_rig_anm2(
                     source_path,
@@ -368,18 +387,12 @@ def _build_body_project(
                     fps=animation.fps,
                     animation_stack=animation.source_animation_stack or None,
                     root_mapping=RootMappingSelection.from_animation(animation),
-                    transfer_policy=transfer_policy,
+                    transfer_policy=solver_selection.selected_policy,
                     root_policy=animation.root_policy,
                 )
                 exact_build.report["mapping_transfer_selection"] = {
-                    "policy": transfer_policy,
-                    "reason": (
-                        "source hierarchy is target-compatible; preserve authoritative "
-                        "global bind pivots"
-                        if transfer_policy == "global_bind_basis_correction"
-                        else "reviewed cross-rig map; preserve target local translations/scales "
-                        "and apply source rest-relative rotation"
-                    ),
+                    "policy": solver_selection.selected_policy,
+                    "reason": solver_selection.selection_reason,
                     "source_target_classification": compatibility.get(
                         "classification", "cross_rig"
                     ),
@@ -389,7 +402,7 @@ def _build_body_project(
                     "hierarchy_mismatch_count": len(
                         compatibility.get("hierarchy_mismatches", ())
                     ),
-                    "identity_mapping": identity_mapping,
+                    "identity_mapping": _reviewed_mapping_is_name_identity(bone_map),
                 }
             else:
                 source_rest_policy = "exact_same_rig"
@@ -401,6 +414,7 @@ def _build_body_project(
                     root_mapping=RootMappingSelection.from_animation(animation),
                     root_policy=animation.root_policy,
                 )
+            exact_build.report["solver_selection"] = solver_selection.to_dict()
             payload = exact_build.payload
             candidate_path = clip_out / f"{resource_name}.anm2"
             candidate_path.write_bytes(payload)
@@ -409,6 +423,9 @@ def _build_body_project(
             retarget_report["requested_project_root_policy"] = animation.root_policy
         else:
             assert profile is not None
+            helper_rules = helper_rules_from_dicts(
+                animation.extensions.get("helper_retarget_rules", ()) or ()
+            )
             source_rest_for_clip = (
                 source_path
                 if project.rig.use_imported_animation_bind_pose
@@ -436,6 +453,7 @@ def _build_body_project(
                 include_controls=(
                     project.export.include_validation_controls and not controls_added
                 ),
+                helper_rules=helper_rules_to_dicts(helper_rules),
             )
             reports = json.loads(
                 (clip_out / "retarget_candidate_summary.json").read_text(encoding="utf-8")
@@ -448,6 +466,8 @@ def _build_body_project(
             candidate_path = Path(retarget_report["candidate_path"])
             payload = candidate_path.read_bytes()
         retarget_report["game_id"] = project.game_id
+        if target_package_coherence:
+            retarget_report["target_package_coherence"] = target_package_coherence
         if preflight is not None:
             retarget_report["fbx_preflight"] = preflight.to_dict()
         retarget_report["output_anm2_format"] = (
@@ -456,6 +476,23 @@ def _build_body_project(
         retarget_report["output_validation_status"] = (
             "experimental" if project.game_id == DL2_GAME_ID else "validated"
         )
+        report_identity = {
+            "animation_id": animation.animation_id,
+            "animation_name": animation.display_name,
+            "resource_name": resource_name,
+        }
+        if retarget_report.get("solver_selection"):
+            solver_selection_rows.append(
+                {**report_identity, **retarget_report["solver_selection"]}
+            )
+        if retarget_report.get("source_global_normalization"):
+            normalization_rows.append(
+                {**report_identity, **retarget_report["source_global_normalization"]}
+            )
+        if retarget_report.get("hierarchy_safety"):
+            hierarchy_safety_rows.append(
+                {**report_identity, **retarget_report["hierarchy_safety"]}
+            )
         for message in retarget_report.get("warnings", []):
             rendered = f"{animation.display_name}: {message}"
             warnings.append(rendered)
@@ -648,7 +685,6 @@ def _build_body_project(
     )
     manifest_path = manifest.save_for_pack(output_pack)
 
-    game_profile = get_game_profile(project.game_id)
     report = {
         "status": "ok",
         "project_id": project.project_id,
@@ -669,6 +705,19 @@ def _build_body_project(
             target_rig_definition.skeleton_hash if target_rig_definition else ""
         ),
         "retarget_mode": retarget_mode,
+        "target_package_coherence": target_package_coherence or None,
+        "solver_selection": (
+            solver_selection_rows[0] if len(solver_selection_rows) == 1 else None
+        ),
+        "solver_selections": solver_selection_rows,
+        "source_global_normalization": (
+            normalization_rows[0] if len(normalization_rows) == 1 else None
+        ),
+        "source_global_normalizations": normalization_rows,
+        "hierarchy_safety": (
+            hierarchy_safety_rows[0] if len(hierarchy_safety_rows) == 1 else None
+        ),
+        "hierarchy_safety_results": hierarchy_safety_rows,
         "build_mode": project.export.mode,
         "pack_path": str(output_pack),
         "pack_sha256": manifest.pack_sha256,

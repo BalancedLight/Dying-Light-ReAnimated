@@ -13,7 +13,13 @@ from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 import re
 
-from .bone_maps import BoneMapPair, GenericBoneMap, auto_map_skeletons, skeleton_signature
+from .bone_maps import (
+    BoneMapPair,
+    GenericBoneMap,
+    auto_map_skeletons,
+    set_mapping_profile_origin,
+    skeleton_signature,
+)
 from .chrome_rig import ChromeRig
 from .root_mapping import resolve_source_root
 
@@ -261,6 +267,38 @@ def auto_map_crig_to_fbx(
             (name, target_parents.get(name)) for name in sorted(names)
         ),
     )
+    source_name_set = set(names)
+    target_name_set = {bone.name for bone in rig.bones}
+    required_names = {
+        bone.name for bone in rig.bones if bone.deform and not bone.helper
+    }
+
+    def nearest_target_ancestor(name: str) -> str | None:
+        seen: set[str] = set()
+        cursor = target_parents.get(name)
+        while cursor is not None and cursor not in seen:
+            if cursor in target_name_set:
+                return cursor
+            seen.add(cursor)
+            cursor = target_parents.get(cursor)
+        return None
+
+    hierarchy_mismatch = False
+    for bone in rig.bones:
+        if bone.name not in source_name_set:
+            continue
+        expected_parent = (
+            rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
+        )
+        if nearest_target_ancestor(bone.name) != expected_parent:
+            hierarchy_mismatch = True
+            break
+    set_mapping_profile_origin(
+        profile,
+        "automatic_identity"
+        if not (required_names - source_name_set) and not hierarchy_mismatch
+        else "automatic_repair",
+    )
 
     # The generic fuzzy matcher is useful for props and identical skeletons,
     # but a cross-rig humanoid suggestion must never retain a confident-looking
@@ -386,7 +424,15 @@ def mapping_rows_for_ui(
                 "source_bone": pair.target_bone if pair else "",
                 "confidence": pair.confidence if pair else 0.0,
                 "method": pair.method if pair else "unmapped",
-                "role": canonical_humanoid_role(bone.name) or "",
+                "role": (
+                    "helper" if bone.helper else canonical_humanoid_role(bone.name) or ""
+                ),
+                "mapping_kind": pair.mapping_kind if pair else "bone",
+                "transfer_policy": pair.transfer_policy if pair else "default",
+                "component_policy": (
+                    pair.component_policy if pair else "full_transform"
+                ),
+                "target_helper": bool(bone.helper),
             }
         )
     return current, rows
