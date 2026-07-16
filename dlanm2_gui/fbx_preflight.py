@@ -17,6 +17,9 @@ from .model_importer.fbx_model import (
     BLENDSHAPE_MALFORMED,
     BLENDSHAPE_REAL_ANIMATED,
     BLENDSHAPE_REAL_STATIC,
+    FbxDomainError,
+    FbxImportTolerance,
+    FbxLoadPurpose,
     FbxScene,
 )
 
@@ -24,6 +27,9 @@ from .model_importer.fbx_model import (
 ERROR = "error"
 WARNING = "warning"
 INFO = "informational"
+PASS = "pass"
+AUTOMATICALLY_REPAIRED = "automatically_repaired"
+BLOCK = "block"
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +40,8 @@ class FbxPreflightFinding:
     why_it_matters: str
     can_continue: bool
     action: str
+    outcome: str = PASS
+    group: str = "needs_review"
 
 
 @dataclass(slots=True)
@@ -75,7 +83,21 @@ class FbxPreflightReport:
         action: str,
         *,
         can_continue: bool | None = None,
+        outcome: str | None = None,
+        group: str | None = None,
     ) -> None:
+        resolved_outcome = outcome or (
+            BLOCK if severity == ERROR else WARNING if severity == WARNING else PASS
+        )
+        resolved_group = group or (
+            "fatal"
+            if resolved_outcome == BLOCK
+            else "repaired"
+            if resolved_outcome == AUTOMATICALLY_REPAIRED
+            else "needs_review"
+            if resolved_outcome == WARNING
+            else "ignored"
+        )
         self.findings.append(
             FbxPreflightFinding(
                 severity,
@@ -84,6 +106,8 @@ class FbxPreflightReport:
                 why,
                 severity != ERROR if can_continue is None else bool(can_continue),
                 action,
+                resolved_outcome,
+                resolved_group,
             )
         )
 
@@ -183,29 +207,150 @@ def preflight_fbx(
     document: Any | None = None,
     scene: FbxScene | None = None,
     model_morph_support_enabled: bool = False,
+    tolerance: FbxImportTolerance | str = FbxImportTolerance.RECOMMENDED,
 ) -> FbxPreflightReport:
     source = Path(path)
     report = FbxPreflightReport(str(source), purpose)
     try:
         if document is None:
             document = (
-                FbxDocument.from_scene(scene)
+                FbxDocument.from_scene(
+                    scene,
+                    purpose=(
+                        FbxLoadPurpose.MODEL
+                        if purpose == "model"
+                        else FbxLoadPurpose.ANIMATION
+                    ),
+                    tolerance=tolerance,
+                )
                 if scene is not None
+                else FbxDocument(
+                    source,
+                    purpose=(
+                        FbxLoadPurpose.MODEL
+                        if purpose == "model"
+                        else FbxLoadPurpose.ANIMATION
+                    ),
+                    tolerance=tolerance,
+                )
+                if document_factory is FbxDocument
                 else document_factory(source)
             )
+    except FbxDomainError as exc:
+        report.add(
+            ERROR,
+            exc.code,
+            f"The requested FBX {exc.domain} domain is unusable: {exc}",
+            "Other parsed FBX domains are not evidence that this requested output can be built.",
+            "Repair the named requested-domain data and retry; unrelated model geometry does "
+            "not need to be changed for animation import.",
+        )
+        return report
     except Exception as exc:
         report.add(ERROR, "fbx_unreadable", f"The FBX could not be read: {exc}", "No reliable scene data is available.", "Export a supported binary FBX and try again.")
         return report
+    scene = getattr(document, "scene", scene)
     has_stack_inventory = hasattr(document, "animation_stacks")
     stacks = list(getattr(document, "animation_stacks", ()) or ())
+    stack_activity = (
+        list(document.animation_stack_activity())
+        if hasattr(document, "animation_stack_activity")
+        else []
+    )
     report.inventory.update(
         {
             "skeleton_bone_count": len(document.limb_models),
             "animation_stacks": [row.name for row in stacks],
+            "animation_stack_activity": [
+                row.to_dict() if hasattr(row, "to_dict") else str(row)
+                for row in stack_activity
+            ],
             "meters_per_unit": float(getattr(document, "meters_per_unit", 0.01)),
             "game_id": game_id,
+            "requested_purpose": purpose,
+            "import_tolerance": FbxImportTolerance.coerce(tolerance).value,
+            "loaded_domains": list(getattr(scene, "loaded_domains", ()) or ()),
+            "raw_geometry_inventory": list(
+                getattr(scene, "raw_geometry_inventory", ()) or ()
+            ),
+            "model_geometry_findings": list(
+                getattr(scene, "geometry_findings", ()) or ()
+            ),
         }
     )
+    raw_geometry = tuple(getattr(scene, "raw_geometry_inventory", ()) or ())
+    if purpose == "animation" and raw_geometry:
+        polygon_count = sum(int(row.get("polygon_count", 0)) for row in raw_geometry)
+        quad_count = sum(
+            int((row.get("polygon_size_counts", {}) or {}).get("4", 0))
+            for row in raw_geometry
+        )
+        ngon_count = sum(
+            int(count)
+            for row in raw_geometry
+            for size, count in (row.get("polygon_size_counts", {}) or {}).items()
+            if int(size) > 4
+        )
+        report.add(
+            INFO,
+            "model_geometry_ignored_for_animation",
+            f"The FBX contains {len(raw_geometry)} model mesh object(s) with "
+            f"{polygon_count} polygons ({quad_count} quads, {ngon_count} n-gons). "
+            "Model topology was not loaded or validated for animation import.",
+            "Skeletal ANM2 sampling uses the hierarchy, bind pose, selected animation "
+            "stack, and curves; display-mesh triangulation, tangents, normals, materials, "
+            "and skin topology are irrelevant to that output.",
+            "No model-mesh repair is required for animation import. Use Model or Full "
+            "Diagnostic purpose only when that geometry itself must be built or reviewed.",
+            outcome=PASS,
+            group="ignored",
+        )
+        inventory_errors = [
+            (str(row.get("name", "<unnamed>")), str(row.get("inventory_error", "")))
+            for row in raw_geometry
+            if str(row.get("inventory_error", ""))
+        ]
+        if inventory_errors:
+            report.add(
+                INFO,
+                "model_geometry_error_ignored_for_animation",
+                "Some unrequested model geometry could not even be inventoried: "
+                + "; ".join(
+                    f"{name}: {message}" for name, message in inventory_errors[:8]
+                ),
+                "The skeletal animation domain parsed independently and does not consume model "
+                "control-point or polygon-index arrays.",
+                "No action is required for ANM2 animation output. Repair the mesh only before "
+                "requesting a model build.",
+                outcome=PASS,
+                group="ignored",
+            )
+    if purpose == "model":
+        for finding in list(getattr(scene, "geometry_findings", ()) or ()):
+            code = str(finding.get("code", "model_polygon_repaired"))
+            geometry = str(finding.get("geometry", "<unnamed>"))
+            count = max(1, int(finding.get("count", 1)))
+            indexes = [int(value) for value in finding.get("polygon_indexes", ())]
+            polygon_note = (
+                " Representative polygon indexes: "
+                + ", ".join(str(value) for value in indexes)
+                + ("." if count <= len(indexes) else "; additional rows are aggregated.")
+                if indexes
+                else ""
+            )
+            report.add(
+                INFO,
+                code,
+                f"Automatically repaired {count} model geometry item(s) in {geometry!r} "
+                f"using {finding.get('method', 'deterministic recovery')}: "
+                f"{finding.get('reason', 'safe source-data recovery')}.{polygon_note}",
+                "The requested model uses the recovered triangles or reconstructed layer data; "
+                "polygon, material, and source-corner provenance remain attached to emitted faces.",
+                "Review the model build report if the source surface was intentionally unusual. "
+                "Use Strict diagnostics to make selected recovery warnings block before output.",
+                outcome=AUTOMATICALLY_REPAIRED,
+                group="repaired",
+            )
     if not document.limb_models:
         if purpose == "model":
             report.add(
@@ -294,29 +439,74 @@ def preflight_fbx(
     if purpose == "animation":
         if has_stack_inventory and not stacks:
             report.add(ERROR, "no_animation_stacks", "The FBX contains no animation stack.", "There is no clip to sample.", "Bake the desired action into an FBX animation stack.")
-        elif len(stacks) > 1:
-            report.add(WARNING, "multiple_animation_stacks", f"The FBX contains {len(stacks)} animation stacks.", "The intended clip must be selected explicitly.", "Select one stack; bake/flatten multi-layer stacks before building.")
         try:
             if stacks:
                 selected_stack = getattr(document, "selected_animation_stack", None)
                 selected_name = str(getattr(selected_stack, "name", "") or "")
-                if (
-                    animation_stack
-                    and selected_name != animation_stack
-                ) or (
-                    not animation_stack
-                    and selected_stack is None
-                ):
+                if animation_stack and selected_name != animation_stack:
                     document.select_animation_stack(animation_stack)
+                elif not animation_stack and selected_stack is None and hasattr(
+                    document, "select_preferred_animation_stack"
+                ):
+                    document.select_preferred_animation_stack()
         except ValueError as exc:
-            report.add(ERROR, "animation_stack_selection", str(exc), "Sampling an absent or layered stack would produce the wrong clip.", "Choose an available single-layer stack or bake/flatten it.")
+            report.add(ERROR, "animation_stack_unusable", str(exc), "Sampling an absent, malformed, or layered stack would produce the wrong clip.", "Choose an available single-layer stack or bake/flatten it.")
+        selected_stack = getattr(document, "selected_animation_stack", None)
+        selected_name = str(getattr(selected_stack, "name", "") or "")
+        if len(stacks) > 1 and selected_name:
+            report.add(
+                INFO,
+                "animation_stack_automatically_selected",
+                f"The FBX contains {len(stacks)} animation stacks; selected "
+                f"{selected_name!r} automatically from skeletal curve activity.",
+                "Static or unrelated stacks do not need to prevent import when exactly one "
+                "stack contains the useful skeletal clip.",
+                "No action is required. Manual stack selection remains available in the "
+                "animation row.",
+                outcome=AUTOMATICALLY_REPAIRED,
+                group="repaired",
+            )
+        elif len(stacks) > 1 and not selected_name:
+            report.add(
+                WARNING,
+                "multiple_animation_stacks",
+                f"The FBX contains {len(stacks)} animation stacks with no unique activity winner.",
+                "Choosing between multiple equally useful skeletal stacks changes the output clip.",
+                "Select the intended stack manually; static peer stacks do not need to be removed.",
+            )
+        unusable_activity = [row for row in stack_activity if not row.usable]
+        if stacks and stack_activity and len(unusable_activity) == len(stack_activity):
+            report.add(
+                ERROR,
+                "animation_stack_unusable",
+                "No animation stack has one usable baked layer with valid curve data: "
+                + "; ".join(
+                    f"{row.name}: {row.reason or 'unusable'}"
+                    for row in unusable_activity
+                ),
+                "There is no stack that can be sampled safely for skeletal output.",
+                "Bake or repair at least one named stack, ensuring finite ordered keys and "
+                "one animation layer, then re-export.",
+            )
+        selected_unusable = [
+            row
+            for row in unusable_activity
+            if row.name == (animation_stack or selected_name)
+        ]
+        for row in selected_unusable:
+            report.add(
+                ERROR,
+                "animation_stack_unusable",
+                f"Animation stack {row.name!r} is unusable: {row.reason}",
+                "Malformed curve data or layered animation cannot be sampled reliably.",
+                "Bake/repair the named stack or choose another usable stack.",
+            )
         curves = dict(getattr(document, "curves", {}) or {})
         changing = []
         facial = []
         for (object_id, prop, axis), (_times, values) in curves.items():
             if len(values) < 2 or max(values) - min(values) <= 1.0e-8:
                 continue
-            scene = getattr(document, "scene", None)
             name = scene.model_names.get(object_id, "") if scene is not None else ""
             if object_id in document.limb_models.values():
                 changing.append((name, prop, axis))
@@ -324,14 +514,35 @@ def preflight_fbx(
                     facial.append(name)
         report.inventory["changing_skeletal_channel_count"] = len(changing)
         if stacks and not changing:
-            report.add(WARNING, "no_changing_skeletal_channels", "The selected stack has no changing skeletal TRS channels.", "The output would remain at bind pose.", "Select the intended body animation stack or rebake skeletal animation.")
+            selected_activity = next(
+                (row for row in stack_activity if row.name == selected_name),
+                None,
+            )
+            if (
+                selected_activity is not None
+                and selected_activity.skeletal_channel_count > 0
+            ):
+                report.add(
+                    INFO,
+                    "static_rest_pose_stack",
+                    f"Animation stack {selected_name!r} contains "
+                    f"{selected_activity.skeletal_channel_count} constant skeletal channels "
+                    "and is importable as a rest-pose clip.",
+                    "A deliberately static T-pose or bind-pose source is useful even though "
+                    "no channel changes over time.",
+                    "No action is required unless a moving clip was expected.",
+                    outcome=PASS,
+                    group="ignored",
+                )
+            else:
+                report.add(WARNING, "no_changing_skeletal_channels", "The selected stack has no changing skeletal TRS channels.", "The output would remain at bind pose.", "Select the intended body animation stack or keep it only when a bind-pose clip is intentional.")
         elif changing and set(facial) == {row[0] for row in changing}:
             report.add(WARNING, "facial_only_curves", "Only facial-like bones have changing curves.", "A body ANM2 export may be static.", "Use the facial/mimic workflow or select a body animation stack.")
     diagnostics = document.bind_diagnostics() if hasattr(document, "bind_diagnostics") else {}
     report.inventory["bind"] = diagnostics
     coverage = diagnostics.get("bind_coverage", {})
     if coverage and coverage.get("authoritative", 0) < coverage.get("total", 0):
-        report.add(WARNING, "partial_bind_pose", f"Authoritative bind coverage is {coverage.get('authoritative')}/{coverage.get('total')} bones.", "Fallback Model transforms may not equal the skinned bind pose.", "Re-export with a complete BindPose or skin TransformLink matrices.")
+        report.add(WARNING, "bind_pose_partial", f"Authoritative bind coverage is {coverage.get('authoritative')}/{coverage.get('total')} bones.", "Fallback Model transforms may not equal the skinned bind pose.", "Re-export with a complete BindPose or skin TransformLink matrices.")
     bind_conflicts = [
         *diagnostics.get("conflicting_transform_links", []),
         *diagnostics.get("conflicting_pose_transform_links", []),

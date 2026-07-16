@@ -113,6 +113,24 @@ def test_unknown_fields_are_preserved() -> None:
     assert project.extensions["unknown_fields"]["future_field"] == {"hello": "world"}
 
 
+def test_import_tolerance_and_saved_animation_diagnostics_roundtrip() -> None:
+    project = DlReanimatedProject.new("Tolerant import")
+    project.extensions["import_tolerance"] = "strict_diagnostics"
+    animation = ProjectAnimation.create("clip.fbx", resource_name="clip")
+    animation.extensions["fbx_preflight"] = {
+        "purpose": "animation",
+        "findings": [{"code": "model_geometry_ignored_for_animation", "group": "ignored"}],
+        "future_diagnostic_field": {"keep": True},
+    }
+    animation.extensions["future_animation_setting"] = [1, 2, 3]
+    project.animations.append(animation)
+
+    loaded = DlReanimatedProject.from_dict(project.to_dict())
+
+    assert loaded.extensions["import_tolerance"] == "strict_diagnostics"
+    assert loaded.animations[0].extensions == animation.extensions
+
+
 def test_newer_project_schema_is_rejected() -> None:
     with pytest.raises(ValueError, match="newer"):
         DlReanimatedProject.from_dict(

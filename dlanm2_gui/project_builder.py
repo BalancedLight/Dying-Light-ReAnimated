@@ -359,6 +359,9 @@ def _build_body_project(
     solver_by_animation: dict[str, Any] = {}
     humanoid_profile_by_animation: dict[str, SourceBoneMappingProfile] = {}
     expected_frame_count_by_animation: dict[str, int] = {}
+    import_tolerance = str(
+        project.extensions.get("import_tolerance", "recommended") or "recommended"
+    )
     for animation in enabled:
         source_path = Path(animation.source_fbx)
         if not source_path.is_file():
@@ -370,7 +373,15 @@ def _build_body_project(
                 "RPack output was created."
             )
         context = target_contexts[animation.animation_id]
-        document = _FbxDocument(source_path)
+        document = (
+            _FbxDocument(
+                source_path,
+                purpose="animation",
+                tolerance=import_tolerance,
+            )
+            if _FbxDocument is FbxDocument
+            else _FbxDocument(source_path)
+        )
         preflight = None
         if source_path.read_bytes()[:18] == b"Kaydara FBX Binary":
             preflight = preflight_fbx(
@@ -380,6 +391,7 @@ def _build_body_project(
                 target_rig=context.rig if context.retarget_mode == "exact" else None,
                 game_id=project.game_id,
                 document=document,
+                tolerance=import_tolerance,
             )
             hard_findings = [
                 row

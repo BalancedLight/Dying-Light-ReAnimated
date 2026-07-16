@@ -4,6 +4,14 @@ DL ReAnimated runs preflight when an FBX is imported/analyzed and again before m
 
 Import readiness and build readiness are intentionally different. A readable cross-rig animation may be added so its mapping can be repaired, while output remains blocked until the map and selected target are safe.
 
+## Purpose-scoped FBX loading
+
+The production reader requires an explicit load purpose: `ANIMATION`, `MODEL`, `ANIMATION_AND_FACIAL`, or `FULL_DIAGNOSTIC`. All purposes share the same hierarchy, transform, unit, axis, and bind evaluator. They do not share validation for data the caller did not request.
+
+Normal animation import loads the skeleton, animation stacks/curves, bind pose, and lightweight object/connection inventory. It does not construct `FbxGeometry`, triangulate polygons, validate model layer indexes, or load model materials/skin weights. Facial animation additionally follows `BlendShapeChannel`/`DeformPercent` curve connections without requiring polygon topology. Therefore a quad-heavy display mesh, missing tangent layer, or malformed unrequested model index array cannot become `fbx_unreadable` for ANM2 output.
+
+`fbx_unreadable` is reserved for container-level failures such as an invalid signature, truncated node stream, unsupported fundamental encoding, or object/connection corruption that prevents the requested domain from being parsed. Requested-domain failures use scoped codes such as `animation_skeleton_unusable`, `animation_stack_unusable`, `model_geometry_unusable`, and `facial_shape_geometry_unusable`.
+
 ## Canonical transform inventory
 
 Every readable binary FBX reports an `FbxTransformContract` containing:
@@ -29,8 +37,7 @@ A model build stops before output when a reliable MSH/CRIG cannot be authored, i
 
 - unreadable, ASCII, or unsupported-version FBX;
 - invalid geometry, polygon, layer, normal, UV, or material indexes;
-- non-finite/repeated/zero-area triangle data;
-- unsafe concave or non-planar polygon data that must be triangulated in the DCC;
+- non-finite coordinates, out-of-range control-point indexes, fewer than three usable distinct points, irreparably self-intersecting topology, or a face from which no valid output triangle can be produced;
 - singular, sheared, or irreducibly reflected bind/geometry transforms;
 - Unicode-normalized animation-node name collisions or descriptor collisions;
 - a manually selected root or fitted target role that is absent;
@@ -88,10 +95,17 @@ The source cannot be evaluated safely, the selected game/target is incoherent, o
 
 ## Warnings and informational findings
 
-Warnings do not necessarily invalidate an FBX:
+Findings have a requested-purpose disposition: `pass`, `warning`, `automatically_repaired`, or `block`. Warnings do not necessarily invalidate an FBX:
 
-- multiple animation stacks are present and require an explicit selection;
-- no changing skeletal channels were found in the selected stack;
+- multiple equally useful animation stacks require manual selection;
+- a deliberately static stack is importable as a rest-pose clip;
+- a unique changing skeletal stack was selected automatically while static peers remain manually selectable;
+- unrequested model geometry was ignored for animation;
+- a non-planar quad was triangulated by deterministic diagonal scoring;
+- a simple convex/concave n-gon was triangulated by deterministic projected ear clipping;
+- a valid polygon used the validated deterministic fan recovery path;
+- a missing normal layer was reconstructed;
+- excess skin influences were reduced to four and normalized, or minor unweighted vertices used the reviewed root fallback;
 - BindPose coverage is partial and Model transforms cover remaining nodes;
 - BindPose and `TransformLink` disagree;
 - a non-bone wrapper carries a representable axis/scale conversion;
@@ -116,7 +130,9 @@ Each finding states:
 4. a safe corrective action;
 5. whether import can continue for mapping repair.
 
-The GUI shows a concise summary and keeps the complete structured report in build output. Do not bypass a failure by deleting a report or reusing an older source MSH/CRIG.
+The GUI shows **Imported with warnings** on usable animation rows and exposes the complete report in the selected-clip diagnostics panel, grouped as repaired, ignored, needs review, and fatal. Batch import continues after one genuinely corrupt file. Python tracebacks remain hidden in normal GUI logs/dialogs; they are available only when advanced developer diagnostics are explicitly enabled. Do not bypass a failure by deleting a report or reusing an older source MSH/CRIG.
+
+The normal **Import tolerance** preference defaults to **Recommended / forgiving**. **Strict diagnostics** may promote selected requested-model recovery warnings to blockers, but it never makes irrelevant model geometry block animation import.
 
 Common recovery paths:
 

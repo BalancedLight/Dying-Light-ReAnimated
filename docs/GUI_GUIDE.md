@@ -86,6 +86,10 @@ Each row is one output animation. Core columns/controls include:
 - **Animation SCR**: project default or clip override;
 - **IK** recommendation.
 
+Usable clips with non-fatal preflight findings show **Imported with warnings**. Select the row to open **Selected clip import diagnostics**, which groups findings for that file and requested purpose under repaired, ignored, needs review, and fatal. Embedded model geometry is normally listed as ignored because skeletal ANM2 creation does not load or triangulate it. During batch import, a genuinely corrupt file is reported without preventing other usable clips from being added.
+
+The Project tab's **Import tolerance** defaults to **Recommended / forgiving**. **Strict diagnostics** is useful for model audits and may block selected model recovery warnings; it never makes unrequested model geometry block animation import. Normal GUI errors remain actionable and omit Python tracebacks. Advanced developer diagnostics must be enabled explicitly to include tracebacks in developer logs.
+
 An empty per-animation target inherits the Project target. An explicit target affects only that row. Animations for different CRIGs may coexist in one tool-owned RPack when resource names are unique; the build report groups output by target rig.
 
 Use the Target rig column and the target-rig filter to audit clips by model; optional grouping keeps clips for the same resolved target together. The build report groups completed output by target. Changing the Project default updates only rows that inherit it.
@@ -145,7 +149,7 @@ Use motion accumulator for locomotion that should move the object in the consumi
 
 ## Multiple animation stacks
 
-FBX stacks/actions are discovered by connection. Files with multiple stacks create selectable rows. Choose the intended stack. A multi-layer blended stack must be baked/flattened before build; a stack with no changing skeletal channels may be disabled or shown as a bind-pose warning.
+FBX stacks/actions are discovered by connection without loading model geometry. When exactly one stack contains changing skeletal channels, it is selected automatically; common static peer stacks remain available in the row dropdown. Equally useful peers create one editable row that requires manual selection rather than manufacturing one resource per stack. A multi-layer blended stack must be baked/flattened before build. A constant skeletal stack remains importable as an intentional T-pose/rest-pose clip.
 
 ## Export
 

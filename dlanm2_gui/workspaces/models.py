@@ -10,7 +10,6 @@ import hashlib
 import json
 import re
 import string
-import traceback
 
 from ..model_importer.compiler_bridge import CompilerSettings, compile_and_install_model
 from ..background_tasks import BackgroundTaskRunner, TaskFailure
@@ -19,7 +18,11 @@ from ..model_importer.crig import (
     build_crig_from_rig_contract_bytes,
     write_prebuilt_crig_payload,
 )
-from ..model_importer.fbx_model import FbxScene, ORIENTATION_POLICIES
+from ..model_importer.fbx_model import (
+    FbxImportTolerance,
+    FbxScene,
+    ORIENTATION_POLICIES,
+)
 from ..model_importer.msh_builder import (
     ModelBuildOptions,
     build_source_from_fbx,
@@ -346,6 +349,18 @@ class ModelWorkspace:
         self.material_mode = qt["QComboBox"]()
         self.material_mode.addItem("Known-good test material", "test")
         self.material_mode.addItem("Preserve slots as placeholder .mat names", "preserve_slots")
+        self.import_tolerance = qt["QComboBox"]()
+        self.import_tolerance.addItem(
+            "Recommended / forgiving", FbxImportTolerance.RECOMMENDED.value
+        )
+        self.import_tolerance.addItem(
+            "Strict diagnostics", FbxImportTolerance.STRICT_DIAGNOSTICS.value
+        )
+        self.import_tolerance.setToolTip(
+            "Recommended triangulates safe non-planar quads/n-gons and reports repairs. "
+            "Strict diagnostics blocks selected recovery warnings before output."
+        )
+        self.import_tolerance.currentIndexChanged.connect(self._changed)
         self.test_material = qt["QLineEdit"]("bottle_trash_a.mat")
         self.surface_name = qt["QLineEdit"]("Flesh")
         self.flip_v = qt["QCheckBox"]("Flip UV V")
@@ -364,6 +379,7 @@ class ModelWorkspace:
         if default_smd.is_file():
             self.target_smd.setText(str(default_smd))
         form.addRow("Materials", self.material_mode)
+        form.addRow("Import tolerance", self.import_tolerance)
         form.addRow("Test material", self.test_material)
         form.addRow("Physical surface", self.surface_name)
         form.addRow(self.flip_v)
@@ -522,19 +538,24 @@ class ModelWorkspace:
         try:
             for index, entry in enumerate(rows, 1):
                 try:
-                    entry.scene = FbxScene.from_path(entry.path)
+                    entry.scene = FbxScene.from_path(
+                        entry.path,
+                        purpose="model",
+                        tolerance=self._import_tolerance_value(),
+                    )
                     entry.inventory = entry.scene.inventory()
                     preflight = preflight_fbx(
                         entry.path,
                         purpose="model",
                         scene=entry.scene,
+                        tolerance=self._import_tolerance_value(),
                     )
                     entry.inventory["preflight"] = preflight.to_dict()
                     preflight.require_buildable()
                     entry.status = f"Ready ({entry.inventory['detected_mode']})"
                 except Exception as exc:
                     entry.status = f"ERROR: {exc}"
-                    self._append_log(traceback.format_exc())
+                    self._append_log(f"Model analysis failed: {exc}")
                 self.progress.setValue(index)
                 self.qt["QApplication"].processEvents()
         finally:
@@ -930,13 +951,26 @@ class ModelWorkspace:
         if entry is None:
             self._message("No humanoid model", "Choose Dying Light humanoid mode for a model first.")
             return
-        if entry.scene is None:
-            entry.scene = FbxScene.from_path(entry.path)
+        if (
+            entry.scene is None
+            or getattr(
+                entry.scene,
+                "import_tolerance",
+                self._import_tolerance_value(),
+            )
+            != self._import_tolerance_value()
+        ):
+            entry.scene = FbxScene.from_path(
+                entry.path,
+                purpose="model",
+                tolerance=self._import_tolerance_value(),
+            )
             entry.inventory = entry.scene.inventory()
         preflight = preflight_fbx(
             entry.path,
             purpose="model",
             scene=entry.scene,
+            tolerance=self._import_tolerance_value(),
         )
         preflight.require_buildable()
         entry.inventory = dict(entry.inventory or {})
@@ -1028,8 +1062,20 @@ class ModelWorkspace:
             self.mapping_note.setText("No model currently uses Dying Light Humanoid mode.")
             return
         try:
-            if entry.scene is None:
-                entry.scene = FbxScene.from_path(entry.path)
+            if (
+                entry.scene is None
+                or getattr(
+                    entry.scene,
+                    "import_tolerance",
+                    self._import_tolerance_value(),
+                )
+                != self._import_tolerance_value()
+            ):
+                entry.scene = FbxScene.from_path(
+                    entry.path,
+                    purpose="model",
+                    tolerance=self._import_tolerance_value(),
+                )
                 entry.inventory = entry.scene.inventory()
             nodes = self._target_smd_nodes()
             if not nodes:
@@ -1238,6 +1284,7 @@ class ModelWorkspace:
         return {
             "output_path": self.output_path.text(),
             "material_mode": str(self.material_mode.currentData()),
+            "import_tolerance": self._import_tolerance_value(),
             "test_material": self.test_material.text().strip(),
             "surface_name": self.surface_name.text().strip(),
             "flip_v": self.flip_v.isChecked(),
@@ -1260,13 +1307,22 @@ class ModelWorkspace:
         return result
 
     def _build_entry_for_job(self, entry: ModelEntry, config: dict[str, Any], progress) -> None:
-        if entry.scene is None:
-            entry.scene = FbxScene.from_path(entry.path)
+        tolerance = str(config.get("import_tolerance", "recommended"))
+        if (
+            entry.scene is None
+            or getattr(entry.scene, "import_tolerance", tolerance) != tolerance
+        ):
+            entry.scene = FbxScene.from_path(
+                entry.path,
+                purpose="model",
+                tolerance=tolerance,
+            )
             entry.inventory = entry.scene.inventory()
         model_preflight = preflight_fbx(
             entry.path,
             purpose="model",
             scene=entry.scene,
+            tolerance=tolerance,
         )
         model_preflight.require_buildable()
         if entry.inventory is None:
@@ -1497,6 +1553,7 @@ class ModelWorkspace:
             "test_material": self.test_material.text(),
             "surface": self.surface_name.text(),
             "material_mode": str(self.material_mode.currentData()),
+            "import_tolerance": self._import_tolerance_value(),
             "retain_skeleton": self.retain_skeleton.isChecked(),
             "create_crig": self.create_crig.isChecked(),
             "flip_v": self.flip_v.isChecked(),
@@ -1522,6 +1579,10 @@ class ModelWorkspace:
             index = self.material_mode.findData(str(config["material_mode"]))
             if index >= 0:
                 self.material_mode.setCurrentIndex(index)
+        if "import_tolerance" in config:
+            index = self.import_tolerance.findData(str(config["import_tolerance"]))
+            if index >= 0:
+                self.import_tolerance.setCurrentIndex(index)
         for widget, key in (
             (self.retain_skeleton, "retain_skeleton"),
             (self.create_crig, "create_crig"),
@@ -1542,6 +1603,7 @@ class ModelWorkspace:
             "test_material": "bottle_trash_a.mat",
             "surface": "Flesh",
             "material_mode": "test",
+            "import_tolerance": FbxImportTolerance.RECOMMENDED.value,
             "retain_skeleton": True,
             "create_crig": True,
             "flip_v": False,
@@ -1558,6 +1620,11 @@ class ModelWorkspace:
     def _save_settings(self) -> None:
         for key, value in self._settings_payload().items():
             self.settings.setValue(key, value)
+
+    def _import_tolerance_value(self) -> str:
+        return FbxImportTolerance.coerce(
+            str(self.import_tolerance.currentData() or "recommended")
+        ).value
 
     # ------------------------------------------------------------------ helpers
     def _changed(self, *_args) -> None:
@@ -1604,8 +1671,9 @@ class ModelWorkspace:
             self.rigs_installed_callback(installed)
 
     def _model_job_failed(self, title: str, failure: TaskFailure) -> None:
-        self._append_log(failure.traceback)
-        self._message(title, failure.display_message(), critical=True)
+        message = failure.display_message(False)
+        self._append_log(message)
+        self._message(title, message, critical=True)
 
     def _model_jobs_finished(self) -> None:
         self._set_busy(False)

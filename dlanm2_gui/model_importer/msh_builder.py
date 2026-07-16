@@ -3246,6 +3246,7 @@ def _base_report(scene: FbxScene, options: ModelBuildOptions, *, effective_mode:
         "source_fbx": str(scene.path),
         "source_fbx_sha256": scene.sha256,
         "source_fbx_version": scene.version,
+        "import_tolerance": getattr(scene, "import_tolerance", "recommended"),
         "effective_mode": effective_mode,
         "coordinate_contract": {
             "source": "FBX X-right/Y-up/Z-front, scene units",
@@ -3264,7 +3265,11 @@ def _base_report(scene: FbxScene, options: ModelBuildOptions, *, effective_mode:
         },
         "normal_policy": "FBX layer normal transformed by inverse-transpose; geometric face fallback",
         "tangent_policy": "reconstructed from final positions, normals and UV0",
-        "vertex_policy": "triangle-corner expansion; material split; <=65535 vertices per source mesh node",
+        "triangulation_policy": (
+            "source-order triangles; deterministic scored quad diagonals; stable projected "
+            "ear clipping; validated fan recovery only when needed"
+        ),
+        "vertex_policy": "source-corner provenance; material split; <=65535 vertices per source mesh node",
         "skin_policy": "combine duplicate clusters, discard zero weights, keep top four, normalize",
         "uv_policy": "UV0; V flipped" if options.flip_v else "UV0 preserved",
         "engine_or_editor_tested": False,
@@ -3273,6 +3278,9 @@ def _base_report(scene: FbxScene, options: ModelBuildOptions, *, effective_mode:
             for row in (getattr(scene, "blend_shapes", ()) or ())
             if getattr(row, "classification", "") == BLENDSHAPE_IDENTITY_NOOP
             and hasattr(row, "ignored_identity_report")
+        ],
+        "model_geometry_findings": [
+            dict(row) for row in (getattr(scene, "geometry_findings", ()) or ())
         ],
     }
 

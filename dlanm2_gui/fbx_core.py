@@ -20,6 +20,11 @@ import numpy as np
 from .model_importer.fbx_model import (
     FBX_TICKS_PER_SECOND,
     FBX_Y_UP_TO_DYING_LIGHT,
+    FbxImportTolerance,
+    FbxAnimationSkeletonError,
+    FbxAnimationStackError,
+    FbxDomainError,
+    FbxLoadPurpose,
     FbxNode,
     FbxScene,
     _axis_rotation,
@@ -40,6 +45,24 @@ class FbxAnimationStack:
     stop_tick: int
     object_id: int
     layer_ids: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FbxAnimationStackActivity:
+    name: str
+    layer_names: tuple[str, ...]
+    skeletal_channel_count: int
+    changing_skeletal_channel_count: int
+    key_count: int
+    usable: bool
+    reason: str = ""
+
+    @property
+    def changing(self) -> bool:
+        return self.changing_skeletal_channel_count > 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -174,20 +197,26 @@ def resolve_bind_globals(
     model_names = dict(getattr(scene, "model_names", {}) or {})
     cluster_links: dict[int, list[np.ndarray]] = {}
     conflicting_links: list[str] = []
-    for geometry in scene.geometries:
-        for cluster in geometry.clusters:
-            bone_id = cluster.bone_id
-            if (
-                bone_id is None
-                or bone_id not in selected_set
-                or cluster.transform_link is None
-            ):
-                continue
-            value = np.asarray(cluster.transform_link, dtype=float)
-            rows = cluster_links.setdefault(int(bone_id), [])
-            if rows and not any(_matrix_agrees(value, previous) for previous in rows):
-                conflicting_links.append(model_names.get(int(bone_id), str(bone_id)))
-            rows.append(value.copy())
+    scene_clusters = tuple(getattr(scene, "skin_clusters", ()) or ())
+    if not scene_clusters:
+        scene_clusters = tuple(
+            cluster
+            for geometry in scene.geometries
+            for cluster in geometry.clusters
+        )
+    for cluster in scene_clusters:
+        bone_id = cluster.bone_id
+        if (
+            bone_id is None
+            or bone_id not in selected_set
+            or cluster.transform_link is None
+        ):
+            continue
+        value = np.asarray(cluster.transform_link, dtype=float)
+        rows = cluster_links.setdefault(int(bone_id), [])
+        if rows and not any(_matrix_agrees(value, previous) for previous in rows):
+            conflicting_links.append(model_names.get(int(bone_id), str(bone_id)))
+        rows.append(value.copy())
 
     pose_link_conflicts: list[str] = []
     for bone_id in selected:
@@ -274,10 +303,23 @@ class FbxDocument:
         animation_stack: str | None = None,
         *,
         orientation_policy: str = "auto",
+        purpose: FbxLoadPurpose | str = FbxLoadPurpose.ANIMATION,
+        tolerance: FbxImportTolerance | str = FbxImportTolerance.RECOMMENDED,
     ) -> None:
         self.path = Path(path)
-        self.scene = FbxScene.from_path(self.path)
-        self._initialize(animation_stack, orientation_policy)
+        self.load_purpose = FbxLoadPurpose.coerce(purpose).value
+        self.import_tolerance = FbxImportTolerance.coerce(tolerance).value
+        self.scene = FbxScene.from_path(
+            self.path,
+            purpose=purpose,
+            tolerance=tolerance,
+        )
+        try:
+            self._initialize(animation_stack, orientation_policy)
+        except FbxDomainError:
+            raise
+        except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
+            raise FbxAnimationSkeletonError(str(exc)) from exc
 
     @classmethod
     def from_scene(
@@ -286,11 +328,29 @@ class FbxDocument:
         animation_stack: str | None = None,
         *,
         orientation_policy: str = "auto",
+        purpose: FbxLoadPurpose | str | None = None,
+        tolerance: FbxImportTolerance | str | None = None,
     ) -> "FbxDocument":
         document = cls.__new__(cls)
         document.path = Path(scene.path)
         document.scene = scene
-        document._initialize(animation_stack, orientation_policy)
+        document.load_purpose = FbxLoadPurpose.coerce(
+            purpose or getattr(scene, "load_purpose", FbxLoadPurpose.ANIMATION.value)
+        ).value
+        document.import_tolerance = FbxImportTolerance.coerce(
+            tolerance
+            or getattr(
+                scene,
+                "import_tolerance",
+                FbxImportTolerance.RECOMMENDED.value,
+            )
+        ).value
+        try:
+            document._initialize(animation_stack, orientation_policy)
+        except FbxDomainError:
+            raise
+        except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
+            raise FbxAnimationSkeletonError(str(exc)) from exc
         return document
 
     def _initialize(
@@ -340,10 +400,17 @@ class FbxDocument:
         self._normalizer_cache: dict[int, np.ndarray] = {}
         self._build_bind_inventory()
         self.transform_contract = self._build_transform_contract()
-        if animation_stack:
-            self.select_animation_stack(animation_stack)
-        elif len(self.animation_stacks) == 1:
-            self.select_animation_stack(self.animation_stacks[0].name)
+        try:
+            if animation_stack:
+                self.select_animation_stack(animation_stack)
+            elif len(self.animation_stacks) == 1:
+                self.select_animation_stack(self.animation_stacks[0].name)
+            elif self.animation_stacks:
+                self.select_preferred_animation_stack()
+        except FbxDomainError:
+            raise
+        except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
+            raise FbxAnimationStackError(str(exc)) from exc
 
     @property
     def contract(self) -> FbxTransformContract:
@@ -394,6 +461,101 @@ class FbxDocument:
                 self.animation_start_tick = min(times)
             self.animation_stop_tick = max(self.animation_stop_tick, max(times))
         return row
+
+    def animation_stack_activity(self) -> tuple[FbxAnimationStackActivity, ...]:
+        rows: list[FbxAnimationStackActivity] = []
+        for stack in self.animation_stacks:
+            layer_ids = tuple(getattr(stack, "layer_ids", ()) or ())
+            layer_names = tuple(getattr(stack, "layer_names", ()) or ())
+            if not layer_ids and stack is getattr(
+                self, "selected_animation_stack", None
+            ):
+                # Compatibility for synthetic/legacy callers that provide a
+                # selected stack object plus already-isolated curves, but no
+                # FBX AnimationLayer object IDs.
+                curves = dict(getattr(self, "curves", {}) or {})
+            elif len(layer_ids) != 1:
+                rows.append(
+                    FbxAnimationStackActivity(
+                        stack.name,
+                        layer_names,
+                        0,
+                        0,
+                        0,
+                        False,
+                        "stack must contain exactly one baked animation layer",
+                    )
+                )
+                continue
+            else:
+                try:
+                    curves = self._animation_curves(layer_ids[0])
+                except ValueError as exc:
+                    rows.append(
+                        FbxAnimationStackActivity(
+                            stack.name,
+                            layer_names,
+                            0,
+                            0,
+                            0,
+                            False,
+                            str(exc),
+                        )
+                    )
+                    continue
+            limb_ids = set(getattr(self, "limb_models", {}).values())
+            skeletal_curves = {
+                key: curve
+                for key, curve in curves.items()
+                if key[0] in limb_ids
+            }
+            changing = sum(
+                bool(
+                    len(values) > 1
+                    and max(values) - min(values) > 1.0e-8
+                )
+                for _times, values in skeletal_curves.values()
+            )
+            rows.append(
+                FbxAnimationStackActivity(
+                    stack.name,
+                    layer_names,
+                    len(skeletal_curves),
+                    changing,
+                    sum(
+                        len(times)
+                        for times, _values in skeletal_curves.values()
+                    ),
+                    True,
+                )
+            )
+        return tuple(rows)
+
+    def preferred_animation_stack(self) -> FbxAnimationStack | None:
+        """Return one unambiguous useful stack without guessing between peers."""
+
+        activity = self.animation_stack_activity()
+        usable = [row for row in activity if row.usable]
+        changing = [row for row in usable if row.changing]
+        selected_name: str | None = None
+        if len(changing) == 1:
+            selected_name = changing[0].name
+        elif not changing:
+            with_channels = [row for row in usable if row.skeletal_channel_count > 0]
+            if len(with_channels) == 1:
+                selected_name = with_channels[0].name
+            elif len(self.animation_stacks) == 1 and usable:
+                selected_name = usable[0].name
+        if selected_name is None:
+            return None
+        return next(
+            (row for row in self.animation_stacks if row.name == selected_name),
+            None,
+        )
+
+    def select_preferred_animation_stack(self) -> FbxAnimationStack | None:
+        row = self.preferred_animation_stack()
+        return self.select_animation_stack(row.name) if row is not None else None
 
     def frame_ticks(self, fps: int = 30) -> list[int]:
         if len(self.animation_stacks) > 1 and self.selected_animation_stack is None:
@@ -463,7 +625,26 @@ class FbxDocument:
                     float(value)
                     for value in (_child_value(curve, "KeyValueFloat", []) or [])
                 ]
-                if times and len(times) == len(values):
+                if len(times) != len(values):
+                    raise ValueError(
+                        f"animation curve {curve_id} for "
+                        f"{self.scene.model_names.get(model_id, model_id)!r} "
+                        f"{property_name} {axis} has {len(times)} KeyTime rows and "
+                        f"{len(values)} KeyValueFloat rows"
+                    )
+                if any(not math.isfinite(value) for value in values):
+                    raise ValueError(
+                        f"animation curve {curve_id} for "
+                        f"{self.scene.model_names.get(model_id, model_id)!r} "
+                        f"{property_name} {axis} contains a non-finite key value"
+                    )
+                if any(right < left for left, right in zip(times, times[1:])):
+                    raise ValueError(
+                        f"animation curve {curve_id} for "
+                        f"{self.scene.model_names.get(model_id, model_id)!r} "
+                        f"{property_name} {axis} has decreasing KeyTime rows"
+                    )
+                if times:
                     result[(model_id, property_name, axis)] = (times, values)
         return result
 
