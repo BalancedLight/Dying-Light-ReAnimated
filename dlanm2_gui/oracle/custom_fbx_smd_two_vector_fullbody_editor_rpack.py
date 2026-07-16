@@ -14,7 +14,7 @@ from dlanm2_gui.animation_scr import AnimationScrSequence, build_animation_scr_s
 from dlanm2_gui.anm2 import Anm2Header
 from dlanm2_gui.anm2_components import decode_file_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
-from dlanm2_gui.oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND, _FbxDocument
+from dlanm2_gui.fbx_core import FBX_TICKS_PER_SECOND, FbxDocument
 from dlanm2_gui.oracle.custom_fbx_smd_retarget_editor_rpack import (
     _manifest,
     _sequence,
@@ -227,7 +227,7 @@ def build_custom_fbx_smd_two_vector_fullbody_editor_rpack(
         shutil.rmtree(out)
     out.mkdir(parents=True)
 
-    animation = _FbxDocument(Path(animation_fbx))
+    animation = FbxDocument(Path(animation_fbx))
     ticks = animation.frame_ticks(fps=FPS)
     frame_count = len(ticks)
     source_positions = _sample_source_positions(animation, ticks)
@@ -801,7 +801,7 @@ def _desired_globals_to_local_rotations(
 
 
 def _sample_source_positions(
-    animation: _FbxDocument,
+    animation: FbxDocument,
     ticks: list[int],
 ) -> list[dict[str, np.ndarray]]:
     required = set(animation.limb_models)

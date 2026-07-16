@@ -10,7 +10,7 @@ DCC FBX exports and keeps every coordinate-space conversion explicit.
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 import hashlib
 import math
 import struct
@@ -34,6 +34,9 @@ DYING_LIGHT_TO_FBX_Y_UP = np.linalg.inv(FBX_Y_UP_TO_DYING_LIGHT)
 
 ORIENTATION_POLICIES = {
     "auto",
+    # Resolved-only value retained in reports and accepted for deterministic
+    # replay of a previously analysed project.
+    "fbx_global_settings",
     "fbx_y_up_to_dying_light",
     "none",
     "rotate_x_90",
@@ -44,6 +47,15 @@ ORIENTATION_POLICIES = {
     "rotate_z_minus_90",
 }
 ROTATION_ORDERS = {0: "XYZ", 1: "XZY", 2: "YZX", 3: "YXZ", 4: "ZXY", 5: "ZYX"}
+
+IDENTITY_BLENDSHAPE_POSITION_EPSILON = 1.0e-8
+IDENTITY_BLENDSHAPE_NORMAL_EPSILON = 1.0e-5
+IDENTITY_BLENDSHAPE_WEIGHT_EPSILON = 1.0e-8
+
+BLENDSHAPE_IDENTITY_NOOP = "identity_noop"
+BLENDSHAPE_REAL_STATIC = "real_static_morph"
+BLENDSHAPE_REAL_ANIMATED = "real_animated_morph"
+BLENDSHAPE_MALFORMED = "malformed"
 
 
 @dataclass(slots=True)
@@ -84,6 +96,191 @@ class FbxCluster:
     # Optional in older exporters.  When present this is the mesh/associate
     # model's bind transform, not the linked bone transform.
     transform_associate_model: np.ndarray | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class FbxBlendShapeTarget:
+    """One connected FBX Shape target with its channel and weight evidence.
+
+    Shape payloads are sparse.  ``position_values`` and ``normal_values``
+    retain the authored rows, while their ``*_deltas`` counterparts expose a
+    common relative representation for classification.  Legacy FBX Shapes are
+    relative by definition; modern Shapes may declare absolute storage.
+    """
+
+    shape_object_id: int | None
+    shape_name: str
+    channel_object_id: int | None
+    channel_name: str
+    base_geometry_id: int | None
+    base_geometry_name: str
+    control_point_indexes: tuple[int, ...]
+    position_values: tuple[tuple[float, float, float], ...]
+    position_deltas: tuple[tuple[float, float, float], ...]
+    normal_values: tuple[tuple[float, float, float], ...]
+    normal_deltas: tuple[tuple[float, float, float], ...]
+    default_deform_percent: float
+    full_weights: tuple[float, ...]
+    animation_curve_ids: tuple[int, ...]
+    animation_curve_times: tuple[int, ...]
+    animation_curve_values: tuple[float, ...]
+    shape_mode: str
+    shape_mode_source: str
+    classification: str
+    malformed_fields: tuple[str, ...] = ()
+
+    @property
+    def name(self) -> str:
+        return self.shape_name or self.channel_name or "UnnamedShape"
+
+    @property
+    def maximum_position_delta(self) -> float:
+        return max(
+            (abs(float(value)) for row in self.position_deltas for value in row),
+            default=0.0,
+        )
+
+    @property
+    def maximum_normal_delta(self) -> float:
+        return max(
+            (abs(float(value)) for row in self.normal_deltas for value in row),
+            default=0.0,
+        )
+
+    @property
+    def curve_key_count(self) -> int:
+        return len(self.animation_curve_values)
+
+    @property
+    def curve_changes(self) -> bool:
+        values = self.animation_curve_values
+        return bool(
+            len(values) > 1
+            and max(values) - min(values) > IDENTITY_BLENDSHAPE_WEIGHT_EPSILON
+        )
+
+    def ignored_identity_report(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "geometry": self.base_geometry_name,
+            "maximum_position_delta": self.maximum_position_delta,
+            "maximum_normal_delta": self.maximum_normal_delta,
+            "default_weight": float(self.default_deform_percent),
+            "curve_key_count": self.curve_key_count,
+            "reason": (
+                "the target contains no position deformation and its weight remains zero"
+            ),
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "shape_object_id": self.shape_object_id,
+            "shape_name": self.shape_name,
+            "channel_object_id": self.channel_object_id,
+            "channel_name": self.channel_name,
+            "base_geometry_id": self.base_geometry_id,
+            "base_geometry_name": self.base_geometry_name,
+            "control_point_indexes": list(self.control_point_indexes),
+            "position_values": [list(row) for row in self.position_values],
+            "position_deltas": [list(row) for row in self.position_deltas],
+            "normal_values": [list(row) for row in self.normal_values],
+            "normal_deltas": [list(row) for row in self.normal_deltas],
+            "default_deform_percent": self.default_deform_percent,
+            "full_weights": list(self.full_weights),
+            "animation_curve_ids": list(self.animation_curve_ids),
+            "animation_curve_times": list(self.animation_curve_times),
+            "animation_curve_values": list(self.animation_curve_values),
+            "shape_mode": self.shape_mode,
+            "shape_mode_source": self.shape_mode_source,
+            "classification": self.classification,
+            "maximum_position_delta": self.maximum_position_delta,
+            "maximum_normal_delta": self.maximum_normal_delta,
+            "curve_key_count": self.curve_key_count,
+            "curve_changes": self.curve_changes,
+            "malformed_fields": list(self.malformed_fields),
+        }
+
+    def diagnostic_summary(self) -> dict[str, Any]:
+        """Return bounded report evidence while the scene retains full payload rows."""
+
+        return {
+            "name": self.name,
+            "shape_object_id": self.shape_object_id,
+            "shape_name": self.shape_name,
+            "channel_object_id": self.channel_object_id,
+            "channel_name": self.channel_name,
+            "base_geometry_id": self.base_geometry_id,
+            "base_geometry_name": self.base_geometry_name,
+            "sparse_index_count": len(self.control_point_indexes),
+            "position_row_count": len(self.position_values),
+            "normal_row_count": len(self.normal_values),
+            "default_deform_percent": self.default_deform_percent,
+            "full_weights": list(self.full_weights),
+            "animation_curve_ids": list(self.animation_curve_ids),
+            "animation_curve_times": list(self.animation_curve_times),
+            "animation_curve_values": list(self.animation_curve_values),
+            "shape_mode": self.shape_mode,
+            "shape_mode_source": self.shape_mode_source,
+            "classification": self.classification,
+            "maximum_position_delta": self.maximum_position_delta,
+            "maximum_normal_delta": self.maximum_normal_delta,
+            "curve_key_count": self.curve_key_count,
+            "curve_changes": self.curve_changes,
+            "malformed_fields": list(self.malformed_fields),
+        }
+
+
+def _classify_blend_shape_target(
+    *,
+    position_deltas: Sequence[Sequence[float]],
+    normal_deltas: Sequence[Sequence[float]],
+    default_deform_percent: float,
+    animation_curve_values: Sequence[float],
+    malformed_fields: Sequence[str],
+) -> str:
+    if malformed_fields:
+        return BLENDSHAPE_MALFORMED
+    maximum_position_delta = max(
+        (abs(float(value)) for row in position_deltas for value in row),
+        default=0.0,
+    )
+    maximum_normal_delta = max(
+        (abs(float(value)) for row in normal_deltas for value in row),
+        default=0.0,
+    )
+    curve_values = tuple(float(value) for value in animation_curve_values)
+    curve_changes = bool(
+        len(curve_values) > 1
+        and max(curve_values) - min(curve_values)
+        > IDENTITY_BLENDSHAPE_WEIGHT_EPSILON
+    )
+    every_curve_key_is_zero = all(
+        abs(value) <= IDENTITY_BLENDSHAPE_WEIGHT_EPSILON
+        for value in curve_values
+    )
+    geometric_identity = (
+        maximum_position_delta <= IDENTITY_BLENDSHAPE_POSITION_EPSILON
+        and maximum_normal_delta <= IDENTITY_BLENDSHAPE_NORMAL_EPSILON
+    )
+    default_is_zero = (
+        abs(float(default_deform_percent))
+        <= IDENTITY_BLENDSHAPE_WEIGHT_EPSILON
+    )
+    if (
+        geometric_identity
+        and default_is_zero
+        and every_curve_key_is_zero
+        and not curve_changes
+    ):
+        return BLENDSHAPE_IDENTITY_NOOP
+    if (
+        not default_is_zero
+        or not every_curve_key_is_zero
+        or curve_changes
+    ):
+        return BLENDSHAPE_REAL_ANIMATED
+    return BLENDSHAPE_REAL_STATIC
 
 
 @dataclass(frozen=True, slots=True)
@@ -187,6 +384,7 @@ class FbxGeometry:
     mesh_bind_global: np.ndarray
     geometric_transform: np.ndarray
     blend_shape_names: tuple[str, ...] = ()
+    blend_shapes: tuple[FbxBlendShapeTarget, ...] = ()
 
     @property
     def skin_influences(self) -> dict[int, list[tuple[int, float]]]:
@@ -208,13 +406,31 @@ class FbxGeometry:
         if layer is None:
             return 0
         mapping = layer.mapping.casefold()
-        mapped = polygon_index if mapping == "bypolygon" else 0
-        values = layer.direct
-        if not values:
-            return 0
-        if mapped < 0 or mapped >= len(values):
-            return 0
-        return max(0, int(values[mapped]))
+        if mapping not in {"bypolygon", "allsame"}:
+            raise ValueError(
+                f"Geometry {self.name!r} has unsupported material mapping "
+                f"{layer.mapping!r}; assign materials ByPolygon or AllSame and re-export."
+            )
+        try:
+            value = layer.value(
+                control_point_index=0,
+                polygon_vertex_index=0,
+                polygon_index=polygon_index,
+            )
+        except (ValueError, IndexError) as exc:
+            raise ValueError(
+                f"Geometry {self.name!r} polygon {polygon_index} has an invalid "
+                f"{layer.kind} row: {exc}. Repair material layer indexes and re-export."
+            ) from exc
+        slot = int(value[0])
+        slot_count = max(len(self.material_ids), len(self.material_names), 1)
+        if slot < 0 or slot >= slot_count:
+            raise ValueError(
+                f"Geometry {self.name!r} polygon {polygon_index} selects material slot "
+                f"{slot}, outside 0..{slot_count - 1}. Repair material assignments and "
+                "re-export before building."
+            )
+        return slot
 
 
 @dataclass(slots=True)
@@ -236,17 +452,30 @@ class FbxScene:
     blend_shape_names: tuple[str, ...]
     axis_settings: dict[str, int | float | None]
     meters_per_unit: float
+    blend_shapes: tuple[FbxBlendShapeTarget, ...] = ()
     warnings: list[str] = field(default_factory=list)
+    mesh_bind_source_by_geometry: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_path(cls, path: str | Path) -> "FbxScene":
         source = Path(path)
         data = source.read_bytes()
         if not data.startswith(b"Kaydara FBX Binary"):
-            raise ValueError(f"only binary FBX is supported: {source}")
+            raise ValueError(
+                f"Detected an ASCII, non-FBX, or unsupported non-binary file at {source}. "
+                "The canonical importer requires binary FBX transform, bind, and animation "
+                "records and cannot safely infer them from this input. Re-export as FBX "
+                "2011-2020 Binary and retry. Exact Rig is viable only after that supported "
+                "export contains the intended hierarchy; no model or animation output was written."
+            )
         if len(data) < 27:
             raise ValueError(f"FBX file is truncated: {source}")
         version = struct.unpack_from("<I", data, 23)[0]
+        if version < 7100 or version > 7700:
+            raise ValueError(
+                f"unsupported binary FBX version {version} in {source}. Re-export as FBX "
+                "2011-2020 binary (versions 7100-7700); ASCII FBX is not supported."
+            )
         nodes, _ = _parse_nodes(data, 27, version)
         top = {node.name: node for node in nodes}
         if "Objects" not in top or "Connections" not in top:
@@ -316,11 +545,22 @@ class FbxScene:
             blend_shape_names=(),
             axis_settings=axis,
             meters_per_unit=meters_per_unit,
+            blend_shapes=(),
         )
         scene._validate_axis_contract()
         scene.animation_stacks = scene._read_animation_stacks()
-        scene.blend_shape_names = scene._read_blend_shape_names()
         scene.geometries = scene._read_geometries()
+        scene.blend_shapes = scene._read_blend_shapes()
+        scene.blend_shape_names = scene._read_blend_shape_names()
+        for geometry in scene.geometries:
+            geometry.blend_shapes = tuple(
+                row
+                for row in scene.blend_shapes
+                if row.base_geometry_id == geometry.object_id
+            )
+            geometry.blend_shape_names = tuple(
+                dict.fromkeys(row.channel_name or row.name for row in geometry.blend_shapes)
+            )
         scene._add_scene_warnings()
         return scene
 
@@ -330,11 +570,10 @@ class FbxScene:
 
     @property
     def armature_roots(self) -> tuple[int, ...]:
-        limb = set(self.limb_ids)
         return tuple(
             object_id
             for object_id in self.limb_ids
-            if self.model_parent_id(object_id) not in limb
+            if self.nearest_limb_parent_id(object_id) is None
         )
 
     def model_parent_id(self, object_id: int) -> int | None:
@@ -342,6 +581,49 @@ class FbxScene:
             if kind == "OO" and parent_id in self.model_names:
                 return parent_id
         return None
+
+    def nearest_limb_parent_id(self, object_id: int) -> int | None:
+        """Return the nearest LimbNode ancestor through arbitrary Model wrappers.
+
+        FBX exporters commonly insert ``Null`` or ``Root`` Model objects between
+        armature joints.  Those objects still participate in global transform
+        evaluation, but they must not make the child joint look like an
+        independent skeleton root to animation mapping and compatibility code.
+        """
+
+        limb = set(self.limb_ids)
+        visited: set[int] = set()
+        parent = self.model_parent_id(object_id)
+        while parent in self.model_names and parent not in visited:
+            if parent in limb:
+                return parent
+            visited.add(parent)
+            parent = self.model_parent_id(parent)
+        return None
+
+    def limb_children_ids(self, object_id: int) -> tuple[int, ...]:
+        """Return nearest LimbNode descendants, traversing non-bone Models."""
+
+        limb = set(self.limb_ids)
+        result: list[int] = []
+        visited: set[int] = set()
+
+        def visit(current: int) -> None:
+            if current in visited:
+                raise ValueError(
+                    "FBX model hierarchy cycle at "
+                    f"{self.model_names.get(current, current)!r}"
+                )
+            visited.add(current)
+            for child_id in self.model_children_ids(current, limb_only=False):
+                if child_id in limb:
+                    result.append(child_id)
+                else:
+                    visit(child_id)
+            visited.remove(current)
+
+        visit(object_id)
+        return tuple(dict.fromkeys(result))
 
     def model_children_ids(self, object_id: int, *, limb_only: bool = False) -> tuple[int, ...]:
         allowed = set(self.limb_ids) if limb_only else set(self.model_ids)
@@ -351,12 +633,30 @@ class FbxScene:
             if kind == "OO" and child_id in allowed
         )
 
-    def model_local_matrix(self, object_id: int) -> np.ndarray:
+    def model_local_matrix(
+        self,
+        object_id: int,
+        *,
+        property_overrides: Mapping[str, Sequence[float]] | None = None,
+        euler_matrix_resolver: Callable[[Sequence[float], str], np.ndarray] | None = None,
+    ) -> np.ndarray:
         node = self.object_by_id[object_id]
         props = _properties70(node)
-        translation = _vector_property(props, "Lcl Translation", (0.0, 0.0, 0.0))
-        rotation = _vector_property(props, "Lcl Rotation", (0.0, 0.0, 0.0))
-        scaling = _vector_property(props, "Lcl Scaling", (1.0, 1.0, 1.0))
+
+        def animated_property(name: str, default: Sequence[float]) -> np.ndarray:
+            if property_overrides is not None and name in property_overrides:
+                value = np.asarray(property_overrides[name], dtype=float)
+                if value.shape != (3,) or not np.isfinite(value).all():
+                    raise ValueError(
+                        f"FBX Model {self.model_names.get(object_id, object_id)!r} "
+                        f"has an invalid animated {name} value"
+                    )
+                return value.copy()
+            return _vector_property(props, name, default)
+
+        translation = animated_property("Lcl Translation", (0.0, 0.0, 0.0))
+        rotation = animated_property("Lcl Rotation", (0.0, 0.0, 0.0))
+        scaling = animated_property("Lcl Scaling", (1.0, 1.0, 1.0))
         pre = _vector_property(props, "PreRotation", (0.0, 0.0, 0.0))
         post = _vector_property(props, "PostRotation", (0.0, 0.0, 0.0))
         rotation_offset = _vector_property(props, "RotationOffset", (0.0, 0.0, 0.0))
@@ -364,13 +664,14 @@ class FbxScene:
         scaling_offset = _vector_property(props, "ScalingOffset", (0.0, 0.0, 0.0))
         scaling_pivot = _vector_property(props, "ScalingPivot", (0.0, 0.0, 0.0))
         order = ROTATION_ORDERS.get(int((props.get("RotationOrder") or [0])[0]), "XYZ")
+        evaluate_euler = euler_matrix_resolver or _euler_matrix
         return (
             _translation_matrix(translation)
             @ _translation_matrix(rotation_offset)
             @ _translation_matrix(rotation_pivot)
-            @ _euler_matrix(pre, order)
-            @ _euler_matrix(rotation, order)
-            @ np.linalg.inv(_euler_matrix(post, order))
+            @ evaluate_euler(pre, order)
+            @ evaluate_euler(rotation, order)
+            @ np.linalg.inv(evaluate_euler(post, order))
             @ _translation_matrix(-rotation_pivot)
             @ _translation_matrix(scaling_offset)
             @ _translation_matrix(scaling_pivot)
@@ -387,9 +688,17 @@ class FbxScene:
         order = ROTATION_ORDERS.get(int((props.get("RotationOrder") or [0])[0]), "XYZ")
         return _translation_matrix(translation) @ _euler_matrix(rotation, order) @ _scale_matrix(scaling)
 
-    def model_global_matrix(self, object_id: int) -> np.ndarray:
+    def model_global_matrices(
+        self,
+        object_ids: Iterable[int] | None = None,
+        *,
+        local_matrix_resolver: Callable[[int], np.ndarray] | None = None,
+    ) -> dict[int, np.ndarray]:
+        """Evaluate Model globals once through the canonical hierarchy solver."""
+
         cache: dict[int, np.ndarray] = {}
         visiting: set[int] = set()
+        resolver = local_matrix_resolver or self.model_local_matrix
 
         def resolve(current: int) -> np.ndarray:
             if current in cache:
@@ -397,34 +706,34 @@ class FbxScene:
             if current in visiting:
                 raise ValueError(f"FBX model hierarchy cycle at {self.model_names.get(current, current)}")
             visiting.add(current)
-            local = self.model_local_matrix(current)
+            local = np.asarray(resolver(current), dtype=float)
+            if local.shape != (4, 4) or not np.isfinite(local).all():
+                raise ValueError(
+                    f"FBX Model {self.model_names.get(current, current)!r} "
+                    "evaluated to a non-finite or malformed local matrix"
+                )
             parent = self.model_parent_id(current)
             value = resolve(parent) @ local if parent in self.model_names else local
             visiting.remove(current)
             cache[current] = value
             return value
 
-        return resolve(object_id)
+        selected = tuple(self.model_ids if object_ids is None else object_ids)
+        return {object_id: resolve(object_id).copy() for object_id in selected}
+
+    def model_global_matrix(self, object_id: int) -> np.ndarray:
+        return self.model_global_matrices((object_id,))[object_id]
 
     def object_bind_matrix(self, object_id: int) -> np.ndarray:
         value = self.bind_pose_matrices.get(object_id)
         return value.copy() if value is not None else self.model_global_matrix(object_id)
 
     def bone_globals(self, bone_ids: Sequence[int]) -> dict[int, np.ndarray]:
-        cluster_links: dict[int, list[np.ndarray]] = defaultdict(list)
-        for geometry in self.geometries:
-            for cluster in geometry.clusters:
-                if cluster.bone_id is not None and cluster.transform_link is not None:
-                    cluster_links[cluster.bone_id].append(cluster.transform_link)
-        result: dict[int, np.ndarray] = {}
-        for bone_id in bone_ids:
-            if bone_id in self.bind_pose_matrices:
-                result[bone_id] = self.bind_pose_matrices[bone_id].copy()
-            elif cluster_links.get(bone_id):
-                result[bone_id] = cluster_links[bone_id][0].copy()
-            else:
-                result[bone_id] = self.model_global_matrix(bone_id)
-        return result
+        # Import lazily to avoid a module cycle: fbx_core owns the public
+        # document/contract and imports this parser/data model.
+        from ..fbx_core import resolve_bind_globals
+
+        return resolve_bind_globals(self, bone_ids).globals_by_id
 
     def depth_first_bones_for_weighted_ids(self, weighted_ids: Iterable[int]) -> tuple[int, ...]:
         weighted = set(weighted_ids)
@@ -446,7 +755,12 @@ class FbxScene:
 
         def visit(object_id: int) -> None:
             result.append(object_id)
-            for child_id in self.model_children_ids(object_id, limb_only=limb_only):
+            children = (
+                self.limb_children_ids(object_id)
+                if limb_only
+                else self.model_children_ids(object_id, limb_only=False)
+            )
+            for child_id in children:
                 visit(child_id)
 
         visit(root_id)
@@ -496,6 +810,9 @@ class FbxScene:
                         for kind, rows in geometry.layers.items()
                     },
                     "blend_shape_names": list(geometry.blend_shape_names),
+                    "blend_shapes": [
+                        row.diagnostic_summary() for row in geometry.blend_shapes
+                    ],
                 }
             )
         detected_mode = "skinned" if weighted_bones else "static"
@@ -526,6 +843,14 @@ class FbxScene:
                 for row in self.animation_stacks
             ],
             "blend_shape_names": list(self.blend_shape_names),
+            "blend_shapes": [
+                row.diagnostic_summary() for row in self.blend_shapes
+            ],
+            "ignored_identity_blendshapes": [
+                row.ignored_identity_report()
+                for row in self.blend_shapes
+                if row.classification == BLENDSHAPE_IDENTITY_NOOP
+            ],
             "geometries": geometry_rows,
             "warnings": list(self.warnings),
             "ready_for_source_build": bool(self.geometries),
@@ -542,6 +867,7 @@ class FbxScene:
             if len(vertices) % 3:
                 raise ValueError(f"geometry {_clean_name(node.properties[1])!r} has malformed Vertices")
             control_points = np.asarray(vertices, dtype=float).reshape((-1, 3))
+            geometry_name = _clean_name(node.properties[1])
             raw_indices = [int(value) for value in (_child_value(node, "PolygonVertexIndex", []) or [])]
             polygons: list[tuple[FbxTriangleCorner, ...]] = []
             triangles: list[FbxTriangle] = []
@@ -555,6 +881,34 @@ class FbxScene:
                 if end:
                     polygon_index = len(polygons)
                     polygon = tuple(current)
+                    if len(polygon) < 3:
+                        raise ValueError(
+                            f"geometry {geometry_name!r} polygon {polygon_index} has only "
+                            f"{len(polygon)} corners; remove the invalid face and re-export"
+                        )
+                    invalid_control_points = [
+                        corner.control_point_index
+                        for corner in polygon
+                        if corner.control_point_index < 0
+                        or corner.control_point_index >= len(control_points)
+                    ]
+                    if invalid_control_points:
+                        raise ValueError(
+                            f"geometry {geometry_name!r} polygon {polygon_index} references "
+                            f"control point {invalid_control_points[0]} outside 0.."
+                            f"{max(0, len(control_points) - 1)}; repair the mesh and re-export"
+                        )
+                    _validate_polygon_for_fan(
+                        np.asarray(
+                            [
+                                control_points[corner.control_point_index]
+                                for corner in polygon
+                            ],
+                            dtype=float,
+                        ),
+                        geometry_name=geometry_name,
+                        polygon_index=polygon_index,
+                    )
                     polygons.append(polygon)
                     for corner_index in range(1, len(polygon) - 1):
                         triangles.append(
@@ -565,7 +919,7 @@ class FbxScene:
                         )
                     current = []
             if current:
-                raise ValueError(f"geometry {_clean_name(node.properties[1])!r} has unterminated polygon")
+                raise ValueError(f"geometry {geometry_name!r} has unterminated polygon")
 
             model_id = self._linked_object_id(geometry_id, object_name="Model", subtype="Mesh")
             model_name = self.model_names.get(model_id, _clean_name(node.properties[1]))
@@ -574,7 +928,7 @@ class FbxScene:
             layers = _read_layer_elements(node)
             clusters = self._geometry_clusters(geometry_id)
             bind = self._resolve_geometry_mesh_bind(
-                geometry_name=_clean_name(node.properties[1]),
+                geometry_name=geometry_name,
                 model_id=model_id,
                 clusters=clusters,
             )
@@ -583,7 +937,7 @@ class FbxScene:
             result.append(
                 FbxGeometry(
                     object_id=geometry_id,
-                    name=_clean_name(node.properties[1]),
+                    name=geometry_name,
                     model_id=model_id,
                     model_name=model_name,
                     control_points=control_points,
@@ -646,8 +1000,8 @@ class FbxScene:
 
         def agree(left: np.ndarray, right: np.ndarray) -> bool:
             # FBX exporters commonly serialize independently calculated bind
-            # matrices with low-order float noise.  The testnohara fixture has
-            # a worst valid reconstruction delta of about 1.5e-5.
+            # matrices with low-order float noise; observed valid reconstruction
+            # deltas can reach roughly 1.5e-5.
             return bool(np.allclose(left, right, rtol=1.0e-5, atol=5.0e-5))
 
         def representative(
@@ -725,6 +1079,9 @@ class FbxScene:
                 self.warnings.append(
                     f"{geometry_name}: no usable mesh-bind evidence was found; using identity."
                 )
+            if not hasattr(self, "mesh_bind_source_by_geometry"):
+                self.mesh_bind_source_by_geometry = {}
+            self.mesh_bind_source_by_geometry[geometry_name] = "identity fallback"
             return np.eye(4, dtype=float)
 
         support = [
@@ -746,6 +1103,9 @@ class FbxScene:
             self.warnings.append(
                 f"{geometry_name}: mesh-bind sources disagree; using {selected_label}; {details}."
             )
+        if not hasattr(self, "mesh_bind_source_by_geometry"):
+            self.mesh_bind_source_by_geometry = {}
+        self.mesh_bind_source_by_geometry[geometry_name] = selected_label
         return selected.copy()
 
     def _geometry_clusters(self, geometry_id: int) -> tuple[FbxCluster, ...]:
@@ -810,6 +1170,488 @@ class FbxScene:
                 names.append(_clean_name(self.object_by_id[channel_id].properties[1]))
         return tuple(dict.fromkeys(names))
 
+    def _read_blend_shapes(self) -> tuple[FbxBlendShapeTarget, ...]:
+        """Read and classify connected sparse Shape geometry without mutating it."""
+
+        shape_nodes = {
+            object_id: node
+            for object_id, node in self.object_by_id.items()
+            if node.name == "Geometry"
+            and len(node.properties) >= 3
+            and str(node.properties[2]) == "Shape"
+        }
+        channel_nodes = {
+            object_id: node
+            for object_id, node in self.object_by_id.items()
+            if node.name == "Deformer"
+            and len(node.properties) >= 3
+            and str(node.properties[2]) == "BlendShapeChannel"
+        }
+        targets: list[FbxBlendShapeTarget] = []
+        connected_channels: set[int] = set()
+
+        for shape_id, shape_node in sorted(shape_nodes.items()):
+            channel_ids = self._linked_object_ids(
+                shape_id,
+                object_name="Deformer",
+                subtype="BlendShapeChannel",
+            )
+            connected_channels.update(channel_ids)
+            targets.append(
+                self._read_blend_shape_target(
+                    shape_id=shape_id,
+                    shape_node=shape_node,
+                    channel_ids=channel_ids,
+                )
+            )
+
+        # A channel without Shape geometry is not safe to discard merely
+        # because there are no deltas to inspect.  Keep it as a malformed
+        # record so model preflight can name the broken connection.
+        for channel_id, channel_node in sorted(channel_nodes.items()):
+            if channel_id in connected_channels:
+                continue
+            targets.append(
+                self._read_blend_shape_target(
+                    shape_id=None,
+                    shape_node=None,
+                    channel_ids=(channel_id,),
+                )
+            )
+        return tuple(
+            sorted(
+                targets,
+                key=lambda row: (
+                    row.base_geometry_name.casefold(),
+                    row.name.casefold(),
+                    row.shape_object_id if row.shape_object_id is not None else -1,
+                ),
+            )
+        )
+
+    def _read_blend_shape_target(
+        self,
+        *,
+        shape_id: int | None,
+        shape_node: FbxNode | None,
+        channel_ids: Sequence[int],
+    ) -> FbxBlendShapeTarget:
+        errors: list[str] = []
+        shape_name = (
+            _clean_name(shape_node.properties[1])
+            if shape_node is not None and len(shape_node.properties) >= 2
+            else ""
+        )
+        if len(channel_ids) != 1:
+            errors.append(
+                "channel_connection: shape "
+                f"{shape_name or shape_id!r} is connected to {len(channel_ids)} "
+                f"BlendShapeChannel objects {list(channel_ids)}; expected exactly one"
+            )
+        channel_id = int(channel_ids[0]) if channel_ids else None
+        channel_node = self.object_by_id.get(channel_id) if channel_id is not None else None
+        channel_name = (
+            _clean_name(channel_node.properties[1])
+            if channel_node is not None and len(channel_node.properties) >= 2
+            else ""
+        )
+        if shape_node is None:
+            errors.append(
+                "shape_connection: channel "
+                f"{channel_name or channel_id!r} has no connected Geometry subtype Shape"
+            )
+
+        blend_ids = (
+            self._linked_object_ids(
+                channel_id,
+                object_name="Deformer",
+                subtype="BlendShape",
+            )
+            if channel_id is not None
+            else ()
+        )
+        if len(blend_ids) != 1:
+            errors.append(
+                "base_geometry_connection: channel "
+                f"{channel_name or channel_id!r} is connected to {len(blend_ids)} "
+                f"BlendShape deformers {list(blend_ids)}; expected exactly one"
+            )
+        base_ids = tuple(
+            dict.fromkeys(
+                geometry_id
+                for blend_id in blend_ids
+                for geometry_id in self._linked_object_ids(
+                    blend_id,
+                    object_name="Geometry",
+                    subtype="Mesh",
+                )
+            )
+        )
+        if len(base_ids) != 1:
+            errors.append(
+                "base_geometry_connection: shape "
+                f"{shape_name or shape_id!r} resolves to {len(base_ids)} base Mesh "
+                f"geometries {list(base_ids)}; expected exactly one"
+            )
+        base_geometry_id = int(base_ids[0]) if base_ids else None
+        base_node = (
+            self.object_by_id.get(base_geometry_id)
+            if base_geometry_id is not None
+            else None
+        )
+        base_geometry_name = (
+            _clean_name(base_node.properties[1])
+            if base_node is not None and len(base_node.properties) >= 2
+            else "<unresolved>"
+        )
+        base_geometry = next(
+            (
+                row
+                for row in self.geometries
+                if row.object_id == base_geometry_id
+            ),
+            None,
+        )
+        if base_geometry_id is not None and base_geometry is None:
+            errors.append(
+                "base_geometry_connection: resolved Geometry "
+                f"{base_geometry_name!r} ({base_geometry_id}) is not a parsed Mesh"
+            )
+
+        indexes = self._shape_integer_array(
+            shape_node,
+            "Indexes",
+            errors,
+        )
+        raw_positions = self._shape_numeric_array(
+            shape_node,
+            "Vertices",
+            errors,
+        )
+        raw_normals = self._shape_numeric_array(
+            shape_node,
+            "Normals",
+            errors,
+        )
+        position_values = self._shape_vector_rows(
+            raw_positions,
+            "Vertices",
+            errors,
+        )
+        normal_values = self._shape_vector_rows(
+            raw_normals,
+            "Normals",
+            errors,
+        )
+        if len(indexes) != len(position_values):
+            errors.append(
+                "Indexes/Vertices: sparse index count "
+                f"{len(indexes)} does not match position-row count {len(position_values)}"
+            )
+        if normal_values and len(normal_values) != len(position_values):
+            errors.append(
+                "Normals: normal-row count "
+                f"{len(normal_values)} must be zero or match position-row count "
+                f"{len(position_values)}"
+            )
+        if base_geometry is not None:
+            for row_index, control_point_index in enumerate(indexes):
+                if not 0 <= control_point_index < len(base_geometry.control_points):
+                    errors.append(
+                        f"Indexes[{row_index}]: sparse control-point index "
+                        f"{control_point_index} is outside base geometry "
+                        f"{base_geometry_name!r} range 0.."
+                        f"{max(0, len(base_geometry.control_points) - 1)}"
+                    )
+
+        default_deform_percent = self._shape_channel_default(channel_node, errors)
+        full_weights = self._shape_numeric_array(
+            channel_node,
+            "FullWeights",
+            errors,
+        )
+        curve_ids, curve_times, curve_values = self._shape_channel_curves(
+            channel_id,
+            errors,
+        )
+        shape_mode, shape_mode_source = self._shape_storage_mode(
+            shape_node,
+            errors,
+        )
+
+        position_deltas = position_values
+        normal_deltas = normal_values
+        if shape_mode == "absolute" and base_geometry is not None:
+            converted_positions: list[tuple[float, float, float]] = []
+            for row_index, value in enumerate(position_values):
+                if row_index >= len(indexes):
+                    break
+                control_point_index = indexes[row_index]
+                if not 0 <= control_point_index < len(base_geometry.control_points):
+                    converted_positions.append(value)
+                    continue
+                base = base_geometry.control_points[control_point_index]
+                converted_positions.append(
+                    tuple(float(value[axis] - base[axis]) for axis in range(3))
+                )
+            position_deltas = tuple(converted_positions)
+
+            normal_layer = base_geometry.first_layer("LayerElementNormal")
+            if (
+                normal_values
+                and normal_layer is not None
+                and normal_layer.mapping.casefold()
+                in {"byvertice", "byvertex", "bycontrolpoint"}
+            ):
+                converted_normals: list[tuple[float, float, float]] = []
+                for row_index, value in enumerate(normal_values):
+                    if row_index >= len(indexes):
+                        break
+                    control_point_index = indexes[row_index]
+                    try:
+                        base = normal_layer.value(
+                            control_point_index=control_point_index,
+                            polygon_vertex_index=0,
+                            polygon_index=0,
+                        )
+                    except (ValueError, IndexError) as exc:
+                        errors.append(
+                            f"Normals[{row_index}]: absolute Shape normal cannot resolve "
+                            f"base geometry {base_geometry_name!r} normal: {exc}"
+                        )
+                        converted_normals.append(value)
+                    else:
+                        converted_normals.append(
+                            tuple(float(value[axis] - base[axis]) for axis in range(3))
+                        )
+                normal_deltas = tuple(converted_normals)
+
+        classification = _classify_blend_shape_target(
+            position_deltas=position_deltas,
+            normal_deltas=normal_deltas,
+            default_deform_percent=default_deform_percent,
+            animation_curve_values=curve_values,
+            malformed_fields=errors,
+        )
+        return FbxBlendShapeTarget(
+            shape_object_id=shape_id,
+            shape_name=shape_name,
+            channel_object_id=channel_id,
+            channel_name=channel_name,
+            base_geometry_id=base_geometry_id,
+            base_geometry_name=base_geometry_name,
+            control_point_indexes=indexes,
+            position_values=position_values,
+            position_deltas=position_deltas,
+            normal_values=normal_values,
+            normal_deltas=normal_deltas,
+            default_deform_percent=default_deform_percent,
+            full_weights=full_weights,
+            animation_curve_ids=curve_ids,
+            animation_curve_times=curve_times,
+            animation_curve_values=curve_values,
+            shape_mode=shape_mode,
+            shape_mode_source=shape_mode_source,
+            classification=classification,
+            malformed_fields=tuple(errors),
+        )
+
+    @staticmethod
+    def _shape_numeric_array(
+        node: FbxNode | None,
+        field_name: str,
+        errors: list[str],
+    ) -> tuple[float, ...]:
+        if node is None:
+            return ()
+        raw = _child_value(node, field_name, []) or []
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw]
+        values: list[float] = []
+        for index, item in enumerate(raw):
+            try:
+                value = float(item)
+            except (TypeError, ValueError):
+                errors.append(
+                    f"{field_name}[{index}]: value {item!r} is not numeric"
+                )
+                continue
+            if not math.isfinite(value):
+                errors.append(
+                    f"{field_name}[{index}]: value {item!r} is not finite"
+                )
+            values.append(value)
+        return tuple(values)
+
+    @staticmethod
+    def _shape_integer_array(
+        node: FbxNode | None,
+        field_name: str,
+        errors: list[str],
+    ) -> tuple[int, ...]:
+        if node is None:
+            return ()
+        raw = _child_value(node, field_name, []) or []
+        if not isinstance(raw, (list, tuple)):
+            raw = [raw]
+        values: list[int] = []
+        for index, item in enumerate(raw):
+            try:
+                numeric = float(item)
+                value = int(item)
+            except (TypeError, ValueError, OverflowError):
+                errors.append(
+                    f"{field_name}[{index}]: value {item!r} is not an integer"
+                )
+                continue
+            if not math.isfinite(numeric) or numeric != value:
+                errors.append(
+                    f"{field_name}[{index}]: value {item!r} is not a finite integer"
+                )
+            values.append(value)
+        return tuple(values)
+
+    @staticmethod
+    def _shape_vector_rows(
+        values: Sequence[float],
+        field_name: str,
+        errors: list[str],
+    ) -> tuple[tuple[float, float, float], ...]:
+        if len(values) % 3:
+            errors.append(
+                f"{field_name}: component count {len(values)} is not divisible by 3"
+            )
+        return tuple(
+            (float(values[index]), float(values[index + 1]), float(values[index + 2]))
+            for index in range(0, len(values) - 2, 3)
+        )
+
+    @staticmethod
+    def _shape_channel_default(
+        channel_node: FbxNode | None,
+        errors: list[str],
+    ) -> float:
+        if channel_node is None:
+            return 0.0
+        raw = _child_value(channel_node, "DeformPercent", None)
+        if raw is None:
+            props = _properties70(channel_node)
+            values = props.get("DeformPercent") or props.get("Deform Percent") or [0.0]
+            raw = values[0] if values else 0.0
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            errors.append(f"DeformPercent: value {raw!r} is not numeric")
+            return math.nan
+        if not math.isfinite(value):
+            errors.append(f"DeformPercent: value {raw!r} is not finite")
+        return value
+
+    def _shape_channel_curves(
+        self,
+        channel_id: int | None,
+        errors: list[str],
+    ) -> tuple[tuple[int, ...], tuple[int, ...], tuple[float, ...]]:
+        if channel_id is None:
+            return (), (), ()
+        curve_node_ids: list[int] = []
+        for kind, other_id, rest in (
+            self.children.get(channel_id, []) + self.parents.get(channel_id, [])
+        ):
+            node = self.object_by_id.get(other_id)
+            property_name = str(rest[0]) if rest else ""
+            if (
+                kind == "OP"
+                and node is not None
+                and node.name == "AnimationCurveNode"
+                and "deform" in property_name.casefold()
+            ):
+                curve_node_ids.append(int(other_id))
+        curve_ids: list[int] = []
+        times: list[int] = []
+        values: list[float] = []
+        for curve_node_id in dict.fromkeys(curve_node_ids):
+            for kind, other_id, _rest in (
+                self.children.get(curve_node_id, [])
+                + self.parents.get(curve_node_id, [])
+            ):
+                curve = self.object_by_id.get(other_id)
+                if kind != "OP" or curve is None or curve.name != "AnimationCurve":
+                    continue
+                if other_id in curve_ids:
+                    continue
+                curve_ids.append(int(other_id))
+                raw_times = _child_value(curve, "KeyTime", []) or []
+                raw_values = _child_value(curve, "KeyValueFloat", []) or []
+                if not isinstance(raw_times, (list, tuple)):
+                    raw_times = [raw_times]
+                if not isinstance(raw_values, (list, tuple)):
+                    raw_values = [raw_values]
+                if len(raw_times) != len(raw_values):
+                    errors.append(
+                        f"AnimationCurve {other_id} KeyTime/KeyValueFloat: counts "
+                        f"{len(raw_times)} and {len(raw_values)} differ"
+                    )
+                for key_index, raw_time in enumerate(raw_times):
+                    try:
+                        time = int(raw_time)
+                    except (TypeError, ValueError, OverflowError):
+                        errors.append(
+                            f"AnimationCurve {other_id} KeyTime[{key_index}]: "
+                            f"value {raw_time!r} is not an integer"
+                        )
+                        continue
+                    times.append(time)
+                for key_index, raw_value in enumerate(raw_values):
+                    try:
+                        value = float(raw_value)
+                    except (TypeError, ValueError):
+                        errors.append(
+                            f"AnimationCurve {other_id} KeyValueFloat[{key_index}]: "
+                            f"value {raw_value!r} is not numeric"
+                        )
+                        continue
+                    if not math.isfinite(value):
+                        errors.append(
+                            f"AnimationCurve {other_id} KeyValueFloat[{key_index}]: "
+                            f"value {raw_value!r} is not finite"
+                        )
+                    values.append(value)
+        return tuple(curve_ids), tuple(times), tuple(values)
+
+    @staticmethod
+    def _shape_storage_mode(
+        shape_node: FbxNode | None,
+        errors: list[str],
+    ) -> tuple[str, str]:
+        if shape_node is None:
+            return "relative", "fbx_legacy_default"
+        props = _properties70(shape_node)
+
+        def setting(name: str) -> Any | None:
+            direct = _child_value(shape_node, name, None)
+            if direct is not None:
+                return direct
+            values = props.get(name)
+            return values[0] if values else None
+
+        legacy = setting("LegacyStyle")
+        absolute = setting("AbsoluteMode")
+        try:
+            if legacy is not None and bool(int(legacy)):
+                return "relative", "LegacyStyle"
+            if absolute is not None:
+                return (
+                    ("absolute" if bool(int(absolute)) else "relative"),
+                    "AbsoluteMode",
+                )
+        except (TypeError, ValueError, OverflowError):
+            errors.append(
+                "ShapeMode: LegacyStyle/AbsoluteMode must be a boolean integer, got "
+                f"LegacyStyle={legacy!r}, AbsoluteMode={absolute!r}"
+            )
+        return "relative", "fbx_legacy_default"
+
     def _read_animation_stacks(self) -> tuple[FbxAnimationStack, ...]:
         layers = {
             object_id: _clean_name(node.properties[1])
@@ -871,6 +1713,8 @@ class FbxScene:
         value = self.resolved_orientation_policy(policy)
         if value == "none":
             return np.eye(4, dtype=float)
+        if value == "fbx_global_settings":
+            return self.global_settings_conversion_matrix()
         if value == "fbx_y_up_to_dying_light":
             return FBX_Y_UP_TO_DYING_LIGHT.copy()
         axis, sign = {
@@ -886,18 +1730,81 @@ class FbxScene:
     def resolved_orientation_policy(self, policy: str = "auto") -> str:
         """Resolve a requested orientation policy to the transform actually used.
 
-        ``FbxScene.from_path`` rejects axis layouts outside the supported
-        X-right/Y-up/Z-front contract.  Consequently a valid scene needs no
-        additional scene-basis rotation in automatic mode; object-level export
-        wrappers are already present in Model/BindPose matrices.
+        Automatic orientation is derived from FBX ``GlobalSettings``.  The
+        common X-right/Y-up/Z-front layout resolves to ``none``; any other
+        representable axis permutation/sign layout resolves to the explicit
+        ``fbx_global_settings`` conversion.
         """
 
         value = str(policy or "auto").strip().lower()
         if value not in ORIENTATION_POLICIES:
             raise ValueError(f"unknown orientation policy {policy!r}")
         if value == "auto":
-            return "none"
+            conversion = self.global_settings_conversion_matrix()
+            return (
+                "none"
+                if np.allclose(conversion, np.eye(4), rtol=0.0, atol=1.0e-12)
+                else "fbx_global_settings"
+            )
         return value
+
+    def global_settings_conversion_matrix(self) -> np.ndarray:
+        """Convert declared FBX axes into canonical X-right/Y-up/Z-front.
+
+        The FBX axis metadata describes a signed permutation of the three
+        coordinate axes.  Such a basis is exactly representable without
+        approximation.  Missing metadata retains the historical identity
+        convention; malformed, repeated, or non-unit axis declarations are
+        rejected with the complete setting inventory.
+        """
+
+        keys = (
+            ("CoordAxis", "CoordAxisSign"),
+            ("UpAxis", "UpAxisSign"),
+            ("FrontAxis", "FrontAxisSign"),
+        )
+        if all(self.axis_settings.get(axis) is None for axis, _sign in keys):
+            return np.eye(4, dtype=float)
+        rows: list[np.ndarray] = []
+        used: list[int] = []
+        for axis_key, sign_key in keys:
+            raw_axis = self.axis_settings.get(axis_key)
+            raw_sign = self.axis_settings.get(sign_key)
+            try:
+                axis = int(raw_axis)  # type: ignore[arg-type]
+                sign = int(raw_sign)  # type: ignore[arg-type]
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "FBX GlobalSettings axis metadata is incomplete: "
+                    f"{self.axis_settings}"
+                ) from exc
+            if axis not in {0, 1, 2} or sign not in {-1, 1}:
+                raise ValueError(
+                    "FBX GlobalSettings axes must use indexes 0..2 and signs +/-1; "
+                    f"found {axis_key}={raw_axis!r}, {sign_key}={raw_sign!r}"
+                )
+            used.append(axis)
+            row = np.zeros(3, dtype=float)
+            row[axis] = float(sign)
+            rows.append(row)
+        if len(set(used)) != 3:
+            raise ValueError(
+                "FBX GlobalSettings axes are not an orthonormal permutation: "
+                f"{self.axis_settings}"
+            )
+        result = np.eye(4, dtype=float)
+        result[:3, :3] = np.vstack(rows)
+        if not np.allclose(
+            result[:3, :3] @ result[:3, :3].T,
+            np.eye(3),
+            rtol=0.0,
+            atol=1.0e-12,
+        ):
+            raise ValueError(
+                "FBX GlobalSettings axis basis is not orthonormal: "
+                f"{self.axis_settings}"
+            )
+        return result
 
     def to_chrome_global_matrix(self, matrix: np.ndarray, policy: str = "auto") -> np.ndarray:
         conversion = self.coordinate_conversion_matrix(policy)
@@ -914,24 +1821,7 @@ class FbxScene:
         return conversion[:3, :3] @ np.asarray(value, dtype=float)[:3]
 
     def _validate_axis_contract(self) -> None:
-        expected = {
-            "UpAxis": 1,
-            "UpAxisSign": 1,
-            "CoordAxis": 0,
-            "CoordAxisSign": 1,
-            "FrontAxis": 2,
-            "FrontAxisSign": 1,
-        }
-        mismatches = {
-            key: (self.axis_settings.get(key), value)
-            for key, value in expected.items()
-            if self.axis_settings.get(key) not in (None, value)
-        }
-        if mismatches:
-            raise ValueError(
-                "this first model importer supports FBX X-right/Y-up/Z-front scenes only; "
-                f"axis mismatch: {mismatches}"
-            )
+        self.global_settings_conversion_matrix()
 
     def _add_scene_warnings(self) -> None:
         if not self.limb_ids:
@@ -1088,6 +1978,99 @@ def _euler_matrix(value: Sequence[float], order: str) -> np.ndarray:
     for axis in order:
         result = _axis_rotation(axis, values[axis]) @ result
     return result
+
+
+def _validate_polygon_for_fan(
+    points: np.ndarray,
+    *,
+    geometry_name: str,
+    polygon_index: int,
+) -> None:
+    """Prove that deterministic first-corner fan triangulation is safe.
+
+    Triangles need no additional proof. Convex planar quads/n-gons preserve
+    their source winding under a fan. Concave, self-intersecting, degenerate,
+    or non-planar polygons are rejected with an export-time remedy rather than
+    being silently converted into different visible geometry.
+    """
+
+    values = np.asarray(points, dtype=float)
+    if values.ndim != 2 or values.shape[1:] != (3,):
+        raise ValueError(
+            f"geometry {geometry_name!r} polygon {polygon_index} has malformed positions; "
+            "repair the face and re-export"
+        )
+    if not np.isfinite(values).all():
+        raise ValueError(
+            f"geometry {geometry_name!r} polygon {polygon_index} contains non-finite "
+            "positions; repair the face and re-export"
+        )
+    if len(values) <= 3:
+        return
+
+    extent = float(np.max(np.ptp(values, axis=0)))
+    position_tolerance = max(1.0e-8, extent * 1.0e-7)
+    for left in range(len(values)):
+        for right in range(left + 1, len(values)):
+            if float(np.linalg.norm(values[left] - values[right])) <= position_tolerance:
+                raise ValueError(
+                    f"geometry {geometry_name!r} polygon {polygon_index} repeats a corner. "
+                    "Remove the degenerate face, triangulate it in the DCC, and re-export."
+                )
+
+    # Newell's method gives a deterministic normal for any simple planar
+    # polygon without choosing a potentially collinear first triple.
+    normal = np.zeros(3, dtype=float)
+    for index, current in enumerate(values):
+        following = values[(index + 1) % len(values)]
+        normal += np.asarray(
+            (
+                (current[1] - following[1]) * (current[2] + following[2]),
+                (current[2] - following[2]) * (current[0] + following[0]),
+                (current[0] - following[0]) * (current[1] + following[1]),
+            ),
+            dtype=float,
+        )
+    normal_length = float(np.linalg.norm(normal))
+    if normal_length <= max(1.0e-12, extent * extent * 1.0e-10):
+        raise ValueError(
+            f"geometry {geometry_name!r} polygon {polygon_index} is degenerate or "
+            "self-intersecting. Triangulate/repair this face in the DCC and re-export."
+        )
+    normal /= normal_length
+    distances = np.abs((values - values[0]) @ normal)
+    planarity_tolerance = max(1.0e-7, extent * 1.0e-5)
+    maximum_distance = float(np.max(distances))
+    if maximum_distance > planarity_tolerance:
+        raise ValueError(
+            f"geometry {geometry_name!r} polygon {polygon_index} is non-planar "
+            f"(maximum plane deviation {maximum_distance:.6g}). Triangulate this face in "
+            "the DCC before FBX export; automatic fan triangulation is intentionally blocked."
+        )
+
+    drop_axis = int(np.argmax(np.abs(normal)))
+    projected = np.delete(values, drop_axis, axis=1)
+    signs: list[float] = []
+    cross_tolerance = max(1.0e-14, extent * extent * 1.0e-10)
+    for index in range(len(projected)):
+        before = projected[index - 1]
+        current = projected[index]
+        after = projected[(index + 1) % len(projected)]
+        first = current - before
+        second = after - current
+        cross = float(first[0] * second[1] - first[1] * second[0])
+        if abs(cross) <= cross_tolerance:
+            raise ValueError(
+                f"geometry {geometry_name!r} polygon {polygon_index} has a collinear or "
+                "degenerate n-gon corner. Triangulate/repair this face in the DCC and re-export."
+            )
+        signs.append(cross)
+    if min(signs) < 0.0 < max(signs):
+        raise ValueError(
+            f"geometry {geometry_name!r} polygon {polygon_index} is concave. Triangulate "
+            "this face in the DCC before FBX export; first-corner fan triangulation would "
+            "change or overlap visible geometry."
+        )
 
 
 def _matrix_from_array(values: Sequence[float] | None) -> np.ndarray | None:

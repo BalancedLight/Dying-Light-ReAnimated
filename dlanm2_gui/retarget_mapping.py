@@ -11,7 +11,11 @@ Every suggestion remains editable in the GUI.
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
+import math
 import re
+import unicodedata
+
+import numpy as np
 
 from .bone_maps import (
     BoneMapPair,
@@ -21,7 +25,7 @@ from .bone_maps import (
     skeleton_signature,
 )
 from .chrome_rig import ChromeRig
-from .root_mapping import resolve_source_root
+from .trackmap import dl_name_hash
 
 
 def _plain(value: str) -> str:
@@ -235,30 +239,650 @@ def canonical_humanoid_role(value: str) -> str | None:
     return match.role if match else None
 
 
-def _role_priority(name: str, role: str) -> tuple[int, int, str]:
-    plain = _plain(name)
-    penalty = 0
-    if any(token in plain for token in ("twist", "share", "helper", "end", "ik")):
-        penalty += 100
-    if role == "pelvis":
-        if plain in {"pelvis", "hips", "back_bottom", "backbottom"}:
-            penalty -= 20
-        if "cc_base_pelvis" in plain:
-            penalty -= 10
-    if role == "root" and plain in {"root", "control"}:
-        penalty -= 20
-    # Shallower/shorter canonical names win over decorated duplicates.
-    return penalty, len(plain), plain
+def _hierarchy_depth(
+    name: str,
+    parents: Mapping[str, str | None],
+) -> int:
+    depth = 0
+    seen: set[str] = set()
+    cursor = parents.get(name)
+    while cursor is not None and cursor not in seen:
+        seen.add(cursor)
+        depth += 1
+        cursor = parents.get(cursor)
+    return depth
+
+
+_ASSIGNMENT_FLOOR = 32.0
+_REVIEW_MARGIN = 12.0
+_HELPER_TOKENS = (
+    "helper",
+    "camera",
+    "weapon",
+    "socket",
+    "accessory",
+    "cloth",
+    "control",
+    "ik",
+    "pole",
+)
+
+
+def source_mapping_evidence(document: Any) -> dict[str, Any]:
+    """Return optional bind/deformation evidence exposed by an FBX document.
+
+    Animation-only FBXs commonly have no mesh clusters. In that case the bind
+    globals still participate and deformation-class scoring simply remains
+    unavailable. The helper is intentionally tolerant so lightweight document
+    fixtures and older callers keep working.
+    """
+
+    bind_globals = dict(getattr(document, "bind_global_matrices", {}) or {})
+    skin_weights: dict[str, float] = defaultdict(float)
+    scene = getattr(document, "scene", None)
+    geometries = tuple(getattr(scene, "geometries", ()) or ())
+    model_names = dict(getattr(scene, "model_names", {}) or {})
+    for geometry in geometries:
+        for cluster in tuple(getattr(geometry, "clusters", ()) or ()):
+            bone_name = str(getattr(cluster, "bone_name", "") or "")
+            if not bone_name:
+                bone_id = getattr(cluster, "bone_id", None)
+                if bone_id is not None:
+                    bone_name = str(model_names.get(int(bone_id), "") or "")
+            if not bone_name:
+                continue
+            total = sum(
+                float(weight)
+                for weight in tuple(getattr(cluster, "weights", ()) or ())
+                if math.isfinite(float(weight)) and float(weight) > 0.0
+            )
+            if total > 0.0:
+                skin_weights[bone_name] += total
+    return {
+        "source_bind_globals": bind_globals or None,
+        "source_deform_bones": frozenset(skin_weights) or None,
+        "source_skin_weights": dict(skin_weights) or None,
+    }
+
+
+def _rig_bind_globals(rig: ChromeRig) -> dict[str, np.ndarray]:
+    locals_by_name: dict[str, np.ndarray] = {}
+    for bone in rig.bones:
+        w, x, y, z = map(float, bone.bind_rotation_wxyz)
+        norm = math.sqrt(w * w + x * x + y * y + z * z)
+        if norm <= 1.0e-12 or not math.isfinite(norm):
+            continue
+        w, x, y, z = w / norm, x / norm, y / norm, z / norm
+        rotation = np.asarray(
+            (
+                (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)),
+                (2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)),
+                (2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)),
+            ),
+            dtype=float,
+        )
+        local = np.eye(4, dtype=float)
+        local[:3, :3] = rotation @ np.diag(np.asarray(bone.bind_scale, dtype=float))
+        local[:3, 3] = np.asarray(bone.bind_translation, dtype=float)
+        locals_by_name[bone.name] = local
+
+    by_index = {bone.index: bone for bone in rig.bones}
+    result: dict[str, np.ndarray] = {}
+    visiting: set[int] = set()
+
+    def resolve(index: int) -> np.ndarray:
+        bone = by_index[index]
+        if bone.name in result:
+            return result[bone.name]
+        if index in visiting:
+            raise ValueError(f"target .crig hierarchy contains a cycle at {bone.name!r}")
+        visiting.add(index)
+        local = locals_by_name[bone.name]
+        if bone.parent_index >= 0 and bone.parent_index in by_index:
+            value = resolve(bone.parent_index) @ local
+        else:
+            value = local.copy()
+        visiting.remove(index)
+        result[bone.name] = value
+        return value
+
+    for bone in rig.bones:
+        if bone.name in locals_by_name:
+            resolve(bone.index)
+    return result
+
+
+def _valid_bind_globals(
+    names: Iterable[str],
+    values: Mapping[str, Any] | None,
+) -> dict[str, np.ndarray]:
+    result: dict[str, np.ndarray] = {}
+    if not values:
+        return result
+    for name in names:
+        raw = values.get(name)
+        if raw is None:
+            continue
+        matrix = np.asarray(raw, dtype=float)
+        if matrix.shape == (4, 4) and np.isfinite(matrix).all():
+            result[name] = matrix.copy()
+    return result
+
+
+def _spatial_features(
+    names: Iterable[str],
+    parents: Mapping[str, str | None],
+    globals_by_name: Mapping[str, np.ndarray],
+) -> dict[str, dict[str, Any]]:
+    ordered = [name for name in names if name in globals_by_name]
+    if not ordered:
+        return {}
+    pivots = {
+        name: np.asarray(globals_by_name[name][:3, 3], dtype=float)
+        for name in ordered
+    }
+    roots = [name for name in ordered if parents.get(name) not in pivots]
+    origin = (
+        np.mean([pivots[name] for name in roots], axis=0)
+        if roots
+        else np.mean(list(pivots.values()), axis=0)
+    )
+    extent = max(
+        (float(np.linalg.norm(value - origin)) for value in pivots.values()),
+        default=0.0,
+    )
+    if extent <= 1.0e-12:
+        stacked = np.asarray(list(pivots.values()), dtype=float)
+        extent = float(np.linalg.norm(np.max(stacked, axis=0) - np.min(stacked, axis=0)))
+    extent = max(extent, 1.0e-12)
+    maximum_depth = max((_hierarchy_depth(name, parents) for name in ordered), default=0)
+    result: dict[str, dict[str, Any]] = {}
+    for name in ordered:
+        parent = parents.get(name)
+        vector = (
+            pivots[name] - pivots[parent]
+            if parent in pivots
+            else pivots[name] - origin
+        )
+        length = float(np.linalg.norm(vector))
+        direction = vector / length if length > 1.0e-12 else np.zeros(3, dtype=float)
+        result[name] = {
+            "normalized_pivot": (pivots[name] - origin) / extent,
+            "parent_direction": direction,
+            "segment_extent": length / extent,
+            "radial_extent": float(np.linalg.norm(pivots[name] - origin)) / extent,
+            "normalized_depth": (
+                _hierarchy_depth(name, parents) / maximum_depth
+                if maximum_depth
+                else 0.0
+            ),
+        }
+    return result
+
+
+def _safe_descriptor_match(source_name: str, descriptor: int) -> bool:
+    try:
+        return dl_name_hash(source_name) == int(descriptor)
+    except ValueError:
+        return False
+
+
+def _source_deform_lookup(
+    source_deform_bones: Iterable[str] | Mapping[str, bool] | None,
+    source_skin_weights: Mapping[str, float] | None,
+) -> dict[str, bool]:
+    if isinstance(source_deform_bones, Mapping):
+        result = {str(name): bool(value) for name, value in source_deform_bones.items()}
+    else:
+        result = {str(name): True for name in tuple(source_deform_bones or ())}
+    for name, value in dict(source_skin_weights or {}).items():
+        if math.isfinite(float(value)) and float(value) > 0.0:
+            result[str(name)] = True
+    return result
+
+
+def _mapping_candidates(
+    rig: ChromeRig,
+    source_names: list[str],
+    source_parents: Mapping[str, str | None],
+    *,
+    source_bind_globals: Mapping[str, Any] | None,
+    source_deform_bones: Iterable[str] | Mapping[str, bool] | None,
+    source_skin_weights: Mapping[str, float] | None,
+) -> tuple[dict[str, list[dict[str, Any]]], bool, str]:
+    rig_parents = {
+        bone.name: (
+            rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
+        )
+        for bone in rig.bones
+    }
+    source_name_set = set(source_names)
+    source_children: dict[str, list[str]] = defaultdict(list)
+    for name in source_names:
+        parent = source_parents.get(name)
+        if parent is not None:
+            source_children[str(parent)].append(name)
+    rig_children: dict[str, list[str]] = defaultdict(list)
+    for bone in rig.bones:
+        parent = rig_parents[bone.name]
+        if parent is not None:
+            rig_children[parent].append(bone.name)
+
+    target_globals = _rig_bind_globals(rig)
+    source_globals = _valid_bind_globals(source_names, source_bind_globals)
+    target_spatial = _spatial_features(rig_parents, rig_parents, target_globals)
+    source_spatial = _spatial_features(source_names, source_parents, source_globals)
+    spatial_available = bool(target_spatial and source_spatial)
+    spatial_note = (
+        "source and target bind pivots, segment directions, extents, and chain depths were scored"
+        if spatial_available
+        else "source bind globals were not supplied (or were invalid); spatial scoring was omitted"
+    )
+    source_deform = _source_deform_lookup(source_deform_bones, source_skin_weights)
+    skin = {
+        str(name): max(0.0, float(value))
+        for name, value in dict(source_skin_weights or {}).items()
+        if math.isfinite(float(value))
+    }
+    maximum_skin = max(skin.values(), default=0.0)
+    target_plain_by_name = {bone.name: _plain(bone.name) for bone in rig.bones}
+    results: dict[str, list[dict[str, Any]]] = {}
+    for bone in rig.bones:
+        target_role = canonical_humanoid_role(bone.name)
+        target_plain = target_plain_by_name[bone.name]
+        target_side = _side(target_plain)
+        target_parent_role = canonical_humanoid_role(rig_parents[bone.name] or "")
+        target_child_roles = {
+            role
+            for child in rig_children.get(bone.name, ())
+            if (role := canonical_humanoid_role(child)) is not None
+        }
+        target_normal = unicodedata.normalize("NFKC", bone.name).casefold()
+        alias_normals = {_plain(alias) for alias in bone.aliases}
+        candidates: list[dict[str, Any]] = []
+        for source_name in source_names:
+            components: dict[str, float] = {}
+            evidence: list[str] = []
+            source_normal = unicodedata.normalize("NFKC", source_name).casefold()
+            source_plain = _plain(source_name)
+            if _safe_descriptor_match(source_name, bone.descriptor):
+                components["descriptor"] = 120.0
+                evidence.append("exact descriptor")
+            elif source_name == bone.name:
+                components["exact_name"] = 116.0
+                evidence.append("exact name")
+            elif source_normal == target_normal:
+                components["unicode_name"] = 112.0
+                evidence.append("Unicode NFKC/casefold name")
+            elif source_plain == target_plain:
+                components["normalized_name"] = 105.0
+                evidence.append("namespace-stripped normalized name")
+            elif source_plain in alias_normals:
+                components["alias"] = 96.0
+                evidence.append("target .crig alias")
+            else:
+                ignored = {"target", "source", "bone", "joint", "jnt", "def"}
+                target_tokens = set(target_plain.split("_")) - ignored
+                source_tokens = set(source_plain.split("_")) - ignored
+                overlap = len(target_tokens & source_tokens)
+                if overlap:
+                    components["name_tokens"] = min(24.0, overlap * 8.0)
+                    evidence.append(f"{overlap} normalized name token(s)")
+
+            source_role = canonical_humanoid_role(source_name)
+            if target_role and source_role == target_role:
+                components["semantic_role"] = 60.0
+                evidence.append(f"semantic role {target_role}")
+            elif target_role and source_role and source_role != target_role:
+                components["semantic_role"] = -60.0
+                evidence.append(f"semantic mismatch {target_role}/{source_role}")
+            source_side = _side(source_plain)
+            if target_side and source_side == target_side:
+                components["side"] = 12.0
+                evidence.append(f"side {target_side}")
+            elif target_side and source_side and source_side != target_side:
+                components["side"] = -55.0
+                evidence.append("left/right conflict")
+
+            source_parent = source_parents.get(source_name)
+            source_parent_role = canonical_humanoid_role(source_parent or "")
+            if target_parent_role and source_parent_role == target_parent_role:
+                components["parent_role"] = 12.0
+                evidence.append("parent semantic role")
+            source_child_roles = {
+                role
+                for child in source_children.get(source_name, ())
+                if (role := canonical_humanoid_role(child)) is not None
+            }
+            child_overlap = len(target_child_roles & source_child_roles)
+            if child_overlap:
+                components["child_roles"] = min(12.0, 4.0 * child_overlap)
+                evidence.append(f"{child_overlap} child semantic role(s)")
+            depth_delta = abs(
+                _hierarchy_depth(bone.name, rig_parents)
+                - _hierarchy_depth(source_name, source_parents)
+            )
+            components["chain_depth"] = max(0.0, 12.0 - 3.0 * depth_delta)
+            if depth_delta <= 1:
+                evidence.append("compatible chain depth")
+            target_root = rig_parents[bone.name] is None
+            source_root = source_parents.get(source_name) not in source_name_set
+            components["root_membership"] = 10.0 if target_root == source_root else -15.0
+            if target_root == source_root:
+                evidence.append("root membership")
+
+            target_helper_like = bone.helper or any(
+                token in target_plain for token in _HELPER_TOKENS
+            )
+            source_helper_like = any(token in source_plain for token in _HELPER_TOKENS)
+            if source_name in source_deform:
+                source_helper_like = not source_deform[source_name]
+            components["deform_helper_class"] = (
+                10.0 if target_helper_like == source_helper_like else -22.0
+            )
+            if target_helper_like == source_helper_like:
+                evidence.append("deform/helper class")
+            if skin and source_name in skin:
+                normalized_weight = skin[source_name] / maximum_skin if maximum_skin else 0.0
+                if bone.deform and not bone.helper:
+                    components["skin_ownership"] = 6.0 + 6.0 * math.sqrt(normalized_weight)
+                    evidence.append("positive source skin ownership")
+                elif bone.helper:
+                    components["skin_ownership"] = -12.0
+                    evidence.append("source skin ownership conflicts with target helper")
+
+            target_position = target_spatial.get(bone.name)
+            source_position = source_spatial.get(source_name)
+            if target_position is not None and source_position is not None:
+                pivot_distance = float(
+                    np.linalg.norm(
+                        target_position["normalized_pivot"]
+                        - source_position["normalized_pivot"]
+                    )
+                )
+                components["bind_pivot"] = max(-8.0, 24.0 * (1.0 - pivot_distance / 1.5))
+                direction_dot = float(
+                    np.clip(
+                        np.dot(
+                            target_position["parent_direction"],
+                            source_position["parent_direction"],
+                        ),
+                        -1.0,
+                        1.0,
+                    )
+                )
+                components["parent_child_direction"] = 15.0 * direction_dot
+                target_extent = float(target_position["segment_extent"])
+                source_extent = float(source_position["segment_extent"])
+                if target_extent <= 1.0e-9 and source_extent <= 1.0e-9:
+                    extent_similarity = 1.0
+                elif target_extent <= 1.0e-9 or source_extent <= 1.0e-9:
+                    extent_similarity = 0.0
+                else:
+                    extent_similarity = math.exp(
+                        -abs(math.log(target_extent / source_extent))
+                    )
+                components["segment_extent"] = 14.0 * extent_similarity
+                radial_delta = abs(
+                    float(target_position["radial_extent"])
+                    - float(source_position["radial_extent"])
+                )
+                components["hierarchy_extent"] = max(0.0, 8.0 * (1.0 - radial_delta))
+                normalized_depth_delta = abs(
+                    float(target_position["normalized_depth"])
+                    - float(source_position["normalized_depth"])
+                )
+                components["normalized_chain_depth"] = max(
+                    0.0, 8.0 * (1.0 - normalized_depth_delta)
+                )
+                evidence.extend(
+                    (
+                        "normalized bind pivot",
+                        "parent-child bind direction",
+                        "relative segment extent",
+                    )
+                )
+            score = float(sum(components.values()))
+            candidates.append(
+                {
+                    "source_fbx_bone": source_name,
+                    "score": round(score, 6),
+                    "evidence": evidence,
+                    "components": {
+                        key: round(value, 6) for key, value in sorted(components.items())
+                    },
+                }
+            )
+        candidates.sort(
+            key=lambda row: (
+                -float(row["score"]),
+                unicodedata.normalize("NFKC", str(row["source_fbx_bone"])).casefold(),
+                str(row["source_fbx_bone"]),
+            )
+        )
+        results[bone.name] = candidates
+    return results, spatial_available, spatial_note
+
+
+def _maximum_weight_assignment(
+    target_names: list[str],
+    source_names: list[str],
+    candidates_by_target: Mapping[str, list[dict[str, Any]]],
+) -> dict[str, str]:
+    """Solve one deterministic maximum-weight target<-source assignment.
+
+    Each target gets a private dummy option at the review floor, so weak
+    hierarchy-only coincidences remain unmapped. Source names are sorted before
+    the Hungarian solve and a tiny target-priority tie break makes results
+    independent of input iteration order.
+    """
+
+    if not target_names or not source_names:
+        return {}
+    # Exact descriptor rows are collision-checked by ChromeRig validation and
+    # cannot benefit from fuzzy competition. Locking them both protects exact
+    # tracks from aggregate-score tradeoffs and keeps same-rig/superset mapping
+    # linear before the global solve handles the genuinely ambiguous remainder.
+    descriptor_targets_by_source: dict[str, list[str]] = defaultdict(list)
+    descriptor_source_by_target: dict[str, str] = {}
+    for target_name in target_names:
+        matches = [
+            str(row["source_fbx_bone"])
+            for row in candidates_by_target.get(target_name, ())
+            if float(dict(row.get("components", {}) or {}).get("descriptor", 0.0)) > 0.0
+        ]
+        if len(matches) == 1:
+            descriptor_source_by_target[target_name] = matches[0]
+            descriptor_targets_by_source[matches[0]].append(target_name)
+    locked = {
+        target_name: source_name
+        for target_name, source_name in descriptor_source_by_target.items()
+        if len(descriptor_targets_by_source[source_name]) == 1
+    }
+    locked_sources = set(locked.values())
+    target_names = [name for name in target_names if name not in locked]
+    source_names = [name for name in source_names if name not in locked_sources]
+    if not target_names or not source_names:
+        return locked
+    ordered_sources = sorted(
+        dict.fromkeys(source_names),
+        key=lambda value: (unicodedata.normalize("NFKC", value).casefold(), value),
+    )
+    source_index = {name: index for index, name in enumerate(ordered_sources)}
+    real_count = len(ordered_sources)
+    row_count = len(target_names)
+    column_count = real_count + row_count
+    weights: list[list[float]] = []
+    raw_by_target: dict[str, dict[str, float]] = {}
+    for target_index, target_name in enumerate(target_names):
+        raw = {
+            str(row["source_fbx_bone"]): float(row["score"])
+            for row in candidates_by_target.get(target_name, ())
+        }
+        raw_by_target[target_name] = raw
+        row = [_ASSIGNMENT_FLOOR] * column_count
+        for source_name, score in raw.items():
+            if source_name not in source_index:
+                continue
+            # Earlier target tracks win exact ties; lexicographically earlier
+            # source names win ties within that target.
+            source_rank = source_index[source_name]
+            tie_break = 1.0e-7 * (row_count - target_index) * (real_count - source_rank)
+            row[source_rank] = score + tie_break
+        weights.append(row)
+
+    # Hungarian algorithm for a rectangular minimization matrix (rows <= cols).
+    # Negating the weights produces the required maximum-weight assignment.
+    u = [0.0] * (row_count + 1)
+    v = [0.0] * (column_count + 1)
+    p = [0] * (column_count + 1)
+    way = [0] * (column_count + 1)
+    for row_index in range(1, row_count + 1):
+        p[0] = row_index
+        minimum = [float("inf")] * (column_count + 1)
+        used = [False] * (column_count + 1)
+        column0 = 0
+        while True:
+            used[column0] = True
+            active_row = p[column0]
+            delta = float("inf")
+            column1 = 0
+            for column in range(1, column_count + 1):
+                if used[column]:
+                    continue
+                current = -weights[active_row - 1][column - 1] - u[active_row] - v[column]
+                if current < minimum[column]:
+                    minimum[column] = current
+                    way[column] = column0
+                if minimum[column] < delta:
+                    delta = minimum[column]
+                    column1 = column
+            for column in range(column_count + 1):
+                if used[column]:
+                    u[p[column]] += delta
+                    v[column] -= delta
+                else:
+                    minimum[column] -= delta
+            column0 = column1
+            if p[column0] == 0:
+                break
+        while True:
+            column1 = way[column0]
+            p[column0] = p[column1]
+            column0 = column1
+            if column0 == 0:
+                break
+
+    selected_column = [-1] * row_count
+    for column in range(1, column_count + 1):
+        if p[column]:
+            selected_column[p[column] - 1] = column - 1
+    result: dict[str, str] = dict(locked)
+    for target_index, column in enumerate(selected_column):
+        if 0 <= column < real_count:
+            target_name = target_names[target_index]
+            source_name = ordered_sources[column]
+            if raw_by_target[target_name].get(source_name, -float("inf")) > _ASSIGNMENT_FLOOR:
+                result[target_name] = source_name
+    return result
+
+
+def _candidate_method(row: Mapping[str, Any]) -> str:
+    components = dict(row.get("components", {}) or {})
+    if components.get("descriptor", 0.0) > 0.0:
+        return "descriptor"
+    if components.get("exact_name", 0.0) > 0.0:
+        return "exact"
+    if any(components.get(name, 0.0) > 0.0 for name in ("unicode_name", "normalized_name")):
+        return "normalized"
+    if components.get("alias", 0.0) > 0.0:
+        return "alias"
+    if components.get("semantic_role", 0.0) > 0.0:
+        return "semantic"
+    if components.get("bind_pivot", 0.0) > 0.0:
+        return "spatial_bind"
+    return "hierarchy"
+
+
+def _automatic_mapping_evidence(
+    rig: ChromeRig,
+    source_names: list[str],
+    source_parents: Mapping[str, str | None],
+    profile: GenericBoneMap,
+    *,
+    candidates_by_target: Mapping[str, list[dict[str, Any]]],
+    spatial_evidence_available: bool,
+    spatial_evidence_note: str,
+) -> list[dict[str, Any]]:
+    """Attach deterministic candidate/runner-up evidence for map review.
+
+    The report reuses the exact candidate matrix consumed by global assignment,
+    so review displays cannot disagree with the actual automatic selection.
+    Low-margin rows remain unreviewed and therefore build-blocking.
+    """
+    del source_names, source_parents
+    selected_by_target = {row.target_rig_bone: row for row in profile.base_pairs}
+    rows: list[dict[str, Any]] = []
+    for bone in rig.bones:
+        candidates = list(candidates_by_target.get(bone.name, ()))
+        top = candidates[0] if candidates else None
+        runner = candidates[1] if len(candidates) > 1 else None
+        margin = (
+            float(top["score"]) - float(runner["score"])
+            if top is not None and runner is not None
+            else float(top["score"]) if top is not None else 0.0
+        )
+        pair = selected_by_target.get(bone.name)
+        selected_is_top = bool(
+            pair is not None
+            and top is not None
+            and pair.source_fbx_bone == top["source_fbx_bone"]
+        )
+        review_required = bool(
+            pair is None
+            or pair.review_state == "automatic_unreviewed"
+            or not selected_is_top
+            or (top is not None and float(top["score"]) < 55.0)
+            or margin < _REVIEW_MARGIN
+        )
+        report = {
+            "target_rig_bone": bone.name,
+            "selected_source_fbx_bone": pair.source_fbx_bone if pair else "",
+            "top_candidate": top,
+            "runner_up_candidate": runner,
+            "score_margin": round(margin, 6),
+            "selected_is_top_candidate": selected_is_top,
+            "review_required": review_required,
+            "spatial_evidence_available": spatial_evidence_available,
+            "spatial_evidence_note": spatial_evidence_note,
+            "assignment_policy": "deterministic_global_one_to_one",
+            "assignment_floor": _ASSIGNMENT_FLOOR,
+            "review_margin": _REVIEW_MARGIN,
+        }
+        if pair is not None:
+            pair.extensions = dict(pair.extensions)
+            pair.extensions["automatic_evidence"] = report
+            if review_required and pair.method != "manual" and pair.review_state not in {
+                "manually_reviewed",
+                "imported_reviewed",
+            }:
+                pair.review_state = "automatic_unreviewed"
+        rows.append(report)
+    return rows
 
 
 def auto_map_crig_to_fbx(
     rig: ChromeRig,
     target_names: Iterable[str],
     target_parents: Mapping[str, str | None],
+    *,
+    source_bind_globals: Mapping[str, Any] | None = None,
+    source_deform_bones: Iterable[str] | Mapping[str, bool] | None = None,
+    source_skin_weights: Mapping[str, float] | None = None,
 ) -> GenericBoneMap:
     """Auto-map a target `.crig` skeleton to a source animation FBX skeleton."""
 
-    names = list(target_names)
+    names = list(dict.fromkeys(str(name) for name in target_names))
     profile = auto_map_skeletons(
         rig,
         names,
@@ -267,6 +891,7 @@ def auto_map_crig_to_fbx(
             (name, target_parents.get(name)) for name in sorted(names)
         ),
     )
+    profile.pairs = []
     source_name_set = set(names)
     target_name_set = {bone.name for bone in rig.bones}
     required_names = {
@@ -293,105 +918,59 @@ def auto_map_crig_to_fbx(
         if nearest_target_ancestor(bone.name) != expected_parent:
             hierarchy_mismatch = True
             break
+    identity = not (required_names - source_name_set) and not hierarchy_mismatch
     set_mapping_profile_origin(
-        profile,
-        "automatic_identity"
-        if not (required_names - source_name_set) and not hierarchy_mismatch
-        else "automatic_repair",
+        profile, "automatic_identity" if identity else "automatic_repair"
     )
 
-    # The generic fuzzy matcher is useful for props and identical skeletons,
-    # but a cross-rig humanoid suggestion must never retain a confident-looking
-    # pair whose anatomy roles disagree (for example CC Spine01 -> Mixamo Spine).
-    rig_matches = scan_humanoid_bones(bone.name for bone in rig.bones)
-    source_matches = scan_humanoid_bones(names, target_parents)
-    profile.pairs = [
-        row
-        for row in profile.pairs
-        if not (
-            row.source_bone in rig_matches
-            and row.target_bone in source_matches
-            and rig_matches[row.source_bone].role != source_matches[row.target_bone].role
-        )
-    ]
-
-    # Root-motion extraction and pelvis pose are separate jobs.  A non-deforming
-    # wrapper such as RL_BoneRoot must not consume Mixamo Hips as its pose row;
-    # doing so rotates the whole model while the real CC_Base_Hip stays at bind.
-    # Leave the source root available for the semantic pelvis pass below.  The
-    # root-motion resolver samples it independently and writes displacement only
-    # to the user-selected Bip01/root track.
-    try:
-        source_roots = [
-            name for name in names if target_parents.get(name) not in set(names)
-        ]
-        source_root = (
-            source_roots[0]
-            if len(source_roots) == 1
-            else resolve_source_root(names, target_parents)[0]
-        )
-        target_root = rig.bones[rig.root_index]
-        same_named_root = _plain(target_root.name) == _plain(source_root)
-        if target_root.helper and not target_root.deform and not same_named_root:
-            profile.pairs = [
-                row
-                for row in profile.pairs
-                if row.source_bone != target_root.name
-                and row.target_bone != source_root
-            ]
-    except (IndexError, ValueError):
-        # A malformed/empty hierarchy is reported by normal FBX/.crig
-        # validation. Keeping auto-map best-effort lets the editor still open.
-        pass
-
-    mapped_rig_bones = {row.source_bone for row in profile.pairs}
-    used_source = {row.target_bone for row in profile.pairs}
-
-    source_by_role: dict[str, list[str]] = defaultdict(list)
-    for source_name, match in source_matches.items():
-        source_by_role[match.role].append(source_name)
-
-    rig_by_role: dict[str, list[Any]] = defaultdict(list)
+    candidates_by_target, spatial_available, spatial_note = _mapping_candidates(
+        rig,
+        names,
+        target_parents,
+        source_bind_globals=source_bind_globals,
+        source_deform_bones=source_deform_bones,
+        source_skin_weights=source_skin_weights,
+    )
+    selected = _maximum_weight_assignment(
+        [bone.name for bone in rig.bones], names, candidates_by_target
+    )
+    by_candidate = {
+        target: {str(row["source_fbx_bone"]): row for row in rows}
+        for target, rows in candidates_by_target.items()
+    }
     for bone in rig.bones:
-        if bone.name in rig_matches:
-            rig_by_role[rig_matches[bone.name].role].append(bone)
-
-    # Root is allowed to remain fixed when pelvis/hips already owns the only
-    # source root; this is safer than assigning the same source bone twice.
-    for role, rig_bones in sorted(rig_by_role.items()):
-        available_sources = [row for row in source_by_role.get(role, ()) if row not in used_source]
-        if not available_sources:
+        source_name = selected.get(bone.name)
+        if source_name is None:
             continue
-        available_sources.sort(key=lambda value: _role_priority(value, role))
-        candidates = [bone for bone in rig_bones if bone.name not in mapped_rig_bones]
-        candidates.sort(
-            key=lambda bone: (
-                0 if bone.deform and not bone.helper else 1,
-                *_role_priority(bone.name, role),
+        candidate = by_candidate[bone.name][source_name]
+        method = _candidate_method(candidate)
+        exact_identity_row = identity and method in {"descriptor", "exact", "normalized"}
+        profile.pairs.append(
+            BoneMapPair(
+                target_rig_descriptor=bone.descriptor,
+                target_rig_bone=bone.name,
+                source_fbx_bone=source_name,
+                confidence=max(0.0, min(1.0, float(candidate["score"]) / 160.0)),
+                method=method,
+                review_state=(
+                    "automatic_accepted"
+                    if exact_identity_row
+                    else "automatic_unreviewed"
+                ),
             )
         )
-        for bone, source_name in zip(candidates, available_sources):
-            profile.pairs.append(
-                BoneMapPair(
-                    source_descriptor=bone.descriptor,
-                    source_bone=bone.name,
-                    target_bone=source_name,
-                    confidence=0.94,
-                    method=f"semantic:{role}",
-                )
-            )
-            mapped_rig_bones.add(bone.name)
-            used_source.add(source_name)
 
     profile.pairs.sort(key=lambda row: next(
         (bone.index for bone in rig.bones if bone.name == row.source_bone), 1_000_000
     ))
+    rig_matches = scan_humanoid_bones(bone.name for bone in rig.bones)
+    source_matches = scan_humanoid_bones(names, target_parents)
     mapped_roles = {
         rig_matches[row.source_bone].role
         for row in profile.pairs
         if row.source_bone in rig_matches
     }
-    available_roles = set(source_by_role).intersection(
+    available_roles = set(match.role for match in source_matches.values()).intersection(
         match.role for match in rig_matches.values()
     )
     profile.extensions["auto_map_summary"] = {
@@ -400,7 +979,19 @@ def auto_map_crig_to_fbx(
         "mapped_bone_count": len(profile.pairs),
         "mapped_anatomy_roles": sorted(mapped_roles),
         "unmapped_available_anatomy_roles": sorted(available_roles - mapped_roles),
+        "assignment_policy": "deterministic_global_one_to_one",
+        "spatial_evidence_available": spatial_available,
+        "skin_evidence_available": bool(source_skin_weights),
     }
+    profile.extensions["automatic_mapping_evidence_v2"] = _automatic_mapping_evidence(
+        rig,
+        names,
+        target_parents,
+        profile,
+        candidates_by_target=candidates_by_target,
+        spatial_evidence_available=spatial_available,
+        spatial_evidence_note=spatial_note,
+    )
     return profile
 
 
@@ -409,12 +1000,30 @@ def mapping_rows_for_ui(
     target_names: Iterable[str],
     target_parents: Mapping[str, str | None],
     profile: GenericBoneMap | None = None,
+    *,
+    source_bind_globals: Mapping[str, Any] | None = None,
+    source_deform_bones: Iterable[str] | Mapping[str, bool] | None = None,
+    source_skin_weights: Mapping[str, float] | None = None,
 ) -> tuple[GenericBoneMap, list[dict[str, Any]]]:
-    current = profile or auto_map_crig_to_fbx(rig, target_names, target_parents)
+    current = profile or auto_map_crig_to_fbx(
+        rig,
+        target_names,
+        target_parents,
+        source_bind_globals=source_bind_globals,
+        source_deform_bones=source_deform_bones,
+        source_skin_weights=source_skin_weights,
+    )
     by_target = {row.source_bone: row for row in current.pairs}
     rows = []
     for bone in rig.bones:
         pair = by_target.get(bone.name)
+        evidence = (
+            pair.extensions.get("automatic_evidence", {})
+            if pair is not None
+            else {}
+        )
+        top_candidate = evidence.get("top_candidate") or {}
+        runner_up = evidence.get("runner_up_candidate") or {}
         rows.append(
             {
                 "target_bone": bone.name,
@@ -433,6 +1042,14 @@ def mapping_rows_for_ui(
                     pair.component_policy if pair else "full_transform"
                 ),
                 "target_helper": bool(bone.helper),
+                "review_state": (
+                    pair.review_state if pair else "intentionally_unmapped"
+                ),
+                "review_required": bool(evidence.get("review_required", False)),
+                "top_candidate": str(top_candidate.get("source_fbx_bone", "")),
+                "runner_up": str(runner_up.get("source_fbx_bone", "")),
+                "score_margin": float(evidence.get("score_margin", 0.0)),
+                "mapping_evidence": evidence,
             }
         )
     return current, rows
@@ -445,4 +1062,5 @@ __all__ = [
     "match_humanoid_bone",
     "mapping_rows_for_ui",
     "scan_humanoid_bones",
+    "source_mapping_evidence",
 ]

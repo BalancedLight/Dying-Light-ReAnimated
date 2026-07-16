@@ -9,7 +9,7 @@ import numpy as np
 
 from .anm2 import Anm2Header
 from .anm2_components import decode_samples
-from .oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND, _FbxDocument
+from .fbx_core import FBX_TICKS_PER_SECOND, FbxDocument
 from .oracle.custom_fbx_smd_two_vector_fullbody_editor_rpack import (
     _continuous_frames,
     _orthogonalize,
@@ -30,7 +30,7 @@ except ImportError:
 MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
 
 
-def _frame_ticks(document: _FbxDocument, fps: int, frame_count: int) -> list[int]:
+def _frame_ticks(document: FbxDocument, fps: int, frame_count: int) -> list[int]:
     if hasattr(document, "frame_ticks"):
         ticks = list(document.frame_ticks(fps=fps))
     else:
@@ -97,12 +97,12 @@ def apply_root_motion_source_override(
     motion_index = descriptors.index(MOTION_HELPER_DESCRIPTOR) if MOTION_HELPER_DESCRIPTOR in descriptors else -1
     values = [[list(track) for track in frame.tracks] for frame in sample.frames]
 
-    animation = _FbxDocument(Path(animation_fbx))
+    animation = FbxDocument(Path(animation_fbx))
     if animation_stack:
         animation.select_animation_stack(animation_stack)
     elif len(getattr(animation, "animation_stacks", ())) == 1 and getattr(animation, "selected_animation_stack", None) is None:
         animation.select_animation_stack(animation.animation_stacks[0].name)
-    rest = _FbxDocument(Path(source_rest_fbx))
+    rest = FbxDocument(Path(source_rest_fbx))
     ticks = _frame_ticks(animation, fps, header.frame_count)
 
     rest_globals = apply_canonical_aliases(

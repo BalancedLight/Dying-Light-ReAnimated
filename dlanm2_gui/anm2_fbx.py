@@ -14,7 +14,7 @@ from .anm2_components import decode_samples
 from .bone_maps import GenericBoneMap, skeleton_signature
 from .chrome_rig import ChromeRig, ChromeRigBone
 from .chrome_rig_builder import decompose_local_matrix, _topological_bone_names
-from .oracle.binary_fbx_mixamo import _FbxDocument
+from .fbx_core import FbxDocument
 
 MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
 
@@ -229,7 +229,7 @@ def reconstruct_native_scene(
     )
 
 def chrome_rig_from_fbx_skeleton(path: str | Path) -> ChromeRig:
-    document = _FbxDocument(Path(path))
+    document = FbxDocument(Path(path))
     names = _topological_bone_names(document)
     index_by_name = {name: index for index, name in enumerate(names)}
     meters = float(document.meters_per_unit)

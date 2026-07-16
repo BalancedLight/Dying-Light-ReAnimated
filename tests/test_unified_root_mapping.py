@@ -52,6 +52,22 @@ def test_source_root_prefers_reviewed_humanoid_hips_mapping() -> None:
     assert method == "mapped_humanoid_hips"
 
 
+def test_tied_multiple_roots_require_an_explicit_selection() -> None:
+    names = ["AlphaBase", "AlphaTip", "BetaBase", "BetaTip"]
+    parents = {
+        "AlphaBase": None,
+        "AlphaTip": "AlphaBase",
+        "BetaBase": None,
+        "BetaTip": "BetaBase",
+    }
+
+    with pytest.raises(ValueError, match="ambiguous.*AlphaBase.*BetaBase") as raised:
+        resolve_source_root(names, parents)
+
+    assert "Source root/Target root" in str(raised.value)
+    assert "no first-bone fallback" in str(raised.value)
+
+
 def test_root_mapping_is_saved_per_animation_extension() -> None:
     animation = SimpleNamespace(extensions={})
     RootMappingSelection("Root", "pelvis").store(animation)

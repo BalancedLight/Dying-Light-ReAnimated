@@ -32,21 +32,47 @@ GEOMETRY_NODE_TYPES = {SOURCE_NODE_MESH, SOURCE_NODE_MESH_VBLEND, SOURCE_NODE_HU
 TRANSFORM_ONLY_NODE_TYPES = {SOURCE_NODE_HELPER, SOURCE_NODE_BONE, SOURCE_NODE_LIGHT, SOURCE_NODE_CAMERA}
 
 
-def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
-    source = Path(path)
-    parsed = MshFile.from_path(source)
+def audit_source_msh_bytes_for_compiler(
+    payload: bytes,
+    source_name: str = "<in-memory source MSH>",
+) -> dict[str, Any]:
+    parsed = MshFile.parse(bytes(payload), source_name)
     errors: list[str] = []
     warnings: list[str] = []
     node_type_counts: dict[str, int] = {}
+
+    if len(parsed.nodes) > 32_768:
+        errors.append(
+            f"source MSH contains {len(parsed.nodes)} physical nodes; parent indexes are "
+            "signed int16 and support at most 32768. This is independent of the 256-entry "
+            "local skin-palette limit."
+        )
+    for issue in parsed.warnings:
+        errors.append(
+            f"source-MSH hierarchy/header validation failed: {issue}. Rebuild the source "
+            "from the original FBX before compiling."
+        )
 
     for index, node in enumerate(parsed.nodes):
         type_name = SOURCE_NODE_TYPE_NAMES.get(node.node_type, f"UNKNOWN_{node.node_type}")
         node_type_counts[type_name] = node_type_counts.get(type_name, 0) + 1
         if node.node_type in GEOMETRY_NODE_TYPES and not node.lods:
-            errors.append(
-                f"node {index} {node.name!r} is {type_name} but has no LOD; "
-                "the compiler treats geometry types as mesh elements"
+            is_explicit_bounds_carrier = (
+                node.node_type == SOURCE_NODE_MESH
+                and node.name.casefold().endswith("_bounds")
+                and len(node.bounds) == 6
+                and any(float(value) > 0.0 for value in node.bounds[3:6])
             )
+            if is_explicit_bounds_carrier:
+                warnings.append(
+                    f"node {index} {node.name!r} is the explicit non-rendering model-bounds "
+                    "carrier; it has no LOD by design and must remain after visible geometry"
+                )
+            else:
+                errors.append(
+                    f"node {index} {node.name!r} is {type_name} but has no LOD; "
+                    "the compiler treats geometry types as mesh elements"
+                )
         if node.node_type in TRANSFORM_ONLY_NODE_TYPES and node.lods:
             errors.append(
                 f"node {index} {node.name!r} is {type_name} but contains geometry LODs"
@@ -57,6 +83,22 @@ def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
             )
 
         for lod_index, lod in enumerate(node.lods):
+            location = f"node {index} {node.name!r} LOD {lod_index}"
+            if lod.vertex_count > 65_535:
+                errors.append(
+                    f"{location} has {lod.vertex_count} vertices; split the geometry so each "
+                    "emitted source-MSH node has at most 65535 vertices."
+                )
+            invalid_indices = [
+                value for value in lod.indices if value < 0 or value >= lod.vertex_count
+            ]
+            if invalid_indices:
+                errors.append(
+                    f"{location} contains {len(invalid_indices)} vertex indexes outside "
+                    f"0..{max(0, lod.vertex_count - 1)}; rebuild or repair the source mesh."
+                )
+            for issue in lod.validate():
+                errors.append(f"{location}: {issue}")
             color_bytes = lod.streams.get(0x110, b"")
             color_count = len(color_bytes) // 4 if len(color_bytes) % 4 == 0 else -1
             if node.node_type == SOURCE_NODE_MESH_VBLEND and not lod.skin_vertices:
@@ -80,6 +122,18 @@ def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
                         "the compact runtime object"
                     )
                 for subset_index, subset in enumerate(lod.subsets):
+                    if len(subset.bone_palette) > 256:
+                        errors.append(
+                            f"{location} subset {subset_index} has "
+                            f"{len(subset.bone_palette)} palette entries; vertex bone bytes are "
+                            "local indexes, so partition weighted triangles into palettes of at "
+                            "most 256 entries. The total hierarchy may remain larger."
+                        )
+                    if len(set(subset.bone_palette)) != len(subset.bone_palette):
+                        errors.append(
+                            f"{location} subset {subset_index} contains duplicate global node "
+                            "entries in its local palette; rebuild the partition."
+                        )
                     for palette_index in subset.bone_palette:
                         if not 0 <= palette_index < len(parsed.nodes):
                             errors.append(
@@ -95,6 +149,32 @@ def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
                                 f"{SOURCE_NODE_TYPE_NAMES.get(target.node_type, target.node_type)}; "
                                 "skinning palettes must target BONE (8) nodes"
                             )
+                    palette_size = len(subset.bone_palette)
+                    referenced_vertices = {
+                        lod.indices[position]
+                        for position in range(
+                            subset.first_index,
+                            min(
+                                subset.first_index + subset.index_count,
+                                len(lod.indices),
+                            ),
+                        )
+                        if 0 <= lod.indices[position] < len(lod.skin_vertices)
+                    }
+                    for vertex_index in sorted(referenced_vertices):
+                        row = lod.skin_vertices[vertex_index]
+                        invalid_local = [
+                            value
+                            for value in row.bone_indices
+                            if value < 0 or value >= palette_size
+                        ]
+                        if invalid_local:
+                            errors.append(
+                                f"{location} subset {subset_index} vertex {vertex_index} stores "
+                                f"local bone index {invalid_local[0]}, outside palette size "
+                                f"{palette_size}. A global node index must never be written into "
+                                "the uint8 local-palette field. Rebuild the model source."
+                            )
 
     if not parsed.surface_names:
         errors.append(
@@ -104,7 +184,7 @@ def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
 
     return {
         "format": "chrome_mesh_tools_ce6_source_compile_audit_v2",
-        "path": str(source),
+        "path": str(source_name),
         "node_count": len(parsed.nodes),
         "node_type_counts": node_type_counts,
         "material_count": len(parsed.materials),
@@ -117,3 +197,11 @@ def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
         "warnings": warnings,
         "ready": not errors,
     }
+
+
+def audit_source_msh_for_compiler(path: str | Path) -> dict[str, Any]:
+    source = Path(path)
+    return audit_source_msh_bytes_for_compiler(source.read_bytes(), str(source))
+
+
+__all__ = ["audit_source_msh_bytes_for_compiler", "audit_source_msh_for_compiler"]

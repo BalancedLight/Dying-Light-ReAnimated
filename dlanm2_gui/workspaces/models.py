@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from pathlib import Path
 from typing import Any, Callable
+import hashlib
 import json
 import re
 import string
@@ -13,7 +14,11 @@ import traceback
 
 from ..model_importer.compiler_bridge import CompilerSettings, compile_and_install_model
 from ..background_tasks import BackgroundTaskRunner, TaskFailure
-from ..model_importer.crig import create_crig_from_source_msh
+from ..chrome_rig import ChromeRig
+from ..model_importer.crig import (
+    build_crig_from_rig_contract_bytes,
+    write_prebuilt_crig_payload,
+)
 from ..model_importer.fbx_model import FbxScene, ORIENTATION_POLICIES
 from ..model_importer.msh_builder import (
     ModelBuildOptions,
@@ -26,6 +31,14 @@ from ..model_importer.vendor.chrome_mesh_tools.smd import SmdFile
 from ..fbx_preflight import preflight_fbx
 
 MODEL_WORKSPACE_EXTENSION_KEY = "model_workspace_v2"
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 @dataclass(slots=True)
@@ -44,9 +57,11 @@ class ModelEntry:
     installed_crig_ref: str = ""
     installed_crig_path: Path | None = None
     status: str = "Not analyzed"
+    extensions: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = deepcopy(self.extensions)
+        result.update({
             "path": self.path,
             "resource_name": self.resource_name,
             "mode": self.mode,
@@ -57,10 +72,21 @@ class ModelEntry:
             "generated_crig_path": (
                 str(self.installed_crig_path) if self.installed_crig_path else ""
             ),
-        }
+        })
+        return result
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ModelEntry":
+        known = {
+            "path",
+            "resource_name",
+            "mode",
+            "enabled",
+            "orientation_policy",
+            "humanoid_bone_map",
+            "generated_crig_ref",
+            "generated_crig_path",
+        }
         return cls(
             path=str(value.get("path", "")),
             resource_name=str(value.get("resource_name", "model")),
@@ -77,6 +103,11 @@ class ModelEntry:
                 if value.get("generated_crig_path")
                 else None
             ),
+            extensions={
+                str(key): deepcopy(row)
+                for key, row in value.items()
+                if key not in known
+            },
         )
 
 
@@ -90,6 +121,7 @@ class ModelWorkspace:
         mark_dirty: Callable[[], None],
         status_callback: Callable[[str], None] | None = None,
         rigs_installed_callback: Callable[[list["ModelEntry"]], None] | None = None,
+        animations_for_rig_callback: Callable[["ModelEntry"], None] | None = None,
     ) -> None:
         self.qt = qt
         self.parent_window = parent_window
@@ -97,8 +129,11 @@ class ModelWorkspace:
         self.mark_dirty = mark_dirty
         self.status_callback = status_callback or (lambda _message: None)
         self.rigs_installed_callback = rigs_installed_callback
+        self.animations_for_rig_callback = animations_for_rig_callback
         self.settings = qt["QSettings"]("DL ReAnimated", "Unified Model Workspace")
         self.entries: list[ModelEntry] = []
+        self._workspace_unknown_fields: dict[str, Any] = {}
+        self._settings_unknown_fields: dict[str, Any] = {}
         self.busy = False
         # Path rows emit textChanged while the UI is still being assembled.
         # Defer persistence until every settings widget exists.
@@ -121,17 +156,32 @@ class ModelWorkspace:
     # ------------------------------------------------------------------ project state
     def serialize(self) -> dict[str, Any]:
         self._capture_all_table_state()
-        return {
+        result = deepcopy(self._workspace_unknown_fields)
+        settings = deepcopy(self._settings_unknown_fields)
+        settings.update(self._settings_payload())
+        result.update({
             "format": "dl-reanimated-model-workspace",
             "schema_version": 2,
             "models": [entry.to_dict() for entry in self.entries],
-            "settings": self._settings_payload(),
-        }
+            "settings": settings,
+        })
+        return result
 
     def restore(self, value: dict[str, Any] | None) -> None:
         payload = dict(value or {})
+        self._workspace_unknown_fields = {
+            str(key): deepcopy(row)
+            for key, row in payload.items()
+            if key not in {"format", "schema_version", "models", "settings"}
+        }
         self.entries = [ModelEntry.from_dict(dict(row)) for row in payload.get("models", [])]
-        self._apply_settings_payload(dict(payload.get("settings", {})))
+        settings = dict(payload.get("settings", {}))
+        self._settings_unknown_fields = {
+            str(key): deepcopy(row)
+            for key, row in settings.items()
+            if key not in self._settings_payload()
+        }
+        self._apply_settings_payload(settings)
         self._refresh_table()
         self._refresh_mapping_model_combo()
 
@@ -189,6 +239,28 @@ class ModelWorkspace:
         self.details = qt["QPlainTextEdit"]()
         self.details.setReadOnly(True)
         details_layout.addWidget(self.details)
+        detail_actions = qt["QHBoxLayout"]()
+        self.open_model_report_button = qt["QPushButton"]("Open model build report")
+        self.open_model_report_button.clicked.connect(self._open_model_build_report)
+        self.open_generated_crig_button = qt["QPushButton"]("Open generated CRIG location")
+        self.open_generated_crig_button.clicked.connect(
+            self._open_generated_crig_location
+        )
+        self.show_targeting_animations_button = qt["QPushButton"](
+            "Show animations targeting this CRIG"
+        )
+        self.show_targeting_animations_button.clicked.connect(
+            self._show_targeting_animations
+        )
+        for button in (
+            self.open_model_report_button,
+            self.open_generated_crig_button,
+            self.show_targeting_animations_button,
+        ):
+            button.setEnabled(False)
+            detail_actions.addWidget(button)
+        detail_actions.addStretch(1)
+        details_layout.addLayout(detail_actions)
         layout.addWidget(details_group, 2)
         self.tabs.addTab(page, "Models")
 
@@ -197,8 +269,10 @@ class ModelWorkspace:
         page = qt["QWidget"]()
         layout = qt["QVBoxLayout"](page)
         intro = qt["QLabel"](
-            "Manual skin mapping for Dying Light Humanoid model imports. Auto-map is a starting "
-            "point; twist, helper, face, costume, or accessory bones may remain unmapped."
+            "Manual skin mapping for fitted DL1-name model imports. Auto-map is a starting "
+            "point; twist, helper, face, costume, or accessory bones may remain unmapped. "
+            "This mode preserves model-specific proportions: retarget every animation to the "
+            "generated CRIG and never attach raw stock tracks directly."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -207,23 +281,54 @@ class ModelWorkspace:
         self.mapping_model_combo.currentIndexChanged.connect(self._refresh_model_mapping_table)
         auto_button = qt["QPushButton"]("Auto-map selected model")
         auto_button.clicked.connect(self.auto_map_model)
+        self.review_ambiguous_button = qt["QPushButton"]("Review ambiguous only")
+        self.review_ambiguous_button.setCheckable(True)
+        self.review_ambiguous_button.toggled.connect(
+            lambda _checked: self._apply_model_mapping_filter()
+        )
+        self.reset_safe_suggestions_button = qt["QPushButton"](
+            "Reset safe suggestions"
+        )
+        self.reset_safe_suggestions_button.setToolTip(
+            "Return high-confidence rows to their current automatic suggestion while "
+            "leaving ambiguous and intentionally unmapped rows unchanged."
+        )
+        self.reset_safe_suggestions_button.clicked.connect(
+            self.reset_safe_model_suggestions
+        )
         clear_button = qt["QPushButton"]("Clear manual overrides")
         clear_button.clicked.connect(self.clear_model_mapping)
         row.addWidget(qt["QLabel"]("Model"))
         row.addWidget(self.mapping_model_combo, 1)
         row.addWidget(auto_button)
+        row.addWidget(self.review_ambiguous_button)
+        row.addWidget(self.reset_safe_suggestions_button)
         row.addWidget(clear_button)
         layout.addLayout(row)
-        self.model_mapping_table = qt["QTableWidget"](0, 5)
+        self.model_mapping_table = qt["QTableWidget"](0, 11)
         self.model_mapping_table.setHorizontalHeaderLabels(
-            ("Source FBX bone", "Auto target", "Final target", "Method", "Status")
+            (
+                "Source FBX bone",
+                "Source weight %",
+                "Semantic role",
+                "Automatic target",
+                "Final target",
+                "Transfer",
+                "Components",
+                "Confidence",
+                "Review",
+                "Method",
+                "Status",
+            )
         )
         mapping_header = self.model_mapping_table.horizontalHeader()
         mapping_header.setSectionResizeMode(0, qt["QHeaderView"].Stretch)
-        mapping_header.setSectionResizeMode(1, qt["QHeaderView"].Stretch)
-        mapping_header.setSectionResizeMode(2, qt["QHeaderView"].Stretch)
-        mapping_header.setSectionResizeMode(3, qt["QHeaderView"].ResizeToContents)
-        mapping_header.setSectionResizeMode(4, qt["QHeaderView"].ResizeToContents)
+        mapping_header.setSectionResizeMode(3, qt["QHeaderView"].Stretch)
+        mapping_header.setSectionResizeMode(4, qt["QHeaderView"].Stretch)
+        for index in (1, 2, 5, 6, 7, 8, 9, 10):
+            mapping_header.setSectionResizeMode(
+                index, qt["QHeaderView"].ResizeToContents
+            )
         self.model_mapping_table.verticalHeader().setVisible(False)
         layout.addWidget(self.model_mapping_table, 1)
         self.mapping_note = qt["QLabel"]()
@@ -271,8 +376,20 @@ class ModelWorkspace:
         self.build_source_button.clicked.connect(self.build_sources)
         self.install_button = qt["QPushButton"]("Build, compile & install")
         self.install_button.clicked.connect(self.compile_and_install)
+        self.use_generated_rig_button = qt["QPushButton"](
+            "Use generated rig in Animations"
+        )
+        self.use_generated_rig_button.setToolTip(
+            "Assign the selected model's generated CRIG to the selected animation clip (or "
+            "the project default when no clips exist) without changing unrelated clips."
+        )
+        self.use_generated_rig_button.clicked.connect(
+            self._use_selected_generated_rig
+        )
+        self.use_generated_rig_button.setEnabled(False)
         actions.addWidget(self.build_source_button)
         actions.addWidget(self.install_button)
+        actions.addWidget(self.use_generated_rig_button)
         actions.addStretch(1)
         layout.addLayout(actions)
         self.progress = qt["QProgressBar"]()
@@ -407,7 +524,11 @@ class ModelWorkspace:
                 try:
                     entry.scene = FbxScene.from_path(entry.path)
                     entry.inventory = entry.scene.inventory()
-                    preflight = preflight_fbx(entry.path, purpose="model")
+                    preflight = preflight_fbx(
+                        entry.path,
+                        purpose="model",
+                        scene=entry.scene,
+                    )
                     entry.inventory["preflight"] = preflight.to_dict()
                     preflight.require_buildable()
                     entry.status = f"Ready ({entry.inventory['detected_mode']})"
@@ -452,8 +573,11 @@ class ModelWorkspace:
             for label, value in (
                 ("Auto", "auto"),
                 ("Static prop", "static"),
-                ("Exact FBX rig", "exact_rig"),
-                ("Dying Light humanoid", "dying_light_humanoid"),
+                ("Exact original FBX rig", "exact_rig"),
+                (
+                    "DL1 humanoid names - preserve proportions, retarget animations",
+                    "dying_light_humanoid",
+                ),
             ):
                 mode.addItem(label, value)
             mode.setCurrentIndex(max(0, mode.findData(entry.mode)))
@@ -489,6 +613,7 @@ class ModelWorkspace:
             )
             for column, value in enumerate(values, 5):
                 self.model_table.setItem(row, column, qt["QTableWidgetItem"](str(value)))
+        self._selection_changed()
 
     def _set_enabled(self, index: int, value: bool) -> None:
         if 0 <= index < len(self.entries):
@@ -513,6 +638,170 @@ class ModelWorkspace:
             index = self.mapping_model_combo.findData(selected.path)
             if index >= 0:
                 self.mapping_model_combo.setCurrentIndex(index)
+        if hasattr(self, "use_generated_rig_button"):
+            self.use_generated_rig_button.setEnabled(
+                bool(selected and selected.installed_crig_ref and not self.busy)
+            )
+        if hasattr(self, "open_model_report_button"):
+            self.open_model_report_button.setEnabled(
+                bool(selected and isinstance(selected.build_report, dict))
+            )
+            crig_path = (
+                selected.installed_crig_path or selected.crig_path
+                if selected is not None
+                else None
+            )
+            self.open_generated_crig_button.setEnabled(bool(crig_path))
+            self.show_targeting_animations_button.setEnabled(
+                bool(
+                    selected
+                    and selected.installed_crig_ref
+                    and self.animations_for_rig_callback is not None
+                )
+            )
+
+    @staticmethod
+    def _model_report_path(entry: ModelEntry) -> Path | None:
+        report = entry.build_report if isinstance(entry.build_report, dict) else {}
+        msh_value = str(report.get("msh_path", "") or "")
+        msh_path = Path(msh_value) if msh_value else entry.source_msh
+        if msh_path is None:
+            return None
+        return Path(msh_path).with_suffix(".model_import.json")
+
+    def _open_local_path(self, path: Path) -> None:
+        self.qt["QDesktopServices"].openUrl(
+            self.qt["QUrl"].fromLocalFile(str(path.resolve()))
+        )
+
+    def _open_model_build_report(self) -> None:
+        entry = self._selected_entry()
+        report_path = self._model_report_path(entry) if entry is not None else None
+        if report_path is None or not report_path.is_file():
+            self._message(
+                "Model build report is unavailable",
+                "Build the selected model first. The report is created beside its source MSH "
+                "as <resource>.model_import.json.",
+                critical=True,
+            )
+            return
+        self._open_local_path(report_path)
+
+    def _open_generated_crig_location(self) -> None:
+        entry = self._selected_entry()
+        crig_path = (
+            entry.installed_crig_path or entry.crig_path
+            if entry is not None
+            else None
+        )
+        if crig_path is None or not Path(crig_path).is_file():
+            self._message(
+                "Generated CRIG is unavailable",
+                "Build the selected skinned model with Create/install .crig enabled, then "
+                "retry. No animation target was changed.",
+                critical=True,
+            )
+            return
+        self._open_local_path(Path(crig_path).parent)
+
+    def _show_targeting_animations(self) -> None:
+        entry = self._selected_entry()
+        if (
+            entry is None
+            or not entry.installed_crig_ref
+            or self.animations_for_rig_callback is None
+        ):
+            self._message(
+                "No generated animation target",
+                "Build/install a generated CRIG for this model before filtering animations.",
+            )
+            return
+        self.animations_for_rig_callback(entry)
+
+    @staticmethod
+    def _generated_rig_handoff_error(entry: ModelEntry) -> str:
+        report = entry.build_report
+        if not isinstance(report, dict):
+            return (
+                "The selected model has no current build report. Analyze and rebuild the model "
+                "and generated CRIG together before using it as an animation target."
+            )
+        contract = report.get("authored_rig_contract")
+        if not isinstance(contract, dict):
+            return (
+                "The model build report has no authored rig contract, so MSH/CRIG bind identity "
+                "cannot be verified. Rebuild in Exact original FBX rig mode."
+            )
+        source = Path(entry.path)
+        if not source.is_file():
+            return f"The model source FBX is missing: {source}. Restore it and rebuild the model."
+        expected_source_hash = str(contract.get("source_fbx_sha256", "") or "")
+        actual_source_hash = _sha256_file(source)
+        if not expected_source_hash or actual_source_hash != expected_source_hash:
+            return (
+                f"The model source FBX {source.name!r} changed after its authored MSH/CRIG was "
+                "built. Analyze and rebuild the model and CRIG together before handoff."
+            )
+        source_msh = entry.source_msh
+        if source_msh is None or not Path(source_msh).is_file():
+            return (
+                "The source MSH associated with this generated rig is missing. Rebuild the model "
+                "before assigning its CRIG to animations."
+            )
+        expected_msh_hash = str(report.get("msh_sha256", "") or "")
+        if not expected_msh_hash or _sha256_file(Path(source_msh)) != expected_msh_hash:
+            return (
+                f"The source MSH {Path(source_msh).name!r} does not match its build report. "
+                "Rebuild the model and CRIG as one bind unit."
+            )
+        crig_path = entry.installed_crig_path or entry.crig_path
+        if crig_path is None or not Path(crig_path).is_file():
+            return "The generated CRIG is missing. Build and install it again before handoff."
+        try:
+            rig = ChromeRig.load(crig_path)
+        except (OSError, ValueError) as exc:
+            return f"The generated CRIG cannot be validated: {exc}. Rebuild and install it again."
+        expected = {
+            "authored_bind_hash": str(contract.get("bind_hash", "") or ""),
+            "authored_rig_contract_id": str(contract.get("contract_id", "") or ""),
+            "authored_skeleton_hash": str(contract.get("skeleton_hash", "") or ""),
+            "authored_descriptor_hash": str(contract.get("descriptor_hash", "") or ""),
+        }
+        mismatches = [
+            key
+            for key, value in expected.items()
+            if value and str(rig.extensions.get(key, "") or "") != value
+        ]
+        if mismatches:
+            return (
+                f"The installed CRIG {Path(crig_path).name!r} does not match the model's current "
+                "authored MSH contract (mismatched " + ", ".join(mismatches) + "). Rebuild/install "
+                "the generated CRIG and retry; no animation target was changed."
+            )
+        return ""
+
+    def _use_selected_generated_rig(self) -> None:
+        entry = self._selected_entry()
+        if (
+            entry is None
+            or not entry.installed_crig_ref
+            or entry.installed_crig_path is None
+        ):
+            self._message(
+                "No generated rig",
+                "Build and install a CRIG for the selected model first.",
+            )
+            return
+        handoff_error = self._generated_rig_handoff_error(entry)
+        if handoff_error:
+            self._message(
+                "Generated rig is stale or unverifiable",
+                handoff_error,
+                critical=True,
+            )
+            return
+        if self.rigs_installed_callback is not None:
+            self.rigs_installed_callback([entry])
 
     def _selected_entry(self) -> ModelEntry | None:
         rows = sorted({index.row() for index in self.model_table.selectedIndexes()})
@@ -529,20 +818,90 @@ class ModelWorkspace:
             self.details.setPlainText(f"{entry.path}\n\n{entry.status}")
             return
         inv = entry.inventory
+        report = entry.build_report if isinstance(entry.build_report, dict) else {}
+        geometries = [
+            row for row in inv.get("geometries", ()) if isinstance(row, dict)
+        ]
+        source_triangles = sum(int(row.get("triangle_count", 0)) for row in geometries)
+        contract = report.get("authored_rig_contract")
+        contract = contract if isinstance(contract, dict) else {}
+        contract_nodes = [
+            row for row in contract.get("nodes", ()) if isinstance(row, dict)
+        ]
+        animation_prefix = int(
+            contract.get("animation_entity_prefix_length", len(contract_nodes)) or 0
+        )
+        root_names = [
+            str(contract_nodes[index].get("name", index))
+            for index in contract.get("roots", ())
+            if (
+                isinstance(index, int)
+                and 0 <= index < len(contract_nodes)
+                and index < animation_prefix
+            )
+        ] or [str(row) for row in inv.get("armature_roots", ())]
+        partition = report.get("skin_partitions")
+        partition = partition if isinstance(partition, dict) else {}
+        compatibility = report.get("humanoid_bind_compatibility")
+        if isinstance(compatibility, dict):
+            compatibility_text = str(compatibility.get("status", "review"))
+        elif contract:
+            validation = report.get("authored_rig_validation")
+            validation_status = (
+                str(validation.get("status", "recorded"))
+                if isinstance(validation, dict)
+                else "recorded"
+            )
+            compatibility_text = f"authored MSH/CRIG bind contract {validation_status}"
+        elif str(report.get("effective_mode", inv.get("detected_mode", ""))) == "static":
+            compatibility_text = "not applicable (static model)"
+        else:
+            compatibility_text = "not built"
+        axis_text = json.dumps(inv.get("axis_settings", {}), sort_keys=True)
+        generated_path = entry.installed_crig_path or entry.crig_path
+        coordinate = report.get("coordinate_contract")
+        coordinate = coordinate if isinstance(coordinate, dict) else {}
+        resolved_orientation = str(
+            coordinate.get("resolved_orientation_policy", entry.orientation_policy)
+        )
         lines = [
             entry.path, "",
             f"Detected mode: {inv.get('detected_mode')}",
             f"FBX version: {inv.get('fbx_version')}",
-            f"Meters per unit: {inv.get('meters_per_unit')}",
-            f"Meshes: {inv.get('mesh_geometry_count')}",
-            f"Bones: {inv.get('limb_node_count')}",
-            f"Weighted bones: {inv.get('weighted_bone_count')}",
+            f"Scene units (meters/unit): {inv.get('meters_per_unit')}",
+            f"Scene orientation metadata: {axis_text}",
+            f"Resolved output orientation: {resolved_orientation}",
+            f"Mesh geometries: {inv.get('mesh_geometry_count')}",
+            f"Source triangles: {source_triangles}",
+            f"Emitted vertices: {report.get('total_vertices', '—')}",
+            f"Emitted triangles: {report.get('total_triangles', '—')}",
+            f"Hierarchy nodes: {report.get('total_hierarchy_node_count', inv.get('limb_node_count'))}",
+            f"Deform bones: {report.get('bone_count', inv.get('weighted_bone_count'))}",
+            f"Helper bones: {report.get('helper_count', '—')}",
+            f"Hierarchy roots: {', '.join(root_names) if root_names else '—'}",
             f"Materials: {inv.get('material_count')}",
-            f"Orientation: {entry.orientation_policy}",
+            f"Skin partitions: {partition.get('partition_count', '—')}",
+            f"Maximum subset palette: {partition.get('maximum_local_palette_size', '—')} / 256 local entries",
+            f"Generated CRIG ref: {entry.installed_crig_ref or '—'}",
+            f"Generated CRIG path: {generated_path or '—'}",
+            f"Animation compatibility: {compatibility_text}",
             "",
         ]
         for warning in inv.get("warnings", []):
             lines.append(f"WARNING: {warning}")
+        if entry.mode == "dying_light_humanoid":
+            lines.extend(
+                (
+                    "WARNING: This model uses DL1-style names but a model-specific bind pose.",
+                    "Use the generated CRIG to retarget stock or custom animations.",
+                    "Do not attach raw stock animation tracks directly.",
+                )
+            )
+        if isinstance(entry.build_report, dict):
+            for warning in entry.build_report.get("warnings", ()) or ():
+                rendered = f"WARNING: {warning}"
+                if rendered not in lines:
+                    lines.append(rendered)
         self.details.setPlainText("\n".join(lines))
 
     # ------------------------------------------------------------------ model mapping
@@ -574,7 +933,11 @@ class ModelWorkspace:
         if entry.scene is None:
             entry.scene = FbxScene.from_path(entry.path)
             entry.inventory = entry.scene.inventory()
-        preflight = preflight_fbx(entry.path, purpose="model")
+        preflight = preflight_fbx(
+            entry.path,
+            purpose="model",
+            scene=entry.scene,
+        )
         preflight.require_buildable()
         entry.inventory = dict(entry.inventory or {})
         entry.inventory["preflight"] = preflight.to_dict()
@@ -601,6 +964,10 @@ class ModelWorkspace:
             for bone_id, target in mapping.items()
             if target is not None
         }
+        entry.extensions["humanoid_mapping_review_v1"] = {
+            entry.scene.model_names[bone_id]: "automatic_unreviewed"
+            for bone_id in source_ids
+        }
         entry.status = f"Mapped {report['directly_mapped_count']}/{report['source_bone_count']} source bones"
         self._changed()
         self._refresh_model_mapping_table()
@@ -610,6 +977,45 @@ class ModelWorkspace:
         entry = self._mapping_entry()
         if entry:
             entry.humanoid_bone_map.clear()
+            entry.extensions.pop("humanoid_mapping_review_v1", None)
+            self._changed()
+            self._refresh_model_mapping_table()
+            self._refresh_table()
+
+    def reset_safe_model_suggestions(self) -> None:
+        """Reset only high-confidence rows; retain ambiguous user decisions."""
+
+        entry = self._mapping_entry()
+        if entry is None:
+            return
+        review_states = entry.extensions.get("humanoid_mapping_review_v1")
+        states = dict(review_states) if isinstance(review_states, dict) else {}
+        changed = False
+        for row in range(self.model_mapping_table.rowCount()):
+            source_item = self.model_mapping_table.item(row, 0)
+            auto_item = self.model_mapping_table.item(row, 3)
+            confidence_item = self.model_mapping_table.item(row, 7)
+            review_item = self.model_mapping_table.item(row, 8)
+            if not all((source_item, auto_item, confidence_item, review_item)):
+                continue
+            source_name = source_item.text()
+            confidence = float(confidence_item.data(self.qt["Qt"].UserRole) or 0.0)
+            review_required = bool(review_item.data(self.qt["Qt"].UserRole))
+            safe = (
+                auto_item.text() != "Unmapped"
+                and confidence >= 0.95
+                and not review_required
+                and review_item.text() != "Intentionally unmapped"
+            )
+            if safe and source_name in entry.humanoid_bone_map:
+                entry.humanoid_bone_map.pop(source_name, None)
+                states.pop(source_name, None)
+                changed = True
+        if changed:
+            if states:
+                entry.extensions["humanoid_mapping_review_v1"] = states
+            else:
+                entry.extensions.pop("humanoid_mapping_review_v1", None)
             self._changed()
             self._refresh_model_mapping_table()
             self._refresh_table()
@@ -642,19 +1048,73 @@ class ModelWorkspace:
                 nodes,
                 source_weight_totals=usage["bone_weight_totals"],
             )
+            final, final_report = humanoid_bone_mapping(
+                entry.scene,
+                source_ids,
+                nodes,
+                manual_mapping=entry.humanoid_bone_map,
+                source_weight_totals=usage["bone_weight_totals"],
+            )
         except Exception as exc:
             self.model_mapping_table.setRowCount(0)
             self.mapping_note.setText(str(exc))
             return
         target_names = [node.name for node in nodes]
+        auto_rows = {
+            str(row.get("source_bone")): row for row in report.get("rows", ())
+        }
+        final_rows = {
+            str(row.get("source_bone")): row
+            for row in final_report.get("rows", ())
+        }
+        total_weight = float(usage.get("total_normalized_weight", 0.0) or 0.0)
+        review_payload = entry.extensions.get("humanoid_mapping_review_v1")
+        review_states = (
+            dict(review_payload) if isinstance(review_payload, dict) else {}
+        )
         self.model_mapping_table.setRowCount(len(source_ids))
         for row, bone_id in enumerate(source_ids):
             source_name = entry.scene.model_names[bone_id]
             auto_index = auto.get(bone_id)
             auto_name = nodes[auto_index].name if auto_index is not None else ""
-            final_name = entry.humanoid_bone_map.get(source_name, auto_name)
-            self.model_mapping_table.setItem(row, 0, qt["QTableWidgetItem"](source_name))
-            self.model_mapping_table.setItem(row, 1, qt["QTableWidgetItem"](auto_name or "Unmapped"))
+            final_index = final.get(bone_id)
+            final_name = nodes[final_index].name if final_index is not None else ""
+            auto_row = auto_rows.get(source_name, {})
+            final_row = final_rows.get(source_name, {})
+            source_weight = float(
+                usage.get("bone_weight_totals", {}).get(bone_id, 0.0) or 0.0
+            )
+            weight_fraction = source_weight / total_weight if total_weight > 0.0 else 0.0
+            confidence = float(auto_row.get("confidence", 0.0) or 0.0)
+            manual = source_name in entry.humanoid_bone_map
+            state = str(
+                review_states.get(
+                    source_name,
+                    "manually_reviewed" if manual else "automatic_unreviewed",
+                )
+            )
+            manual_mismatch = bool(final_row.get("manual_role_mismatch", False))
+            review_required = bool(
+                manual_mismatch
+                or (
+                    state == "automatic_unreviewed"
+                    and (not auto_name or confidence < 0.95)
+                )
+            )
+            source_item = qt["QTableWidgetItem"](source_name)
+            source_item.setData(qt["Qt"].UserRole, source_name)
+            self.model_mapping_table.setItem(row, 0, source_item)
+            self.model_mapping_table.setItem(
+                row, 1, qt["QTableWidgetItem"](f"{weight_fraction:.2%}")
+            )
+            self.model_mapping_table.setItem(
+                row,
+                2,
+                qt["QTableWidgetItem"](str(auto_row.get("role") or "Unclassified")),
+            )
+            self.model_mapping_table.setItem(
+                row, 3, qt["QTableWidgetItem"](auto_name or "Unmapped")
+            )
             combo = qt["QComboBox"]()
             combo.addItem("Unmapped", "")
             for target in target_names:
@@ -663,28 +1123,85 @@ class ModelWorkspace:
             combo.currentIndexChanged.connect(
                 lambda _value, source=source_name, widget=combo: self._set_model_map_row(source, str(widget.currentData()))
             )
-            self.model_mapping_table.setCellWidget(row, 2, combo)
-            method = "manual" if source_name in entry.humanoid_bone_map else (
-                "auto" if auto_name else "unmapped"
-            )
-            self.model_mapping_table.setItem(row, 3, qt["QTableWidgetItem"](method))
+            self.model_mapping_table.setCellWidget(row, 4, combo)
             self.model_mapping_table.setItem(
-                row, 4, qt["QTableWidgetItem"]("Mapped" if final_name else "Bind/root fallback")
+                row, 5, qt["QTableWidgetItem"]("Skin-weight transfer")
             )
+            self.model_mapping_table.setItem(
+                row, 6, qt["QTableWidgetItem"]("Authored bind T/R/S")
+            )
+            confidence_item = qt["QTableWidgetItem"](f"{confidence:.0%}")
+            confidence_item.setData(qt["Qt"].UserRole, confidence)
+            self.model_mapping_table.setItem(row, 7, confidence_item)
+            if state == "intentionally_unmapped":
+                review_text = "Intentionally unmapped"
+            elif state == "manually_reviewed":
+                review_text = "Manual reviewed"
+            elif review_required:
+                review_text = "Automatic - review"
+            else:
+                review_text = "Automatic safe"
+            review_item = qt["QTableWidgetItem"](review_text)
+            review_item.setData(qt["Qt"].UserRole, review_required)
+            self.model_mapping_table.setItem(row, 8, review_item)
+            self.model_mapping_table.setItem(
+                row,
+                9,
+                qt["QTableWidgetItem"](str(final_row.get("method") or "unmapped")),
+            )
+            status = (
+                "Review role mismatch"
+                if manual_mismatch
+                else "Intentionally unmapped"
+                if state == "intentionally_unmapped"
+                else "Unmapped; ancestor/root fallback at build"
+                if not final_name
+                else "Review required"
+                if review_required
+                else "Ready"
+            )
+            self.model_mapping_table.setItem(
+                row, 10, qt["QTableWidgetItem"](status)
+            )
+        self._apply_model_mapping_filter()
         self.mapping_note.setText(
             f"Auto mapped {report['directly_mapped_count']} of {report['source_bone_count']} source bones. "
-            "The final column is saved with this project and overrides automatic suggestions."
+            "Source weight is normalized over emitted skin corners. Automatic rows below 95% "
+            "confidence remain visible for review; final target choices are saved with the project."
         )
+
+    def _apply_model_mapping_filter(self) -> None:
+        ambiguous_only = bool(
+            hasattr(self, "review_ambiguous_button")
+            and self.review_ambiguous_button.isChecked()
+        )
+        for row in range(self.model_mapping_table.rowCount()):
+            review = self.model_mapping_table.item(row, 8)
+            required = bool(
+                review is not None
+                and review.data(self.qt["Qt"].UserRole)
+            )
+            self.model_mapping_table.setRowHidden(
+                row, ambiguous_only and not required
+            )
 
     def _set_model_map_row(self, source_name: str, target_name: str) -> None:
         entry = self._mapping_entry()
         if entry is None:
             return
-        if target_name:
-            entry.humanoid_bone_map[source_name] = target_name
-        else:
-            entry.humanoid_bone_map.pop(source_name, None)
+        # An explicit empty string is meaningful: it intentionally suppresses
+        # an otherwise automatic mapping. Clear manual overrides returns rows
+        # to automatic behavior.
+        entry.humanoid_bone_map[source_name] = target_name
+        payload = entry.extensions.get("humanoid_mapping_review_v1")
+        states = dict(payload) if isinstance(payload, dict) else {}
+        states[source_name] = (
+            "manually_reviewed" if target_name else "intentionally_unmapped"
+        )
+        entry.extensions["humanoid_mapping_review_v1"] = states
         self._changed()
+        self._refresh_model_mapping_table()
+        self._refresh_table()
 
     # ------------------------------------------------------------------ build
     def build_sources(self) -> None:
@@ -746,6 +1263,15 @@ class ModelWorkspace:
         if entry.scene is None:
             entry.scene = FbxScene.from_path(entry.path)
             entry.inventory = entry.scene.inventory()
+        model_preflight = preflight_fbx(
+            entry.path,
+            purpose="model",
+            scene=entry.scene,
+        )
+        model_preflight.require_buildable()
+        if entry.inventory is None:
+            entry.inventory = entry.scene.inventory()
+        entry.inventory["fbx_preflight"] = model_preflight.to_dict()
         script = str(config["animation_script"])
         options = ModelBuildOptions(
             resource_name=entry.resource_name,
@@ -764,33 +1290,38 @@ class ModelWorkspace:
         output = Path(str(config["output_path"])).expanduser() / "sources" / entry.resource_name
         progress(f"Building {entry.resource_name} ({entry.mode}, {entry.orientation_policy})…")
         result = build_source_from_fbx(entry.scene, options)
+        result.report["fbx_preflight"] = model_preflight.to_dict()
+        crig_payload: bytes | None = None
+        crig_report: dict[str, Any] | None = None
+        if bool(config["create_crig"]) and result.report["effective_mode"] != "static":
+            if result.authored_rig_contract is None:
+                raise ValueError(
+                    f"Model {entry.resource_name!r} did not produce an authored rig contract; "
+                    "no MSH or CRIG was written because their bind identity could not be proven. "
+                    "Re-analyze the FBX in Exact original FBX rig mode; Exact Rig is viable only "
+                    "when the report contains a complete authored animation hierarchy."
+                )
+            try:
+                crig_payload, crig_report = build_crig_from_rig_contract_bytes(
+                    result.authored_rig_contract,
+                    name=entry.resource_name,
+                )
+            except Exception as exc:
+                raise ValueError(
+                    f"Model {entry.resource_name!r} cannot generate a CRIG from the exact authored "
+                    f"MSH hierarchy: {exc} No MSH or CRIG was written. Apply/freeze the named "
+                    "unsupported bone transform and re-export; Exact Rig remains viable after its "
+                    "bind is representable as finite Chrome TRS."
+                ) from exc
         paths = result.write(output)
         entry.source_msh = paths["msh"]
         entry.build_report = json.loads(paths["report"].read_text(encoding="utf-8"))
-        if bool(config["create_crig"]) and result.report["effective_mode"] != "static":
-            aliases_by_name: dict[str, list[str]] = {}
-            coverage = (
-                result.report.get("humanoid_mapping", {})
-                .get("weighted_coverage", {})
-                .get("rows", [])
-            )
-            for row in coverage if isinstance(coverage, list) else []:
-                target = str(row.get("effective_target_bone", "")).strip()
-                source_name = str(row.get("source_bone", "")).strip()
-                if target and source_name and source_name.casefold() != target.casefold():
-                    aliases_by_name.setdefault(target, []).append(source_name)
-            entry.crig_path, crig_report = create_crig_from_source_msh(
-                result.source,
+        if crig_payload is not None and crig_report is not None:
+            assert result.authored_rig_contract is not None
+            entry.crig_path, crig_report = write_prebuilt_crig_payload(
+                crig_payload,
+                crig_report,
                 output / f"{entry.resource_name}.crig",
-                name=entry.resource_name,
-                source_model_name=Path(entry.path).name,
-                source_sha256=str(result.report.get("source_fbx_sha256", "")),
-                aliases_by_name=aliases_by_name,
-                resolved_orientation_policy=str(
-                    result.report.get("coordinate_contract", {}).get(
-                        "resolved_orientation_policy", "none"
-                    )
-                ),
             )
             (output / f"{entry.resource_name}.crig_build.json").write_text(
                 json.dumps(crig_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
@@ -808,9 +1339,36 @@ class ModelWorkspace:
                 )
             except Exception as exc:
                 progress(f".crig built but not installed automatically: {exc}")
+            resolved_ref = entry.installed_crig_ref or str(crig_report.get("rig_id", ""))
+            resolved_path = entry.installed_crig_path or entry.crig_path
+            result.authored_rig_contract = result.authored_rig_contract.with_generated_crig(
+                rig_ref=resolved_ref,
+                path=str(resolved_path or ""),
+            )
+            entry.build_report["authored_rig_contract"] = (
+                result.authored_rig_contract.to_dict()
+            )
+            entry.build_report["generated_crig"] = {
+                "rig_ref": resolved_ref,
+                "path": str(resolved_path or ""),
+                "bind_hash": result.authored_rig_contract.bind_hash,
+                "contract_id": result.authored_rig_contract.contract_id,
+                "skeleton_hash": result.authored_rig_contract.skeleton_hash,
+                "descriptor_hash": result.authored_rig_contract.descriptor_hash,
+                "skeleton_sha256": str(crig_report.get("skeleton_sha256", "")),
+            }
+            paths["report"].write_text(
+                json.dumps(entry.build_report, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
         entry.status = "Source built; expected editor rotation = identity"
         fitted = result.report.get("humanoid_fitted_bind")
         if isinstance(fitted, dict):
+            progress(
+                "WARNING: This model uses DL1-style names but a model-specific bind pose. "
+                "Use the generated CRIG to retarget animations; do not attach raw stock "
+                "animation tracks directly."
+            )
             progress(
                 "Humanoid geometry pivot fit: "
                 f"{int(fitted.get('anchor_count', 0))} FBX pivot anchors, "
@@ -1012,6 +1570,11 @@ class ModelWorkspace:
         self.busy = bool(value)
         self.build_source_button.setEnabled(not value)
         self.install_button.setEnabled(not value)
+        if hasattr(self, "use_generated_rig_button"):
+            selected = self._selected_entry()
+            self.use_generated_rig_button.setEnabled(
+                bool(not value and selected and selected.installed_crig_ref)
+            )
         self.status_callback("Working…" if value else "Ready")
 
     def _append_log(self, message: str) -> None:

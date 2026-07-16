@@ -1,54 +1,135 @@
 # Model import and installation
 
-The Models workspace imports static or skinned FBX models and prepares Dying Light model assets. Model entries and their manual bone mappings are stored in the same `.dlraproj` file as animation work.
+The Models workspace imports static or skinned binary FBX models and prepares Dying Light model assets. Models, their authored rig metadata, manual mappings, and generated CRIG references are stored in the same `.dlraproj` project as animation work.
 
-## Tabs
+For the bind and target rules behind this workflow, see [Custom model rig contract](CUSTOM_MODEL_RIG_CONTRACT.md).
 
-### Models
+## Choose a model mode
 
-Add one or more FBX files, choose the import mode and orientation policy, and run **Analyze models**. Leave orientation on **Auto** for ordinary Y-up FBX files. Auto respects the evaluated FBX scene and its Model/BindPose transforms instead of adding another axis rotation; imported models are intended to be placed at identity rotation in ChromeEd. The legacy Y-up conversion remains available as an explicit manual policy for older projects.
+| UI mode | Use it for | Bind result |
+| --- | --- | --- |
+| **Auto** | Ordinary imports where DL ReAnimated should choose static or skinned behavior from the analyzed scene. | Uses the canonical FBX scene and reports the selected mode. |
+| **Static prop** | Geometry with no animated skin hierarchy. | No generated CRIG. |
+| **Exact original FBX rig** | Custom characters, animals, doors, machinery, props, or any skeleton whose authored hierarchy must remain exact. | Emits the exact animation hierarchy and creates a matching CRIG. |
+| **DL1 humanoid names - preserve proportions, retarget animations** | A custom-proportioned character that needs stock-style DL1 target names. The serialized compatibility name is `dying_light_humanoid`. | Fits a model-specific stock-named bind and requires animation retargeting to its generated CRIG. |
 
-### Bone Mapping
+Exact Rig is the safest alternative when a fitted DL1 target role is missing or ambiguous. There is no silent fallback to `bip01`, pelvis, `root`, or the first node.
 
-This tab applies to **Dying Light Humanoid** imports. Auto-map provides a starting point, while the final-target dropdowns store manual overrides for the project. Review helper, twist, face, costume, and accessory bones before building.
+## Analyze once through the canonical FBX contract
 
-Humanoid conversion preserves the FBX's evaluated bind-pose surface byte-for-byte at the authored vertex positions and remaps only its skin weights onto stock-named Dying Light bones. It does not pre-deform vertices with a weighted `target_bind * inverse(source_bind)` pass: that operation changes triangle lengths before compilation and caused compressed torsos, elongated necks, detached clothing, and collapsing limbs on stylised characters.
+Click **Analyze models** before building. Model and animation paths share the same production FBX evaluator. Model analysis keeps the parsed scene for build and records a serializable transform contract with:
 
-The humanoid palette emits the useful stock Dying Light animation prefix: 69 `BONE` elements and 18 `HELPER` elements. The 19 stock clothing/head mesh roots in `player_1_tpp.smd` are omitted and replaced by the imported skinned geometry. Cameras, normals, holders, and the two `hspine` rows are therefore no longer mislabeled or retained as skin bones.
+- FBX version, source hash, detected units, and axis metadata;
+- requested and resolved orientation policy;
+- wrapper scale/axis normalization and conversion counts;
+- BindPose, `TransformLink`, and Model-transform bind coverage;
+- roots, non-bone ancestors, normalized-name collisions, and reflection diagnostics;
+- warnings and blocking errors.
 
-Stock-named joints are fitted to the mapped FBX pivots, then re-framed so Chrome's local `+X` axis follows each visible bone segment. Every reference matrix is the inverse of that exact authored global bind. This produces the same bind identity used by Chrome skinning while preserving arbitrary proportions and giving ChromeEd the bone direction it expects.
+Leave orientation on **Auto** for ordinary exports. Auto derives the representable orthonormal basis conversion from FBX `GlobalSettings`. Units and axes are each applied exactly once to bind, geometry, and animation evaluation. Explicit `+90`/`-90` policies remain available for diagnosing older projects.
 
-This fitted hierarchy is a custom bind even though its bone names are familiar. Raw `anims_man_all` tracks must not be attached automatically: their absolute local translations belong to the stock player bind. The model importer creates a `.crig` from the exact emitted MSH hierarchy; retarget stock or custom animation FBXs to that rig, then enter only the script containing those retargeted clips. The BSCR retains position and rotation channels (plus root scale) for that path.
+Unsupported binary layout, ASCII FBX, shear, singular scale, irreducible reflection, invalid layer indexes, or an unsafe hierarchy is reported before an MSH is written. The finding names what was detected, why it matters, the affected node or geometry, and a corrective action.
 
-Humanoid and Exact Rig bone extents use compact local bind-segment proxies. They are not calculated from every influenced vertex: weighted-vertex AABBs make terminal twists, hands, and head bones enormous and point leaf visualizations in arbitrary directions. Transverse radius is estimated only from dominantly owned vertices and capped relative to segment length.
+## Exact original FBX rig
 
-The model box is independent from bone display bounds. The importer appends a non-rendering ordinary `MESH` entity after all `MESH_SKINNED` elements and stores the exact emitted-vertex AABB on it. This ordering follows `CMeshFileBase::InitNumAnimEntities` and `CMeshFileBase::CalculateBoundingBox`: the carrier contributes to the cyan reference box without entering the animation prefix, while skinned geometry remains excluded by the engine's normal bounds pass.
+Exact mode preserves the authored animation hierarchy and proportions. Nodes with real skin-cluster ownership are emitted as `BONE`. Unweighted armature ancestors, end markers, facial controls, sockets, cameras, and other transform-only animation nodes are emitted as `HELPER`; they remain addressable without receiving artificial visible weights.
 
-In Exact Rig mode, LimbNodes with real skin-cluster weights are emitted as `BONE`; unweighted armature ancestors, end markers, facial controls, and other transform-only nodes are emitted as animated `HELPER`. They remain addressable by custom animation but no longer create a false ground-to-pelvis bone or receive retention skin weights.
+The builder authors Chrome local `+X` frames, then writes the known source-MSH rule:
 
-Use **Exact Rig** when the original skeleton, bone names, and proportions must remain exact. Both skinned modes now create their `.crig` from the authored MSH hierarchy rather than the raw FBX, so custom animations use the same Chrome `+X` frames and fitted pivots that were compiled into the model.
+```text
+global[node] = global[parent] * local[node]
+reference[node] = inverse(global[node])
+```
 
-### Build & Install
+Immediately before serialization it freezes the emitted nodes into an immutable `AuthoredRigContract`. The source MSH, build report, and generated CRIG all consume that exact contract. The generated CRIG therefore has the same local/global bind, parents, descriptors, and helper/deform classification as the authored MSH rather than an independently reconstructed raw-FBX bind.
 
-Choose the output folder, material handling, physical surface, skeleton options, and animation script. **Build source MSH** creates source files without running the Developer Tools compiler. **Build, compile & install** also compiles and copies the results into the configured project.
+Use exact same-rig animation when names and target ancestry match. A source-superset animation may also include extra face, cloth, accessory, camera, weapon, twist, or helper bones; extra source nodes are harmless to required target tracks and are ignored unless mapped.
 
-Model builds run in the background. Progress appears in the build log, and other workspaces remain responsive until the task completes.
+## DL1 humanoid names with a fitted bind
 
-Use **Exact Rig** when the imported model and its animations share the same skeleton. If **Create/install .crig** is enabled, every skinned model build creates a reusable target from its exact emitted bind.
+This mode preserves evaluated source positions and arbitrary proportions while mapping weights to stock-style DL1 names. It fits target-named pivots to imported proportions, authors Chrome `+X` frames, and uses inverse authored-global references. It does not pre-deform the mesh with a weighted target-bind/source-bind warp.
 
-### DevTools
+The familiar names do not make this a stock bind. Raw `anims_man_all` tracks contain stock absolute local translations and can compress the torso, stretch the neck, detach clothing, or collapse limbs on a fitted custom model.
 
-Configure the ResPack compiler, `Data0.pak`, workshop root, active project, and Developer Tools `Engine\Data` folder. **Auto-detect** checks common Steam locations; **Validate** reports missing or incompatible paths before a build starts.
+The safe rule is:
 
-## Typical model workflow
+> This model uses DL1-style names but a model-specific bind pose. Use the generated CRIG to retarget stock or custom animations. Do not attach raw stock animation tracks directly.
 
-1. Add the model FBX in **Models** and analyze it.
-2. Select Static, Exact Rig, or Dying Light Humanoid mode.
-3. Review **Bone Mapping** for humanoid imports.
-4. Configure output and material options in **Build & Install**.
-5. Validate the Developer Tools paths.
-6. Build the source or compile and install it into the active project.
+Leave **Animation script** empty until the desired clips have been retargeted to the generated CRIG. Then reference only the script resource containing those rebuilt animations.
 
-Compiled skinned imports are rejected if expected bones/helpers are pruned, no skinned mesh survives, the animation prefix changes, render flags are lost, any compiled bone bound collapses, or the compiled ordinary-mesh carrier differs from the emitted geometry AABB. A successful compiler exit by itself is not treated as a valid model.
+The fitted hierarchy emits the useful stock-style animation prefix while imported geometry replaces stock clothing/head mesh roots. Bone display bounds use compact bind-segment proxies rather than every influenced vertex, preventing terminal and twist visualizations from becoming enormous.
 
-For custom rig packages and exact-skeleton animation targets, see [Chrome Rig custom targets](CHROME_RIGS.md).
+## Per-subset skin palettes
+
+A complete model hierarchy is not limited to 256 nodes. Chrome uses two index spaces:
+
+```text
+subset palette entry      uint16 global source-MSH node index
+vertex bone index         uint8 local index into the current subset palette
+```
+
+The real skin limit is at most 256 global entries in each emitted subset palette. Weighted triangles are partitioned independently by material in stable source order. A partition is flushed before it would exceed:
+
+- 256 local palette entries;
+- 65,535 unique emitted vertices;
+- the source index range;
+- its current material.
+
+When flushed, its global palette is deterministically ordered and every normalized top-four influence is remapped to a local byte. The writer validates the local-to-global round trip; a global node index is never stored directly in a vertex byte. A valid influence is not discarded merely to force a palette to fit.
+
+A three-corner triangle can use at most 12 distinct bones after top-four normalization. A larger reported set means corrupt input and is rejected with the material/triangle identified.
+
+The model report separates total hierarchy nodes from per-subset palette sizes and includes partition count, global palette entries, triangle/vertex counts, maximum influences, dropped/fallback weights, quantization error, and tangent policy.
+
+## Geometry stability
+
+The importer preserves source triangle order and deduplicates only a complete emitted-vertex key: transformed position, normal, tangent/binormal inputs, UV, color, normalized global influences, and morph identity where present. UV seams, hard-normal seams, material boundaries, different weights, and different morph values remain distinct.
+
+Source tangents are imported when valid; otherwise the report states that they were rebuilt. Invalid or repeated indexes, non-finite positions, zero-area triangles, and unsafe concave/non-planar polygons fail with instructions to repair or triangulate the named geometry before export.
+
+The model AABB remains independent from skinned bone-display bounds. A non-rendering ordinary `MESH` carrier after the `MESH_SKINNED` elements stores the exact emitted-vertex bounds without entering the animation prefix or visible skin palettes.
+
+## Blendshape preflight
+
+Model analysis reads each sparse FBX `Geometry::Shape` together with its channel, base mesh, `DeformPercent`, `FullWeights`, and connected weight keys. A target is ignored only when its position deltas are at most `1e-8`, normal deltas are at most `1e-5`, its default weight is zero within `1e-8`, and every constant animation key is zero within `1e-8`. The ignored target is listed in `ignored_identity_blendshapes`; the base mesh is emitted unchanged.
+
+Names do not affect this decision. A real deformation remains a non-morph build blocker, even if its name resembles a placeholder. Invalid sparse counts, out-of-range control-point indexes, non-finite values, or ambiguous Shape/channel/base-geometry links block with the exact object names, IDs, and malformed field. The importer never rewrites or strips the source FBX.
+
+## Skeleton retention
+
+Visible palettes contain only actual weighted deform nodes. Unweighted animated helpers survive through animated node flags, ASCR/BSCR entity declarations, the authored hierarchy, and generated CRIG descriptors. The importer does not inject tiny artificial weights into visible vertices just to retain every node.
+
+The report distinguishes:
+
+- `retained_by_real_skin_weight`;
+- `retained_as_animated_helper`;
+- `retained_by_explicit_carrier`;
+- compiler-pruned or unexpected nodes.
+
+An explicit retention carrier is not used unless a compiler audit proves it is needed; the ordinary bounds carrier is not a skin-retention workaround.
+
+## Build and generated-rig handoff
+
+1. Add the model FBX and click **Analyze models**.
+2. Select Static, Exact Rig, or fitted DL1-name mode.
+3. Review fitted humanoid mapping only when that mode is selected.
+4. Configure materials, surface, output folder, and Developer Tools paths.
+5. Leave **Create/install .crig for every skinned model** enabled.
+6. Click **Build source MSH** for offline source output, or **Build, compile & install** for compiler/install output.
+7. Confirm the build report passes authored-bind, CPU skin, source artifact, and compiled-artifact validation.
+8. Select the model and click **Use generated rig in Animations**.
+9. Add animation FBXs, review their target compatibility and any ambiguous map rows, then build ANM2/RPack output.
+
+The handoff verifies that the model source is current, the generated CRIG fingerprints the authored MSH bind, and the installed rig reference/path are retained with the model. You do not need to copy a CRIG path manually.
+
+After changing model hierarchy, bind, orientation, units, fitted mapping, or resource identity, rebuild the source and CRIG together. Existing animations that point at an older bind must be reselected or remapped; same names do not make a stale bind safe.
+
+## Compiler and offline validation
+
+Before writing output, model validation reconstructs every authored global from parent/local matrices and checks `global * reference` against identity. It then resolves every sampled vertex-local palette byte back to its global node, CPU-skins at bind, and compares the result with the emitted position, including quantized weights.
+
+Source artifact checks reject invalid node types, parent indexes, palette entries, local vertex indexes, missing LODs, and bounds contracts. Compiled skinned imports are rejected if required bones/helpers are pruned, the animation prefix changes, no skinned mesh survives, render flags are lost, a compiled bone bound collapses, or the ordinary-mesh bounds carrier differs from the emitted AABB. A compiler exit code of zero alone is not considered success.
+
+The importer does not launch ChromeEd, Dying Light, or Developer Tools for validation. Manual editor/game verification remains required after offline checks pass.
+
+For animation targets and relationship routing, continue with [Chrome Rig custom targets](CHROME_RIGS.md). For errors, see [Troubleshooting](TROUBLESHOOTING.md).

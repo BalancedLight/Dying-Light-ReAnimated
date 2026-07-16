@@ -53,8 +53,16 @@ class RootMappingSelection:
         if not isinstance(payload, Mapping):
             payload = {}
         return cls(
-            source_bone=str(payload.get("source_bone", "") or ""),
-            target_bone=str(payload.get("target_bone", "") or ""),
+            source_bone=str(
+                getattr(animation, "source_root_bone", "")
+                or payload.get("source_bone", "")
+                or ""
+            ),
+            target_bone=str(
+                getattr(animation, "target_root_bone", "")
+                or payload.get("target_bone", "")
+                or ""
+            ),
         )
 
     def store(self, animation: Any) -> None:
@@ -64,6 +72,10 @@ class RootMappingSelection:
             "target_bone": self.target_bone,
         }
         animation.extensions = extensions
+        if hasattr(animation, "source_root_bone"):
+            animation.source_root_bone = self.source_bone
+        if hasattr(animation, "target_root_bone"):
+            animation.target_root_bone = self.target_bone
 
 
 @dataclass(frozen=True, slots=True)
@@ -209,7 +221,23 @@ def choose_hierarchy_root(
         normal = _normalized(name)
         return int(any(token in normal for token in ("iktarget", "helper", "shadowcaster", "mesh", "model")))
 
-    return max(pool, key=lambda name: (counts.get(name, 0), -penalty(name), -all_names.index(name)))
+    scores = {
+        name: (counts.get(name, 0), -penalty(name))
+        for name in pool
+    }
+    best_score = max(scores.values())
+    winners = [name for name in pool if scores[name] == best_score]
+    if len(winners) != 1:
+        available_roots = roots or pool
+        raise ValueError(
+            "Automatic root selection is ambiguous: equally suitable candidates are "
+            + ", ".join(repr(name) for name in winners)
+            + ". Available hierarchy roots: "
+            + ", ".join(repr(name) for name in available_roots)
+            + ". Choose the intended Source root/Target root explicitly in "
+            "Animations > Root & .crig Mapping; no first-bone fallback was used."
+        )
+    return winners[0]
 
 
 # ---------------------------------------------------------------------------

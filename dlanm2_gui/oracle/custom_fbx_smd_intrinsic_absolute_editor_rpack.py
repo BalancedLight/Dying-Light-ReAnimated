@@ -13,10 +13,10 @@ from dlanm2_gui.animation_scr import AnimationScrSequence, build_animation_scr_s
 from dlanm2_gui.anm2 import Anm2Header
 from dlanm2_gui.anm2_components import decode_file_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
-from dlanm2_gui.oracle import binary_fbx_mixamo as fbx_module
-from dlanm2_gui.oracle.binary_fbx_mixamo import (
+import dlanm2_gui.fbx_core as fbx_module
+from dlanm2_gui.fbx_core import (
     FBX_TICKS_PER_SECOND,
-    _FbxDocument,
+    FbxDocument,
     _axis_rotation,
 )
 from dlanm2_gui.oracle.custom_fbx_smd_retarget_editor_rpack import (
@@ -153,8 +153,8 @@ def build_custom_fbx_smd_intrinsic_absolute_editor_rpack(
         encoding="utf-8",
     )
 
-    animation = _FbxDocument(Path(animation_fbx))
-    source_rest = _FbxDocument(Path(source_rest_fbx))
+    animation = FbxDocument(Path(animation_fbx))
+    source_rest = FbxDocument(Path(source_rest_fbx))
     if set(animation.limb_models) != set(source_rest.limb_models):
         raise ValueError("animation FBX and source-rest FBX skeletons differ")
 
@@ -328,7 +328,7 @@ def validate_fbx_intrinsic_euler_against_trusted_rest(
         str(row["name"]): np.asarray(row["rest_matrix"], dtype=float)
         for row in trusted_payload["bones"]
     }
-    fixed_doc = _FbxDocument(Path(source_rest_fbx))
+    fixed_doc = FbxDocument(Path(source_rest_fbx))
     fixed = fixed_doc.global_matrices(tick=0, use_animation=False)
     shared = sorted(set(trusted).intersection(fixed))
     fixed_rows = _matrix_error_rows(fixed, trusted, shared)
@@ -336,7 +336,7 @@ def validate_fbx_intrinsic_euler_against_trusted_rest(
     original_euler = fbx_module._euler_matrix
     try:
         fbx_module._euler_matrix = _legacy_euler_matrix
-        legacy_doc = _FbxDocument(Path(source_rest_fbx))
+        legacy_doc = FbxDocument(Path(source_rest_fbx))
         legacy = legacy_doc.global_matrices(tick=0, use_animation=False)
     finally:
         fbx_module._euler_matrix = original_euler
@@ -826,7 +826,7 @@ def _add_absolute_terminal_global(
 
 
 def _sample_source_positions(
-    document: _FbxDocument,
+    document: FbxDocument,
     ticks: list[int],
 ) -> list[dict[str, np.ndarray]]:
     required = set(document.limb_models)
