@@ -16,13 +16,17 @@ from ..anm2_components import decode_samples
 from ..anm2_writer import build_payload_from_values
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import decompose_local_matrix
-from ..oracle.binary_fbx_mixamo import (
+from ..fbx_core import (
     FBX_TICKS_PER_SECOND,
-    _FbxDocument,
+    FbxDocument,
     _properties70,
 )
 from ..oracle.smd_bind_pose import anm2_cayley_vector_from_quaternion
 from .base import RetargetBuild
+from .output_validation import (
+    DECODED_COMPONENT_ERROR_LIMIT,
+    validate_decoded_component_error,
+)
 
 
 ExactRigBuild = RetargetBuild
@@ -36,7 +40,7 @@ _Y_UP_TO_BLENDER = np.asarray(
 )
 
 
-def _is_dlr_native_export(document: _FbxDocument) -> bool:
+def _is_dlr_native_export(document: FbxDocument) -> bool:
     for object_id in getattr(document, "null_models", {}).values():
         node = document.object_by_id.get(object_id)
         if node is not None and (_properties70(node).get("dlr_native_anm2_export") or [0])[0]:
@@ -44,7 +48,7 @@ def _is_dlr_native_export(document: _FbxDocument) -> bool:
     return False
 
 
-def _dlr_native_metadata(document: _FbxDocument) -> dict[str, Any]:
+def _dlr_native_metadata(document: FbxDocument) -> dict[str, Any]:
     for object_id in getattr(document, "null_models", {}).values():
         node = document.object_by_id.get(object_id)
         if node is None:
@@ -91,7 +95,7 @@ def _rig_bind_globals(rig: ChromeRig) -> list[np.ndarray]:
     return [resolve(index) for index in range(len(rig.bones))]
 
 
-def _synthetic_tracks(document: _FbxDocument) -> dict[int, str]:
+def _synthetic_tracks(document: FbxDocument) -> dict[int, str]:
     result: dict[int, str] = {}
     model_names = [
         *document.limb_models,
@@ -104,7 +108,7 @@ def _synthetic_tracks(document: _FbxDocument) -> dict[int, str]:
     return result
 
 
-def _model_id(document: _FbxDocument, name: str) -> int:
+def _model_id(document: FbxDocument, name: str) -> int:
     if name in document.limb_models:
         return document.limb_models[name]
     null_models = getattr(document, "null_models", {})
@@ -115,7 +119,7 @@ def _model_id(document: _FbxDocument, name: str) -> int:
 
 def _validate_exact_skeleton(
     rig: ChromeRig,
-    document: _FbxDocument,
+    document: FbxDocument,
     *,
     meters_per_unit: float,
 ) -> dict[str, Any]:
@@ -241,15 +245,25 @@ def build_exact_rig_anm2(
     *,
     fps: int | None = None,
     animation_stack: str | None = None,
-    document_factory: Any = _FbxDocument,
+    document_factory: Any = FbxDocument,
+    document: Any | None = None,
 ) -> ExactRigBuild:
     rig.validate().require_valid()
     sample_fps = int(fps or rig.writer_profile.default_fps)
     if not 1 <= sample_fps <= 240:
         raise ValueError("Exact-rig sample FPS must be between 1 and 240")
     source = Path(animation_fbx)
-    document = document_factory(source)
-    if animation_stack or len(getattr(document, "animation_stacks", ())) > 1:
+    document = document if document is not None else document_factory(source)
+    selected_stack = getattr(document, "selected_animation_stack", None)
+    selected_stack_name = str(getattr(selected_stack, "name", "") or "")
+    if (
+        animation_stack
+        and selected_stack_name != animation_stack
+    ) or (
+        not animation_stack
+        and len(getattr(document, "animation_stacks", ())) > 1
+        and selected_stack is None
+    ):
         document.select_animation_stack(animation_stack)
     source_meters = float(document.meters_per_unit)
     synthetic_tracks = _synthetic_tracks(document)
@@ -405,14 +419,12 @@ def build_exact_rig_anm2(
     payload = build_payload_from_values(header, rig.descriptors, values, packed_flags)
     sample_frames = sorted({0, frame_count // 2, frame_count - 1})
     decoded = decode_samples(payload, [float(value) for value in sample_frames])
-    maximum_error = 0.0
-    for decoded_frame, frame_index in zip(decoded.frames, sample_frames):
-        expected = values[frame_index]
-        for actual_track, expected_track in zip(decoded_frame.tracks, expected):
-            maximum_error = max(
-                maximum_error,
-                max(abs(float(a) - float(b)) for a, b in zip(actual_track, expected_track)),
-            )
+    maximum_error = validate_decoded_component_error(
+        decoded,
+        values,
+        sample_frames,
+        engine_name="ExactRigRetargetEngine",
+    )
     names_by_descriptor = {bone.descriptor: bone.name for bone in rig.bones}
     moving_tracks = [
         names_by_descriptor.get(rig.descriptors[index], f"extra:{index}")
@@ -436,6 +448,7 @@ def build_exact_rig_anm2(
             "moving_tracks": moving_tracks,
             "sample_frames": sample_frames,
             "decoded_max_component_error": maximum_error,
+            "decoded_component_error_tolerance": DECODED_COMPONENT_ERROR_LIMIT,
             "source_unit_meters": source_meters,
             "source_animation_stack": (
                 document.selected_animation_stack.name

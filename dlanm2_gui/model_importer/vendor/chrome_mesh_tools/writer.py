@@ -202,6 +202,17 @@ class SourceLod:
                 raise ValueError(f"subset {subset_index} exceeds the index buffer")
             if any(bone < 0 or bone >= node_count for bone in subset.bone_palette):
                 raise ValueError(f"subset {subset_index} bone palette references an invalid node")
+            if len(subset.bone_palette) > 256:
+                raise ValueError(
+                    f"subset {subset_index} has {len(subset.bone_palette)} global node entries; "
+                    "source-MSH vertices address their current subset palette with uint8 local "
+                    "indexes, so each emitted subset may contain at most 256 entries. Split the "
+                    "weighted triangles into additional palette partitions."
+                )
+            if len(set(subset.bone_palette)) != len(subset.bone_palette):
+                raise ValueError(
+                    f"subset {subset_index} bone palette contains duplicate global node indexes"
+                )
         for target in self.morph_targets:
             if len(target.position_deltas) != self.vertex_count:
                 raise ValueError(
@@ -529,6 +540,12 @@ class SourceMsh:
     def validate(self) -> None:
         if not self.nodes:
             raise ValueError("source MSH needs at least one node")
+        if len(self.nodes) > 32_768:
+            raise ValueError(
+                f"source MSH has {len(self.nodes)} nodes; physical parent indexes are signed "
+                "int16 and support at most 32768 nodes. This is separate from the 256-entry "
+                "per-subset skin-palette limit."
+            )
         if not self.materials:
             raise ValueError("source MSH needs at least one material")
         self._validate_depth_first_order()

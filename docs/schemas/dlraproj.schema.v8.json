@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/dlraproj.schema.v8.json",
+  "title": "DL ReAnimated Project v8",
+  "description": "Adds a project default target rig and optional per-animation target-rig/root overrides. Empty animation target fields inherit the project default.",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "minimum_reader_version",
+    "game_id",
+    "rig",
+    "animations",
+    "anm2_to_fbx"
+  ],
+  "properties": {
+    "format": {"const": "dl-reanimated-project"},
+    "schema_version": {"const": 8},
+    "minimum_reader_version": {"type": "integer", "minimum": 1},
+    "game_id": {"enum": ["dying_light_1", "dying_light_2"]},
+    "rig": {"$ref": "#/$defs/rig"},
+    "export": {"type": "object", "additionalProperties": true},
+    "animations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/animation"}
+    },
+    "mapping_profiles": {
+      "type": "object",
+      "additionalProperties": {"type": "object"}
+    },
+    "anm2_to_fbx": {"type": "object", "additionalProperties": true},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "$defs": {
+    "rig": {
+      "type": "object",
+      "required": ["retarget_mode", "target_rig_ref", "target_rig_path"],
+      "properties": {
+        "retarget_mode": {"enum": ["humanoid", "exact"]},
+        "target_rig_ref": {"type": "string"},
+        "target_rig_path": {"type": "string"},
+        "default_target_rig_ref": {
+          "type": "string",
+          "description": "Explicit alias for target_rig_ref used by v8 user interfaces."
+        },
+        "default_target_rig_path": {
+          "type": "string",
+          "description": "Explicit alias for target_rig_path used by v8 user interfaces."
+        }
+      },
+      "additionalProperties": true
+    },
+    "animation": {
+      "type": "object",
+      "required": [
+        "animation_id",
+        "source_fbx",
+        "display_name",
+        "resource_name",
+        "mapping_profile_id",
+        "target_rig_ref",
+        "target_rig_path",
+        "source_root_bone",
+        "target_root_bone"
+      ],
+      "properties": {
+        "animation_id": {"type": "string", "minLength": 1},
+        "source_fbx": {"type": "string"},
+        "display_name": {"type": "string"},
+        "resource_name": {"type": "string"},
+        "mapping_profile_id": {"type": "string"},
+        "target_rig_ref": {
+          "type": "string",
+          "description": "Empty means inherit rig.default_target_rig_ref."
+        },
+        "target_rig_path": {
+          "type": "string",
+          "description": "Portable fallback path for the selected CRIG; empty means inherit."
+        },
+        "source_root_bone": {"type": "string"},
+        "target_root_bone": {"type": "string"}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

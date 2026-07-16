@@ -13,6 +13,8 @@ import subprocess
 import time
 
 from .vendor.chrome_mesh_tools.compact_mesh import inspect_msh_obj
+from .vendor.chrome_mesh_tools.source_contract import audit_source_msh_for_compiler
+from .rig_contract import AuthoredRigContract
 from .compiler_support import (
     GENERATED_PROJECT_MARKER,
     MeshResourceSpec,
@@ -68,6 +70,12 @@ def compile_and_install_model(
     settings: CompilerSettings,
     log_callback=None,
 ) -> dict[str, Any]:
+    # Source and generated-rig integrity are checked before settings validation
+    # creates an output directory or a compiler staging project.
+    source_preflight = preflight_model_compile(
+        source_msh=source_msh,
+        source_report=source_report,
+    )
     settings.validate()
     source = Path(source_msh)
     if not source.is_file():
@@ -241,6 +249,7 @@ def compile_and_install_model(
         "resource_name": resource_name,
         "effective_mode": effective_mode,
         "source_msh": str(source),
+        "source_preflight": source_preflight,
         "compiler": str(compiler),
         "workshop_root": str(workshop),
         "compiler_project": str(compiler_project),
@@ -270,6 +279,191 @@ def compile_and_install_model(
     _log(log_callback, f"Installed source: {data_target}")
     _log(log_callback, f"Installed compiled object: {assets_target}")
     return report
+
+
+def preflight_model_compile(
+    *,
+    source_msh: str | Path,
+    source_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate model/compiler inputs without creating or changing any output."""
+
+    source = Path(source_msh)
+    if not source.is_file():
+        raise ModelCompileError(
+            f"Model compile preflight could not read source MSH: {source}. Build Source MSH "
+            "from the model FBX first; no compiler or install output was created."
+        )
+    missing = [
+        key for key in ("resource_name", "effective_mode") if key not in source_report
+    ]
+    if missing:
+        raise ModelCompileError(
+            "Model compile preflight received an incomplete build report (missing "
+            + ", ".join(missing)
+            + "). Rebuild the source from its FBX before compiling; no output was created."
+        )
+    try:
+        audit = audit_source_msh_for_compiler(source)
+    except (OSError, ValueError) as exc:
+        raise ModelCompileError(
+            f"Model compile preflight could not parse {source.name!r}: {exc}. Rebuild the "
+            "source from a supported binary FBX; Exact Rig is viable when humanoid fitting "
+            "is the unsupported step. No compiler or install output was created."
+        ) from exc
+    if not audit.get("ready", False):
+        raise ModelCompileError(
+            f"Model compile preflight rejected {source.name!r} before output:\n- "
+            + "\n- ".join(str(value) for value in audit.get("errors", ()))
+            + "\nSafe action: rebuild the source MSH from the original FBX after correcting "
+            "the named geometry/hierarchy issue. Exact Rig remains an alternative to fitted "
+            "humanoid mode where applicable."
+        )
+
+    contract_payload = source_report.get("authored_rig_contract")
+    generated = source_report.get("generated_crig")
+    contract: AuthoredRigContract | None = None
+    if isinstance(contract_payload, dict):
+        try:
+            contract = AuthoredRigContract.from_dict(contract_payload)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ModelCompileError(
+                "Model compile preflight found an invalid authored rig identity in the build "
+                f"report: {exc} Rebuild the Source MSH and CRIG together from the model FBX; "
+                "no compiler output was created."
+            ) from exc
+        contract_validation = contract.validate()
+        audit["authored_rig_identity"] = {
+            "status": "pass",
+            "contract_id": contract.contract_id,
+            "canonical_contract_id": contract_validation["canonical_contract_id"],
+            "contract_identity_scheme": contract_validation[
+                "contract_identity_scheme"
+            ],
+            "bind_hash": contract.bind_hash,
+            "skeleton_hash": contract.skeleton_hash,
+            "descriptor_hash": contract.descriptor_hash,
+        }
+    if isinstance(generated, dict) and contract is None:
+        raise ModelCompileError(
+            "Model compile preflight found generated CRIG metadata without an authored MSH "
+            "rig contract. Rebuild the model and CRIG together before compiling; no output "
+            "was created."
+        )
+    if contract is not None and isinstance(generated, dict):
+        expected_identity = {
+            "bind": contract.bind_hash,
+            "skeleton": contract.skeleton_hash,
+            "descriptor": contract.descriptor_hash,
+        }
+        generated_identity = {
+            "bind": str(
+                generated.get("bind_hash", generated.get("authored_bind_hash", ""))
+                or ""
+            ),
+            "skeleton": str(
+                generated.get(
+                    "skeleton_hash", generated.get("authored_skeleton_hash", "")
+                )
+                or ""
+            ),
+            "descriptor": str(
+                generated.get(
+                    "descriptor_hash", generated.get("authored_descriptor_hash", "")
+                )
+                or ""
+            ),
+        }
+        for label, expected_value in expected_identity.items():
+            generated_value = generated_identity[label]
+            if generated_value and generated_value != expected_value:
+                raise ModelCompileError(
+                    "Model compile preflight found a stale generated CRIG selection: "
+                    f"build-report authored {label} identity {generated_value!r} does not "
+                    f"match the current MSH contract {expected_value!r}. Rebuild/install "
+                    "this model's CRIG and use that generated rig in Animations; no compiler "
+                    "output was created."
+                )
+        contract_validation = contract.validate()
+        allowed_contract_ids = {
+            contract.contract_id,
+            str(contract_validation["canonical_contract_id"]),
+            f"authored:{contract.bind_hash[:24]}",
+        }
+        generated_contract = str(generated.get("contract_id", "") or "")
+        if generated_contract and generated_contract not in allowed_contract_ids:
+            raise ModelCompileError(
+                "Model compile preflight found a CRIG from a different authored rig contract. "
+                "Its contract ID is not the composite or legacy ID for the current bind, "
+                "skeleton, and descriptor identity. Rebuild the source and CRIG together "
+                "before compiling; no output was created."
+            )
+        crig_value = str(generated.get("path", "") or "")
+        if crig_value:
+            crig_path = Path(crig_value)
+            if not crig_path.is_file():
+                raise ModelCompileError(
+                    f"Model compile preflight expected generated CRIG {crig_path}, but it is "
+                    "missing. Rebuild/install the generated rig before compiling; no output "
+                    "was created."
+                )
+            try:
+                from ..chrome_rig import ChromeRig
+
+                rig = ChromeRig.load(crig_path)
+            except (OSError, ValueError) as exc:
+                raise ModelCompileError(
+                    f"Model compile preflight could not load generated CRIG {crig_path.name!r}: "
+                    f"{exc}. Rebuild it from this model source; no output was created."
+                ) from exc
+            actual_identity = {
+                "bind": str(rig.extensions.get("authored_bind_hash", "") or ""),
+                "skeleton": str(
+                    rig.extensions.get("authored_skeleton_hash", "") or ""
+                ),
+                "descriptor": str(
+                    rig.extensions.get("authored_descriptor_hash", "") or ""
+                ),
+            }
+            actual_contract = str(
+                rig.extensions.get("authored_rig_contract_id", "") or ""
+            )
+            for label, expected_value in expected_identity.items():
+                actual_value = actual_identity[label]
+                if actual_value != expected_value:
+                    detail = (
+                        f"declares {actual_value!r}"
+                        if actual_value
+                        else "does not declare that identity"
+                    )
+                    raise ModelCompileError(
+                        f"Generated CRIG {crig_path.name!r} has stale authored {label} "
+                        f"identity: it {detail}, but the current MSH contract requires "
+                        f"{expected_value!r}. Rebuild/install the CRIG generated with this "
+                        "model and reselect it in Animations; no output was created."
+                    )
+            if actual_contract not in allowed_contract_ids:
+                raise ModelCompileError(
+                    f"Generated CRIG {crig_path.name!r} belongs to contract "
+                    f"{actual_contract!r}, which is neither the composite nor legacy ID for "
+                    "the current bind, skeleton, and descriptor identity. Rebuild the model "
+                    "and CRIG as one unit; no output was created."
+                )
+            audit["authored_rig_identity"]["generated_crig_verified"] = True
+        elif not all(generated_identity.values()):
+            missing_identity = [
+                label for label, value in generated_identity.items() if not value
+            ]
+            raise ModelCompileError(
+                "Model compile preflight cannot prove generated CRIG coherence because the "
+                "build report has no CRIG path and is missing authored "
+                + ", ".join(missing_identity)
+                + " identity metadata. Rebuild the model and CRIG together before compiling; "
+                "no output was created."
+            )
+        else:
+            audit["authored_rig_identity"]["generated_crig_verified"] = True
+    return audit
 
 
 def _replace_generated_project(path: Path, *, kind: str) -> None:

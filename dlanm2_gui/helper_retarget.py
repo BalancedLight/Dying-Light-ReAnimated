@@ -271,6 +271,8 @@ def evaluate_helper_target_local(
         )
     elif transfer_policy == "copy_local":
         result = source_animated.copy()
+    elif transfer_policy == "bind":
+        result = target_bind.copy()
     else:
         required = {
             "target_bind_global": target_bind_global,

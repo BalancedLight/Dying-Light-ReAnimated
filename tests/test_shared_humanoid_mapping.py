@@ -2,12 +2,19 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from dlanm2_gui.chrome_rig import ChromeRig, ChromeRigBone
 from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
 from dlanm2_gui.model_importer.msh_builder import humanoid_bone_mapping
-from dlanm2_gui.retarget_mapping import auto_map_crig_to_fbx, scan_humanoid_bones
+from dlanm2_gui.bone_maps import GenericBoneMap
+from dlanm2_gui.retarget_mapping import (
+    auto_map_crig_to_fbx,
+    mapping_rows_for_ui,
+    scan_humanoid_bones,
+    source_mapping_evidence,
+)
 from dlanm2_gui.trackmap import dl_name_hash
 
 
@@ -120,6 +127,166 @@ def test_animation_workspace_mapper_uses_the_same_suffix_heuristics() -> None:
     assert pairs["spine2"] == "spine_02"
     assert pairs["l_upperarm"] == "upperarm_l"
     assert pairs["l_forearm"] == "lowerarm_l"
+
+
+def test_automatic_mapping_records_reviewable_top_and_runner_up_evidence() -> None:
+    rig_bones = (
+        ChromeRigBone(
+            index=0,
+            name="pelvis",
+            parent_index=-1,
+            descriptor=dl_name_hash("pelvis"),
+            bind_translation=(0.0, 0.0, 0.0),
+            bind_rotation_wxyz=(1.0, 0.0, 0.0, 0.0),
+            bind_scale=(1.0, 1.0, 1.0),
+            deform=True,
+            helper=False,
+        ),
+    )
+    rig = ChromeRig(
+        "test:evidence",
+        "Evidence target",
+        "Humanoid",
+        rig_bones,
+        0,
+        track_descriptors=(rig_bones[0].descriptor,),
+    )
+    source_names = ["hips", "root"]
+    source_parents = {"hips": None, "root": None}
+
+    profile = auto_map_crig_to_fbx(rig, source_names, source_parents)
+    evidence = profile.extensions["automatic_mapping_evidence_v2"]
+    assert len(evidence) == 1
+    assert evidence[0]["top_candidate"]["source_fbx_bone"] == "hips"
+    assert evidence[0]["runner_up_candidate"]["source_fbx_bone"] == "root"
+    assert evidence[0]["spatial_evidence_available"] is False
+    assert evidence[0]["review_required"] is True
+
+    loaded = GenericBoneMap.from_dict(profile.to_dict())
+    _profile, rows = mapping_rows_for_ui(
+        rig,
+        source_names,
+        source_parents,
+        loaded,
+    )
+    assert rows[0]["review_state"] == "automatic_unreviewed"
+    assert rows[0]["review_required"] is True
+    assert rows[0]["top_candidate"] == "hips"
+    assert rows[0]["runner_up"] == "root"
+
+
+def test_spatial_global_assignment_is_deterministic_and_keeps_ties_unreviewed() -> None:
+    rig_bones = (
+        ChromeRigBone(
+            0,
+            "rig_root",
+            -1,
+            dl_name_hash("rig_root"),
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0, 0.0),
+            deform=False,
+            helper=True,
+        ),
+        ChromeRigBone(
+            1,
+            "rig_first",
+            0,
+            dl_name_hash("rig_first"),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0, 0.0),
+        ),
+        ChromeRigBone(
+            2,
+            "rig_second",
+            0,
+            dl_name_hash("rig_second"),
+            (0.0, 1.0, 0.0),
+            (1.0, 0.0, 0.0, 0.0),
+        ),
+    )
+    rig = ChromeRig(
+        "test:spatial-tie",
+        "Spatial tie",
+        "Other",
+        rig_bones,
+        0,
+        track_descriptors=tuple(row.descriptor for row in rig_bones),
+    )
+    parents = {
+        "anim_root": None,
+        "alpha": "anim_root",
+        "beta": "anim_root",
+    }
+    root = np.eye(4, dtype=float)
+    child = np.eye(4, dtype=float)
+    child[1, 3] = 100.0
+    bind_globals = {"anim_root": root, "alpha": child, "beta": child.copy()}
+
+    first = auto_map_crig_to_fbx(
+        rig,
+        ["beta", "anim_root", "alpha"],
+        parents,
+        source_bind_globals=bind_globals,
+        source_deform_bones={"alpha", "beta"},
+    )
+    second = auto_map_crig_to_fbx(
+        rig,
+        ["alpha", "beta", "anim_root"],
+        parents,
+        source_bind_globals=bind_globals,
+        source_deform_bones={"alpha", "beta"},
+    )
+    first_pairs = {
+        row.target_rig_bone: row.source_fbx_bone for row in first.pairs
+    }
+    second_pairs = {
+        row.target_rig_bone: row.source_fbx_bone for row in second.pairs
+    }
+
+    assert first_pairs == second_pairs
+    assert first_pairs["rig_first"] == "alpha"
+    assert first_pairs["rig_second"] == "beta"
+    evidence = {
+        row["target_rig_bone"]: row
+        for row in first.extensions["automatic_mapping_evidence_v2"]
+    }
+    ambiguous = evidence["rig_first"]
+    assert ambiguous["top_candidate"]["source_fbx_bone"] == "alpha"
+    assert ambiguous["runner_up_candidate"]["source_fbx_bone"] == "beta"
+    assert ambiguous["score_margin"] == pytest.approx(0.0)
+    assert ambiguous["spatial_evidence_available"] is True
+    assert ambiguous["assignment_policy"] == "deterministic_global_one_to_one"
+    assert ambiguous["review_required"] is True
+    assert next(
+        row for row in first.pairs if row.target_rig_bone == "rig_first"
+    ).review_state == "automatic_unreviewed"
+
+
+def test_document_mapping_evidence_includes_bind_and_positive_skin_ownership() -> None:
+    bind = np.eye(4, dtype=float)
+    document = SimpleNamespace(
+        bind_global_matrices={"weighted": bind},
+        scene=SimpleNamespace(
+            model_names={7: "weighted"},
+            geometries=(
+                SimpleNamespace(
+                    clusters=(
+                        SimpleNamespace(
+                            bone_name=None,
+                            bone_id=7,
+                            weights=(0.25, 0.75, 0.0),
+                        ),
+                    )
+                ),
+            ),
+        ),
+    )
+
+    evidence = source_mapping_evidence(document)
+
+    np.testing.assert_array_equal(evidence["source_bind_globals"]["weighted"], bind)
+    assert evidence["source_deform_bones"] == frozenset({"weighted"})
+    assert evidence["source_skin_weights"] == {"weighted": pytest.approx(1.0)}
 
 
 def test_animation_mapper_aligns_mixamo_to_character_creator_chain_and_fingers() -> None:

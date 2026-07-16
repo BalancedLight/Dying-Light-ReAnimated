@@ -4,23 +4,26 @@ DL ReAnimated projects are UTF-8 JSON files with the extension `.dlraproj`. They
 
 ## Compatibility guarantees
 
-Every project contains:
+Current projects declare schema 8:
 
 ```json
 {
   "format": "dl-reanimated-project",
-  "schema_version": 7,
+  "schema_version": 8,
   "minimum_reader_version": 1,
-  "created_with": "0.4.0a1",
-  "project_id": "stable UUID"
+  "created_with": "application version",
+  "project_id": "stable UUID",
+  "game_id": "dying_light_1"
 }
 ```
 
-The loader applies one-step migrations in order. Unknown fields are retained under `extensions.unknown_fields` instead of being silently deleted. Projects are saved atomically through a temporary file and `os.replace`.
+The loader applies deterministic migrations in order. Saving is atomic through a temporary file and `os.replace`. Known paths are made relative to the project where possible.
 
-## Schema 2 source-bind policy
+Unknown top-level and nested object fields are retained in `extensions.unknown_fields` and re-emitted at their original object level on save. Existing mapping rows/profiles, model-workspace data, target selections, root choices, animation settings, notes, tags, and extension payloads are not discarded during migration.
 
-Schema 2 adds:
+## Schema history
+
+### Schema 2: source-bind policy
 
 ```json
 {
@@ -31,18 +34,11 @@ Schema 2 adds:
 }
 ```
 
-When `use_imported_animation_bind_pose` is `true`, each animation FBX supplies its own unanimated/bind transforms and no separate T-pose is required.
+When `use_imported_animation_bind_pose` is true, each animation FBX supplies its source bind and no separate T-pose is required. When false, `source_rest_fbx` must name a neutral/rest FBX with the same source skeleton.
 
-When it is `false`, `source_rest_fbx` must point to a neutral/rest-pose FBX with the same source skeleton.
+Schema-1 migration preserves explicit-rest behavior when a non-empty rest path exists; otherwise it enables embedded-bind mode.
 
-Migration from schema 1 is deterministic:
-
-- an existing non-empty `source_rest_fbx` keeps explicit-rest mode;
-- an empty source-rest path becomes embedded-bind mode.
-
-## Schema 3 target rigs
-
-Schema 3 adds an explicit target reference, optional portable `.crig` path, and retarget engine:
+### Schema 3: target CRIG
 
 ```json
 {
@@ -54,24 +50,72 @@ Schema 3 adds an explicit target reference, optional portable `.crig` path, and 
 }
 ```
 
-Schema-2 projects migrate to the bundled humanoid target with identical build behavior. The historical SMD/template/control fields remain available and are also recorded under `rig.extensions.legacy_target_files` during migration.
+Older SMD/template/control fields remain available and are also recorded under `rig.extensions.legacy_target_files`.
 
-## Schema 5 ANM2 to FBX workspace
+### Schema 5: ANM2 to FBX workspace
 
-Schema 5 adds an optional `anm2_to_fbx` section containing batch ANM2 inputs, source rig references, native/retarget mode, target skeleton FBX, FPS/frame ranges, translation scale, output directory, and embedded generic mapping profiles. Schema-4 projects migrate with an empty native reverse workspace and unchanged forward-build behavior. Blender's executable path is a machine-local GUI preference and is not written into portable projects.
+Schema 5 adds the optional `anm2_to_fbx` section containing reverse-conversion jobs, source rig references, native/cross-rig mode, target skeleton FBX, FPS/frame ranges, translation scale, output directory, and generic mapping profiles. Blender's executable path is machine-local UI state and is not stored in a portable project.
 
-## Schema 7 game profile
+### Schema 7: game profile
 
-Schema 7 adds `game_id`, with `dying_light_1` and `dying_light_2` as supported values. Projects without the field migrate deterministically to Dying Light 1 unless their existing target paths are unmistakably DL2. The profile selects a coherent target rig, SMD, reference ANM2, root, finger policy, format dispatch, and output-status label. Unknown top-level and nested fields remain preserved under `extensions.unknown_fields`.
+Schema 7 adds `game_id`. Missing projects migrate to Dying Light 1 unless existing target paths unmistakably identify DL2. The profile keeps target rig, root policy, reference format, and output status coherent. This does not claim native DL2 format-42 writing.
+
+### Schema 8: multiple target rigs
+
+Schema 8 adds explicit project-default aliases and optional per-animation target/root overrides:
+
+```json
+{
+  "rig": {
+    "target_rig_ref": "authored:default-character",
+    "target_rig_path": "rigs/default-character.crig",
+    "default_target_rig_ref": "authored:default-character",
+    "default_target_rig_path": "rigs/default-character.crig",
+    "retarget_mode": "exact"
+  },
+  "animations": [
+    {
+      "animation_id": "stable clip UUID",
+      "source_fbx": "inputs/walk.fbx",
+      "display_name": "Walk",
+      "resource_name": "walk_default",
+      "mapping_profile_id": "",
+      "target_rig_ref": "",
+      "target_rig_path": "",
+      "source_root_bone": "",
+      "target_root_bone": ""
+    },
+    {
+      "animation_id": "another UUID",
+      "source_fbx": "inputs/door_open.fbx",
+      "display_name": "Door open",
+      "resource_name": "door_open_custom",
+      "mapping_profile_id": "reviewed door map UUID",
+      "target_rig_ref": "authored:door-rig",
+      "target_rig_path": "rigs/door.crig",
+      "source_root_bone": "DoorRoot",
+      "target_root_bone": "door_root"
+    }
+  ]
+}
+```
+
+An empty animation `target_rig_ref`/`target_rig_path` means **Inherit project target**. An explicit override resolves through the CRIG registry and uses its portable path as fallback. CRIG bytes are not embedded repeatedly in animation rows.
+
+Old projects retain the same project-level target and all old animations inherit it. Legacy `root_mapping_v1` extension values migrate into the explicit root fields without deleting the extension.
+
+In exact mode the project default may be empty only when every enabled animation selects an explicit target. Build resolves each enabled clip independently and groups report output by target rig/skeleton hash. Resource names must remain unique across all groups and script targets.
 
 ## Main sections
 
 ### `rig`
 
-```
-target_rig_ref
+```text
+target_rig_ref                 legacy/current storage for the project default
 target_rig_path
-retarget_mode                 humanoid | exact
+default_target_rig_ref         schema-v8 explicit alias
+default_target_rig_path
+retarget_mode                  humanoid | exact
 use_imported_animation_bind_pose
 source_rest_fbx
 trusted_source_rest_json
@@ -84,12 +128,12 @@ extensions
 
 ### `export`
 
-```
-mode                         new | append
+```text
+mode                           new | append
 output_directory
 pack_filename
 existing_rpack
-collision_policy             error | replace
+collision_policy               error | replace
 default_script_target
 custom_script_resource
 resource_prefix
@@ -100,43 +144,84 @@ extensions
 
 ### `animations[]`
 
-Each clip has a stable UUID and stores its FBX path, display/resource names, script target, root policy, IK recommendation, mapping profile, frame range, FPS, notes, tags, and extensions.
+Each clip has a stable UUID and stores:
+
+```text
+source_fbx
+source_animation_stack
+display_name
+resource_name
+enabled
+script_target
+root_policy
+ik_preset
+mapping_profile_id
+target_rig_ref                 empty = inherit project default
+target_rig_path                empty = inherit project default
+source_root_bone
+target_root_bone
+fps
+start_frame / end_frame
+notes / tags / extensions
+```
 
 ### `mapping_profiles`
 
-Mappings are embedded by UUID so a project remains self-contained. They can also be exported as `.dlrmap.json` files for reuse.
+Mappings are embedded by UUID so the project remains self-contained. They may also be exported as `.dlrbmap.json`/`.dlrmap.json` files where the relevant workspace supports it.
+
+A generic bone map uses schema v2 and fingerprints:
+
+- source skeleton signature;
+- target skeleton hash;
+- target full-bind hash;
+- target rig reference.
+
+Each row uses explicit `target_rig_descriptor`, `target_rig_bone`, and `source_fbx_bone` fields, plus mapping kind, transfer/component policies, confidence, method, review state, notes, and extensions. Schema-v1 historical row names are migrated without reversing their stored meaning.
+
+### Models workspace extension
+
+The unified Models workspace is stored under the project extension payload. It retains model FBX/resource/mode/orientation choices, humanoid overrides, generated CRIG references/paths, build settings, and unknown model/settings fields across a round trip.
 
 ### `anm2_to_fbx`
 
-Reverse-conversion jobs and `.dlrbmap.json` payloads used by the dedicated workspace. Input, target, rig, and output paths use the same portable-path rules as forward projects.
+Reverse-conversion jobs and `.dlrbmap.json` payloads use the same portable-path rules. Each item selects the CRIG that provides the otherwise absent ANM2 hierarchy/descriptors.
 
 ## Portable paths
 
 Known file paths are written relative to the project directory whenever possible and resolved to absolute paths in memory when loaded.
 
-```
+```text
 MyProject/
-├─ MyProject.dlraproj
-├─ inputs/
-│  └─ Walk.fbx
-└─ build/
+|-- MyProject.dlraproj
+|-- inputs/
+|   |-- Walk.fbx
+|   `-- DoorOpen.fbx
+|-- rigs/
+|   |-- Character.crig
+|   `-- Door.crig
+`-- build/
 ```
+
+Per-animation CRIG fallback paths and generated model-rig paths use the same rule. Moving the whole project tree preserves those references.
 
 ## Formal schemas
 
-```
+```text
 docs/schemas/dlraproj.schema.v1.json
 docs/schemas/dlraproj.schema.v2.json
 docs/schemas/dlraproj.schema.v3.json
 docs/schemas/dlraproj.schema.v4.json
 docs/schemas/dlraproj.schema.v5.json
 docs/schemas/dlraproj.schema.v7.json
+docs/schemas/dlraproj.schema.v8.json
 ```
 
-Runtime validation remains authoritative because file existence, duplicate resources, and cross-references cannot be fully described by JSON Schema.
+Runtime validation remains authoritative because file existence, registry resolution, source/target fingerprints, duplicate resources, and cross-references cannot be fully expressed in JSON Schema.
 
 ## CLI build
 
 ```bash
 dlanm2-project-build MyProject.dlraproj
 ```
+
+The CLI uses the same per-animation target resolution and preflight as the GUI and stops before creating output when any enabled clip has a blocking finding.

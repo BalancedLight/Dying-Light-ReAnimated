@@ -13,7 +13,7 @@ from dlanm2_gui.animation_scr import AnimationScrSequence, build_animation_scr_s
 from dlanm2_gui.anm2 import Anm2Header
 from dlanm2_gui.anm2_components import decode_file_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
-from dlanm2_gui.oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND, _FbxDocument, _decompose_basis
+from dlanm2_gui.fbx_core import FBX_TICKS_PER_SECOND, FbxDocument, _decompose_basis
 from dlanm2_gui.oracle.smd_bind_pose import (
     anm2_cayley_vector_from_quaternion,
     bind_track_values,
@@ -137,7 +137,7 @@ def build_custom_fbx_smd_retarget_editor_rpack(
         for descriptor, name in names_by_descriptor.items()
     }
 
-    animation = _FbxDocument(Path(animation_fbx))
+    animation = FbxDocument(Path(animation_fbx))
     ticks = animation.frame_ticks(fps=FPS)
     frame_count = len(ticks)
     source_rotation_by_bone = _source_rotation_matrices(animation, ticks)
@@ -315,7 +315,7 @@ def build_custom_fbx_smd_retarget_editor_rpack(
     return summary
 
 
-def _source_rotation_matrices(animation: _FbxDocument, ticks: list[int]) -> dict[str, list[np.ndarray]]:
+def _source_rotation_matrices(animation: FbxDocument, ticks: list[int]) -> dict[str, list[np.ndarray]]:
     result: dict[str, list[np.ndarray]] = {}
     for source_name in SOURCE_TO_TARGET:
         object_id = animation.limb_models.get(source_name)

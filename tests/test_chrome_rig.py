@@ -99,6 +99,30 @@ def test_model_only_crig_and_exact_rig_object_export(names: tuple[str, ...], tmp
     assert build.report["decoded_max_component_error"] < 1.0e-4
 
 
+def test_exact_engine_reuses_one_canonical_document_across_legacy_adapter(
+    tmp_path: Path,
+) -> None:
+    names = ("root", "bone_door")
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "object.fbx",
+        document_factory=_factory(names),
+    )
+    created: list[_ObjectFbx] = []
+
+    def counting_factory(path: Path) -> _ObjectFbx:
+        document = _ObjectFbx(path, names)
+        created.append(document)
+        return document
+
+    build_exact_rig_anm2(
+        tmp_path / "animation.fbx",
+        rig,
+        document_factory=counting_factory,
+    )
+
+    assert len(created) == 1
+
+
 def test_exact_rig_rejects_parent_mismatch(tmp_path: Path) -> None:
     rig = build_chrome_rig_from_fbx(
         tmp_path / "door.fbx",

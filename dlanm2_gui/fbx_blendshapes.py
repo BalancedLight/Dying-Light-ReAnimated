@@ -14,9 +14,9 @@ import math
 
 import numpy as np
 
-from .oracle.binary_fbx_mixamo import (
+from .fbx_core import (
     FBX_TICKS_PER_SECOND,
-    _FbxDocument,
+    FbxDocument,
     _child_value,
     _clean_name,
     _properties70,
@@ -113,7 +113,7 @@ def _channel_default(node: Any) -> float:
     return float(values[0]) if values else 0.0
 
 
-def _shape_aliases(document: _FbxDocument, channel_id: int, channel_name: str) -> tuple[str, ...]:
+def _shape_aliases(document: FbxDocument, channel_id: int, channel_name: str) -> tuple[str, ...]:
     aliases = [channel_name]
     for kind, child_id, _rest in document.children.get(channel_id, ()):
         child = document.object_by_id.get(child_id)
@@ -124,7 +124,7 @@ def _shape_aliases(document: _FbxDocument, channel_id: int, channel_name: str) -
     return tuple(dict.fromkeys(value for value in aliases if value))
 
 
-def _selected_layer_id(document: _FbxDocument, animation_stack: str | None) -> int | None:
+def _selected_layer_id(document: FbxDocument, animation_stack: str | None) -> int | None:
     if animation_stack:
         document.select_animation_stack(animation_stack)
     elif getattr(document, "selected_animation_stack", None) is None:
@@ -145,7 +145,7 @@ def _selected_layer_id(document: _FbxDocument, animation_stack: str | None) -> i
 
 
 def _channel_curves_for_layer(
-    document: _FbxDocument,
+    document: FbxDocument,
     layer_id: int | None,
 ) -> dict[int, tuple[list[int], list[float]]]:
     if layer_id is None:
@@ -199,7 +199,7 @@ def _percent_scale(default_value: float, raw_values: Iterable[float]) -> float:
 def scan_fbx_blendshapes(
     source: str | Path | None = None,
     *,
-    document: _FbxDocument | None = None,
+    document: FbxDocument | None = None,
     fps: int = 30,
     animation_stack: str | None = None,
 ) -> FbxFacialScan:
@@ -208,7 +208,7 @@ def scan_fbx_blendshapes(
     if document is None:
         if source is None:
             raise ValueError("source or document is required")
-        document = _FbxDocument(Path(source))
+        document = FbxDocument(Path(source))
     source_path = str(Path(getattr(document, "path", source or "")).resolve())
     layer_id = _selected_layer_id(document, animation_stack)
     if hasattr(document, "frame_ticks"):

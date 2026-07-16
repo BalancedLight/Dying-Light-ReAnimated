@@ -23,7 +23,11 @@ from .animation_scr import (
 from .fbx_pipeline import FbxAnimationClip, build_fbx_rpack
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_smd_template
-from .oracle.binary_fbx_mixamo import _FbxDocument
+from .fbx_core import FbxDocument
+
+# Backward-compatible factory seam used by project-builder tests and external
+# integrations.  The implementation itself is the public production class.
+_FbxDocument = FbxDocument
 from .pack_manifest import (
     PackManifest,
     PackResourceManifest,
@@ -35,6 +39,8 @@ from .retarget_engines.exact_rig import build_exact_rig_anm2
 from .retarget_engines.mapped_rig import build_mapped_rig_anm2
 from .bone_maps import GenericBoneMap
 from .runtime_paths import resource_root
+from .runtime_paths import writable_application_root
+from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
 from .rp6l import (
     AnimationLibrary,
     build_animation_library_rpack,
@@ -86,6 +92,10 @@ class BuiltAnimation:
     root_policy: str
     ik_preset: str
     mapping_profile_id: str
+    target_rig_ref: str
+    target_rig_name: str
+    target_skeleton_hash: str
+    retarget_mode: str
     frame_count: int
     fps: int
     page_count: int
@@ -93,6 +103,87 @@ class BuiltAnimation:
     anm2_path: str
     sha256: str
     retarget_report: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AnimationTargetContext:
+    rig_ref: str
+    rig_path: str
+    retarget_mode: str
+    rig: ChromeRig | None
+
+
+def _animation_target_context(
+    project: DlReanimatedProject,
+    animation: ProjectAnimation,
+    *,
+    game_target_rig_ref: str,
+    cache: dict[str, ChromeRig],
+) -> _AnimationTargetContext:
+    rig_ref = str(animation.target_rig_ref or project.rig.target_rig_ref)
+    rig_path_value = str(
+        animation.target_rig_path
+        or (
+            project.rig.target_rig_path
+            if not animation.target_rig_ref
+            or animation.target_rig_ref == project.rig.target_rig_ref
+            else ""
+        )
+    )
+    clip_mode = (
+        "humanoid"
+        if project.rig.retarget_mode == "humanoid"
+        and rig_ref == game_target_rig_ref
+        and not animation.target_rig_path
+        else "exact"
+    )
+    if clip_mode == "humanoid":
+        return _AnimationTargetContext(rig_ref, rig_path_value, clip_mode, None)
+
+    candidate: Path | None = None
+    if rig_path_value:
+        path = Path(rig_path_value)
+        if path.is_file():
+            candidate = path
+        else:
+            raise FileNotFoundError(
+                f"Animation {animation.display_name!r} selects target rig {rig_ref!r}, "
+                f"but its CRIG path is not a file: {path}. Re-select the generated rig or "
+                "choose Inherit project target."
+            )
+    if candidate is None:
+        if rig_ref == BUILTIN_MALE_RIG_REF:
+            bundled = resource_root() / "reference" / "male_npc_infected.crig"
+            candidate = bundled if bundled.is_file() else None
+        else:
+            candidate = ChromeRigRegistry(
+                writable_application_root() / "rigs"
+            ).resolve(rig_ref)
+    if candidate is None or not candidate.is_file():
+        raise FileNotFoundError(
+            f"Animation {animation.display_name!r} selects target rig {rig_ref!r}, but no "
+            "installed or portable CRIG path could be resolved. Re-import the model's "
+            "generated CRIG, set this animation's target path, or inherit a valid project target."
+        )
+    resolved = str(candidate.resolve())
+    rig = cache.get(resolved)
+    if rig is None:
+        rig = ChromeRig.load(candidate)
+        cache[resolved] = rig
+    if rig_ref and not rig_ref.startswith("builtin:") and rig.rig_id != rig_ref:
+        raise ValueError(
+            f"Animation {animation.display_name!r} selects rig reference {rig_ref!r}, but "
+            f"{candidate.name!r} identifies itself as {rig.rig_id!r}. Re-select the intended "
+            "CRIG; a stale same-named bind is not accepted."
+        )
+    rig_game = str(rig.extensions.get("game_id", "") or "")
+    if rig_game and rig_game != project.game_id:
+        raise ValueError(
+            f"Animation {animation.display_name!r} targets CRIG {rig.name!r} for game profile "
+            f"{rig_game!r}, while the project uses {project.game_id!r}. Choose a CRIG for the "
+            "selected game profile."
+        )
+    return _AnimationTargetContext(rig_ref or rig.rig_id, resolved, clip_mode, rig)
 
 
 @dataclass(slots=True)
@@ -171,11 +262,27 @@ def _build_body_project(
 
     retarget_mode = project.rig.retarget_mode
     game_profile = get_game_profile(project.game_id)
+    rig_cache: dict[str, ChromeRig] = {}
+    target_contexts = {
+        animation.animation_id: _animation_target_context(
+            project,
+            animation,
+            game_target_rig_ref=game_profile.target_rig_ref,
+            cache=rig_cache,
+        )
+        for animation in enabled
+    }
+    uses_humanoid = any(
+        row.retarget_mode == "humanoid" for row in target_contexts.values()
+    )
+    uses_exact = any(
+        row.retarget_mode == "exact" for row in target_contexts.values()
+    )
     target_package_coherence: dict[str, Any] = {}
-    if (
-        project.rig.target_rig_ref == game_profile.target_rig_ref
-        and game_profile.target_rig_relative_path
-    ):
+    uses_profile_target = any(
+        row.rig_ref == game_profile.target_rig_ref for row in target_contexts.values()
+    )
+    if uses_profile_target and game_profile.target_rig_relative_path:
         coherence = validate_target_package(
             game_profile,
             smd_path=project.rig.canonical_smd,
@@ -185,9 +292,8 @@ def _build_body_project(
         coherence.require_valid(game_profile.display_name)
         target_package_coherence = coherence.to_dict()
     rig_paths: dict[str, Path] = {}
-    exact_rig: ChromeRig | None = None
     target_rig_definition: ChromeRig | None = None
-    if retarget_mode == "humanoid":
+    if uses_humanoid:
         rig_paths = {
             "canonical_smd": Path(project.rig.canonical_smd),
             "target_template_anm2": Path(project.rig.target_template_anm2),
@@ -196,17 +302,11 @@ def _build_body_project(
         for label, path in rig_paths.items():
             if not path.is_file():
                 raise FileNotFoundError(f"{label} must be a file: {path}")
-    elif retarget_mode == "exact":
-        rig_path = Path(project.rig.target_rig_path)
-        if not rig_path.is_file():
-            raise FileNotFoundError(f"target_rig_path must be a .crig file: {rig_path}")
-        exact_rig = ChromeRig.load(rig_path)
-        target_rig_definition = exact_rig
-    else:
+    elif not uses_exact:
         raise ValueError(f"Unsupported retarget mode: {retarget_mode!r}")
 
     explicit_source_rest = None
-    if retarget_mode == "humanoid" and not project.rig.use_imported_animation_bind_pose:
+    if uses_humanoid and not project.rig.use_imported_animation_bind_pose:
         explicit_source_rest = Path(project.rig.source_rest_fbx)
         if not project.rig.source_rest_fbx.strip() or not explicit_source_rest.is_file():
             raise FileNotFoundError(
@@ -216,7 +316,7 @@ def _build_body_project(
 
     trusted_path = None
     if (
-        retarget_mode == "humanoid"
+        uses_humanoid
         and not project.rig.use_imported_animation_bind_pose
         and project.rig.trusted_source_rest_json
     ):
@@ -226,7 +326,7 @@ def _build_body_project(
                 f"trusted_source_rest_json must be a file: {trusted_path}"
             )
 
-    if retarget_mode == "humanoid":
+    if uses_humanoid:
         try:
             bundled_reference = resource_root() / "reference"
             bundled_crig = bundled_reference / "male_npc_infected.crig"
@@ -249,26 +349,162 @@ def _build_body_project(
             # project-builder tests to use intentionally minimal file stubs.
             target_rig_definition = None
 
-    if not project.export.output_directory.strip():
-        raise ValueError("Choose an output folder before building")
-    output_dir = Path(project.export.output_directory)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_pack = output_dir / project.export.pack_filename
-    report_dir = output_dir / "dl_reanimated_build"
-    work_dir = report_dir / "intermediate"
-    if report_dir.exists():
-        shutil.rmtree(report_dir)
-    work_dir.mkdir(parents=True, exist_ok=True)
-
-    registry = _project_script_registry(project)
-    existing_library = AnimationLibrary({}, {})
-    warnings: list[str] = []
-    if retarget_mode == "exact" and project.export.include_validation_controls:
-        warnings.append(
-            "Bundled humanoid writer/bind controls are not compatible with custom Chrome "
-            "Rigs and were omitted. Exact-rig output is decoded and sampled during validation."
+    # Resolve, preflight and route every clip before creating any output.  A
+    # later unsupported file must not leave earlier candidate ANM2/MSH/RPack
+    # artifacts behind.
+    preflight_by_animation: dict[str, Any] = {}
+    mapping_document_by_animation: dict[str, Any] = {}
+    bone_map_by_animation: dict[str, GenericBoneMap | None] = {}
+    compatibility_by_animation: dict[str, dict[str, Any]] = {}
+    solver_by_animation: dict[str, Any] = {}
+    humanoid_profile_by_animation: dict[str, SourceBoneMappingProfile] = {}
+    expected_frame_count_by_animation: dict[str, int] = {}
+    for animation in enabled:
+        source_path = Path(animation.source_fbx)
+        if not source_path.is_file():
+            raise FileNotFoundError(
+                f"Animation {animation.display_name!r} cannot be built because its source "
+                f"FBX is missing or unreadable: {source_path}. The clip cannot be preflighted "
+                "or sampled safely. Re-select a supported binary FBX and retry; Exact Rig is "
+                "viable only when that FBX contains the selected target hierarchy. No ANM2 or "
+                "RPack output was created."
+            )
+        context = target_contexts[animation.animation_id]
+        document = _FbxDocument(source_path)
+        preflight = None
+        if source_path.read_bytes()[:18] == b"Kaydara FBX Binary":
+            preflight = preflight_fbx(
+                source_path,
+                purpose="animation",
+                animation_stack=animation.source_animation_stack or None,
+                target_rig=context.rig if context.retarget_mode == "exact" else None,
+                game_id=project.game_id,
+                document=document,
+            )
+            hard_findings = [
+                row
+                for row in preflight.findings
+                if row.severity == "error" and not row.can_continue
+            ]
+            if hard_findings:
+                raise ValueError(
+                    f"Animation {animation.display_name!r} failed FBX preflight before output:\n"
+                    + preflight.actionable_message(hard_findings)
+                )
+            preflight_by_animation[animation.animation_id] = preflight
+        selected_stack = getattr(document, "selected_animation_stack", None)
+        selected_stack_name = str(getattr(selected_stack, "name", "") or "")
+        if (
+            animation.source_animation_stack
+            and selected_stack_name != animation.source_animation_stack
+        ):
+            document.select_animation_stack(animation.source_animation_stack)
+        mapping_document_by_animation[animation.animation_id] = document
+        sample_fps = int(animation.fps) if context.retarget_mode == "exact" else 30
+        if sample_fps <= 0:
+            raise ValueError(
+                f"Animation {animation.display_name!r} has invalid FPS {animation.fps}. "
+                "Choose a positive sample rate and rebuild; no ANM2 or RPack output was created."
+            )
+        predicted_frame_count: int | None = None
+        if hasattr(document, "frame_ticks"):
+            predicted_frame_count = len(document.frame_ticks(fps=sample_fps))
+        elif hasattr(document, "frame_count"):
+            predicted_frame_count = int(document.frame_count(fps=sample_fps))
+        if predicted_frame_count is not None:
+            if context.retarget_mode == "exact":
+                predicted_frame_count = max(2, predicted_frame_count)
+            expected_frame_count_by_animation[animation.animation_id] = (
+                predicted_frame_count
+            )
+        start_frame = 0 if animation.start_frame is None else int(animation.start_frame)
+        end_frame = (
+            (predicted_frame_count - 1)
+            if animation.end_frame is None and predicted_frame_count is not None
+            else int(animation.end_frame)
+            if animation.end_frame is not None
+            else None
         )
+        invalid_frame_range = start_frame < 0 or (
+            end_frame is not None
+            and (
+                end_frame < start_frame
+                or (
+                    predicted_frame_count is not None
+                    and end_frame >= predicted_frame_count
+                )
+            )
+        )
+        if invalid_frame_range:
+            count_text = (
+                f", canonical FBX sampling produces {predicted_frame_count} frames"
+                if predicted_frame_count is not None
+                else ""
+            )
+            raise ValueError(
+                f"Animation {animation.display_name!r} has invalid configured frame range "
+                f"{start_frame}..{end_frame}{count_text}. Choose a range inside the sampled "
+                "clip and retry; Exact Rig does not make an out-of-range selection viable. "
+                "No ANM2 or RPack output was created."
+            )
+        if context.retarget_mode == "humanoid":
+            profile = _mapping_profile_for_animation(project, animation, document)
+            mapping_errors = profile.validate(document.limb_models)
+            if mapping_errors:
+                raise ValueError(
+                    f"Retarget mapping for {animation.display_name!r} is incomplete:\n- "
+                    + "\n- ".join(mapping_errors)
+                )
+            humanoid_profile_by_animation[animation.animation_id] = profile
+            continue
+        assert context.rig is not None
+        mapping_payload = project.mapping_profiles.get(
+            str(animation.mapping_profile_id or ""), {}
+        )
+        if animation.mapping_profile_id and not mapping_payload:
+            raise ValueError(
+                f"Animation {animation.display_name!r} references missing mapping profile "
+                f"{animation.mapping_profile_id}. Create/review a map for target "
+                f"{context.rig.name!r}."
+            )
+        if animation.mapping_profile_id and mapping_payload.get("format") != "dl-reanimated-bone-map":
+            raise ValueError(
+                f"Animation {animation.display_name!r} references a mapping that is not a "
+                "generic CRIG bone map. Create a reviewed map for its selected target rig."
+            )
+        bone_map = (
+            GenericBoneMap.from_dict(mapping_payload)
+            if mapping_payload.get("format") == "dl-reanimated-bone-map"
+            else None
+        )
+        compatibility = classify_target_compatibility(document, context.rig)
+        solver = select_exact_solver(compatibility, bone_map)
+        if not solver.build_allowed:
+            raise ValueError(
+                f"Animation {animation.display_name!r} cannot target {context.rig.name!r}: "
+                + solver.blocking_error
+            )
+        bone_map_by_animation[animation.animation_id] = bone_map
+        compatibility_by_animation[animation.animation_id] = compatibility
+        solver_by_animation[animation.animation_id] = solver
+
+    # Resolve naming, script routing, and append-pack provenance while the
+    # operation is still read-only. An invalid late clip or stale append pack
+    # must not leave an otherwise empty output/build tree behind.
+    registry = _project_script_registry(project)
+    resource_name_by_animation: dict[str, str] = {}
+    script_resource_by_animation: dict[str, str] = {}
+    for animation in enabled:
+        resource_name = _final_resource_name(project, animation)
+        _validate_resource_name(resource_name)
+        resource_name_by_animation[animation.animation_id] = resource_name
+        script_resource_by_animation[animation.animation_id] = (
+            _resolve_script_resource(project, animation, registry)
+        )
+
+    existing_library = AnimationLibrary({}, {})
     existing_manifest: PackManifest | None = None
+    warnings: list[str] = []
     if project.export.mode == "append":
         existing_path = Path(project.export.existing_rpack)
         if not existing_path.is_file():
@@ -287,6 +523,40 @@ def _build_body_project(
                 "Refusing append to avoid overwriting unknown changes."
             )
 
+    if project.export.collision_policy == "error":
+        collisions = sorted(
+            {
+                resource_name_by_animation[row.animation_id]
+                for row in enabled
+                if resource_name_by_animation[row.animation_id]
+                in existing_library.animations
+            },
+            key=str.casefold,
+        )
+        if collisions:
+            raise ValueError(
+                "Append preflight found animation resources that already exist in the "
+                "selected RPack: " + ", ".join(collisions)
+                + ". Choose Replace collisions or rename the affected animations; no ANM2 "
+                "or RPack output was created."
+            )
+
+    if not project.export.output_directory.strip():
+        raise ValueError("Choose an output folder before building")
+    output_dir = Path(project.export.output_directory)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_pack = output_dir / project.export.pack_filename
+    report_dir = output_dir / "dl_reanimated_build"
+    work_dir = report_dir / "intermediate"
+    if report_dir.exists():
+        shutil.rmtree(report_dir)
+    work_dir.mkdir(parents=True, exist_ok=True)
+
+    if uses_exact and project.export.include_validation_controls:
+        warnings.append(
+            "Bundled humanoid writer/bind controls are not compatible with custom Chrome "
+            "Rigs and were omitted. Exact-rig output is decoded and sampled during validation."
+        )
     final_animations = dict(existing_library.animations)
     final_scripts = dict(existing_library.animation_scripts)
     sequences_by_script: dict[str, list[AnimationScrSequence]] = {}
@@ -299,33 +569,17 @@ def _build_body_project(
 
     for index, animation in enumerate(enabled, start=1):
         source_path = Path(animation.source_fbx)
-        if not source_path.is_file():
-            raise FileNotFoundError(f"Animation FBX must be a file: {source_path}")
+        context = target_contexts[animation.animation_id]
+        clip_retarget_mode = context.retarget_mode
+        clip_target_rig = context.rig
         log(f"[{index}/{len(enabled)}] Reading skeleton: {source_path.name}")
-        preflight = None
-        if source_path.read_bytes()[:18] == b"Kaydara FBX Binary":
-            preflight = preflight_fbx(
-                source_path, purpose="animation",
-                animation_stack=animation.source_animation_stack or None,
-                game_id=project.game_id,
-            )
-            preflight.require_buildable()
-        profile: SourceBoneMappingProfile | None = None
-        if retarget_mode == "humanoid":
-            document = _FbxDocument(source_path)
-            if animation.source_animation_stack:
-                document.select_animation_stack(animation.source_animation_stack)
-            profile = _mapping_profile_for_animation(project, animation, document)
-            mapping_errors = profile.validate(document.limb_models)
-            if mapping_errors:
-                raise ValueError(
-                    f"Retarget mapping for {animation.display_name!r} is incomplete:\n- "
-                    + "\n- ".join(mapping_errors)
-                )
+        preflight = preflight_by_animation.get(animation.animation_id)
+        profile: SourceBoneMappingProfile | None = humanoid_profile_by_animation.get(
+            animation.animation_id
+        )
 
-        script_resource = _resolve_script_resource(project, animation, registry)
-        resource_name = _final_resource_name(project, animation)
-        _validate_resource_name(resource_name)
+        script_resource = script_resource_by_animation[animation.animation_id]
+        resource_name = resource_name_by_animation[animation.animation_id]
         if resource_name in final_animations and project.export.collision_policy == "error":
             raise ValueError(
                 f"Animation resource already exists in output library: {resource_name}. "
@@ -337,58 +591,26 @@ def _build_body_project(
             f"[{index}/{len(enabled)}] Retargeting {animation.display_name} "
             f"({animation.root_policy}, {script_resource})"
         )
-        if retarget_mode == "exact":
-            assert exact_rig is not None
+        if clip_retarget_mode == "exact":
+            assert clip_target_rig is not None
             source_rest_for_clip = source_path
             clip_out.mkdir(parents=True, exist_ok=True)
-            mapping_payload = project.mapping_profiles.get(
-                str(animation.mapping_profile_id or ""), {}
-            )
-            if animation.mapping_profile_id and not mapping_payload:
-                raise ValueError(
-                    f"Animation {animation.display_name!r} references missing mapping profile "
-                    f"{animation.mapping_profile_id}. Click Create .crig map for this clip."
-                )
-            if (
-                animation.mapping_profile_id
-                and mapping_payload.get("format") != "dl-reanimated-bone-map"
-            ):
-                raise ValueError(
-                    f"Animation {animation.display_name!r} still references a humanoid or "
-                    "incompatible mapping from a previous target rig. Click Create .crig map "
-                    "to generate an editable map for the selected custom target."
-                )
-            bone_map = (
-                GenericBoneMap.from_dict(mapping_payload)
-                if mapping_payload.get("format") == "dl-reanimated-bone-map"
-                else None
-            )
-            mapping_document = _FbxDocument(source_path)
-            if animation.source_animation_stack:
-                mapping_document.select_animation_stack(
-                    animation.source_animation_stack
-                )
-            compatibility = classify_target_compatibility(
-                mapping_document, exact_rig
-            )
-            solver_selection = select_exact_solver(compatibility, bone_map)
-            if not solver_selection.build_allowed:
-                raise ValueError(
-                    f"Animation {animation.display_name!r} cannot be built: "
-                    + solver_selection.blocking_error
-                )
+            bone_map = bone_map_by_animation.get(animation.animation_id)
+            compatibility = compatibility_by_animation[animation.animation_id]
+            solver_selection = solver_by_animation[animation.animation_id]
             if solver_selection.selected_engine == "MappedRigRetargetEngine":
                 assert bone_map is not None
                 source_rest_policy = "reviewed_mapped_crig"
                 exact_build = build_mapped_rig_anm2(
                     source_path,
-                    exact_rig,
+                    clip_target_rig,
                     bone_map,
                     fps=animation.fps,
                     animation_stack=animation.source_animation_stack or None,
                     root_mapping=RootMappingSelection.from_animation(animation),
                     transfer_policy=solver_selection.selected_policy,
                     root_policy=animation.root_policy,
+                    document=mapping_document_by_animation[animation.animation_id],
                 )
                 exact_build.report["mapping_transfer_selection"] = {
                     "policy": solver_selection.selected_policy,
@@ -408,11 +630,12 @@ def _build_body_project(
                 source_rest_policy = "exact_same_rig"
                 exact_build = build_exact_rig_anm2(
                     source_path,
-                    exact_rig,
+                    clip_target_rig,
                     fps=animation.fps,
                     animation_stack=animation.source_animation_stack or None,
                     root_mapping=RootMappingSelection.from_animation(animation),
                     root_policy=animation.root_policy,
+                    document=mapping_document_by_animation[animation.animation_id],
                 )
             exact_build.report["solver_selection"] = solver_selection.to_dict()
             payload = exact_build.payload
@@ -466,7 +689,10 @@ def _build_body_project(
             candidate_path = Path(retarget_report["candidate_path"])
             payload = candidate_path.read_bytes()
         retarget_report["game_id"] = project.game_id
-        if target_package_coherence:
+        if (
+            target_package_coherence
+            and context.rig_ref == game_profile.target_rig_ref
+        ):
             retarget_report["target_package_coherence"] = target_package_coherence
         if preflight is not None:
             retarget_report["fbx_preflight"] = preflight.to_dict()
@@ -538,6 +764,20 @@ def _build_body_project(
             )
 
         persisted_retarget_report = dict(retarget_report)
+        selected_rig_name = (
+            clip_target_rig.name
+            if clip_target_rig is not None
+            else target_rig_definition.name
+            if target_rig_definition is not None
+            else ""
+        )
+        selected_skeleton_hash = (
+            clip_target_rig.skeleton_hash
+            if clip_target_rig is not None
+            else target_rig_definition.skeleton_hash
+            if target_rig_definition is not None
+            else ""
+        )
         persisted_retarget_report.update(
             {
                 "resource_name": resource_name,
@@ -552,12 +792,11 @@ def _build_body_project(
                 ),
                 "source_rest_policy": source_rest_policy,
                 "source_rest_fbx": str(source_rest_for_clip),
-                "target_rig_ref": project.rig.target_rig_ref,
-                "target_rig_name": target_rig_definition.name if target_rig_definition else "",
-                "target_skeleton_hash": (
-                    target_rig_definition.skeleton_hash if target_rig_definition else ""
-                ),
-                "retarget_mode": retarget_mode,
+                "target_rig_ref": context.rig_ref,
+                "target_rig_path": context.rig_path,
+                "target_rig_name": selected_rig_name,
+                "target_skeleton_hash": selected_skeleton_hash,
+                "retarget_mode": clip_retarget_mode,
                 "anm2_sha256": sha256_bytes(payload),
                 "anm2_page_count": page_layout.page_count,
                 "anm2_page_frame_spans": list(page_layout.page_frame_spans),
@@ -587,6 +826,10 @@ def _build_body_project(
             root_policy=animation.root_policy,
             ik_preset=animation.ik_preset,
             mapping_profile_id=animation.mapping_profile_id,
+            target_rig_ref=context.rig_ref,
+            target_rig_name=selected_rig_name,
+            target_skeleton_hash=selected_skeleton_hash,
+            retarget_mode=clip_retarget_mode,
             frame_count=frame_count,
             fps=animation.fps,
             page_count=page_layout.page_count,
@@ -614,8 +857,11 @@ def _build_body_project(
                         or str(retarget_report.get("source_animation_stack", ""))
                     ),
                     "source_rest_fbx": str(source_rest_for_clip),
-                    "target_rig_ref": project.rig.target_rig_ref,
-                    "retarget_mode": retarget_mode,
+                    "target_rig_ref": context.rig_ref,
+                    "target_rig_path": context.rig_path,
+                    "target_rig_name": selected_rig_name,
+                    "target_skeleton_hash": selected_skeleton_hash,
+                    "retarget_mode": clip_retarget_mode,
                     "anm2_page_count": page_layout.page_count,
                     "anm2_page_frame_spans": list(page_layout.page_frame_spans),
                 },
@@ -623,7 +869,7 @@ def _build_body_project(
         )
 
         if (
-            retarget_mode == "humanoid"
+            clip_retarget_mode == "humanoid"
             and project.export.include_validation_controls
             and not controls_added
         ):
@@ -673,6 +919,10 @@ def _build_body_project(
         build_mode=project.export.mode,
         extensions={
             "game_id": project.game_id,
+            "default_target_rig_ref": project.rig.target_rig_ref,
+            "target_rig_refs": sorted(
+                {row.target_rig_ref for row in built_rows if row.target_rig_ref}
+            ),
             "output_anm2_format": (
                 "format 1 compatibility" if project.game_id == DL2_GAME_ID else "format 1"
             ),
@@ -685,6 +935,24 @@ def _build_body_project(
     )
     manifest_path = manifest.save_for_pack(output_pack)
 
+    target_rig_groups: list[dict[str, Any]] = []
+    grouped: dict[tuple[str, str], list[BuiltAnimation]] = {}
+    for row in built_rows:
+        grouped.setdefault((row.target_rig_ref, row.target_skeleton_hash), []).append(row)
+    for (rig_ref, skeleton_hash), rows in sorted(grouped.items()):
+        target_rig_groups.append(
+            {
+                "target_rig_ref": rig_ref,
+                "target_rig_name": rows[0].target_rig_name,
+                "target_skeleton_hash": skeleton_hash,
+                "retarget_modes": sorted({row.retarget_mode for row in rows}),
+                "animation_count": len(rows),
+                "animation_ids": [row.animation_id for row in rows],
+                "resource_names": [row.resource_name for row in rows],
+            }
+        )
+    built_modes = sorted({row.retarget_mode for row in built_rows})
+    effective_project_mode = built_modes[0] if len(built_modes) == 1 else "mixed"
     report = {
         "status": "ok",
         "project_id": project.project_id,
@@ -700,11 +968,15 @@ def _build_body_project(
         ),
         "native_dl2_format42_write": False if project.game_id == DL2_GAME_ID else None,
         "target_rig_ref": project.rig.target_rig_ref,
+        "default_target_rig_ref": project.rig.target_rig_ref,
+        "default_target_rig_path": project.rig.target_rig_path,
         "target_rig_name": target_rig_definition.name if target_rig_definition else "",
         "target_skeleton_hash": (
             target_rig_definition.skeleton_hash if target_rig_definition else ""
         ),
-        "retarget_mode": retarget_mode,
+        "retarget_mode": effective_project_mode,
+        "target_rig_group_count": len(target_rig_groups),
+        "target_rig_groups": target_rig_groups,
         "target_package_coherence": target_package_coherence or None,
         "solver_selection": (
             solver_selection_rows[0] if len(solver_selection_rows) == 1 else None

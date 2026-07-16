@@ -21,6 +21,7 @@ import zipfile
 import numpy as np
 
 from .fbx_model import FbxScene
+from .rig_contract import ANIMATION_NODE_TYPES, AuthoredRigContract
 from .vendor.chrome_mesh_tools.math3d import matrix4_from_matrix3x4
 from .vendor.chrome_mesh_tools.writer import SourceMsh
 
@@ -194,6 +195,12 @@ def _package_crig(
             info.create_system = 0
             info.external_attr = 0o600 << 16
             archive.writestr(info, members[member_name])
+    payload = output.getvalue()
+    _validate_generated_crig_payload(
+        payload,
+        source_name=name,
+        animation_track_count=len(bones),
+    )
     report = {
         "format": "dl_reanimated_model_importer_crig_build_v2",
         "rig_id": manifest["rig_id"],
@@ -205,8 +212,43 @@ def _package_crig(
         "skeleton_sha256": manifest["skeleton_sha256"],
         "warnings": validation["warnings"],
         "coordinate_convention": writer["coordinate_convention"],
+        "in_memory_validation": {
+            "status": "pass",
+            "chrome_rig_package": "pass",
+            "anm2_writer_capacity": "pass",
+        },
     }
-    return output.getvalue(), report
+    return payload, report
+
+
+def _validate_generated_crig_payload(
+    payload: bytes,
+    *,
+    source_name: str,
+    animation_track_count: int | None = None,
+) -> None:
+    """Round-trip a generated package through the production CRIG/ANM2 gate."""
+
+    # Keep this import local.  ``chrome_rig`` is the public package reader and
+    # owns the ANM2 writer-capacity probe; importing it at module load time
+    # would unnecessarily couple that public layer to the model importer.
+    from ..chrome_rig import ChromeRig
+
+    try:
+        ChromeRig.from_bytes(payload, source_name=source_name)
+    except (ValueError, OverflowError) as exc:
+        count_text = (
+            f" with {animation_track_count} animation tracks"
+            if animation_track_count is not None
+            else ""
+        )
+        raise ValueError(
+            f"Generated Chrome Rig {source_name!r}{count_text} failed full in-memory "
+            f"ChromeRig/ANM2 writer validation before output: {exc}. Reduce the number "
+            "of BONE/HELPER animation entities so the target fits the fixed 64 KiB ANM2 "
+            "page size, or split the target into separate model and CRIG resources; "
+            "mesh-only hierarchy nodes do not consume ANM2 tracks."
+        ) from exc
 
 
 def build_crig_bytes(
@@ -228,12 +270,19 @@ def build_crig_bytes(
     bone_ids = scene.depth_first_bones_for_weighted_ids(weighted)
     if not bone_ids:
         raise ValueError("A .crig requires a skinned LimbNode armature")
-    globals_units = scene.bone_globals(bone_ids)
+    from ..fbx_core import FbxDocument
+
+    document = FbxDocument.from_scene(
+        scene,
+        orientation_policy=orientation_policy,
+    )
     globals_m = {}
-    for bone_id, matrix in globals_units.items():
-        converted = np.asarray(matrix, dtype=float).copy()
-        converted[:3, 3] *= scene.meters_per_unit
-        globals_m[bone_id] = scene.to_chrome_global_matrix(converted, resolved_orientation)
+    for bone_id in bone_ids:
+        bone_name = scene.model_names[bone_id]
+        globals_m[bone_id] = document.normalized_matrix_to_target_space(
+            bone_name,
+            document.bind_global_matrices[bone_name],
+        )
     index_by_id = {bone_id: index for index, bone_id in enumerate(bone_ids)}
     bones: list[RigBone] = []
     errors: list[str] = []
@@ -246,7 +295,7 @@ def build_crig_bytes(
         if folded in names_seen:
             errors.append(f"duplicate bone name: {bone_name}")
         names_seen.add(folded)
-        parent_id = scene.model_parent_id(bone_id)
+        parent_id = scene.nearest_limb_parent_id(bone_id)
         parent_index = index_by_id.get(parent_id, -1)
         local = (
             np.linalg.inv(globals_m[parent_id]) @ globals_m[bone_id]
@@ -292,6 +341,9 @@ def build_crig_bytes(
             "model_axis_conversion": resolved_orientation,
             "requested_model_axis_conversion": orientation_policy,
             "resolved_model_axis_conversion": resolved_orientation,
+            "model_axis_basis_matrix": scene.coordinate_conversion_matrix(
+                orientation_policy
+            ).tolist(),
             "source_to_dying_light_basis": (
                 "x,z,-y"
                 if resolved_orientation == "fbx_y_up_to_dying_light"
@@ -398,6 +450,144 @@ def build_crig_from_source_msh_bytes(
     return payload, report
 
 
+def build_crig_from_rig_contract_bytes(
+    contract: AuthoredRigContract,
+    *,
+    name: str,
+    category: str = "Generic Object",
+    author: str = "",
+    description: str = "",
+) -> tuple[bytes, dict[str, Any]]:
+    """Build a CRIG from the model builder's immutable authored hierarchy."""
+
+    bind_validation = contract.validate()
+    selected = [
+        row for row in contract.nodes if row.node_type in ANIMATION_NODE_TYPES
+    ]
+    if not selected:
+        raise ValueError(
+            "The authored model rig contains no BONE or HELPER animation entities; "
+            "a target CRIG cannot be generated."
+        )
+    physical_to_rig = {
+        row.physical_index: rig_index for rig_index, row in enumerate(selected)
+    }
+    bones: list[RigBone] = []
+    warnings: list[str] = []
+    maximum_local_roundtrip_error = 0.0
+    for rig_index, row in enumerate(selected):
+        parent = (
+            physical_to_rig.get(row.parent_physical_index, -1)
+            if row.parent_physical_index >= 0
+            else -1
+        )
+        if (
+            row.parent_physical_index >= 0
+            and row.parent_physical_index not in physical_to_rig
+        ):
+            parent_name = contract.nodes[row.parent_physical_index].name
+            raise ValueError(
+                f"Authored animation entity {row.name!r} has non-animation parent "
+                f"{parent_name!r} at physical node {row.parent_physical_index}. Preserve the "
+                "helper in the animation-entity prefix or re-export a coherent hierarchy."
+            )
+        local = np.asarray(matrix4_from_matrix3x4(row.local_matrix3x4), dtype=float)
+        translation, rotation, scale = _decompose(local)
+        reconstructed = np.eye(4, dtype=float)
+        reconstructed[:3, :3] = _rotation_matrix_from_quaternion(rotation) @ np.diag(
+            np.asarray(scale, dtype=float)
+        )
+        reconstructed[:3, 3] = np.asarray(translation, dtype=float)
+        error = float(np.max(np.abs(reconstructed - local)))
+        maximum_local_roundtrip_error = max(maximum_local_roundtrip_error, error)
+        if error > 5.0e-5:
+            raise ValueError(
+                f"Authored bind for {row.name!r} contains unsupported shear or an "
+                f"irreducible reflected basis (CRIG TRS round-trip error {error:.6g}). "
+                "Remove shear/freeze transforms and re-export."
+            )
+        if not row.name.isascii():
+            warnings.append(
+                f"non-ASCII bone name {row.name!r} uses explicit descriptor "
+                f"0x{int(row.descriptor or 0):08X} from the authored rig contract"
+            )
+        if max(scale) - min(scale) > 1.0e-5:
+            warnings.append(f"non-uniform bind scale: {row.name}")
+        bones.append(
+            RigBone(
+                index=rig_index,
+                name=row.name,
+                parent_index=parent,
+                descriptor=int(row.descriptor if row.descriptor is not None else dl_name_hash(row.name)),
+                bind_translation=translation,
+                bind_rotation_wxyz=rotation,
+                bind_scale=scale,
+                deform=row.deform,
+                helper=row.helper,
+                aliases=row.aliases,
+                tags=((row.semantic_role,) if row.semantic_role else ()),
+            )
+        )
+    payload, report = _package_crig(
+        bones,
+        name=name,
+        source_model_name=contract.source_model_name,
+        category=category,
+        author=author,
+        description=description,
+        warnings=warnings,
+        extensions={
+            "builder": "dl_reanimated_authored_rig_contract_v1",
+            "bind_source": "exact_authored_source_msh_rig_contract",
+            "requires_bind_basis_retarget": True,
+            "authored_rig_contract_id": contract.contract_id,
+            "authored_bind_hash": contract.bind_hash,
+            "authored_skeleton_hash": contract.skeleton_hash,
+            "authored_descriptor_hash": contract.descriptor_hash,
+            "authored_msh_resource_name": contract.authored_msh_resource_name,
+            "source_fbx_sha256": contract.source_fbx_sha256,
+            "requested_model_axis_conversion": str(
+                contract.coordinate_contract.get("orientation_policy", "auto")
+            ),
+            "resolved_model_axis_conversion": str(
+                contract.coordinate_contract.get("resolved_orientation_policy", "none")
+            ),
+            "model_axis_basis_matrix": contract.coordinate_contract.get(
+                "basis_matrix",
+                np.eye(4, dtype=float).tolist(),
+            ),
+            "model_msh_reference_policy": "inverse_global_bind",
+        },
+    )
+    report.update(
+        {
+            "bind_source": "authored_rig_contract",
+            "authored_rig_contract_id": contract.contract_id,
+            "authored_bind_hash": contract.bind_hash,
+            "authored_skeleton_hash": contract.skeleton_hash,
+            "authored_descriptor_hash": contract.descriptor_hash,
+            "authored_bind_validation": bind_validation,
+            "maximum_crig_local_roundtrip_error": maximum_local_roundtrip_error,
+            "generated_crig_ref": report["rig_id"],
+        }
+    )
+    return payload, report
+
+
+def _rotation_matrix_from_quaternion(
+    value: Sequence[float],
+) -> np.ndarray:
+    w, x, y, z = (float(item) for item in value)
+    return np.asarray(
+        (
+            (1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)),
+            (2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)),
+            (2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)),
+        ),
+        dtype=float,
+    )
+
+
 def _write_crig_payload(
     payload: bytes,
     report: dict[str, Any],
@@ -430,6 +620,25 @@ def _write_crig_payload(
     return destination, result
 
 
+def write_prebuilt_crig_payload(
+    payload: bytes,
+    report: dict[str, Any],
+    output_path: str | Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Validate and atomically write a CRIG payload built fully in memory."""
+
+    built = bytes(payload)
+    bone_count = report.get("bone_count")
+    _validate_generated_crig_payload(
+        built,
+        source_name=str(report.get("name", "prebuilt Chrome Rig")),
+        animation_track_count=(
+            int(bone_count) if isinstance(bone_count, int) else None
+        ),
+    )
+    return _write_crig_payload(built, report, output_path)
+
+
 def create_crig_file(
     scene: FbxScene,
     output_path: str | Path,
@@ -440,7 +649,7 @@ def create_crig_file(
     payload, report = build_crig_bytes(
         scene, name=name, orientation_policy=orientation_policy
     )
-    return _write_crig_payload(payload, report, output_path)
+    return write_prebuilt_crig_payload(payload, report, output_path)
 
 
 def create_crig_from_source_msh(
@@ -461,13 +670,35 @@ def create_crig_from_source_msh(
         aliases_by_name=aliases_by_name,
         resolved_orientation_policy=resolved_orientation_policy,
     )
-    return _write_crig_payload(payload, report, output_path)
+    return write_prebuilt_crig_payload(payload, report, output_path)
+
+
+def create_crig_from_rig_contract(
+    contract: AuthoredRigContract,
+    output_path: str | Path,
+    *,
+    name: str,
+    category: str = "Generic Object",
+    author: str = "",
+    description: str = "",
+) -> tuple[Path, dict[str, Any]]:
+    payload, report = build_crig_from_rig_contract_bytes(
+        contract,
+        name=name,
+        category=category,
+        author=author,
+        description=description,
+    )
+    return write_prebuilt_crig_payload(payload, report, output_path)
 
 
 __all__ = [
     "build_crig_bytes",
+    "build_crig_from_rig_contract_bytes",
     "build_crig_from_source_msh_bytes",
     "create_crig_file",
+    "create_crig_from_rig_contract",
     "create_crig_from_source_msh",
     "dl_name_hash",
+    "write_prebuilt_crig_payload",
 ]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -14,7 +15,7 @@ from .game_profiles import DL1_GAME_ID, SUPPORTED_GAME_IDS, infer_game_id, proje
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
-CURRENT_PROJECT_SCHEMA_VERSION = 7
+CURRENT_PROJECT_SCHEMA_VERSION = 8
 
 
 def now() -> str:
@@ -38,6 +39,18 @@ def _with_unknown_fields(cls: type, payload: Mapping[str, Any]) -> dict[str, Any
     if "extensions" in _field_names(cls):
         result["extensions"] = extensions
     return result
+
+
+def _restore_unknown_fields(payload: dict[str, Any]) -> dict[str, Any]:
+    """Re-emit preserved extension fields at their original object level."""
+
+    extensions = payload.get("extensions")
+    if isinstance(extensions, Mapping):
+        unknown = extensions.get("unknown_fields")
+        if isinstance(unknown, Mapping):
+            for key, value in unknown.items():
+                payload.setdefault(str(key), deepcopy(value))
+    return payload
 
 
 def _portable_path(value: str, project_path: Path | None) -> str:
@@ -70,6 +83,12 @@ class ProjectAnimation:
     root_policy: str = "inplace"
     ik_preset: str = "runtime"
     mapping_profile_id: str = ""
+    # Empty values inherit the project-level target.  Keeping the override on
+    # the clip lets one RPack contain resources for several custom CRIGs.
+    target_rig_ref: str = ""
+    target_rig_path: str = ""
+    source_root_bone: str = ""
+    target_root_bone: str = ""
     fps: int = 30
     start_frame: int | None = None
     end_frame: int | None = None
@@ -96,6 +115,22 @@ class RigSettings:
     stock_writer_control_anm2: str = "reference/stock_writer_control.anm2"
     target_rig_name: str = "Dying Light male humanoid"
     extensions: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def default_target_rig_ref(self) -> str:
+        return self.target_rig_ref
+
+    @default_target_rig_ref.setter
+    def default_target_rig_ref(self, value: str) -> None:
+        self.target_rig_ref = str(value)
+
+    @property
+    def default_target_rig_path(self) -> str:
+        return self.target_rig_path
+
+    @default_target_rig_path.setter
+    def default_target_rig_path(self, value: str) -> None:
+        self.target_rig_path = str(value)
 
 
 @dataclass(slots=True)
@@ -184,8 +219,16 @@ class DlReanimatedProject:
             errors.append(f"Unsupported game identifier {self.game_id!r}.")
         if self.rig.retarget_mode not in {"humanoid", "exact"}:
             errors.append("Retarget mode must be humanoid or exact.")
-        if self.rig.retarget_mode == "exact" and not self.rig.target_rig_path:
-            errors.append("Exact mode requires a .crig target.")
+        if self.rig.retarget_mode == "exact" and any(
+            row.enabled
+            and not row.target_rig_ref
+            and not row.target_rig_path
+            for row in self.animations
+        ) and not self.rig.target_rig_path:
+            errors.append(
+                "Exact mode requires a default .crig target for animations that inherit the "
+                "project target; alternatively select a target rig on every enabled animation."
+            )
         if (
             self.rig.retarget_mode == "humanoid"
             and not self.rig.use_imported_animation_bind_pose
@@ -223,6 +266,12 @@ class DlReanimatedProject:
             "target_template_anm2", "stock_writer_control_anm2",
         ):
             rig[key] = _portable_path(str(rig.get(key, "")), destination)
+        # Schema-v8 aliases must mirror the already-portable legacy storage
+        # fields.  Writing the alias first would reintroduce an absolute path
+        # during load because migration gives the explicit default alias
+        # precedence.
+        rig["default_target_rig_ref"] = str(rig.get("target_rig_ref", ""))
+        rig["default_target_rig_path"] = str(rig.get("target_rig_path", ""))
         export = result["export"]
         for key in ("output_directory", "existing_rpack"):
             export[key] = _portable_path(str(export.get(key, "")), destination)
@@ -231,10 +280,20 @@ class DlReanimatedProject:
             reverse[key] = _portable_path(str(reverse.get(key, "")), destination)
         for row in result["animations"]:
             row["source_fbx"] = _portable_path(str(row.get("source_fbx", "")), destination)
+            row["target_rig_path"] = _portable_path(
+                str(row.get("target_rig_path", "")), destination
+            )
         for row in reverse["items"]:
             row["source_anm2"] = _portable_path(str(row.get("source_anm2", "")), destination)
             row["source_rig_path"] = _portable_path(str(row.get("source_rig_path", "")), destination)
-        return result
+        _restore_unknown_fields(rig)
+        _restore_unknown_fields(export)
+        _restore_unknown_fields(reverse)
+        for row in result["animations"]:
+            _restore_unknown_fields(row)
+        for row in reverse["items"]:
+            _restore_unknown_fields(row)
+        return _restore_unknown_fields(result)
 
     @classmethod
     def from_dict(cls, payload: Mapping[str, Any]) -> "DlReanimatedProject":
@@ -251,6 +310,12 @@ class DlReanimatedProject:
 
         game_id = infer_game_id(raw)
         rig_raw = dict(raw.get("rig", {}) or {})
+        default_ref = str(rig_raw.pop("default_target_rig_ref", "") or "")
+        default_path = str(rig_raw.pop("default_target_rig_path", "") or "")
+        if default_ref:
+            rig_raw["target_rig_ref"] = default_ref
+        if default_path:
+            rig_raw["target_rig_path"] = default_path
         if schema_version <= 1 and "use_imported_animation_bind_pose" not in rig_raw:
             rig_raw["use_imported_animation_bind_pose"] = not bool(rig_raw.get("source_rest_fbx"))
         if schema_version <= 2:
@@ -268,10 +333,23 @@ class DlReanimatedProject:
         export_raw = dict(raw.get("export", {}) or {})
         reverse_raw = dict(raw.get("anm2_to_fbx", {}) or {})
         item_rows = reverse_raw.pop("items", []) or []
-        animations = [
-            ProjectAnimation(**_with_unknown_fields(ProjectAnimation, dict(row)))
-            for row in (raw.get("animations", []) or [])
-        ]
+        animations = []
+        for source_row in (raw.get("animations", []) or []):
+            animation_raw = dict(source_row)
+            extensions = dict(animation_raw.get("extensions", {}) or {})
+            legacy_root = extensions.get("root_mapping_v1", {})
+            if isinstance(legacy_root, Mapping):
+                animation_raw.setdefault(
+                    "source_root_bone", str(legacy_root.get("source_bone", "") or "")
+                )
+                animation_raw.setdefault(
+                    "target_root_bone", str(legacy_root.get("target_bone", "") or "")
+                )
+            animations.append(
+                ProjectAnimation(
+                    **_with_unknown_fields(ProjectAnimation, animation_raw)
+                )
+            )
         reverse_items = [
             Anm2ToFbxItem(**_with_unknown_fields(Anm2ToFbxItem, dict(row)))
             for row in item_rows
@@ -340,6 +418,7 @@ class DlReanimatedProject:
             setattr(project.export, key, _resolved_path(getattr(project.export, key), source))
         for row in project.animations:
             row.source_fbx = _resolved_path(row.source_fbx, source)
+            row.target_rig_path = _resolved_path(row.target_rig_path, source)
         project.anm2_to_fbx.target_fbx = _resolved_path(project.anm2_to_fbx.target_fbx, source)
         project.anm2_to_fbx.output_directory = _resolved_path(project.anm2_to_fbx.output_directory, source)
         for row in project.anm2_to_fbx.items:

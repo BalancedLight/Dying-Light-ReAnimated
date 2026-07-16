@@ -2,11 +2,15 @@ from __future__ import annotations
 
 """Unified three-workspace shell for DL ReAnimated."""
 
+from copy import deepcopy
 from pathlib import Path
 import sys
 from typing import Any
+import uuid
 
 from . import __version__
+from .animation_targets import resolve_animation_target
+from .bone_maps import GenericBoneMap
 from .chrome_rig import ChromeRig
 from .retarget_mapping import canonical_humanoid_role
 from .workspaces.animation_mapping import CrigMappingWorkspace
@@ -102,6 +106,7 @@ class UnifiedMainWindow:
             mark_dirty=self._mark_dirty,
             status_callback=lambda message: self.controller.status.showMessage(message),
             rigs_installed_callback=self._model_rigs_installed,
+            animations_for_rig_callback=self._show_animations_targeting_model,
         )
         self.controller.extra_task_runners = [self.models.background_tasks]
         self._remove_tab(self.models.tabs, "Help")
@@ -141,6 +146,9 @@ class UnifiedMainWindow:
         self.controller.advanced_mode_toggle.toggled.connect(self._advanced_visibility_changed)
         self._set_crig_tab_visible(self.controller.advanced_mode_toggle.isChecked())
         self.controller.mapping_navigation_callback = self._open_animation_mapping
+        self.controller.target_selection_changed_callback = (
+            self._animation_target_changed
+        )
         self.controller.target_rig_combo.currentIndexChanged.connect(
             lambda *_args: self._set_crig_tab_visible(
                 self.controller.advanced_mode_toggle.isChecked()
@@ -186,6 +194,10 @@ class UnifiedMainWindow:
         file_menu = menu_bar.addMenu("&File")
         action(file_menu, "New Project", "Ctrl+N", self.controller.new_project)
         action(file_menu, "Open Project…", "Ctrl+O", self.controller.open_project)
+        self.recent_projects_menu = file_menu.addMenu("Open Recent")
+        self.recent_projects_menu.aboutToShow.connect(self._refresh_recent_projects_menu)
+        self.controller.recent_projects_changed_callback = self._refresh_recent_projects_menu
+        self._refresh_recent_projects_menu()
         file_menu.addSeparator()
         action(file_menu, "Save Project", "Ctrl+S", self.controller.save_project)
         action(file_menu, "Save Project As…", "Ctrl+Shift+S", self.controller.save_project_as)
@@ -221,6 +233,35 @@ class UnifiedMainWindow:
         advanced_toggle.setText("Advanced settings")
         advanced_toggle.setToolTip("Show custom rig mapping, diagnostic controls, and developer options.")
         menu_bar.setCornerWidget(advanced_toggle)
+
+    def _refresh_recent_projects_menu(self) -> None:
+        menu = self.recent_projects_menu
+        menu.clear()
+        paths = self.controller.recent_project_paths()
+        if not paths:
+            empty = self.qt["QAction"]("No Recent Projects", menu)
+            empty.setEnabled(False)
+            menu.addAction(empty)
+            return
+
+        for index, path in enumerate(paths, start=1):
+            name = path.name.replace("&", "&&")
+            parent = str(path.parent).replace("&", "&&")
+            label = f"{index}. {name}  —  {parent}"
+            row = self.qt["QAction"](label, menu)
+            row.setData(str(path))
+            row.setStatusTip(str(path))
+            row.triggered.connect(
+                lambda _checked=False, project_path=path: self.controller.open_recent_project(
+                    project_path
+                )
+            )
+            menu.addAction(row)
+
+        menu.addSeparator()
+        clear = self.qt["QAction"]("Clear Recent Projects", menu)
+        clear.triggered.connect(self.controller.clear_recent_projects)
+        menu.addAction(clear)
 
     def _help_page(self, heading: str, description: str, documents: tuple[tuple[str, str], ...]) -> Any:
         qt = self.qt
@@ -261,7 +302,19 @@ class UnifiedMainWindow:
         # A custom .crig makes this editor part of the normal recovery path,
         # not an advanced/developer feature. Keep it visible even when the
         # global Advanced Settings toggle is off.
-        visible = bool(visible or self.controller.project.rig.retarget_mode == "exact")
+        visible = bool(
+            visible
+            or self.controller.project.rig.retarget_mode == "exact"
+            or any(
+                resolve_animation_target(
+                    self.controller.project,
+                    animation,
+                    rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
+                ).retarget_mode
+                == "exact"
+                for animation in self.controller.project.animations
+            )
+        )
         index = self._animation_tab_index("Root & .crig Mapping")
         if visible and index < 0:
             insert_at = self._animation_tab_index("Export")
@@ -311,7 +364,17 @@ class UnifiedMainWindow:
 
     def _open_animation_mapping(self, animation_id: str) -> None:
         self.main_tabs.setCurrentIndex(0)
-        if self.controller.project.rig.retarget_mode == "exact":
+        animation = self.controller.project.animation_by_id(animation_id)
+        exact_mode = bool(
+            animation is not None
+            and resolve_animation_target(
+                self.controller.project,
+                animation,
+                rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
+            ).retarget_mode
+            == "exact"
+        )
+        if exact_mode:
             self._set_crig_tab_visible(True)
             self.crig_mapping.reload_clips()
             index = self.crig_mapping.clip_combo.findData(animation_id)
@@ -320,7 +383,6 @@ class UnifiedMainWindow:
             mapping_tab = self._animation_tab_index("Root & .crig Mapping")
             if mapping_tab >= 0:
                 self.animation_tabs.setCurrentIndex(mapping_tab)
-            animation = self.controller.project.animation_by_id(animation_id)
             if animation is not None and self.crig_mapping._current_profile(animation) is None:
                 # "Create .crig map" must persist the suggestions immediately;
                 # merely rendering an unsaved preview leaves strict build mode
@@ -336,6 +398,12 @@ class UnifiedMainWindow:
             self.animation_tabs.setCurrentIndex(retarget_tab)
         self.controller._retarget_clip_changed()
 
+    def _animation_target_changed(self, _animation_id: str = "") -> None:
+        self._set_crig_tab_visible(
+            self.controller.advanced_mode_toggle.isChecked()
+        )
+        self.crig_mapping.reload_clips()
+
     def _add_model(self) -> None:
         self.main_tabs.setCurrentIndex(1)
         self.models.tabs.setCurrentIndex(0)
@@ -350,6 +418,30 @@ class UnifiedMainWindow:
         self.main_tabs.setCurrentIndex(1)
         self.models.tabs.setCurrentIndex(2)
         self.models.compile_and_install()
+
+    def _show_animations_targeting_model(self, entry: Any) -> None:
+        """Jump from one model to clips resolved against its generated CRIG."""
+
+        rig_ref = str(getattr(entry, "installed_crig_ref", "") or "")
+        if not rig_ref:
+            self.controller.status.showMessage(
+                "This model has no installed generated CRIG to filter by."
+            )
+            return
+        self.main_tabs.setCurrentIndex(0)
+        animation_index = self._animation_tab_index("Animations")
+        if animation_index >= 0:
+            self.animation_tabs.setCurrentIndex(animation_index)
+        visible = self.controller.set_animation_target_filter(rig_ref)
+        resource = str(getattr(entry, "resource_name", "model") or "model")
+        self.controller.status.showMessage(
+            f"Showing {visible} animation clip(s) targeting {resource!r} ({rig_ref})."
+            if visible
+            else (
+                f"No animation clips currently target {resource!r} ({rig_ref}). "
+                "Select a clip and use the model's generated-rig handoff to assign it."
+            )
+        )
 
     def _animation_tab_index(self, title: str) -> int:
         for index in range(self.animation_tabs.count()):
@@ -369,31 +461,14 @@ class UnifiedMainWindow:
             self.models._refresh_mapping_model_combo()
 
     def _model_rigs_installed(self, results: list[Any]) -> None:
-        """Select a newly generated model rig and migrate compatible maps.
-
-        A model rebuild may change authored local bone frames while retaining
-        the same names/descriptors.  Leaving the animation project pointed at
-        the older registry entry is especially dangerous because Chrome accepts
-        the stale descriptors and only fails visually at playback.  For a
-        single-model build, make the model's freshly generated .crig the active
-        project target and carry reviewed name mappings to its new bind hash.
-        """
+        """Assign one generated CRIG without rewriting unrelated animations."""
 
         self.controller._sync_project_from_ui()
-        old_ref = self.controller.project.rig.target_rig_ref
-        old_path = self.controller.project.rig.target_rig_path
-        old_hash = ""
-        if old_path and Path(old_path).is_file():
-            try:
-                old_hash = ChromeRig.load(old_path).skeleton_hash
-            except (OSError, ValueError):
-                pass
-
         self.controller._reload_target_rig_combo()
         if len(results) != 1:
             self.controller.status.showMessage(
-                "Installed model .crig targets. Select the intended target on "
-                "Animations > Project before building animations."
+                "Installed model CRIG targets. Use each animation's Target rig column "
+                "to assign the intended model."
             )
             return
 
@@ -402,90 +477,141 @@ class UnifiedMainWindow:
         if not new_path.is_file():
             return
         new_rig = ChromeRig.load(new_path)
+        selected_animation = self.controller._selected_animation()
+        if selected_animation is None and len(self.controller.project.animations) == 1:
+            selected_animation = self.controller.project.animations[0]
+
+        if selected_animation is None and self.controller.project.animations:
+            self.controller.status.showMessage(
+                f"Installed {new_rig.name!r}. Select an animation row, then click "
+                "Use generated rig in Animations; no existing clip was changed."
+            )
+            self.controller._refresh_animation_table()
+            return
+
+        if selected_animation is None:
+            self.controller.project.rig.target_rig_ref = new_rig.rig_id
+            self.controller.project.rig.target_rig_path = str(new_path.resolve())
+            self.controller.project.rig.target_rig_name = new_rig.name
+            self.controller.project.rig.retarget_mode = "exact"
+            self.controller._reload_target_rig_combo()
+            self.controller._set_combo_data(
+                self.controller.target_rig_combo, new_rig.rig_id
+            )
+            self._mark_dirty()
+            self.controller.status.showMessage(
+                f"Set {new_rig.name!r} as the project default animation target."
+            )
+            return
+
+        previous = resolve_animation_target(
+            self.controller.project,
+            selected_animation,
+            rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
+        )
+        old_ref = previous.rig_ref
+        old_path = previous.rig_path
+        old_hash = ""
+        if old_path and Path(old_path).is_file():
+            try:
+                old_hash = ChromeRig.load(old_path).skeleton_hash
+            except (OSError, ValueError):
+                pass
+
+        selected_animation.target_rig_ref = new_rig.rig_id
+        selected_animation.target_rig_path = str(new_path.resolve())
         new_by_name = {bone.name: bone.descriptor for bone in new_rig.bones}
         migrated = 0
-        for profile_id, payload in list(
-            self.controller.project.mapping_profiles.items()
+        profile_id = str(selected_animation.mapping_profile_id or "")
+        payload = self.controller.project.mapping_profiles.get(profile_id)
+        if (
+            profile_id
+            and isinstance(payload, dict)
+            and payload.get("format") == "dl-reanimated-bone-map"
         ):
-            if not isinstance(payload, dict) or payload.get("format") != "dl-reanimated-bone-map":
-                continue
-            rows = payload.get("pairs", ())
-            compatible_rows = bool(rows) and all(
-                str(row.get("source_bone", "")) in new_by_name
-                and int(row.get("source_descriptor", -1))
-                == new_by_name[str(row.get("source_bone", ""))]
-                for row in rows
-                if isinstance(row, dict)
-            )
-            belongs_to_previous_target = (
-                str(payload.get("source_rig_ref", "")) == old_ref
-                or (
-                    bool(old_hash)
-                    and str(payload.get("source_skeleton_hash", "")) == old_hash
+            try:
+                profile = GenericBoneMap.from_dict(payload)
+            except (TypeError, ValueError):
+                profile = None
+            if profile is not None:
+                compatible_rows = bool(profile.pairs) and all(
+                    row.target_rig_bone in new_by_name
+                    and int(row.target_rig_descriptor)
+                    == int(new_by_name[row.target_rig_bone])
+                    for row in profile.pairs
                 )
-            )
-            if compatible_rows and belongs_to_previous_target:
-                updated = dict(payload)
-                updated["source_rig_ref"] = new_rig.rig_id
-                updated["source_skeleton_hash"] = new_rig.skeleton_hash
-                extensions = dict(updated.get("extensions", {}))
-                extensions["migrated_after_model_rig_rebuild"] = {
-                    "previous_rig_ref": old_ref,
-                    "previous_skeleton_hash": old_hash,
-                    "new_rig_ref": new_rig.rig_id,
-                    "new_skeleton_hash": new_rig.skeleton_hash,
-                }
-                updated["extensions"] = extensions
-                migrated_rows = [dict(row) for row in rows]
-                target_root = new_rig.bones[new_rig.root_index]
-                legacy_rows = [
-                    row
-                    for row in migrated_rows
-                    if str(row.get("source_bone", "")) == target_root.name
-                    and str(row.get("method", "")) == "hierarchy_root"
-                ]
-                pelvis_candidates = [
-                    bone
-                    for bone in new_rig.bones
-                    if canonical_humanoid_role(bone.name) == "pelvis"
-                ]
-                pelvis_candidates.sort(
-                    key=lambda bone: (
-                        0 if bone.deform and not bone.helper else 1,
-                        bone.index,
-                    )
+                expected_old_hash = profile.target_bind_hash or profile.source_skeleton_hash
+                belongs_to_previous_target = (
+                    profile.source_rig_ref == old_ref
+                    or (bool(old_hash) and expected_old_hash == old_hash)
                 )
-                for legacy in legacy_rows:
-                    source_root = str(legacy.get("target_bone", ""))
-                    already_used = any(
-                        row is not legacy
-                        and str(row.get("target_bone", "")) == source_root
-                        for row in migrated_rows
+                if compatible_rows and belongs_to_previous_target:
+                    shared_elsewhere = any(
+                        row.animation_id != selected_animation.animation_id
+                        and row.mapping_profile_id == profile_id
+                        for row in self.controller.project.animations
                     )
-                    if pelvis_candidates and not already_used:
-                        pelvis = pelvis_candidates[0]
-                        legacy["source_bone"] = pelvis.name
-                        legacy["source_descriptor"] = pelvis.descriptor
-                        legacy["confidence"] = 0.98
-                        legacy["method"] = "model_rig_rebuild:pelvis_pose"
-                    else:
-                        migrated_rows.remove(legacy)
-                updated["pairs"] = migrated_rows
-                self.controller.project.mapping_profiles[profile_id] = updated
-                migrated += 1
+                    if shared_elsewhere:
+                        profile.profile_id = str(uuid.uuid4())
+                        selected_animation.mapping_profile_id = profile.profile_id
+                    profile.source_rig_ref = new_rig.rig_id
+                    profile.source_skeleton_hash = new_rig.skeleton_hash
+                    profile.target_bind_hash = new_rig.skeleton_hash
+                    for row in profile.pairs:
+                        row.target_rig_descriptor = new_by_name[row.target_rig_bone]
+                    profile.extensions = deepcopy(profile.extensions)
+                    profile.extensions["migrated_after_model_rig_rebuild"] = {
+                        "previous_rig_ref": old_ref,
+                        "previous_skeleton_hash": old_hash,
+                        "new_rig_ref": new_rig.rig_id,
+                        "new_skeleton_hash": new_rig.skeleton_hash,
+                    }
+                    target_root = new_rig.bones[new_rig.root_index]
+                    legacy_rows = [
+                        row
+                        for row in profile.pairs
+                        if row.target_rig_bone == target_root.name
+                        and row.method == "hierarchy_root"
+                    ]
+                    pelvis_candidates = [
+                        bone
+                        for bone in new_rig.bones
+                        if canonical_humanoid_role(bone.name) == "pelvis"
+                    ]
+                    pelvis_candidates.sort(
+                        key=lambda bone: (
+                            0 if bone.deform and not bone.helper else 1,
+                            bone.index,
+                        )
+                    )
+                    for legacy in legacy_rows:
+                        already_used = any(
+                            row is not legacy
+                            and row.source_fbx_bone == legacy.source_fbx_bone
+                            for row in profile.pairs
+                        )
+                        if pelvis_candidates and not already_used:
+                            pelvis = pelvis_candidates[0]
+                            legacy.target_rig_bone = pelvis.name
+                            legacy.target_rig_descriptor = pelvis.descriptor
+                            legacy.confidence = 0.98
+                            legacy.method = "model_rig_rebuild:pelvis_pose"
+                        else:
+                            profile.pairs.remove(legacy)
+                    self.controller.project.mapping_profiles[profile.profile_id] = (
+                        profile.to_dict()
+                    )
+                    migrated = 1
 
         self.controller._reload_target_rig_combo()
-        self.controller._set_combo_data(
-            self.controller.target_rig_combo, new_rig.rig_id
-        )
-        self.controller._target_rig_changed()
+        self.controller._refresh_animation_table()
         self._set_crig_tab_visible(True)
         self.crig_mapping.reload_clips()
         self._mark_dirty()
         self.controller.status.showMessage(
-            f"Selected rebuilt model rig {new_rig.name!r} and migrated "
-            f"{migrated} compatible animation bone map(s). Save and rebuild the "
-            "animation RPack before testing playback."
+            f"Assigned generated rig {new_rig.name!r} to animation "
+            f"{selected_animation.display_name!r}; {migrated} compatible map migrated. "
+            "Other animation targets were left unchanged."
         )
 
 

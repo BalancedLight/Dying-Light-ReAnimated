@@ -22,13 +22,23 @@ import re
 
 import numpy as np
 
-from .fbx_model import FbxGeometry, FbxScene, FbxTriangleCorner
+from .fbx_model import (
+    BLENDSHAPE_IDENTITY_NOOP,
+    BLENDSHAPE_MALFORMED,
+    BLENDSHAPE_REAL_ANIMATED,
+    BLENDSHAPE_REAL_STATIC,
+    FbxGeometry,
+    FbxScene,
+    FbxTriangleCorner,
+)
 from ..retarget_mapping import HumanoidBoneMatch, scan_humanoid_bones
 from .vendor.chrome_mesh_tools.math3d import matrix3x4_from_matrix4
 from .vendor.chrome_mesh_tools.msh import MshFile
 from .vendor.chrome_mesh_tools.smd import SmdFile
 from .vendor.chrome_mesh_tools.smd_bind import build_smd_bind_matrices
-from .vendor.chrome_mesh_tools.source_contract import audit_source_msh_for_compiler
+from .vendor.chrome_mesh_tools.source_contract import (
+    audit_source_msh_bytes_for_compiler,
+)
 from .vendor.chrome_mesh_tools.writer import (
     MSH_NODE_FLAG_ANIMATED,
     SourceLod,
@@ -37,6 +47,13 @@ from .vendor.chrome_mesh_tools.writer import (
     SourceSkinVertex,
     SourceSubset,
 )
+from .skin_partition import (
+    EmittedMeshPartition,
+    MAX_SUBSET_PALETTE_ENTRIES,
+    remap_global_influences_to_local,
+    validate_local_palette_round_trip,
+)
+from .rig_contract import AuthoredRigContract
 
 SOURCE_NODE_MESH = 1
 SOURCE_NODE_MESH_VBLEND = 2
@@ -100,7 +117,18 @@ class _BuildVertex:
     normal: np.ndarray
     uv: tuple[float, float]
     color: tuple[int, int, int, int]
+    # Always stored in the physical/global source-MSH node index space until
+    # the final subset palette is known.  _chunk_to_lod is the only boundary
+    # allowed to convert these to uint8 subset-local indexes.
     influences: list[tuple[int, float]]
+    source_tangent: np.ndarray | None = None
+    source_binormal: np.ndarray | None = None
+    morph_identity: tuple[Any, ...] = ()
+    # Diagnostic provenance used when tangent reconstruction encounters an
+    # authored but unusable UV triangle.  These fields never enter the emitted
+    # vertex key or binary payload.
+    source_geometry_name: str = ""
+    source_polygon_index: int = -1
 
 
 @dataclass(slots=True)
@@ -108,6 +136,13 @@ class _MeshChunk:
     node_name: str
     material_index: int
     vertices: list[_BuildVertex] = field(default_factory=list)
+    bone_palette: tuple[int, ...] = ()
+    partition_index: int = 0
+    source_triangle_count: int = 0
+    maximum_influences: int = 0
+    dropped_weight_total: float = 0.0
+    fallback_weight_total: float = 0.0
+    tangent_policy: str = "rebuilt_missing_source"
 
 
 @dataclass(slots=True)
@@ -116,13 +151,24 @@ class ModelBuildResult:
     report: dict[str, Any]
     ascr_text: str | None
     bscr_text: str | None
+    authored_rig_contract: AuthoredRigContract | None = None
 
     def write(self, output_directory: str | Path) -> dict[str, Path]:
         output = Path(output_directory)
-        output.mkdir(parents=True, exist_ok=True)
         resource_name = str(self.report["resource_name"])
         msh_path = output / f"{resource_name}.msh"
         payload = self.source.build()
+        compiler_preflight = audit_source_msh_bytes_for_compiler(
+            payload, str(msh_path)
+        )
+        if not compiler_preflight["ready"]:
+            raise ValueError(
+                f"Source-MSH compiler preflight blocked {resource_name!r} before output:\n- "
+                + "\n- ".join(str(value) for value in compiler_preflight["errors"])
+                + "\nCorrect the named geometry/palette/node types and rebuild. Exact Rig is "
+                "a viable alternative when a fitted humanoid mapping caused the invalid rows."
+            )
+        output.mkdir(parents=True, exist_ok=True)
         msh_path.write_bytes(payload)
         paths = {"msh": msh_path}
         if self.ascr_text is not None:
@@ -150,7 +196,7 @@ class ModelBuildResult:
         parsed = MshFile.parse(payload, str(msh_path))
         report["parser_lossless_roundtrip"] = parsed.is_lossless_roundtrip()
         report["parsed_has_skinning"] = parsed.has_skinning
-        report["compiler_preflight"] = audit_source_msh_for_compiler(msh_path)
+        report["compiler_preflight"] = compiler_preflight
         report_path = output / f"{resource_name}.model_import.json"
         report_path.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         paths["report"] = report_path
@@ -159,6 +205,7 @@ class ModelBuildResult:
 
 def build_source_from_fbx(scene: FbxScene, options: ModelBuildOptions) -> ModelBuildResult:
     options.validate()
+    _validate_non_morph_blend_shapes(scene)
     mode = options.mode
     weighted_bone_ids = {
         cluster.bone_id
@@ -181,6 +228,82 @@ def build_source_from_fbx(scene: FbxScene, options: ModelBuildOptions) -> ModelB
             raise ValueError("Dying Light humanoid mode needs a target SMD")
         return _build_dying_light_humanoid(scene, options, weighted_bone_ids)
     raise AssertionError(mode)
+
+
+def _validate_non_morph_blend_shapes(scene: FbxScene) -> None:
+    targets = tuple(getattr(scene, "blend_shapes", ()) or ())
+    malformed = tuple(
+        row
+        for row in targets
+        if getattr(row, "classification", "") == BLENDSHAPE_MALFORMED
+    )
+    if malformed:
+        details = []
+        for row in malformed[:8]:
+            details.append(
+                f"shape {getattr(row, 'shape_name', '<unnamed>')!r} "
+                f"({getattr(row, 'shape_object_id', None)}), channel "
+                f"{getattr(row, 'channel_name', '<unresolved>')!r} "
+                f"({getattr(row, 'channel_object_id', None)}), geometry "
+                f"{getattr(row, 'base_geometry_name', '<unresolved>')!r} "
+                f"({getattr(row, 'base_geometry_id', None)}): "
+                + "; ".join(getattr(row, "malformed_fields", ()) or ())
+            )
+        raise ValueError(
+            "Malformed model blendshape target blocked the build before output:\n- "
+            + "\n- ".join(details)
+            + "\nRepair the named connection or sparse field and re-export the FBX."
+        )
+    real = tuple(
+        row
+        for row in targets
+        if getattr(row, "classification", "")
+        in {BLENDSHAPE_REAL_STATIC, BLENDSHAPE_REAL_ANIMATED}
+    )
+    if real:
+        raise ValueError(
+            "Real model blendshape targets are unsupported by this non-morph build and "
+            "cannot be discarded safely: "
+            + ", ".join(
+                f"{getattr(row, 'name', 'UnnamedShape')} "
+                f"({getattr(row, 'classification', '')})"
+                for row in real[:12]
+            )
+            + ". Enable a model importer with morph emission, bake the intended shape, or "
+            "remove/export the real morph targets separately before rebuilding."
+        )
+    legacy_names = tuple(getattr(scene, "blend_shape_names", ()) or ())
+    if legacy_names and not targets:
+        raise ValueError(
+            "Model blendshape channels lack inspectable Shape records and cannot be "
+            "discarded safely: "
+            + ", ".join(str(value) for value in legacy_names[:12])
+            + ". Reload through the production FBX parser before building."
+        )
+
+
+def _canonical_bind_globals_meters(
+    scene: FbxScene,
+    bone_ids: Sequence[int],
+    orientation_policy: str,
+) -> dict[int, np.ndarray]:
+    """Resolve model bind globals through the shared animation FBX contract."""
+
+    from ..fbx_core import FbxDocument
+
+    document = FbxDocument.from_scene(
+        scene,
+        orientation_policy=orientation_policy,
+    )
+    result: dict[int, np.ndarray] = {}
+    for bone_id in bone_ids:
+        name = scene.model_names[bone_id]
+        normalized = document.bind_global_matrices[name]
+        result[bone_id] = document.normalized_matrix_to_target_space(
+            name,
+            normalized,
+        )
+    return result
 
 
 def _build_static(scene: FbxScene, options: ModelBuildOptions) -> ModelBuildResult:
@@ -261,7 +384,8 @@ def _build_static(scene: FbxScene, options: ModelBuildOptions) -> ModelBuildResu
             "reference_matrix_policy": "identity geometry roots; helper nodes use inverse(global transform)",
         }
     )
-    return ModelBuildResult(source, report, None, None)
+    contract = _build_authored_rig_contract(scene, options, source, report)
+    return ModelBuildResult(source, report, None, None, contract)
 
 
 def _build_exact_rig(
@@ -272,20 +396,25 @@ def _build_exact_rig(
     bone_ids = scene.depth_first_bones_for_weighted_ids(weighted_bone_ids)
     if not bone_ids:
         raise ValueError("could not resolve the weighted FBX armature")
-    if len(bone_ids) > 256:
-        raise ValueError("Chrome source skin palettes use uint8 local indexes; rig exceeds 256 bones")
-    _validate_unique_bone_names(scene, bone_ids)
-    globals_units = scene.bone_globals(bone_ids)
-    globals_m = {
-        bone_id: scene.to_chrome_global_matrix(
-            _matrix_units_to_meters(value, scene.meters_per_unit),
-            options.orientation_policy,
+    # The complete hierarchy is not stored in a uint8 field.  Source node
+    # parents are int16 and subset palette entries are uint16; only the vertex
+    # lookup into *one subset's* palette is uint8.  _geometry_chunks therefore
+    # partitions actual weighted triangles instead of rejecting this hierarchy.
+    if len(bone_ids) > 32_768:
+        raise ValueError(
+            f"Exact rig contains {len(bone_ids)} hierarchy nodes, but source-MSH parent "
+            "indexes are signed int16 (maximum supported hierarchy size 32768). "
+            "Remove nonessential hierarchy nodes or split the model before export."
         )
-        for bone_id, value in globals_units.items()
-    }
+    _validate_unique_bone_names(scene, bone_ids)
+    globals_m = _canonical_bind_globals_meters(
+        scene,
+        bone_ids,
+        options.orientation_policy,
+    )
     physical_by_id = {bone_id: index for index, bone_id in enumerate(bone_ids)}
     parent_indices = [
-        physical_by_id.get(scene.model_parent_id(bone_id), -1)
+        physical_by_id.get(scene.nearest_limb_parent_id(bone_id), -1)
         for bone_id in bone_ids
     ]
     deform_indices = frozenset(
@@ -329,16 +458,10 @@ def _build_exact_rig(
         )
     if not chunks:
         raise ValueError("FBX contains no skinned triangle geometry")
-    retention = (
-        _retain_full_palette(
-            chunks,
-            len(bone_ids),
-            options,
-            eligible_bone_indices=tuple(sorted(deform_indices)),
-        )
-        if options.retain_full_skeleton
-        else []
-    )
+    # Animated flags, companion BSCR entities and hierarchy references retain
+    # unweighted deform/helper nodes.  Do not inject artificial weights into
+    # visible vertices merely to make every global node appear in a palette.
+    retention: list[dict[str, Any]] = []
     bone_bounds, bone_bounds_report = _compute_bone_local_bounds(
         chunks,
         authored_globals,
@@ -347,7 +470,6 @@ def _build_exact_rig(
         segment_proxy=True,
     )
     bone_nodes = [replace(node, bounds=bone_bounds[index]) for index, node in enumerate(bone_nodes)]
-    palette = tuple(range(len(bone_ids)))
     geometry_nodes = [
         SourceNode(
             name=chunk.node_name,
@@ -356,7 +478,7 @@ def _build_exact_rig(
             local_matrix=_matrix3x4(IDENTITY4),
             reference_matrix=_matrix3x4(IDENTITY4),
             tail_words=(MSH_NODE_FLAG_ANIMATED, 0, 0),
-            lods=(_chunk_to_lod(chunk, bone_palette=palette),),
+            lods=(_chunk_to_lod(chunk),),
         )
         for chunk in chunks
     ]
@@ -384,13 +506,21 @@ def _build_exact_rig(
             "weighted_source_bone_count": len(weighted_bone_ids),
             "geometry_node_count": len(chunks),
             "material_policy": material_report,
-            "total_vertices": sum(len(chunk.vertices) for chunk in chunks),
-            "total_triangles": sum(len(chunk.vertices) // 3 for chunk in chunks),
+            "total_vertices": sum(node.lods[0].vertex_count for node in geometry_nodes),
+            "total_triangles": sum(len(node.lods[0].indices) // 3 for node in geometry_nodes),
+            "skin_partitions": _skin_partition_report(chunks),
             "full_skeleton_retention": {
-                "enabled": options.retain_full_skeleton,
+                "enabled": False,
+                "requested_legacy_visible_weight_retention": options.retain_full_skeleton,
+                "policy": "animation flags, BSCR entities and hierarchy references; no visible artificial weights",
                 "assignment_count": len(retention),
                 "weight_i16": options.retention_weight_i16,
                 "assignments": retention,
+                "retained_by_real_skin_weight": sorted(deform_indices),
+                "retained_as_animated_helper": [
+                    index for index in range(len(bone_ids)) if index not in deform_indices
+                ],
+                "retained_by_explicit_carrier": [],
             },
             "bone_bounds": bone_bounds_report,
             "model_bounds": model_bounds_report,
@@ -402,7 +532,8 @@ def _build_exact_rig(
             "animation_script": options.animation_script,
         }
     )
-    return ModelBuildResult(source, report, ascr, bscr)
+    contract = _build_authored_rig_contract(scene, options, source, report)
+    return ModelBuildResult(source, report, ascr, bscr, contract)
 
 
 def _build_dying_light_humanoid(
@@ -421,17 +552,19 @@ def _build_dying_light_humanoid(
     smd = SmdFile.from_path(options.target_smd)
     target_bind = build_smd_bind_matrices(smd)
     target_nodes = list(smd.nodes)
-    if len(target_nodes) > 256:
-        raise ValueError("target Dying Light skeleton exceeds source palette capacity")
+    if len(target_nodes) > 32_768:
+        raise ValueError(
+            f"Target hierarchy contains {len(target_nodes)} nodes, exceeding the signed-int16 "
+            "source-MSH parent-index capacity of 32768 nodes. This is independent of the "
+            "256-entry per-subset skin-palette limit."
+        )
     target_index_by_name = {node.name.casefold(): index for index, node in enumerate(target_nodes)}
     source_bone_ids = scene.depth_first_bones_for_weighted_ids(weighted_bone_ids)
-    source_globals = {
-        bone_id: scene.to_chrome_global_matrix(
-            _matrix_units_to_meters(value, scene.meters_per_unit),
-            options.orientation_policy,
-        )
-        for bone_id, value in scene.bone_globals(source_bone_ids).items()
-    }
+    source_globals = _canonical_bind_globals_meters(
+        scene,
+        source_bone_ids,
+        options.orientation_policy,
+    )
     source_weight_usage = source_skin_weight_usage(scene, source_bone_ids)
     mapping, mapping_report = humanoid_bone_mapping(
         scene,
@@ -445,7 +578,21 @@ def _build_dying_light_humanoid(
         raise ValueError(
             f"humanoid auto-map resolved only {mapped_count} source bones; use Exact rig mode"
         )
-    fallback_target = target_index_by_name.get("pelvis", 0)
+    fallback_target = target_index_by_name.get("pelvis")
+    if fallback_target is None:
+        available_roots = [
+            str(node.name)
+            for node in target_nodes
+            if int(node.parent_index) < 0
+        ]
+        raise ValueError(
+            "Dying Light humanoid target SMD has no explicit 'pelvis' bone for resolving "
+            "unweighted/collapsed source influences. A first-node/root fallback would be "
+            "ambiguous and is not safe. Affected target roots: "
+            + (", ".join(available_roots) if available_roots else "none")
+            + ". Use the canonical DL1 target SMD, explicitly repair the target hierarchy, "
+            "or choose Exact original FBX rig mode."
+        )
     effective_targets, effective_methods = _effective_humanoid_targets(
         scene,
         source_bone_ids,
@@ -569,16 +716,7 @@ def _build_dying_light_humanoid(
         raise ValueError("FBX contains no skinned triangle geometry")
     topology_preflight = _bind_topology_preflight(chunks)
     _validate_bind_topology_preflight(topology_preflight)
-    retention = (
-        _retain_full_palette(
-            chunks,
-            active_target_count,
-            options,
-            eligible_bone_indices=bone_target_indices,
-        )
-        if options.retain_full_skeleton
-        else []
-    )
+    retention: list[dict[str, Any]] = []
     physical_by_smd_index = {
         node.index: position for position, node in enumerate(active_target_nodes)
     }
@@ -613,7 +751,6 @@ def _build_dying_light_humanoid(
                 tail_words=(MSH_NODE_FLAG_ANIMATED, 0, 0),
             )
         )
-    palette = tuple(range(active_target_count))
     geometry_nodes = [
         SourceNode(
             name=chunk.node_name,
@@ -622,7 +759,7 @@ def _build_dying_light_humanoid(
             local_matrix=_matrix3x4(IDENTITY4),
             reference_matrix=_matrix3x4(IDENTITY4),
             tail_words=(MSH_NODE_FLAG_ANIMATED, 0, 0),
-            lods=(_chunk_to_lod(chunk, bone_palette=palette),),
+            lods=(_chunk_to_lod(chunk),),
         )
         for chunk in chunks
     ]
@@ -659,8 +796,9 @@ def _build_dying_light_humanoid(
             "humanoid_target_profile": target_profile,
             "geometry_node_count": len(chunks),
             "material_policy": material_report,
-            "total_vertices": sum(len(chunk.vertices) for chunk in chunks),
-            "total_triangles": sum(len(chunk.vertices) // 3 for chunk in chunks),
+            "total_vertices": sum(node.lods[0].vertex_count for node in geometry_nodes),
+            "total_triangles": sum(len(node.lods[0].indices) // 3 for node in geometry_nodes),
+            "skin_partitions": _skin_partition_report(chunks),
             "humanoid_mapping": mapping_report,
             "humanoid_bind_compatibility": bind_compatibility,
             "humanoid_fitted_bind": fitted_bind["report"],
@@ -670,10 +808,19 @@ def _build_dying_light_humanoid(
             "rig_frame_policy": frame_report,
             "mapped_source_bone_count": mapped_count,
             "full_skeleton_retention": {
-                "enabled": options.retain_full_skeleton,
+                "enabled": False,
+                "requested_legacy_visible_weight_retention": options.retain_full_skeleton,
+                "policy": "animation flags, BSCR entities and hierarchy references; no visible artificial weights",
                 "assignment_count": len(retention),
                 "weight_i16": options.retention_weight_i16,
                 "assignments": retention,
+                "retained_by_real_skin_weight": sorted(bone_target_indices),
+                "retained_as_animated_helper": [
+                    index
+                    for index, node in enumerate(active_target_nodes)
+                    if str(node.name).casefold() in helper_names
+                ],
+                "retained_by_explicit_carrier": [],
             },
             "reference_matrix_policy": (
                 "validated inverse(Chrome-authored fitted target global bind)"
@@ -696,7 +843,20 @@ def _build_dying_light_humanoid(
             ],
         }
     )
-    return ModelBuildResult(source, report, ascr, bscr)
+    aliases_by_name: dict[str, list[str]] = {}
+    for row in weighted_coverage.get("rows", []):
+        target_name = str(row.get("effective_target_bone", "")).strip()
+        source_name = str(row.get("source_bone", "")).strip()
+        if target_name and source_name and target_name.casefold() != source_name.casefold():
+            aliases_by_name.setdefault(target_name, []).append(source_name)
+    contract = _build_authored_rig_contract(
+        scene,
+        options,
+        source,
+        report,
+        aliases_by_name=aliases_by_name,
+    )
+    return ModelBuildResult(source, report, ascr, bscr, contract)
 
 
 _PLAYER_1_TPP_HELPER_NAMES = (
@@ -795,12 +955,54 @@ def _geometry_chunks(
     transfer_by_source_bone: dict[int, tuple[int, np.ndarray]] | None,
     fallback_bone_local_index: int | None,
 ) -> list[_MeshChunk]:
+    for cluster in geometry.clusters:
+        if len(cluster.indexes) != len(cluster.weights):
+            raise ValueError(
+                f"Geometry {geometry.name!r} skin cluster {cluster.name!r} has different "
+                "index/weight counts. Repair the skin modifier and re-export. Exact Rig "
+                "cannot bypass malformed skin data."
+            )
+        for row_index, (control_point_index, weight) in enumerate(
+            zip(cluster.indexes, cluster.weights)
+        ):
+            if not 0 <= int(control_point_index) < len(geometry.control_points):
+                raise ValueError(
+                    f"Geometry {geometry.name!r} skin cluster {cluster.name!r} row "
+                    f"{row_index} references control point {control_point_index}, outside "
+                    f"0..{len(geometry.control_points) - 1}. Repair the skin weights and "
+                    "re-export before building. Exact Rig cannot bypass an invalid control-"
+                    "point reference."
+                )
+            if not math.isfinite(float(weight)) or float(weight) < 0.0:
+                raise ValueError(
+                    f"Geometry {geometry.name!r} skin cluster {cluster.name!r} row "
+                    f"{row_index} has invalid weight {weight!r}. Skin weights must be "
+                    "finite and non-negative; normalize/repair them and re-export. Exact "
+                    "Rig cannot make a non-finite or negative source weight valid."
+                )
+        if cluster.bone_id is None and any(
+            float(weight) > 1.0e-12 for weight in cluster.weights
+        ):
+            raise ValueError(
+                f"Geometry {geometry.name!r} skin cluster {cluster.name!r} has positive "
+                "weights but is not linked to a LimbNode bone. Relink the cluster to the "
+                "intended armature bone and re-export. Exact Rig still requires a valid "
+                "skin-to-bone link and is not an alternative for this error."
+            )
     bake_units = geometry.mesh_bind_global @ geometry.geometric_transform
     conversion = scene.coordinate_conversion_matrix(options.orientation_policy)
     determinant = float(np.linalg.det(conversion[:3, :3] @ bake_units[:3, :3]))
+    if not math.isfinite(determinant) or abs(determinant) <= 1.0e-12:
+        raise ValueError(
+            f"Geometry {geometry.name!r} has a singular/non-finite mesh bind or geometric "
+            "transform. Freeze zero scale/remove shear and re-export before building."
+        )
     normal_matrix_fbx = np.linalg.inv(bake_units[:3, :3]).T
+    direction_matrix_fbx = bake_units[:3, :3]
     influences = geometry.skin_influences
     normal_layer = geometry.first_layer("LayerElementNormal")
+    tangent_layer = geometry.first_layer("LayerElementTangent")
+    binormal_layer = geometry.first_layer("LayerElementBinormal")
     uv_layer = geometry.first_layer("LayerElementUV")
     color_layer = geometry.first_layer("LayerElementColor")
 
@@ -817,20 +1019,83 @@ def _geometry_chunks(
     for material_slot, triangles in sorted(by_material.items()):
         global_material_index = material_lookup.get((geometry.object_id, material_slot), 0)
         chunk_index = 0
-        current = _MeshChunk(
-            node_name=_mesh_node_name(options.resource_name, geometry.model_name or geometry.name, material_slot, chunk_index),
-            material_index=global_material_index,
-        )
+        current_palette: set[int] = set()
+
+        def new_chunk(index: int) -> _MeshChunk:
+            return _MeshChunk(
+                node_name=_mesh_node_name(
+                    options.resource_name,
+                    geometry.model_name or geometry.name,
+                    material_slot,
+                    index,
+                ),
+                material_index=global_material_index,
+                partition_index=index,
+                tangent_policy=(
+                    "imported" if tangent_layer is not None else "rebuilt_missing_source"
+                ),
+            )
+
+        current = new_chunk(chunk_index)
+
+        def flush_current() -> None:
+            nonlocal current, current_palette, chunk_index
+            if not current.vertices:
+                return
+            if current.tangent_policy != "imported" and uv_layer is not None:
+                _reject_extreme_degenerate_uv_tangent_fallback(
+                    current,
+                    geometry_name=geometry.name,
+                )
+            current.bone_palette = tuple(sorted(current_palette))
+            if len(current.bone_palette) > MAX_SUBSET_PALETTE_ENTRIES:
+                raise ValueError(
+                    f"Geometry {geometry.name!r} material {material_slot} partition "
+                    f"{current.partition_index} needs {len(current.bone_palette)} bones; "
+                    "the vertex-local palette index is uint8 and permits 256. "
+                    "No valid influence was dropped."
+                )
+            chunks.append(current)
+            chunk_index += 1
+            current = new_chunk(chunk_index)
+            current_palette = set()
+
         for triangle in triangles:
             corners = list(triangle.corners)
             if determinant < 0.0:
                 corners[1], corners[2] = corners[2], corners[1]
+            control_point_indexes = [corner.control_point_index for corner in corners]
+            if len(set(control_point_indexes)) != 3:
+                raise ValueError(
+                    f"Geometry {geometry.name!r} polygon {triangle.polygon_index} contains a "
+                    "triangle with repeated control-point indexes. Remove the degenerate face "
+                    "and re-export before building."
+                )
             triangle_vertices: list[_BuildVertex] = []
             face_positions: list[np.ndarray] = []
+            triangle_dropped_weight_total = 0.0
+            triangle_fallback_weight_total = 0.0
+            triangle_has_invalid_source_tangent = False
             for corner in corners:
+                if not 0 <= corner.control_point_index < len(geometry.control_points):
+                    raise ValueError(
+                        f"Geometry {geometry.name!r} polygon {triangle.polygon_index} references "
+                        f"control point {corner.control_point_index}, outside 0.."
+                        f"{len(geometry.control_points) - 1}. Triangulate/repair the mesh and re-export."
+                    )
                 local = geometry.control_points[corner.control_point_index]
+                if not np.isfinite(local).all():
+                    raise ValueError(
+                        f"Geometry {geometry.name!r} control point {corner.control_point_index} "
+                        "contains a non-finite position. Repair the vertex and re-export."
+                    )
                 point_units = _transform_point(bake_units, local)
                 point_m = (conversion[:3, :3] @ point_units) * scene.meters_per_unit
+                if not np.isfinite(point_m).all():
+                    raise ValueError(
+                        f"Geometry {geometry.name!r} polygon {triangle.polygon_index} produced a "
+                        "non-finite transformed position. Check mesh bind, units and wrapper transforms."
+                    )
                 face_positions.append(point_m)
                 normal = None
                 if normal_layer is not None:
@@ -846,8 +1111,57 @@ def _geometry_chunks(
                         normal = _safe_normalize(
                             conversion[:3, :3] @ (normal_matrix_fbx @ raw[:3])
                         )
+                    except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
+                        raise ValueError(
+                            f"Geometry {geometry.name!r} polygon {triangle.polygon_index} has "
+                            f"an invalid {normal_layer.kind} lookup at polygon-vertex "
+                            f"{corner.polygon_vertex_index}: {exc}. Repair the normal layer "
+                            "mapping/index data or recalculate normals in the DCC, then re-export."
+                        ) from exc
+                source_tangent = None
+                source_binormal = None
+                if tangent_layer is not None:
+                    try:
+                        raw_tangent = np.asarray(
+                            tangent_layer.value(
+                                control_point_index=corner.control_point_index,
+                                polygon_vertex_index=corner.polygon_vertex_index,
+                                polygon_index=triangle.polygon_index,
+                            ),
+                            dtype=float,
+                        )
+                        transformed_tangent = (
+                            conversion[:3, :3]
+                            @ (direction_matrix_fbx @ raw_tangent[:3])
+                        )
+                        tangent_length = float(np.linalg.norm(transformed_tangent))
+                        if not math.isfinite(tangent_length) or tangent_length <= 1.0e-12:
+                            source_tangent = None
+                        else:
+                            source_tangent = transformed_tangent / tangent_length
                     except (ValueError, IndexError, np.linalg.LinAlgError):
-                        normal = None
+                        source_tangent = None
+                if binormal_layer is not None:
+                    try:
+                        raw_binormal = np.asarray(
+                            binormal_layer.value(
+                                control_point_index=corner.control_point_index,
+                                polygon_vertex_index=corner.polygon_vertex_index,
+                                polygon_index=triangle.polygon_index,
+                            ),
+                            dtype=float,
+                        )
+                        transformed_binormal = (
+                            conversion[:3, :3]
+                            @ (direction_matrix_fbx @ raw_binormal[:3])
+                        )
+                        binormal_length = float(np.linalg.norm(transformed_binormal))
+                        if not math.isfinite(binormal_length) or binormal_length <= 1.0e-12:
+                            source_binormal = None
+                        else:
+                            source_binormal = transformed_binormal / binormal_length
+                    except (ValueError, IndexError, np.linalg.LinAlgError):
+                        source_binormal = None
                 uv = (0.0, 0.0)
                 if uv_layer is not None:
                     try:
@@ -857,8 +1171,13 @@ def _geometry_chunks(
                             polygon_index=triangle.polygon_index,
                         )
                         uv = (float(raw_uv[0]), 1.0 - float(raw_uv[1]) if options.flip_v else float(raw_uv[1]))
-                    except (ValueError, IndexError):
-                        pass
+                    except (ValueError, IndexError) as exc:
+                        raise ValueError(
+                            f"Geometry {geometry.name!r} polygon {triangle.polygon_index} has "
+                            f"an invalid {uv_layer.kind} lookup at polygon-vertex "
+                            f"{corner.polygon_vertex_index}: {exc}. Repair the UV layer "
+                            "mapping/index data and re-export before building."
+                        ) from exc
                 color = (255, 255, 255, 255)
                 if color_layer is not None:
                     try:
@@ -871,11 +1190,24 @@ def _geometry_chunks(
                             max(0, min(255, int(round((value if value <= 1.0 else value / 255.0) * 255.0))))
                             for value in raw_color[:4]
                         )  # type: ignore[assignment]
-                    except (ValueError, IndexError):
-                        pass
+                    except (ValueError, IndexError) as exc:
+                        raise ValueError(
+                            f"Geometry {geometry.name!r} polygon {triangle.polygon_index} has "
+                            f"an invalid {color_layer.kind} lookup at polygon-vertex "
+                            f"{corner.polygon_vertex_index}: {exc}. Repair the color layer "
+                            "mapping/index data and re-export before building."
+                        ) from exc
                 source_rows = _clean_influences(influences.get(corner.control_point_index, []))
+                source_positive_total = sum(weight for _, weight in source_rows)
+                retained_source_total = sum(weight for _, weight in source_rows[:4])
+                dropped_fraction = (
+                    max(0.0, source_positive_total - retained_source_total) / source_positive_total
+                    if source_positive_total > 0.0
+                    else 0.0
+                )
                 if not source_rows and fallback_bone_local_index is not None:
                     vertex_influences = [(fallback_bone_local_index, 1.0)]
+                    triangle_fallback_weight_total += 1.0
                 elif target_by_source_bone is not None:
                     vertex_influences = _remap_vertex_influences(
                         source_rows,
@@ -903,56 +1235,338 @@ def _geometry_chunks(
                         uv=uv,
                         color=color,
                         influences=vertex_influences,
+                        source_tangent=source_tangent,
+                        source_binormal=source_binormal,
+                        source_geometry_name=geometry.name,
+                        source_polygon_index=int(triangle.polygon_index),
                     )
                 )
+                triangle_dropped_weight_total += dropped_fraction
             face_normal = _safe_normalize(
                 np.cross(face_positions[1] - face_positions[0], face_positions[2] - face_positions[0])
             )
+            doubled_area = float(
+                np.linalg.norm(
+                    np.cross(
+                        face_positions[1] - face_positions[0],
+                        face_positions[2] - face_positions[0],
+                    )
+                )
+            )
+            if not math.isfinite(doubled_area) or doubled_area <= 1.0e-12:
+                raise ValueError(
+                    f"Geometry {geometry.name!r} polygon {triangle.polygon_index} contains a "
+                    "zero-area triangle after bind/unit/orientation conversion. Remove the "
+                    "degenerate face and re-export before building."
+                )
             for vertex in triangle_vertices:
                 if float(np.linalg.norm(vertex.normal)) < 1.0e-8:
                     vertex.normal = face_normal
-            if len(current.vertices) + 3 > options.max_vertices_per_mesh:
-                chunks.append(current)
-                chunk_index += 1
-                current = _MeshChunk(
-                    node_name=_mesh_node_name(options.resource_name, geometry.model_name or geometry.name, material_slot, chunk_index),
-                    material_index=global_material_index,
+                if vertex.source_tangent is None:
+                    triangle_has_invalid_source_tangent = True
+            triangle_bones = {
+                int(global_node_index)
+                for vertex in triangle_vertices
+                for global_node_index, weight in vertex.influences
+                if weight > 0.0
+            }
+            if len(triangle_bones) > 12:
+                raise ValueError(
+                    f"Geometry {geometry.name!r} polygon {triangle.polygon_index} requires "
+                    f"{len(triangle_bones)} distinct bones after top-four normalization; "
+                    "a triangle can require at most 12. Repair the corrupted skin data."
+                )
+            candidate_palette = current_palette | triangle_bones
+            if current.vertices and (
+                len(current.vertices) + 3 > options.max_vertices_per_mesh
+                or len(candidate_palette) > MAX_SUBSET_PALETTE_ENTRIES
+            ):
+                flush_current()
+                candidate_palette = set(triangle_bones)
+            if len(candidate_palette) > MAX_SUBSET_PALETTE_ENTRIES:
+                raise ValueError(
+                    f"Geometry {geometry.name!r} polygon {triangle.polygon_index} cannot fit a "
+                    "256-entry local skin palette by itself. No influence was dropped; repair "
+                    "the source weights and re-export."
                 )
             current.vertices.extend(triangle_vertices)
-        if current.vertices:
-            chunks.append(current)
+            current_palette = candidate_palette
+            current.source_triangle_count += 1
+            current.dropped_weight_total += triangle_dropped_weight_total
+            current.fallback_weight_total += triangle_fallback_weight_total
+            if triangle_has_invalid_source_tangent:
+                current.tangent_policy = (
+                    "rebuilt_invalid_source"
+                    if tangent_layer is not None
+                    else "rebuilt_missing_source"
+                )
+            current.maximum_influences = max(
+                current.maximum_influences,
+                max((len(vertex.influences) for vertex in triangle_vertices), default=0),
+            )
+        flush_current()
     return chunks
 
 
-def _chunk_to_lod(chunk: _MeshChunk, *, bone_palette: tuple[int, ...]) -> SourceLod:
-    positions = [tuple(float(v) for v in row.position) for row in chunk.vertices]
-    normals = [tuple(float(v) for v in _safe_normalize(row.normal)) for row in chunk.vertices]
-    uvs = [row.uv for row in chunk.vertices]
-    tangents, bitangents = _calculate_tangent_space(chunk.vertices)
-    skin = tuple(
-        SourceSkinVertex(
-            bone_indices=tuple(index for index, _ in row.influences),
-            weights=tuple(weight for _, weight in row.influences),
+def _chunk_to_lod(
+    chunk: _MeshChunk,
+    *,
+    bone_palette: tuple[int, ...] | None = None,
+) -> SourceLod:
+    """Deduplicate a partition and cross the global -> local palette boundary."""
+
+    palette = chunk.bone_palette if bone_palette is None else tuple(bone_palette)
+    if len(palette) > MAX_SUBSET_PALETTE_ENTRIES:
+        raise ValueError(
+            f"Mesh partition {chunk.node_name!r} has {len(palette)} palette entries; "
+            "vertex local indexes are uint8 and permit at most 256."
         )
-        for row in chunk.vertices
-    ) if bone_palette else ()
+    has_skin = any(row.influences for row in chunk.vertices)
+    if has_skin and not palette:
+        raise ValueError(
+            f"Skinned mesh partition {chunk.node_name!r} has no subset palette. "
+            "This importer error was caught before output."
+        )
+
+    if (
+        chunk.tangent_policy == "imported"
+        and all(row.source_tangent is not None for row in chunk.vertices)
+    ):
+        expanded_tangents = [
+            tuple(float(value) for value in _safe_normalize(row.source_tangent))
+            for row in chunk.vertices
+        ]
+        expanded_bitangents = []
+        for row, tangent in zip(chunk.vertices, expanded_tangents):
+            normal = _safe_normalize(row.normal)
+            if row.source_binormal is not None:
+                bitangent = _safe_normalize(row.source_binormal)
+            else:
+                bitangent = _safe_normalize(
+                    np.cross(normal, np.asarray(tangent, dtype=float))
+                )
+            expanded_bitangents.append(tuple(float(value) for value in bitangent))
+    else:
+        expanded_tangents, expanded_bitangents = _calculate_tangent_space(chunk.vertices)
+
+    unique: dict[tuple[Any, ...], int] = {}
+    emitted_vertices: list[_BuildVertex] = []
+    positions: list[tuple[float, float, float]] = []
+    normals: list[tuple[float, float, float]] = []
+    tangents: list[tuple[float, float, float]] = []
+    bitangents: list[tuple[float, float, float]] = []
+    uvs: list[tuple[float, float]] = []
+    colors: list[tuple[int, int, int, int]] = []
+    skin_rows: list[SourceSkinVertex] = []
+    indices: list[int] = []
+
+    for corner_index, row in enumerate(chunk.vertices):
+        global_influences = tuple((int(index), float(weight)) for index, weight in row.influences)
+        local_influences = (
+            remap_global_influences_to_local(global_influences, palette)
+            if palette
+            else ()
+        )
+        if palette:
+            validate_local_palette_round_trip(
+                local_influences,
+                palette,
+                global_influences,
+            )
+        position = tuple(float(value) for value in row.position)
+        normal = tuple(float(value) for value in _safe_normalize(row.normal))
+        tangent = tuple(float(value) for value in expanded_tangents[corner_index])
+        bitangent = tuple(float(value) for value in expanded_bitangents[corner_index])
+        key = (
+            position,
+            normal,
+            tangent,
+            bitangent,
+            tuple(float(value) for value in row.uv),
+            tuple(int(value) for value in row.color),
+            global_influences,
+            tuple(row.morph_identity),
+        )
+        emitted_index = unique.get(key)
+        if emitted_index is None:
+            emitted_index = len(emitted_vertices)
+            if emitted_index > 0xFFFF:
+                raise ValueError(
+                    f"Mesh partition {chunk.node_name!r} exceeds 65535 unique vertices after "
+                    "complete-key seam-safe deduplication. Split or simplify the mesh."
+                )
+            unique[key] = emitted_index
+            emitted_vertices.append(row)
+            positions.append(position)
+            normals.append(normal)
+            tangents.append(tangent)
+            bitangents.append(bitangent)
+            uvs.append(row.uv)
+            colors.append(row.color)
+            if palette:
+                skin_rows.append(
+                    SourceSkinVertex(
+                        bone_indices=tuple(index for index, _ in local_influences),
+                        weights=tuple(weight for _, weight in local_influences),
+                    )
+                )
+        indices.append(emitted_index)
+
+    skin = tuple(skin_rows)
     return SourceLod(
         positions=tuple(positions),
         normals=tuple(normals),
         tangents=tuple(tangents),
         bitangents=tuple(bitangents),
-        colors=tuple(row.color for row in chunk.vertices),
+        colors=tuple(colors),
         uvs=tuple(uvs),
-        indices=tuple(range(len(chunk.vertices))),
+        indices=tuple(indices),
         skin_vertices=skin,
         subsets=(
             SourceSubset(
                 material_index=chunk.material_index,
                 first_index=0,
-                index_count=len(chunk.vertices),
-                bone_palette=bone_palette,
+                index_count=len(indices),
+                bone_palette=palette,
             ),
         ),
+    )
+
+
+def _maximum_weight_quantization_error(vertices: Sequence[_BuildVertex]) -> float:
+    maximum = 0.0
+    for vertex in vertices:
+        weights = [max(0.0, float(weight)) for _, weight in vertex.influences]
+        total = sum(weights)
+        if total <= 0.0:
+            continue
+        normalized = [weight / total for weight in weights]
+        quantized = [int(math.floor(weight * 32767.0)) for weight in normalized]
+        remainder = 32767 - sum(quantized)
+        if remainder:
+            quantized[max(range(len(normalized)), key=normalized.__getitem__)] += remainder
+        maximum = max(
+            maximum,
+            max(
+                abs(weight - integer / 32767.0)
+                for weight, integer in zip(normalized, quantized)
+            ),
+        )
+    return maximum
+
+
+def _skin_partition_report(chunks: Sequence[_MeshChunk]) -> dict[str, Any]:
+    rows: list[dict[str, Any]] = []
+    for chunk in chunks:
+        lod = _chunk_to_lod(chunk)
+        emitted = EmittedMeshPartition(
+            material_index=chunk.material_index,
+            partition_index=chunk.partition_index,
+            triangle_count=len(lod.indices) // 3,
+            vertex_count=lod.vertex_count,
+            global_palette=chunk.bone_palette,
+            maximum_influences=chunk.maximum_influences,
+            dropped_weight_total=float(chunk.dropped_weight_total),
+            fallback_weight_total=float(chunk.fallback_weight_total),
+            maximum_quantization_error=_maximum_weight_quantization_error(chunk.vertices),
+        ).to_dict()
+        emitted.update(
+            {
+                "node_name": chunk.node_name,
+                "expanded_corner_count": len(chunk.vertices),
+                "deduplicated_vertex_count": lod.vertex_count,
+                "tangent_policy": chunk.tangent_policy,
+            }
+        )
+        rows.append(emitted)
+    return {
+        "partition_count": len(rows),
+        "maximum_local_palette_size": max(
+            (int(row["palette_size"]) for row in rows), default=0
+        ),
+        "maximum_emitted_vertex_count": max(
+            (int(row["vertex_count"]) for row in rows), default=0
+        ),
+        "maximum_influences": max(
+            (int(row["maximum_influences"]) for row in rows), default=0
+        ),
+        "maximum_weight_quantization_error": max(
+            (float(row["maximum_quantization_error"]) for row in rows), default=0.0
+        ),
+        "dropped_weight_total": sum(
+            float(row["dropped_weight_total"]) for row in rows
+        ),
+        "fallback_weight_total": sum(
+            float(row["fallback_weight_total"]) for row in rows
+        ),
+        "partitions": rows,
+        "index_contract": (
+            "subset palettes store global source-node uint16 indexes; vertex skin bytes "
+            "store only local indexes into their emitted subset palette"
+        ),
+    }
+
+
+_EXTREME_DEGENERATE_UV_DETERMINANT = 1.0e-12
+
+
+def _reject_extreme_degenerate_uv_tangent_fallback(
+    chunk: _MeshChunk,
+    *,
+    geometry_name: str,
+) -> None:
+    """Block authored UV0 triangles that cannot define tangent space.
+
+    UV-less geometry intentionally keeps the historical normal-derived
+    fallback.  This gate is called only when an FBX UV layer was authored, so
+    silently replacing that data with an arbitrary tangent basis would hide a
+    damaged unwrap or layer export.
+    """
+
+    affected: list[tuple[int, int, float]] = []
+    for corner_index in range(0, len(chunk.vertices), 3):
+        triangle = chunk.vertices[corner_index : corner_index + 3]
+        if len(triangle) != 3:
+            raise ValueError(
+                f"Geometry {geometry_name!r} mesh node {chunk.node_name!r} has an "
+                "incomplete expanded triangle while rebuilding tangents. Repair the "
+                "source topology and re-export before building."
+            )
+        a, b, c = triangle
+        duv1 = np.asarray((b.uv[0] - a.uv[0], b.uv[1] - a.uv[1]), dtype=float)
+        duv2 = np.asarray((c.uv[0] - a.uv[0], c.uv[1] - a.uv[1]), dtype=float)
+        determinant = float(duv1[0] * duv2[1] - duv1[1] * duv2[0])
+        if (
+            not math.isfinite(determinant)
+            or abs(determinant) <= _EXTREME_DEGENERATE_UV_DETERMINANT
+        ):
+            affected.append(
+                (
+                    corner_index // 3,
+                    int(a.source_polygon_index),
+                    determinant,
+                )
+            )
+
+    if not affected:
+        return
+
+    preview = ", ".join(
+        f"partition triangle {triangle_index} / source polygon {polygon_index} "
+        f"(UV determinant {determinant!r})"
+        for triangle_index, polygon_index, determinant in affected[:8]
+    )
+    if len(affected) > 8:
+        preview += f", and {len(affected) - 8} more"
+    raise ValueError(
+        f"Geometry {geometry_name!r} mesh node {chunk.node_name!r} tangent rebuild "
+        f"({chunk.tangent_policy}) would use a synthetic fallback basis for "
+        f"{len(affected)} of {len(chunk.vertices) // 3} triangle(s) because authored "
+        f"UV0 is extremely degenerate (absolute determinant <= "
+        f"{_EXTREME_DEGENERATE_UV_DETERMINANT:g}). Affected rows: {preview}. "
+        "Repair/unwrap UV0 or export a valid source tangent layer, then re-export "
+        "before building. Exact Rig changes skeleton ownership, not invalid geometry, "
+        "so it is not a viable alternative for this UV/tangent error."
     )
 
 
@@ -1178,7 +1792,7 @@ def _source_bones_from_globals(
     selected = set(bone_ids)
     deform = selected if deform_bone_ids is None else set(deform_bone_ids)
     for bone_id in bone_ids:
-        parent_id = scene.model_parent_id(bone_id)
+        parent_id = scene.nearest_limb_parent_id(bone_id)
         parent_physical = physical_by_id[parent_id] if parent_id in selected else -1
         local = np.linalg.inv(globals_m[parent_id]) @ globals_m[bone_id] if parent_id in selected else globals_m[bone_id]
         reference = np.linalg.inv(globals_m[bone_id])
@@ -2640,6 +3254,10 @@ def _base_report(scene: FbxScene, options: ModelBuildOptions, *, effective_mode:
             "orientation_policy": options.orientation_policy,
             "resolved_orientation_policy": resolved_orientation,
             "basis_conversion": basis_conversion,
+            "axis_settings": dict(scene.axis_settings),
+            "basis_matrix": scene.coordinate_conversion_matrix(
+                options.orientation_policy
+            ).tolist(),
             "vertex_space": "global bind/model space",
             "bone_local": "inverse(parent global bind) * global bind",
             "bone_reference": "inverse(global bind)",
@@ -2650,7 +3268,47 @@ def _base_report(scene: FbxScene, options: ModelBuildOptions, *, effective_mode:
         "skin_policy": "combine duplicate clusters, discard zero weights, keep top four, normalize",
         "uv_policy": "UV0; V flipped" if options.flip_v else "UV0 preserved",
         "engine_or_editor_tested": False,
+        "ignored_identity_blendshapes": [
+            row.ignored_identity_report()
+            for row in (getattr(scene, "blend_shapes", ()) or ())
+            if getattr(row, "classification", "") == BLENDSHAPE_IDENTITY_NOOP
+            and hasattr(row, "ignored_identity_report")
+        ],
     }
+
+
+def _build_authored_rig_contract(
+    scene: FbxScene,
+    options: ModelBuildOptions,
+    source: SourceMsh,
+    report: dict[str, Any],
+    *,
+    aliases_by_name: dict[str, Sequence[str]] | None = None,
+) -> AuthoredRigContract:
+    """Freeze and validate the exact hierarchy immediately before MSH output."""
+
+    contract = AuthoredRigContract.from_source_msh(
+        source,
+        source_fbx_sha256=scene.sha256,
+        source_model_name=scene.path.name,
+        authored_msh_resource_name=options.resource_name,
+        coordinate_contract=dict(report.get("coordinate_contract", {}) or {}),
+        aliases_by_name=aliases_by_name,
+    )
+    report["authored_rig_contract"] = contract.to_dict()
+    report["authored_rig_validation"] = contract.validate()
+    report["authored_rig_contract_id"] = contract.contract_id
+    report["authored_bind_hash"] = contract.bind_hash
+    report["authored_skeleton_hash"] = contract.skeleton_hash
+    report["authored_descriptor_hash"] = contract.descriptor_hash
+    report["total_hierarchy_node_count"] = len(contract.nodes)
+    report["animation_entity_prefix_length"] = contract.animation_entity_prefix_length
+    from .model_validation import validate_model_bind_skin
+
+    report["model_bind_cpu_skin_validation"] = validate_model_bind_skin(
+        source, contract
+    )
+    return contract
 
 
 def sanitize_name(value: str, *, max_bytes: int = 63) -> str:

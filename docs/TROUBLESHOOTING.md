@@ -4,11 +4,11 @@
 
 Run:
 
-```
+```text
 run_gui.bat --setup
 ```
 
-Confirm Python 3.11 or newer is installed and available through `py` or `python`. Delete `.venv` and rerun setup when the environment is corrupt.
+Confirm Python 3.11 or newer is available through `py` or `python`. Delete `.venv` and rerun setup only when that generated environment is corrupt.
 
 ## PySide6 is missing
 
@@ -20,55 +20,139 @@ python -m pip install -e ".[gui]"
 
 ## Build fails with `Permission denied: '.'`
 
-This means a required file or output field was blank and was interpreted as the current directory. Current releases validate file fields and identify the missing input directly. Check:
+A required path was blank and an older version interpreted it as the current directory. Current validation identifies the missing field. Check:
 
-- embedded-bind mode is enabled, or a real source rest/T-pose FBX is selected;
-- the target SMD/template/control fields are valid in Advanced mode;
+- embedded-bind mode is enabled, or a real matching source rest FBX is selected;
+- every enabled exact clip inherits a valid project target or has a per-animation CRIG;
+- Advanced target/template/control paths are valid when used;
 - an output folder is selected.
 
 ## Do I need a separate T-pose FBX?
 
-Usually no. Leave **Use imported animation FBX bind pose (recommended)** enabled. Disable it only for FBXs with missing or unreliable bind transforms, then choose a matching neutral/rest FBX.
+Usually no. Leave **Use imported animation FBX bind pose (recommended)** enabled. Disable it only when the animation FBX has missing or unreliable bind transforms, then choose a matching neutral/rest FBX.
+
+## Model import says there are more than 256 bones
+
+More than 256 total hierarchy nodes are allowed. Chrome uses two index spaces:
+
+```text
+subset.bone_palette[]      uint16 global source-MSH node indexes
+vertex.bone_indices[]      uint8 local indexes into that subset palette
+```
+
+Only each emitted subset palette is limited to 256 entries. The importer splits stable triangle runs independently by material and palette. Inspect `skin_partitions.maximum_local_palette_size` and each partition's `global_nodes` in the model report.
+
+If the error names one triangle, geometry, or partition, ordinary splitting could not repair that input. A triangle may use at most 12 distinct bones after four influences per corner. Repair the named weights or corrupt polygon in the DCC; do not delete influences blindly or reduce the whole hierarchy to 256.
+
+## A palette/local-index validation fails
+
+Every vertex skin byte must resolve through the palette of the subset drawing it. A value that happens to resemble a global node number is invalid in that byte even when it is below 256.
+
+Rebuild from the current FBX. Do not combine an old MSH geometry stream with a new node table. CPU bind-skin validation and the local/global round trip identify the worst partition, vertex, local index, and resolved global node. A third-party MSH tool must remap global influences only after the final subset palette is known.
+
+## Imported model is compressed, stretched, or has detached clothing
+
+Rebuild the source MSH, compiled object, and generated CRIG together. Replacing only one artifact leaves incompatible bind ownership.
+
+For fitted **DL1 humanoid names - preserve proportions, retarget animations** mode, the surface stays at authored evaluated positions while target-named pivots are fitted to source proportions. The result is not the stock player bind. Leave **Animation script** empty until animations are retargeted to the generated CRIG.
+
+Do not attach raw `anims_man_all` tracks to this fitted model. Their absolute local translations belong to the stock bind and can compress the torso, elongate the neck, or detach clothing despite matching names.
+
+After a successful model build, select the row and click **Use generated rig in Animations**, then rebuild animation clips for that CRIG.
+
+## Bones point upward or the cyan box is wrong
+
+Leave orientation on Auto for a normal export. The canonical FBX contract uses scene `GlobalSettings` and evaluates non-bone wrappers, units, pivots, and bind sources exactly once. Stacking a manual 90-degree override on top of a correct Auto result applies an unintended conversion.
+
+If preflight names a wrapper with non-uniform scale, reflection, shear, or zero scale, fix/apply it in the DCC and re-export. A representable axis permutation or uniform wrapper scale is normalized and reported; unsupported transforms are blocked.
+
+The cyan model box comes from a non-rendering ordinary-MESH bounds carrier after skinned geometry. It is separate from bone display bounds and does not enter visible skin palettes. Compiler audit rejects a carrier that differs from the emitted geometry AABB.
+
+## The generated CRIG is missing or stale
+
+Enable **Create/install .crig for every skinned model**, rebuild the model, then click **Use generated rig in Animations**. The action installs or refreshes the registry entry and selects the generated target without manual path copying.
+
+A stale CRIG may have identical names and parents but different local frames or proportions. The full authored bind hash is authoritative. Rebuild MSH and CRIG from the same model build, select the new rig, and regenerate/review affected maps. Do not suppress the finding by editing only the reference string.
+
+## Same-rig animation requires manual bind correction
+
+It should not. Confirm that:
+
+- the animation targets the CRIG generated by the same authored model build;
+- preflight classifies it as **Exact** or **Source superset**;
+- BindPose or `TransformLink` coverage is authoritative and conflicts are resolved;
+- orientation is not manually converted a second time;
+- the source stack is the intended baked single layer.
+
+Exact/source-superset transfer uses global bind-basis correction and should reach target bind when the source is at source bind. A persistent mismatch means the animation source is not actually the same authored bind or the target CRIG is stale.
+
+## Source animation has extra face, cloth, weapon, camera, or helper bones
+
+This is safe when every required target deform bone is present under the expected target ancestry. Preflight reports **Source superset**. Unmapped source extras are ignored; optional target helpers absent from the source remain at bind.
+
+Map an extra only when it must drive a target helper/socket/accessory. One source may drive multiple distinct helper rows, so camera/socket fan-out does not require duplicate source tracks.
+
+## A custom CRIG says required target bones are missing
+
+The source and selected target differ; the FBX may still be usable. Import continues for mapping repair, but output is blocked.
+
+Open the animation's mapping editor. Review every required target body/deform row, correct ambiguous source choices, choose transfer/component policies, and mark accepted rows reviewed. Leave irrelevant face/twist/accessory targets intentionally unmapped at bind. Automatic low-confidence suggestions cannot authorize an incompatible cross-rig build.
+
+For a different model target, change the clip's **Target rig** override rather than changing the whole project default.
+
+## Cross-rig model proportions change unexpectedly
+
+Ordinary deform-chain rows should normally use `rotation_delta` with `rotation` ownership. This preserves target local translation and target bind scale, so source bone lengths are not copied.
+
+Inspect rows owning `translation`, `rotation_translation`, or `full_transform`. Choose those components only when translation is intentional and reviewed. Use `rest_relative` for reviewed props/sockets/mechanical parts, `copy_local` only for a proven identical local basis, and `bind` to keep a target unchanged.
+
+Root displacement is handled separately by the clip's root policy and root selections. Do not authorize ordinary hip/spine translations to compensate for an incorrect root pair.
 
 ## A required humanoid role is unmapped
 
-Open Retargeting, run Auto-map, then fill every required role manually. Do not map two roles to the same source bone. Extra helpers can remain ignored.
+Open Retargeting, run Auto-map, and review the evidence. A source may intentionally fan out to helpers, while source twist/share bones may collapse to a reviewed target ancestor for skin ownership.
 
-## The mapping came from a different skeleton
+If no safe DL1 humanoid target exists, use **Exact original FBX rig**. The importer lists available roots/roles instead of silently substituting `bip01`, pelvis, root, identity, or the first bone.
 
-A `.dlrmap.json` profile stores a skeleton hash. Accept the warning only when the new FBX genuinely uses a compatible hierarchy/naming scheme, then review all assignments.
+## Error mentions `bip01`, pelvis, or no safe root
 
-## A custom `.crig` says required target bones are missing
+Choose an explicit source and target root from the inventory shown for that clip/CRIG. Multiple independent or helper-like roots remain independent unless the authored target says otherwise.
 
-This means the animation FBX and selected target model do not use the same bone names; it does not mean the FBX is unusable. Current versions add the clip and create an editable map. Click **Review .crig map**, inspect the recognized body rows, correct any bad dropdowns, and leave facial/twist/accessory helpers unmapped when they should remain at bind pose. The custom-rig mapping tab stays visible even when Advanced Settings is off.
+There is no silent root fallback. If a selected root was renamed or removed, update the clip field. For a non-humanoid model with no meaningful pelvis, Exact Rig is normally the correct model mode.
 
-If the clip has multiple stacks, a row with no changing skeletal channels is disabled automatically. Use the animated stack, or deliberately re-enable the static row only when a bind-pose clip is intended.
+## One project needs animations for several models
 
-## Imported model is compressed, bones point upward, or the cyan box is wrong
+Choose a project default CRIG for the common target. In the Animations table, set another clip's **Target rig** to a custom target or leave it on **Inherit project target**.
 
-Rebuild both the source MSH and compiled `assets_pc` object with the current Models workspace; replacing only one file leaves an incompatible bind. Current builds preserve emitted vertex positions, author Chrome local `+X` bone frames, classify unweighted armature nodes as helpers, and compile an ordinary-MESH bounds carrier after skinned geometry.
+Each enabled clip resolves target, map, root pair, solver, script target, and resource name independently. Different targets may share one tool-owned RPack, but every resource name must be unique. A map for one target bind cannot be reused on a same-named, differently proportioned CRIG.
 
-For Dying Light Humanoid mode, leave **Animation script** empty until the animation clips have been retargeted to the model's generated `.crig`. Attaching raw `anims_man_all.scr` to a fitted custom bind applies stock absolute translations and can deform the model even when bone names match. After building the custom animation RPack, enter only the script resource containing those retargeted tracks and rebuild the model companions.
+If an older project appears to have lost a target override, do not resave it in an older application. Schema-8 migration preserves the legacy project target, per-animation settings, mappings, and unknown fields.
 
-The compiler validator reports BONE/HELPER counts, animation-prefix length, bone-bound health, and the exact model-bounds carrier. A compiler exit code of zero without these checks is not sufficient.
+## Multiple animation stacks or a bind-pose-only row appears
+
+Select the intended stack on each animation row. A source FBX with multiple stacks creates separate selectable clips. A multi-layer stack must be baked/flattened to one layer. A row with no changing skeletal channels may be disabled or warned because it would export a bind-pose clip.
 
 ## Custom model is correct at rest but explodes when animation starts
 
-Rebuild the animation against the `.crig` generated by the same model build. A stale rig can share the same bone names while carrying different local bind frames; the engine accepts the descriptors and then applies the incompatible absolute local tracks directly.
+Likely causes are a stale target bind, wrong per-animation target, incompatible unreviewed map, or unauthorized translation.
 
-For a cross-rig map, verify the retarget report contains:
+1. Rebuild and hand off the model-generated CRIG.
+2. Verify the clip's Target rig column points at that CRIG.
+3. Confirm compatibility is Exact/Source superset, or the cross-rig map is reviewed.
+4. Check non-root translation ownership and the root pair.
+5. Read hierarchy-safety findings for the first detached/exploding node.
 
-```text
-basis_correction_policy: mapped_local_rotation_delta
-preserves_target_non_root_translation_and_scale: true
-maximum_non_root_translation_delta_meters: 0
-```
+The builder rejects non-finite values, singular scales, catastrophic hierarchy expansion, unintended non-root translations, and unexpected parent-child length changes. Do not weaken those checks to force an asset through.
 
-The report's animated joint extent should remain close to the bind extent. Builds are rejected when the hierarchy becomes catastrophically larger. Mixamo `Hips` normally owns the deforming pelvis pose (`CC_Base_Hip` on a Character Creator rig); a non-deforming wrapper such as `RL_BoneRoot` receives only the selected root-motion displacement.
+## The mapping came from a different skeleton or bind
+
+Bone-map schema v2 fingerprints the source skeleton signature and target skeleton/full-bind hashes. Regenerate the map for the current source/target pair. Imported/manual rows may be accepted for the new target only after review; do not copy the old fingerprint by hand.
+
+Schema-v1 historical field names were reversed. Current migration handles the direction automatically and retains every row, review policy, and unknown extension field.
 
 ## Player/female animation looks broken
 
-Changing the `_ANIMATION_SCR_` target does not change the target skeleton. Use target SMD/template/reference assets matching the player/female rig.
+Changing `_ANIMATION_SCR_` does not change the target skeleton. Select the CRIG and profile matching that model. With several targets in one project, verify the individual animation's Target rig override.
 
 ## The resource is not visible in the editor
 
@@ -76,66 +160,64 @@ Check:
 
 - the correct `common_anims_sp_pc.rpack` is installed;
 - the selected `_ANIMATION_SCR_` resource is appropriate;
-- the resource/sequence name is unique;
+- the resource/sequence name is unique across target groups;
 - the editor project was fully reloaded;
 - `common_anims_PC.rpack` was not replaced.
 
 ## Append refuses the existing RPack
 
-When a sidecar exists, its SHA-256 must match the pack. Restore the original pair or deliberately create a new project pack. Do not delete the manifest merely to bypass an unexplained mismatch.
+When a sidecar exists, its SHA-256 must match the pack. Restore the original pair or deliberately create a new project pack. Do not delete the manifest to bypass an unexplained mismatch.
 
 ## A locomotion loop snaps back
 
-`inplace` and `bip01` raw loops reset to frame zero. Use the `motion` policy and configure the movie/graph to apply OffsetHelper or motion accumulation. See [ROOT_MOTION_AND_IK.md](ROOT_MOTION_AND_IK.md).
+`inplace` and raw-root loops reset to frame zero. Use motion accumulator and configure the consumer to apply OffsetHelper/motion accumulation. See [Root motion and IK](ROOT_MOTION_AND_IK.md).
 
 ## The body is correct but fingers are not
 
-Finger retargeting remains under active editor validation. Confirm the source finger roles and test a finger-light build when necessary. Do not change the validated body/ANM2 writer settings to compensate for a hand-only issue.
+Finger retargeting still requires editor validation. Confirm source finger roles and per-row policies, then test a finger-light build when necessary. Do not change validated body/ANM2 writer settings to compensate for a hand-only issue.
 
-## Build log is needed for a bug report
+## Long animation appears but stays in bind pose
 
-Save:
+Rebuild with the current writer. Long packed streams split across physical 64 KiB pages. The report includes fields such as:
 
-```
-project .dlraproj
-mapping .dlrmap.json (when external)
-dl_reanimated_build/build_report.json
-<pack>.dlrmanifest.json
-GUI build log text
-source FBX name and tested frame
+```json
+{
+  "page_count": 3,
+  "page_frame_spans": [210, 210, 145]
+}
 ```
 
-Do not upload commercial/game assets publicly without checking redistribution rights.
+The spans must sum to `frame_count - 1`. Changing target/model/script resources cannot repair malformed page layout. The known packed integration and page behavior are regression-protected.
 
+## ANM2 to FBX problems
+
+- **Blender was not found**: select the installed `blender.exe`; Blender is not bundled.
+- **Hierarchy is wrong**: select the CRIG matching the ANM2 descriptors/model bind.
+- **Cross-rig bones do not move**: intentionally unmapped targets remain at bind; review the map.
+- **Playback speed is wrong**: standalone ANM2 has no authoritative FPS, so select the original rate.
 
 ## The EXE build fails
 
 Build Windows executables on Windows with Python 3.11 or newer:
 
-```
+```text
 build_exe.bat
 ```
 
-Delete `.venv-build`, `build`, and `dist` before retrying a damaged build. The script runs a frozen `--self-test`; inspect `dist\DL-ReAnimated\exe_self_test.json` when packaging succeeds but the app does not start.
+Delete generated `.venv-build`, `build`, and `dist` only when repairing a damaged packaging environment. The script runs a frozen `--self-test`; inspect `dist\DL-ReAnimated\exe_self_test.json` when packaging succeeds but launch fails.
 
-## Long animation appears in the timeline but stays in bind pose
+## Build log needed for a bug report
 
-Rebuild the RPack with the current writer. Dying Light supports very long clips, but their packed stream slots must be split across physical 64 KiB pages.
+Save:
 
-A corrected build report includes fields similar to:
-
-```json
-"page_count": 3,
-"page_frame_spans": [210, 210, 145]
+```text
+project .dlraproj
+mapping .dlrbmap.json or .dlrmap.json when external
+model build report and generated CRIG build report
+dl_reanimated_build/build_report.json
+<pack>.dlrmanifest.json
+GUI build log text
+source FBX name, selected stack, and tested frame
 ```
 
-The spans must sum to `frame_count - 1`. Rebuilding is required for a malformed payload; changing the AnimationScr or target model will not repair its page layout.
-# ANM2 to FBX
-
-**Blender was not found** — choose the installed `blender.exe` in the ANM2 → FBX workspace. Blender is deliberately not bundled with the portable application.
-
-**The exported hierarchy is wrong** — the selected `.crig` does not match the ANM2. Create/import the rig from the model FBX that owns that animation and review descriptor diagnostics.
-
-**Cross-rig bones do not move** — unmapped target bones intentionally remain at bind pose. Run Automatic map, review uncertain rows, and save the corrected `.dlrbmap.json`.
-
-**Playback speed is wrong** — standalone ANM2 has no authoritative FPS. Set the FPS used by the original sequence; 30 is only the default.
+Do not upload commercial/game assets publicly without checking redistribution rights. Offline validation does not claim editor/game success; record the DevTools bind pose, bone overlay, and animated deformation during manual validation.

@@ -26,11 +26,13 @@ from .dl2_anm2 import detect_anm2_format, parse_dl2_header42
 from .anm2_fbx import chrome_rig_from_fbx_skeleton
 from .blender_fbx import discover_blender, export_anm2_to_fbx
 from .background_tasks import BackgroundTaskRunner, TaskFailure
+from .animation_targets import resolve_animation_target
 from .bone_maps import (
     COMPONENT_POLICIES,
     GenericBoneMap,
     BoneMapPair,
     auto_map_skeletons,
+    mapping_profile_origin,
 )
 from .helper_profiles import recognized_helper_names, suggested_helper_source
 from .helper_retarget import (
@@ -38,7 +40,7 @@ from .helper_retarget import (
     helper_rules_from_dicts,
     helper_rules_to_dicts,
 )
-from .oracle.binary_fbx_mixamo import _FbxDocument
+from .fbx_core import FbxDocument
 from .project_builder import build_project, export_project_anm2_files
 from .fbx_preflight import preflight_fbx
 from .retarget_profiles import (
@@ -47,7 +49,7 @@ from .retarget_profiles import (
     SourceBoneMappingProfile,
     auto_map_source_bones,
 )
-from .retarget_mapping import auto_map_crig_to_fbx
+from .retarget_mapping import auto_map_crig_to_fbx, source_mapping_evidence
 from .root_mapping import read_smd_hierarchy
 from .script_targets import (
     AnimationScriptTarget,
@@ -75,6 +77,9 @@ _HELPER_COMPONENT_LABELS = {
     "scale": "Scale",
     "full_transform": "Full transform",
 }
+
+_RECENT_PROJECTS_SETTING = "recent_projects"
+_MAX_RECENT_PROJECTS = 10
 
 
 def _load_qt() -> dict[str, Any]:
@@ -201,8 +206,11 @@ class MainWindow:
         self.project_path: Path | None = None
         self.dirty = False
         self._refreshing = False
-        self._source_cache: dict[str, _FbxDocument] = {}
+        self._source_cache: dict[str, FbxDocument] = {}
         self.mapping_navigation_callback = None
+        self.target_selection_changed_callback = None
+        self.recent_projects_changed_callback = None
+        self._target_rig_cache: dict[str, ChromeRig] = {}
         self.script_registry = ScriptTargetRegistry()
         self.rig_registry = ChromeRigRegistry(self.root / "rigs")
 
@@ -317,7 +325,7 @@ class MainWindow:
             "exact same-skeleton mapping for objects, machinery, animals, or custom models."
         )
         self.target_rig_combo.currentIndexChanged.connect(self._target_rig_changed)
-        rig_form.addRow("Target rig preset", self.target_rig_combo)
+        rig_form.addRow("Default target rig", self.target_rig_combo)
 
         self.custom_rig_actions = qt["QWidget"]()
         custom_rig_row = qt["QHBoxLayout"](self.custom_rig_actions)
@@ -451,7 +459,28 @@ class MainWindow:
         row.addStretch(1)
         layout.addLayout(row)
 
-        self.animation_table = qt["QTableWidget"](0, 9)
+        target_tools = qt["QHBoxLayout"]()
+        target_tools.addWidget(qt["QLabel"]("Target rig filter"))
+        self.animation_target_filter = qt["QComboBox"]()
+        self.animation_target_filter.setToolTip(
+            "Show clips resolved to one target CRIG. Inherited clips are grouped with the "
+            "project target they actually use."
+        )
+        self.animation_target_filter.currentIndexChanged.connect(
+            lambda _index: self._apply_animation_target_filter()
+        )
+        self.animation_target_group = qt["QCheckBox"]("Group rows by target rig")
+        self.animation_target_group.setToolTip(
+            "Keep clips for the same resolved CRIG together without changing project order."
+        )
+        self.animation_target_group.toggled.connect(
+            lambda _checked: self._refresh_animation_table()
+        )
+        target_tools.addWidget(self.animation_target_filter, 1)
+        target_tools.addWidget(self.animation_target_group)
+        layout.addLayout(target_tools)
+
+        self.animation_table = qt["QTableWidget"](0, 11)
         self.animation_table.setHorizontalHeaderLabels(
             [
                 "Use",
@@ -460,6 +489,8 @@ class MainWindow:
                 "FBX animation",
                 "Resource name",
                 "Animation SCR",
+                "Target rig",
+                "Compatibility / mapping",
                 "Root motion",
                 "IK",
                 "Retarget",
@@ -482,13 +513,17 @@ class MainWindow:
         header.setSectionResizeMode(5, qt["QHeaderView"].Interactive)
         header.setSectionResizeMode(6, qt["QHeaderView"].Interactive)
         header.setSectionResizeMode(7, qt["QHeaderView"].Interactive)
-        header.setSectionResizeMode(8, qt["QHeaderView"].ResizeToContents)
+        header.setSectionResizeMode(8, qt["QHeaderView"].Interactive)
+        header.setSectionResizeMode(9, qt["QHeaderView"].Interactive)
+        header.setSectionResizeMode(10, qt["QHeaderView"].ResizeToContents)
         self.animation_table.setColumnWidth(1, 210)
         self.animation_table.setColumnWidth(3, 190)
         self.animation_table.setColumnWidth(4, 190)
         self.animation_table.setColumnWidth(5, 210)
-        self.animation_table.setColumnWidth(6, 155)
-        self.animation_table.setColumnWidth(7, 155)
+        self.animation_table.setColumnWidth(6, 220)
+        self.animation_table.setColumnWidth(7, 220)
+        self.animation_table.setColumnWidth(8, 155)
+        self.animation_table.setColumnWidth(9, 155)
         self.animation_table.itemSelectionChanged.connect(self._animation_selection_changed)
         layout.addWidget(self.animation_table, 1)
 
@@ -976,6 +1011,63 @@ class MainWindow:
 
 
     # ------------------------------------------------------------- project I/O
+    def recent_project_paths(self) -> list[Path]:
+        """Return persisted project paths in most-recently-used order."""
+
+        stored = self.settings.value(_RECENT_PROJECTS_SETTING, [])
+        if isinstance(stored, str):
+            values = [stored]
+        elif isinstance(stored, (list, tuple)):
+            values = stored
+        else:
+            values = []
+
+        paths: list[Path] = []
+        seen: set[str] = set()
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            path = Path(text).expanduser().resolve()
+            key = os.path.normcase(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(path)
+        return paths[:_MAX_RECENT_PROJECTS]
+
+    def _set_recent_project_paths(self, paths: list[Path]) -> None:
+        self.settings.setValue(
+            _RECENT_PROJECTS_SETTING,
+            [str(path) for path in paths[:_MAX_RECENT_PROJECTS]],
+        )
+        callback = self.recent_projects_changed_callback
+        if callback is not None:
+            callback()
+
+    def _remember_recent_project(self, path: str | Path) -> None:
+        resolved = Path(path).expanduser().resolve()
+        key = os.path.normcase(str(resolved))
+        remaining = [
+            candidate
+            for candidate in self.recent_project_paths()
+            if os.path.normcase(str(candidate)) != key
+        ]
+        self._set_recent_project_paths([resolved, *remaining])
+
+    def remove_recent_project(self, path: str | Path) -> None:
+        key = os.path.normcase(str(Path(path).expanduser().resolve()))
+        self._set_recent_project_paths(
+            [
+                candidate
+                for candidate in self.recent_project_paths()
+                if os.path.normcase(str(candidate)) != key
+            ]
+        )
+
+    def clear_recent_projects(self) -> None:
+        self._set_recent_project_paths([])
+
     def new_project(self) -> None:
         if not self._confirm_discard_changes():
             return
@@ -996,15 +1088,28 @@ class MainWindow:
         )
         if not path:
             return
+        self._load_project(path)
+
+    def open_recent_project(self, path: str | Path) -> None:
+        if not self._confirm_discard_changes():
+            return
+        self._load_project(path)
+
+    def _load_project(self, path: str | Path) -> bool:
         try:
             self.project = DlReanimatedProject.load(path)
-            self.project_path = Path(path)
+            self.project_path = Path(path).expanduser().resolve()
             self._source_cache.clear()
             self.dirty = False
             self._refresh_all()
-            self.status.showMessage(f"Opened {path}", 5000)
+            self._remember_recent_project(self.project_path)
+            self.status.showMessage(f"Opened {self.project_path}", 5000)
+            return True
         except Exception as exc:
+            if not Path(path).expanduser().is_file():
+                self.remove_recent_project(path)
             self._show_error("Could not open project", exc)
+            return False
 
     def save_project(self) -> None:
         if self.project_path is None:
@@ -1015,6 +1120,7 @@ class MainWindow:
             self.project_path = self.project.save(self.project_path)
             self.dirty = False
             self._update_title()
+            self._remember_recent_project(self.project_path)
             self.status.showMessage(f"Saved {self.project_path}", 5000)
         except Exception as exc:
             self._show_error("Could not save project", exc)
@@ -1034,6 +1140,7 @@ class MainWindow:
             self.project_path = self.project.save(path)
             self.dirty = False
             self._update_title()
+            self._remember_recent_project(self.project_path)
             self.status.showMessage(f"Saved {self.project_path}", 5000)
         except Exception as exc:
             self._show_error("Could not save project", exc)
@@ -1155,6 +1262,7 @@ class MainWindow:
                                 target_rig,
                                 document.limb_models.keys(),
                                 document.parent_by_name,
+                                **source_mapping_evidence(document),
                             )
                             self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
                             row.mapping_profile_id = profile.profile_id
@@ -1254,6 +1362,10 @@ class MainWindow:
         row.root_policy = source.root_policy
         row.ik_preset = source.ik_preset
         row.mapping_profile_id = source.mapping_profile_id
+        row.target_rig_ref = source.target_rig_ref
+        row.target_rig_path = source.target_rig_path
+        row.source_root_bone = source.source_root_bone
+        row.target_root_bone = source.target_root_bone
         row.fps = source.fps
         row.start_frame = source.start_frame
         row.end_frame = source.end_frame
@@ -1263,13 +1375,272 @@ class MainWindow:
         self._refresh_retarget_clip_combo()
         self.animation_table.selectRow(len(self.project.animations) - 1)
 
+    def _animation_target_mode(self, animation: ProjectAnimation) -> str:
+        return resolve_animation_target(
+            self.project,
+            animation,
+            rig_paths=getattr(self, "_rig_paths_by_ref", {}),
+        ).retarget_mode
+
+    def _resolved_animation_target_ref(self, animation: ProjectAnimation) -> str:
+        return resolve_animation_target(
+            self.project,
+            animation,
+            rig_paths=getattr(self, "_rig_paths_by_ref", {}),
+        ).rig_ref
+
+    def _refresh_animation_target_filter_options(self) -> None:
+        combo = self.animation_target_filter
+        current = str(combo.currentData() or "__all__")
+        labels = dict(getattr(self, "_rig_labels_by_ref", {}))
+        counts: dict[str, int] = {}
+        for animation in self.project.animations:
+            rig_ref = self._resolved_animation_target_ref(animation)
+            counts[rig_ref] = counts.get(rig_ref, 0) + 1
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(f"All target rigs ({len(self.project.animations)} clips)", "__all__")
+        for rig_ref in sorted(
+            counts,
+            key=lambda value: (labels.get(value, value).casefold(), value.casefold()),
+        ):
+            label = labels.get(rig_ref, rig_ref or "No resolved target")
+            combo.addItem(f"{label} ({counts[rig_ref]} clips)", rig_ref)
+        index = combo.findData(current)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+        combo.blockSignals(False)
+
+    def set_animation_target_filter(self, rig_ref: str) -> int:
+        """Filter the table to one resolved CRIG and return its visible clip count."""
+
+        self._refresh_animation_target_filter_options()
+        value = str(rig_ref or "__all__")
+        index = self.animation_target_filter.findData(value)
+        if index < 0 and value != "__all__":
+            label = getattr(self, "_rig_labels_by_ref", {}).get(value, value)
+            self.animation_target_filter.addItem(f"{label} (0 clips)", value)
+            index = self.animation_target_filter.findData(value)
+        self.animation_target_filter.setCurrentIndex(max(0, index))
+        self._apply_animation_target_filter()
+        return sum(
+            not self.animation_table.isRowHidden(row)
+            for row in range(self.animation_table.rowCount())
+        )
+
+    def _apply_animation_target_filter(self) -> None:
+        if not hasattr(self, "animation_table"):
+            return
+        selected = str(self.animation_target_filter.currentData() or "__all__")
+        for row in range(self.animation_table.rowCount()):
+            item = self.animation_table.item(row, 2)
+            animation = (
+                self.project.animation_by_id(str(item.data(self.qt["Qt"].UserRole)))
+                if item is not None
+                else None
+            )
+            matches = bool(
+                animation is not None
+                and (
+                    selected == "__all__"
+                    or self._resolved_animation_target_ref(animation) == selected
+                )
+            )
+            self.animation_table.setRowHidden(row, not matches)
+
+    def _animation_target_combo(self, animation: ProjectAnimation) -> Any:
+        combo = self._combo_box()
+        default_ref = str(self.project.rig.target_rig_ref or "")
+        labels = dict(getattr(self, "_rig_labels_by_ref", {}))
+        default_label = labels.get(
+            default_ref,
+            self.project.rig.target_rig_name or default_ref or "No default target",
+        )
+        combo.addItem(f"Inherit project target — {default_label}", "")
+        for rig_ref, label in labels.items():
+            combo.addItem(label, rig_ref)
+        if animation.target_rig_ref and combo.findData(animation.target_rig_ref) < 0:
+            label = animation.target_rig_ref
+            if animation.target_rig_path:
+                try:
+                    label = ChromeRig.load(animation.target_rig_path).name
+                except (OSError, ValueError):
+                    label += " [missing]"
+            combo.addItem(label, animation.target_rig_ref)
+        self._set_combo_data(combo, animation.target_rig_ref or "")
+        return combo
+
+    def _set_animation_target(self, animation_id: str, rig_ref: str) -> None:
+        if self._refreshing:
+            return
+        animation = self.project.animation_by_id(animation_id)
+        if animation is None:
+            return
+        rig_ref = str(rig_ref or "")
+        animation.target_rig_ref = rig_ref
+        if not rig_ref or rig_ref.startswith("builtin:"):
+            animation.target_rig_path = ""
+        else:
+            animation.target_rig_path = str(
+                getattr(self, "_rig_paths_by_ref", {}).get(rig_ref, "")
+            )
+        self._mark_dirty()
+        for row_index in range(self.animation_table.rowCount()):
+            item = self.animation_table.item(row_index, 2)
+            if (
+                item is not None
+                and str(item.data(self.qt["Qt"].UserRole)) == animation_id
+            ):
+                status_text, status_tooltip = self._animation_target_status(animation)
+                status_item = self.qt["QTableWidgetItem"](status_text)
+                status_item.setToolTip(status_tooltip)
+                status_item.setFlags(
+                    status_item.flags() & ~self.qt["Qt"].ItemIsEditable
+                )
+                self.animation_table.setItem(row_index, 7, status_item)
+                mapping_button = self.animation_table.cellWidget(row_index, 10)
+                if mapping_button is not None:
+                    payload = self.project.mapping_profiles.get(
+                        animation.mapping_profile_id, {}
+                    )
+                    exact = self._animation_target_mode(animation) == "exact"
+                    expected = (
+                        "dl-reanimated-bone-map"
+                        if exact
+                        else "dl-reanimated-retarget-profile"
+                    )
+                    has_mapping = payload.get("format") == expected
+                    mapping_button.setText(
+                        (
+                            "Review .crig map"
+                            if has_mapping
+                            else "Create .crig map"
+                        )
+                        if exact
+                        else ("Edit mapping" if has_mapping else "Create mapping")
+                    )
+                break
+        self._refresh_animation_target_filter_options()
+        self._apply_animation_target_filter()
+        if self.target_selection_changed_callback is not None:
+            self.target_selection_changed_callback(animation_id)
+
+    def _target_rig_for_status(
+        self, animation: ProjectAnimation
+    ) -> ChromeRig | None:
+        selection = resolve_animation_target(
+            self.project,
+            animation,
+            rig_paths=getattr(self, "_rig_paths_by_ref", {}),
+        )
+        path = Path(selection.rig_path) if selection.rig_path else None
+        if path is None or not path.is_file():
+            return None
+        resolved = str(path.resolve())
+        rig = self._target_rig_cache.get(resolved)
+        if rig is None:
+            rig = ChromeRig.load(path)
+            self._target_rig_cache[resolved] = rig
+        return rig
+
+    def _animation_target_status(
+        self, animation: ProjectAnimation
+    ) -> tuple[str, str]:
+        selection = resolve_animation_target(
+            self.project,
+            animation,
+            rig_paths=getattr(self, "_rig_paths_by_ref", {}),
+        )
+        prefix = "Inherited" if selection.inherited else "Override"
+        target_label = getattr(self, "_rig_labels_by_ref", {}).get(
+            selection.rig_ref, selection.rig_ref or "No target"
+        )
+        details = [
+            f"{prefix} target: {target_label}",
+            f"Rig reference: {selection.rig_ref or '(empty)'}",
+            f"Resolved mode: {selection.retarget_mode}",
+        ]
+        if selection.rig_path:
+            details.append(f"CRIG path: {selection.rig_path}")
+
+        if selection.retarget_mode == "exact":
+            rig = None
+            try:
+                rig = self._target_rig_for_status(animation)
+            except (OSError, ValueError) as exc:
+                details.append(f"Target error: {exc}")
+            if rig is None:
+                return f"{prefix} • Exact • target missing", "\n".join(details)
+
+        payload = self.project.mapping_profiles.get(
+            animation.mapping_profile_id, {}
+        )
+        mapping_format = str(payload.get("format", "") or "")
+        if not mapping_format:
+            label = (
+                "Exact • compatibility checked at build"
+                if selection.retarget_mode == "exact"
+                else "Humanoid • mapping not created"
+            )
+            return f"{prefix} • {label}", "\n".join(details)
+
+        if selection.retarget_mode == "exact":
+            if mapping_format != "dl-reanimated-bone-map":
+                details.append("The selected profile is not a .crig bone map.")
+                return f"{prefix} • Exact • wrong map type", "\n".join(details)
+            try:
+                profile = GenericBoneMap.from_dict(payload)
+                errors = profile.validate()
+                rig = self._target_rig_for_status(animation)
+                expected_hash = profile.target_bind_hash or profile.source_skeleton_hash
+                if rig is not None and expected_hash and expected_hash != rig.skeleton_hash:
+                    details.append(
+                        "Mapping full-bind hash does not match the selected CRIG."
+                    )
+                    return f"{prefix} • Exact • stale target map", "\n".join(details)
+                origin = mapping_profile_origin(profile)
+                details.append(f"Mapping origin: {origin}")
+                if errors:
+                    details.extend(errors)
+                    return f"{prefix} • Exact • map invalid", "\n".join(details)
+                if any(
+                    row.review_state == "automatic_unreviewed"
+                    for row in profile.base_pairs
+                ):
+                    return f"{prefix} • Exact • review required", "\n".join(details)
+                return f"{prefix} • Exact • map ready", "\n".join(details)
+            except (TypeError, ValueError) as exc:
+                details.append(str(exc))
+                return f"{prefix} • Exact • map invalid", "\n".join(details)
+
+        if mapping_format != "dl-reanimated-retarget-profile":
+            details.append("The selected profile is not a humanoid mapping.")
+            return f"{prefix} • Humanoid • wrong map type", "\n".join(details)
+        return f"{prefix} • Humanoid • mapping ready", "\n".join(details)
+
     def _refresh_animation_table(self) -> None:
         qt = self.qt
         self._refreshing = True
         try:
             table = self.animation_table
-            table.setRowCount(len(self.project.animations))
-            for row_index, animation in enumerate(self.project.animations):
+            self._refresh_animation_target_filter_options()
+            animations = list(self.project.animations)
+            if self.animation_target_group.isChecked():
+                project_order = {
+                    animation.animation_id: index
+                    for index, animation in enumerate(self.project.animations)
+                }
+                labels = dict(getattr(self, "_rig_labels_by_ref", {}))
+                animations.sort(
+                    key=lambda animation: (
+                        labels.get(
+                            self._resolved_animation_target_ref(animation),
+                            self._resolved_animation_target_ref(animation),
+                        ).casefold(),
+                        project_order[animation.animation_id],
+                    )
+                )
+            table.setRowCount(len(animations))
+            for row_index, animation in enumerate(animations):
                 table.setRowHeight(row_index, 46)
                 enabled = qt["QCheckBox"]()
                 enabled.setChecked(animation.enabled)
@@ -1332,6 +1703,27 @@ class MainWindow:
                 )
                 table.setCellWidget(row_index, 5, script)
 
+                target = self._animation_target_combo(animation)
+                target.setMinimumHeight(32)
+                target.setToolTip(
+                    "Choose a CRIG for this clip, or inherit the project's default target. "
+                    "Changing one row does not change any other animation."
+                )
+                target.currentIndexChanged.connect(
+                    lambda _index, combo=target, aid=animation.animation_id: self._set_animation_target(
+                        aid, str(combo.currentData() or "")
+                    )
+                )
+                table.setCellWidget(row_index, 6, target)
+
+                status_text, status_tooltip = self._animation_target_status(animation)
+                target_status = qt["QTableWidgetItem"](status_text)
+                target_status.setToolTip(status_tooltip)
+                target_status.setFlags(
+                    target_status.flags() & ~qt["Qt"].ItemIsEditable
+                )
+                table.setItem(row_index, 7, target_status)
+
                 root = self._combo_box()
                 root.setMinimumHeight(32)
                 root.setToolTip(
@@ -1347,7 +1739,7 @@ class MainWindow:
                         aid, "root_policy", combo.currentData()
                     )
                 )
-                table.setCellWidget(row_index, 6, root)
+                table.setCellWidget(row_index, 8, root)
 
                 ik = self._combo_box()
                 ik.setMinimumHeight(32)
@@ -1363,9 +1755,9 @@ class MainWindow:
                         aid, "ik_preset", combo.currentData()
                     )
                 )
-                table.setCellWidget(row_index, 7, ik)
+                table.setCellWidget(row_index, 9, ik)
 
-                exact_mapping = self.project.rig.retarget_mode == "exact"
+                exact_mapping = self._animation_target_mode(animation) == "exact"
                 mapping_payload = self.project.mapping_profiles.get(
                     animation.mapping_profile_id, {}
                 )
@@ -1398,9 +1790,10 @@ class MainWindow:
                 mapping.clicked.connect(
                     lambda _checked=False, aid=animation.animation_id: self._open_mapping_for_animation(aid)
                 )
-                table.setCellWidget(row_index, 8, mapping)
+                table.setCellWidget(row_index, 10, mapping)
         finally:
             self._refreshing = False
+        self._apply_animation_target_filter()
         self._animation_selection_changed()
 
     def _set_animation_field(self, animation_id: str, field_name: str, value: Any) -> None:
@@ -1473,7 +1866,8 @@ class MainWindow:
     def _retarget_clip_changed(self) -> None:
         if self._refreshing:
             return
-        if self.project.rig.retarget_mode == "exact":
+        animation = self.project.animation_by_id(str(self.retarget_clip_combo.currentData() or ""))
+        if animation is not None and self._animation_target_mode(animation) == "exact":
             self.mapping_table.setRowCount(0)
             self.mapping_status.setText(
                 "<b style='color:#2e7d32'>Exact skeleton mode</b> — bone names and parents "
@@ -1484,7 +1878,6 @@ class MainWindow:
                 "non-humanoid skeletons."
             )
             return
-        animation = self.project.animation_by_id(str(self.retarget_clip_combo.currentData() or ""))
         if animation is None:
             self.mapping_table.setRowCount(0)
             self.mapping_status.setText("Add an FBX animation to create a humanoid mapping.")
@@ -1498,18 +1891,18 @@ class MainWindow:
             self.mapping_table.setRowCount(0)
             self.mapping_status.setText(str(exc))
 
-    def _source_document(self, path: str) -> _FbxDocument:
+    def _source_document(self, path: str) -> FbxDocument:
         resolved = str(Path(path).resolve())
         document = self._source_cache.get(resolved)
         if document is None:
-            document = _FbxDocument(Path(resolved))
+            document = FbxDocument(Path(resolved))
             self._source_cache[resolved] = document
         return document
 
     def _profile_for_animation(
         self,
         animation: ProjectAnimation,
-        document: _FbxDocument,
+        document: FbxDocument,
         *,
         create: bool,
     ) -> SourceBoneMappingProfile | None:
@@ -1545,7 +1938,7 @@ class MainWindow:
     def _refresh_mapping_table(
         self,
         animation: ProjectAnimation,
-        document: _FbxDocument,
+        document: FbxDocument,
         profile: SourceBoneMappingProfile,
     ) -> None:
         qt = self.qt
@@ -1844,10 +2237,8 @@ class MainWindow:
         self._filter_mapping_rows()
 
     def auto_map_selected(self) -> None:
-        if self.project.rig.retarget_mode == "exact":
-            return
         animation = self._retarget_animation()
-        if animation is None:
+        if animation is None or self._animation_target_mode(animation) == "exact":
             return
         try:
             document = self._source_document(animation.source_fbx)
@@ -1867,10 +2258,8 @@ class MainWindow:
             self._show_error("Auto-map failed", exc)
 
     def clear_mapping(self) -> None:
-        if self.project.rig.retarget_mode == "exact":
-            return
         animation = self._retarget_animation()
-        if animation is None:
+        if animation is None or self._animation_target_mode(animation) == "exact":
             return
         document = self._source_document(animation.source_fbx)
         profile = SourceBoneMappingProfile.empty(
@@ -2624,10 +3013,18 @@ class MainWindow:
         self.project.notes = self.project_notes.toPlainText()
         selected_rig_ref = str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
         self.project.rig.target_rig_ref = selected_rig_ref
-        if selected_rig_ref == BUILTIN_MALE_RIG_REF:
+        game_target_ref = get_game_profile(self.project.game_id).target_rig_ref
+        if selected_rig_ref == game_target_ref:
             self.project.rig.retarget_mode = "humanoid"
-            self.project.rig.target_rig_path = ""
-            self.project.rig.target_rig_name = "Dying Light player_1_tpp / male humanoid"
+            selected_path = getattr(self, "_rig_paths_by_ref", {}).get(
+                selected_rig_ref, ""
+            )
+            self.project.rig.target_rig_path = (
+                "" if selected_rig_ref == BUILTIN_MALE_RIG_REF else selected_path
+            )
+            self.project.rig.target_rig_name = get_game_profile(
+                self.project.game_id
+            ).target_rig_name
         else:
             self.project.rig.retarget_mode = "exact"
             selected_path = getattr(self, "_rig_paths_by_ref", {}).get(selected_rig_ref, "")
@@ -2694,16 +3091,20 @@ class MainWindow:
     def _reload_target_rig_combo(self) -> None:
         if not hasattr(self, "target_rig_combo"):
             return
+        self._target_rig_cache.clear()
         current = self.target_rig_combo.currentData()
         self.target_rig_combo.clear()
         records = self.rig_registry.records()
         self._rig_paths_by_ref = {row.rig_ref: row.path for row in records}
+        self._rig_labels_by_ref: dict[str, str] = {}
         game_id = getattr(getattr(self, "project", None), "game_id", DL1_GAME_ID)
         for row in records:
             if row.rig_ref.startswith("builtin:") and row.rig_ref != GAME_PROFILES[game_id].target_rig_ref:
                 continue
             suffix = "" if row.builtin else f" [{row.category}]"
-            self.target_rig_combo.addItem(row.display_name + suffix, row.rig_ref)
+            label = row.display_name + suffix
+            self.target_rig_combo.addItem(label, row.rig_ref)
+            self._rig_labels_by_ref[row.rig_ref] = label
         project = getattr(self, "project", None)
         if (
             project is not None
@@ -2717,8 +3118,27 @@ class MainWindow:
                     f"{rig.name} [{rig.category}, project]", project.rig.target_rig_ref
                 )
                 self._rig_paths_by_ref[project.rig.target_rig_ref] = project.rig.target_rig_path
+                self._rig_labels_by_ref[project.rig.target_rig_ref] = (
+                    f"{rig.name} [{rig.category}, project]"
+                )
             except (OSError, ValueError):
                 pass
+        if project is not None:
+            for animation in project.animations:
+                rig_ref = str(animation.target_rig_ref or "")
+                rig_path = str(animation.target_rig_path or "")
+                if not rig_ref or rig_ref in self._rig_labels_by_ref or not rig_path:
+                    continue
+                path = Path(rig_path)
+                if not path.is_file():
+                    continue
+                try:
+                    rig = ChromeRig.load(path)
+                except (OSError, ValueError):
+                    continue
+                label = f"{rig.name} [{rig.category}, project clip]"
+                self._rig_paths_by_ref[rig_ref] = rig_path
+                self._rig_labels_by_ref[rig_ref] = label
         if current:
             self._set_combo_data(self.target_rig_combo, current)
 
@@ -2727,7 +3147,11 @@ class MainWindow:
             return
         selected = str(self.target_rig_combo.currentData() or BUILTIN_MALE_RIG_REF)
         self.project.rig.target_rig_ref = selected
-        self.project.rig.retarget_mode = "humanoid" if selected == BUILTIN_MALE_RIG_REF else "exact"
+        self.project.rig.retarget_mode = (
+            "humanoid"
+            if selected == get_game_profile(self.project.game_id).target_rig_ref
+            else "exact"
+        )
         selected_path = getattr(self, "_rig_paths_by_ref", {}).get(selected, "")
         self.project.rig.target_rig_path = selected_path
         if selected_path:
@@ -2738,6 +3162,9 @@ class MainWindow:
         self._mark_dirty()
         self._bind_pose_mode_changed()
         self._retarget_clip_changed()
+        self._refresh_animation_table()
+        if self.target_selection_changed_callback is not None:
+            self.target_selection_changed_callback("")
 
     def _refresh_game_status(self) -> None:
         if not hasattr(self, "game_status"):

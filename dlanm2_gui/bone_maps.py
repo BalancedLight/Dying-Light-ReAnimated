@@ -1,22 +1,16 @@
 """Versioned generic target-rig-to-source-FBX bone maps.
 
-The serialized field names predate the current UI and are intentionally kept
-for compatibility.  In every :class:`BoneMapPair`:
-
-``source_descriptor`` / ``source_bone``
-    Identify the target ``.crig`` track.
-
-``target_bone``
-    Identifies the source FBX bone that drives that target track.
-
-Consequently, a source FBX bone may legitimately appear in several rows while
-the target descriptor/name must remain unique.
+Schema v2 serializes explicit target/source field names and deterministically
+migrates the historically reversed schema-v1 row names. A source FBX bone may
+legitimately drive several target rows while each target descriptor/name stays
+unique.
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, fields
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -29,7 +23,7 @@ from .trackmap import dl_name_hash
 
 
 BONE_MAP_FORMAT = "dl-reanimated-bone-map"
-BONE_MAP_SCHEMA_VERSION = 1
+BONE_MAP_SCHEMA_VERSION = 2
 BONE_MAP_EXTENSION = ".dlrbmap.json"
 MAPPING_PROFILE_ORIGINS = frozenset(
     {"automatic_identity", "automatic_repair", "manually_reviewed", "imported_profile"}
@@ -42,6 +36,7 @@ TRANSFER_POLICIES = (
     "rotation_delta",
     "global_bind_basis",
     "copy_local",
+    "bind",
 )
 COMPONENT_POLICIES = (
     "rotation",
@@ -50,6 +45,26 @@ COMPONENT_POLICIES = (
     "scale",
     "full_transform",
 )
+REVIEW_STATES = (
+    "automatic_unreviewed",
+    "automatic_accepted",
+    "manually_reviewed",
+    "imported_reviewed",
+    "intentionally_unmapped",
+)
+
+
+def _default_review_state(method: str, source_fbx_bone: str) -> str:
+    """Return the deterministic review state for a newly-created v2 row."""
+
+    if not source_fbx_bone:
+        return "automatic_unreviewed"
+    normalized = str(method or "").casefold()
+    if normalized == "manual" or normalized.startswith("manual:"):
+        return "manually_reviewed"
+    if normalized in {"descriptor", "exact", "exact_or_subset"}:
+        return "automatic_accepted"
+    return "automatic_unreviewed"
 
 
 def normalize_bone_name(value: str) -> str:
@@ -69,40 +84,127 @@ def normalize_bone_name(value: str) -> str:
     return re.sub(r"_+", "_", value)
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class BoneMapPair:
-    # Historical names: source_* is the target .crig track; target_bone is the
-    # source FBX bone.  Do not swap these serialized meanings.
-    source_descriptor: int
-    source_bone: str
-    target_bone: str
+    """One explicit target-rig <- source-FBX mapping row.
+
+    Schema v1 serialized these values under the historically reversed names
+    ``source_descriptor``/``source_bone``/``target_bone``. Schema v2 writes
+    only the unambiguous names below. Compatibility properties and constructor
+    keywords keep existing Python callers working while call sites migrate.
+    """
+
+    target_rig_descriptor: int
+    target_rig_bone: str
+    source_fbx_bone: str
     confidence: float = 1.0
     method: str = "manual"
     transfer_policy: str = "default"
     component_policy: str = "full_transform"
     mapping_kind: str = "bone"
+    review_state: str = "manually_reviewed"
+    notes: str = ""
     extensions: dict[str, Any] = field(default_factory=dict)
 
-    @property
-    def target_rig_bone(self) -> str:
-        return self.source_bone
+    def __init__(
+        self,
+        target_rig_descriptor: int | None = None,
+        target_rig_bone: str | None = None,
+        source_fbx_bone: str | None = None,
+        confidence: float = 1.0,
+        method: str = "manual",
+        transfer_policy: str = "default",
+        component_policy: str = "full_transform",
+        mapping_kind: str = "bone",
+        review_state: str = "",
+        notes: str = "",
+        extensions: Mapping[str, Any] | None = None,
+        **legacy: Any,
+    ) -> None:
+        if target_rig_descriptor is None and "source_descriptor" in legacy:
+            target_rig_descriptor = int(legacy.pop("source_descriptor"))
+        if target_rig_bone is None and "source_bone" in legacy:
+            target_rig_bone = str(legacy.pop("source_bone"))
+        if source_fbx_bone is None and "target_bone" in legacy:
+            source_fbx_bone = str(legacy.pop("target_bone"))
+        if legacy:
+            names = ", ".join(sorted(legacy))
+            raise TypeError(f"Unexpected BoneMapPair argument(s): {names}")
+        self.target_rig_descriptor = int(target_rig_descriptor or 0)
+        self.target_rig_bone = str(target_rig_bone or "")
+        self.source_fbx_bone = str(source_fbx_bone or "")
+        self.confidence = float(confidence)
+        self.method = str(method or "manual")
+        self.transfer_policy = str(transfer_policy or "default")
+        self.component_policy = str(component_policy or "full_transform")
+        self.mapping_kind = str(mapping_kind or "bone")
+        self.review_state = str(
+            review_state or _default_review_state(self.method, self.source_fbx_bone)
+        )
+        self.notes = str(notes or "")
+        self.extensions = dict(extensions or {})
 
     @property
-    def source_fbx_bone(self) -> str:
-        return self.target_bone
+    def source_descriptor(self) -> int:
+        """Schema-v1 compatibility alias for ``target_rig_descriptor``."""
+
+        return self.target_rig_descriptor
+
+    @source_descriptor.setter
+    def source_descriptor(self, value: int) -> None:
+        self.target_rig_descriptor = int(value)
+
+    @property
+    def source_bone(self) -> str:
+        """Schema-v1 compatibility alias for ``target_rig_bone``."""
+
+        return self.target_rig_bone
+
+    @source_bone.setter
+    def source_bone(self, value: str) -> None:
+        self.target_rig_bone = str(value)
+
+    @property
+    def target_bone(self) -> str:
+        """Schema-v1 compatibility alias for ``source_fbx_bone``."""
+
+        return self.source_fbx_bone
+
+    @target_bone.setter
+    def target_bone(self, value: str) -> None:
+        self.source_fbx_bone = str(value)
 
     @classmethod
-    def from_dict(cls, payload: Mapping[str, Any]) -> "BoneMapPair":
+    def from_dict(
+        cls,
+        payload: Mapping[str, Any],
+        *,
+        schema_version: int = BONE_MAP_SCHEMA_VERSION,
+        migrated_review_state: str = "",
+    ) -> "BoneMapPair":
         row = dict(payload)
-        allowed = {item.name for item in fields(cls)}
+        allowed = {
+            *(item.name for item in fields(cls)),
+            "source_descriptor",
+            "source_bone",
+            "target_bone",
+        }
         unknown = {key: value for key, value in row.items() if key not in allowed}
         extensions = dict(row.get("extensions", {}) or {})
         if unknown:
             extensions.setdefault("unknown_fields", {}).update(unknown)
+        if schema_version <= 1:
+            descriptor = row.get("source_descriptor", row.get("target_rig_descriptor", 0))
+            target_rig_bone = row.get("source_bone", row.get("target_rig_bone", ""))
+            source_fbx_bone = row.get("target_bone", row.get("source_fbx_bone", ""))
+        else:
+            descriptor = row.get("target_rig_descriptor", row.get("source_descriptor", 0))
+            target_rig_bone = row.get("target_rig_bone", row.get("source_bone", ""))
+            source_fbx_bone = row.get("source_fbx_bone", row.get("target_bone", ""))
         return cls(
-            source_descriptor=int(row.get("source_descriptor", 0)),
-            source_bone=str(row.get("source_bone", "")),
-            target_bone=str(row.get("target_bone", "")),
+            target_rig_descriptor=int(descriptor or 0),
+            target_rig_bone=str(target_rig_bone or ""),
+            source_fbx_bone=str(source_fbx_bone or ""),
             confidence=float(row.get("confidence", 1.0)),
             method=str(row.get("method", "manual")),
             transfer_policy=str(row.get("transfer_policy", "default") or "default"),
@@ -110,6 +212,8 @@ class BoneMapPair:
                 row.get("component_policy", "full_transform") or "full_transform"
             ),
             mapping_kind=str(row.get("mapping_kind", "bone") or "bone"),
+            review_state=str(row.get("review_state", "") or migrated_review_state),
+            notes=str(row.get("notes", "") or ""),
             extensions=extensions,
         )
 
@@ -121,6 +225,9 @@ class GenericBoneMap:
     source_skeleton_hash: str
     target_skeleton_hash: str
     source_rig_ref: str = ""
+    # Full target .crig fingerprint. In schema v1 the same value lived under
+    # the historically reversed ``source_skeleton_hash`` name.
+    target_bind_hash: str = ""
     pairs: list[BoneMapPair] = field(default_factory=list)
     extensions: dict[str, Any] = field(default_factory=dict)
     format: str = BONE_MAP_FORMAT
@@ -136,7 +243,14 @@ class GenericBoneMap:
         source_rig_ref: str = "",
         origin: str = "",
     ) -> "GenericBoneMap":
-        result = cls(str(uuid.uuid4()), name, source_hash, target_hash, source_rig_ref)
+        result = cls(
+            str(uuid.uuid4()),
+            name,
+            source_hash,
+            target_hash,
+            source_rig_ref,
+            source_hash,
+        )
         if origin:
             set_mapping_profile_origin(result, origin)
         return result
@@ -154,8 +268,10 @@ class GenericBoneMap:
         if self.format != BONE_MAP_FORMAT or self.schema_version != BONE_MAP_SCHEMA_VERSION:
             errors.append("Unsupported generic bone-map format or schema version.")
 
-        target_rig_names = [row.source_bone for row in self.pairs if row.source_bone]
-        target_descriptors = [row.source_descriptor for row in self.pairs]
+        target_rig_names = [
+            row.target_rig_bone for row in self.pairs if row.target_rig_bone
+        ]
+        target_descriptors = [row.target_rig_descriptor for row in self.pairs]
         if len(target_rig_names) != len(set(target_rig_names)):
             errors.append("A target rig bone may only be assigned once.")
         if len(target_descriptors) != len(set(target_descriptors)):
@@ -178,6 +294,13 @@ class GenericBoneMap:
                 if row.component_policy not in COMPONENT_POLICIES
             }
         )
+        invalid_reviews = sorted(
+            {
+                row.review_state
+                for row in self.pairs
+                if row.review_state not in REVIEW_STATES
+            }
+        )
         if invalid_kinds:
             errors.append("Unsupported mapping kind(s): " + ", ".join(invalid_kinds))
         if invalid_transfers:
@@ -186,6 +309,28 @@ class GenericBoneMap:
             errors.append(
                 "Unsupported component policy/policies: " + ", ".join(invalid_components)
             )
+        if invalid_reviews:
+            errors.append(
+                "Unsupported mapping review state(s): " + ", ".join(invalid_reviews)
+            )
+        for row in self.pairs:
+            if not row.target_rig_bone:
+                errors.append("Every mapping row needs a target rig bone.")
+            if not math.isfinite(row.confidence) or not 0.0 <= row.confidence <= 1.0:
+                errors.append(
+                    f"Mapping confidence for {row.target_rig_bone!r} must be between 0 and 1."
+                )
+            if row.review_state == "intentionally_unmapped":
+                if row.source_fbx_bone:
+                    errors.append(
+                        f"Intentionally unmapped target {row.target_rig_bone!r} cannot "
+                        "name a source FBX bone."
+                    )
+                if row.transfer_policy != "bind":
+                    errors.append(
+                        f"Intentionally unmapped target {row.target_rig_bone!r} must "
+                        "use bind transfer."
+                    )
         return errors
 
     def to_dict(self) -> dict[str, Any]:
@@ -195,21 +340,67 @@ class GenericBoneMap:
     def from_dict(cls, payload: Mapping[str, Any]) -> "GenericBoneMap":
         if payload.get("format") != BONE_MAP_FORMAT:
             raise ValueError("Not a DL ReAnimated generic bone-map file.")
-        if int(payload.get("schema_version", 0)) != BONE_MAP_SCHEMA_VERSION:
+        schema_version = int(payload.get("schema_version", 0))
+        if schema_version not in {1, BONE_MAP_SCHEMA_VERSION}:
             raise ValueError("Unsupported generic bone-map schema version.")
         allowed = {item.name for item in fields(cls)}
         unknown = {key: value for key, value in payload.items() if key not in allowed}
         extensions = dict(payload.get("extensions", {}) or {})
         if unknown:
             extensions.setdefault("unknown_fields", {}).update(unknown)
+        declared_origin = str(extensions.get("origin", "") or "")
+        raw_pairs = [dict(row) for row in payload.get("pairs", [])]
+        if declared_origin not in MAPPING_PROFILE_ORIGINS:
+            methods = {
+                str(row.get("method", "") or "").casefold() for row in raw_pairs
+            }
+            if raw_pairs and all(
+                method == "manual" or method.startswith("manual:")
+                for method in methods
+            ):
+                declared_origin = "manually_reviewed"
+            elif "auto_map_summary" in extensions or any(
+                method.startswith("semantic:")
+                or method
+                in {
+                    "descriptor",
+                    "exact",
+                    "normalized",
+                    "normalized_suffix",
+                    "heuristic",
+                }
+                for method in methods
+            ):
+                declared_origin = "automatic_repair"
+            else:
+                declared_origin = "imported_profile"
+            extensions["origin"] = declared_origin
+        migrated_review = {
+            "automatic_identity": "automatic_accepted",
+            "automatic_repair": "automatic_unreviewed",
+            "manually_reviewed": "manually_reviewed",
+            "imported_profile": "imported_reviewed",
+        }[declared_origin]
+        source_skeleton_hash = str(payload.get("source_skeleton_hash", ""))
         result = cls(
-            str(payload.get("profile_id") or uuid.uuid4()),
-            str(payload.get("name", "Generic bone map")),
-            str(payload.get("source_skeleton_hash", "")),
-            str(payload.get("target_skeleton_hash", "")),
-            str(payload.get("source_rig_ref", "")),
-            [BoneMapPair.from_dict(dict(row)) for row in payload.get("pairs", [])],
-            extensions,
+            profile_id=str(payload.get("profile_id") or uuid.uuid4()),
+            name=str(payload.get("name", "Generic bone map")),
+            source_skeleton_hash=source_skeleton_hash,
+            target_skeleton_hash=str(payload.get("target_skeleton_hash", "")),
+            source_rig_ref=str(payload.get("source_rig_ref", "")),
+            target_bind_hash=str(
+                payload.get("target_bind_hash", "") or source_skeleton_hash
+            ),
+            pairs=[
+                BoneMapPair.from_dict(
+                    row,
+                    schema_version=schema_version,
+                    migrated_review_state=migrated_review,
+                )
+                for row in raw_pairs
+            ],
+            extensions=extensions,
+            schema_version=BONE_MAP_SCHEMA_VERSION,
         )
         errors = result.validate()
         if errors:
@@ -238,9 +429,10 @@ class GenericBoneMap:
 
     @classmethod
     def load(cls, path: str | Path) -> "GenericBoneMap":
-        result = cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8-sig")))
-        set_mapping_profile_origin(result, "imported_profile")
-        return result
+        # ``from_dict`` performs the schema migration and preserves the
+        # declared origin/review state. Loading a reviewed v2 map must not
+        # silently turn its rows into imported-profile rows.
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
 
 def mapping_profile_origin(profile: GenericBoneMap | None) -> str:
@@ -251,6 +443,15 @@ def mapping_profile_origin(profile: GenericBoneMap | None) -> str:
     declared = str(profile.extensions.get("origin", "") or "")
     if declared in MAPPING_PROFILE_ORIGINS:
         return declared
+    states = {row.review_state for row in profile.pairs}
+    if states and states <= {"manually_reviewed", "intentionally_unmapped"}:
+        return "manually_reviewed"
+    if states and states <= {"imported_reviewed", "intentionally_unmapped"}:
+        return "imported_profile"
+    if states and states <= {"automatic_accepted", "intentionally_unmapped"}:
+        return "automatic_identity"
+    if "automatic_unreviewed" in states:
+        return "automatic_repair"
     methods = {str(row.method or "").casefold() for row in profile.pairs}
     if profile.pairs and all(
         method == "manual" or method.startswith("manual:") for method in methods
@@ -275,6 +476,15 @@ def set_mapping_profile_origin(
     if value not in MAPPING_PROFILE_ORIGINS:
         raise ValueError(f"Unsupported mapping profile origin {value!r}")
     profile.extensions["origin"] = value
+    for row in profile.pairs:
+        if row.review_state == "intentionally_unmapped":
+            continue
+        if value == "manually_reviewed":
+            row.review_state = "manually_reviewed"
+        elif value == "imported_profile":
+            row.review_state = "imported_reviewed"
+        elif value == "automatic_identity" and row.review_state == "automatic_unreviewed":
+            row.review_state = "automatic_accepted"
     return profile
 
 
@@ -316,7 +526,11 @@ def auto_map_skeletons(
         }
         source_parent = parent_name(bone)
         mapped_parent = next(
-            (row.target_bone for row in profile.pairs if row.source_bone == source_parent),
+            (
+                row.source_fbx_bone
+                for row in profile.pairs
+                if row.target_rig_bone == source_parent
+            ),
             None,
         )
         for target in names:
@@ -368,6 +582,7 @@ __all__ = [
     "COMPONENT_POLICIES",
     "MAPPING_PROFILE_ORIGINS",
     "MAPPING_KINDS",
+    "REVIEW_STATES",
     "TRANSFER_POLICIES",
     "BoneMapPair",
     "GenericBoneMap",

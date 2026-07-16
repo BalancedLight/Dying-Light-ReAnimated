@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
+from ..animation_targets import resolve_animation_target
 from ..bone_maps import (
     BoneMapPair,
     COMPONENT_POLICIES,
@@ -26,8 +27,12 @@ from ..helper_retarget import (
     helper_rules_from_dicts,
     helper_rules_to_dicts,
 )
-from ..oracle.binary_fbx_mixamo import _FbxDocument
-from ..retarget_mapping import auto_map_crig_to_fbx, mapping_rows_for_ui
+from ..fbx_core import FbxDocument
+from ..retarget_mapping import (
+    auto_map_crig_to_fbx,
+    mapping_rows_for_ui,
+    source_mapping_evidence,
+)
 from ..retarget_profiles import HUMANOID_ROLES
 from ..retarget_routing import select_exact_solver
 from ..root_mapping import (
@@ -45,6 +50,7 @@ _TRANSFER_LABELS = {
     "rotation_delta": "Rotation delta",
     "global_bind_basis": "Global bind basis",
     "copy_local": "Copy local (advanced)",
+    "bind": "Bind (leave target unchanged)",
 }
 _COMPONENT_LABELS = {
     "rotation": "Rotation",
@@ -227,30 +233,54 @@ class CrigMappingWorkspace:
         animation_id = self.clip_combo.currentData()
         return self.project.animation_by_id(str(animation_id)) if animation_id else None
 
-    def _load_rig(self) -> ChromeRig:
-        if self.project.rig.retarget_mode != "exact":
+    def _target_selection(self, animation: Any | None = None):
+        selected = animation or self._selected_animation()
+        if selected is None:
+            raise ValueError("Select an animation clip first.")
+        return resolve_animation_target(
+            self.project,
+            selected,
+            rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
+        )
+
+    def _load_rig(self, animation: Any | None = None) -> ChromeRig:
+        selection = self._target_selection(animation)
+        if selection.retarget_mode != "exact":
             raise ValueError(
                 "Per-bone .crig mapping is only used with a custom .crig target. Humanoid source "
                 "bones remain editable in the normal Retargeting tab; Bip01/root mapping above "
                 "still applies to humanoid builds."
             )
-        path = Path(self.project.rig.target_rig_path)
+        path = Path(selection.rig_path) if selection.rig_path else None
+        if path is None or not path.is_file():
+            registry = getattr(self.controller, "rig_registry", None)
+            resolved = registry.resolve(selection.rig_ref) if registry is not None else None
+            path = Path(resolved) if resolved is not None else path
+        if path is None:
+            raise FileNotFoundError(
+                f"No CRIG path can be resolved for animation target {selection.rig_ref!r}."
+            )
         if not path.is_file():
-            raise FileNotFoundError(f"Custom .crig file was not found: {path}")
+            raise FileNotFoundError(
+                f"Animation target .crig was not found: {path}. Choose another target or "
+                "select Inherit project target."
+            )
         return ChromeRig.load(path)
 
-    def _document(self, animation) -> _FbxDocument:
+    def _document(self, animation) -> FbxDocument:
         source = Path(animation.source_fbx)
         if not source.is_file():
             raise FileNotFoundError(f"Animation FBX was not found: {source}")
-        document = _FbxDocument(source)
+        document = FbxDocument(source)
         if animation.source_animation_stack:
             document.select_animation_stack(animation.source_animation_stack)
         return document
 
-    def _target_bone_names(self) -> tuple[list[str], dict[str, str | None]]:
-        if self.project.rig.retarget_mode == "exact":
-            rig = self._load_rig()
+    def _target_bone_names(
+        self, animation: Any | None = None
+    ) -> tuple[list[str], dict[str, str | None]]:
+        if self._target_selection(animation).retarget_mode == "exact":
+            rig = self._load_rig(animation)
             names = [bone.name for bone in rig.bones]
             parents = {
                 bone.name: (rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None)
@@ -274,6 +304,9 @@ class CrigMappingWorkspace:
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
         animation.mapping_profile_id = profile.profile_id
         self.mark_dirty()
+        refresh_table = getattr(self.controller, "_refresh_animation_table", None)
+        if callable(refresh_table):
+            refresh_table()
 
     def auto_map(self) -> None:
         animation = self._selected_animation()
@@ -283,7 +316,10 @@ class CrigMappingWorkspace:
             rig = self._load_rig()
             document = self._document(animation)
             profile = auto_map_crig_to_fbx(
-                rig, document.limb_models.keys(), document.parent_by_name
+                rig,
+                document.limb_models.keys(),
+                document.parent_by_name,
+                **source_mapping_evidence(document),
             )
             self._store_profile(animation, profile)
             self.refresh()
@@ -314,12 +350,12 @@ class CrigMappingWorkspace:
         except Exception as exc:
             self.status.setText(f"Could not clear the mapping: {exc}")
 
-    def _refresh_root_controls(self, animation, document: _FbxDocument) -> None:
+    def _refresh_root_controls(self, animation, document: FbxDocument) -> None:
         self._refreshing_root = True
         try:
             selection = RootMappingSelection.from_animation(animation)
             source_names = sorted(document.limb_models, key=str.casefold)
-            target_names, target_parents = self._target_bone_names()
+            target_names, target_parents = self._target_bone_names(animation)
 
             self.root_source_combo.blockSignals(True)
             self.root_source_combo.clear()
@@ -401,7 +437,7 @@ class CrigMappingWorkspace:
             self.table.setColumnHidden(column, not visible)
 
     def _normal_helper_rows(
-        self, animation: Any, document: _FbxDocument
+        self, animation: Any, document: FbxDocument
     ) -> tuple[list[dict[str, Any]], str]:
         hierarchy = read_smd_hierarchy(Path(self.project.rig.canonical_smd))
         by_name = {row.name: row for row in hierarchy}
@@ -463,7 +499,7 @@ class CrigMappingWorkspace:
             self.status.setText(str(exc))
             return
 
-        exact_mode = self.project.rig.retarget_mode == "exact"
+        exact_mode = self._target_selection(animation).retarget_mode == "exact"
         for widget in (
             self.auto_button,
             self.clear_button,
@@ -479,12 +515,13 @@ class CrigMappingWorkspace:
         helper_profile_description = ""
         try:
             if exact_mode:
-                rig = self._load_rig()
+                rig = self._load_rig(animation)
                 profile, rows = mapping_rows_for_ui(
                     rig,
                     document.limb_models.keys(),
                     document.parent_by_name,
                     self._current_profile(animation),
+                    **source_mapping_evidence(document),
                 )
             else:
                 rows, helper_profile_description = self._normal_helper_rows(
@@ -595,7 +632,24 @@ class CrigMappingWorkspace:
             )
             if not row["source_bone"] and suggested:
                 status_text = "Suggested — not enabled"
-            self.table.setItem(index, 9, qt["QTableWidgetItem"](status_text))
+            if row.get("review_required"):
+                status_text += " — review required"
+            status_item = qt["QTableWidgetItem"](status_text)
+            evidence = row.get("mapping_evidence") or {}
+            top = evidence.get("top_candidate") or {}
+            runner = evidence.get("runner_up_candidate") or {}
+            if evidence:
+                status_item.setToolTip(
+                    "Automatic evidence\n"
+                    f"Top: {top.get('source_fbx_bone', '')} "
+                    f"({float(top.get('score', 0.0)):.2f})\n"
+                    f"Runner-up: {runner.get('source_fbx_bone', '')} "
+                    f"({float(runner.get('score', 0.0)):.2f})\n"
+                    f"Margin: {float(evidence.get('score_margin', 0.0)):.2f}\n"
+                    f"Review state: {row.get('review_state', '')}\n"
+                    + str(evidence.get("spatial_evidence_note", ""))
+                )
+            self.table.setItem(index, 9, status_item)
 
         self._advanced_helpers_changed()
         if not exact_mode:
@@ -618,11 +672,18 @@ class CrigMappingWorkspace:
         assert rig is not None and profile is not None
         mapped = len(profile.pairs)
         errors = profile.validate()
-        mapped_source_names = {pair.target_bone for pair in profile.pairs}
+        evidence_rows = profile.extensions.get("automatic_mapping_evidence_v2", ()) or ()
+        review_required_count = sum(
+            1 for row in evidence_rows if bool(row.get("review_required", False))
+        )
+        mapped_source_names = {pair.source_fbx_bone for pair in profile.pairs}
         source_body_names = {
-            row.target_bone
+            row.source_fbx_bone
             for row in auto_map_crig_to_fbx(
-                rig, document.limb_models.keys(), document.parent_by_name
+                rig,
+                document.limb_models.keys(),
+                document.parent_by_name,
+                **source_mapping_evidence(document),
             ).pairs
         }
         unused_body_sources = sorted(source_body_names - mapped_source_names, key=str.casefold)
@@ -649,6 +710,11 @@ class CrigMappingWorkspace:
             + review
             + " Unmapped helpers keep their bind-local transform and inherit parent motion; "
             "use the filter above to review them. "
+            + (
+                f"Automatic evidence requires review on {review_required_count} row(s). "
+                if review_required_count
+                else "Automatic evidence has no ambiguous mapped rows. "
+            )
             + f"Map origin: {mapping_profile_origin(profile)}. {solver_text}"
         )
         self._filter_rows()
@@ -726,10 +792,15 @@ class CrigMappingWorkspace:
             rig = self._load_rig()
             document = self._document(animation)
             profile = self._current_profile(animation) or auto_map_crig_to_fbx(
-                rig, document.limb_models.keys(), document.parent_by_name
+                rig,
+                document.limb_models.keys(),
+                document.parent_by_name,
+                **source_mapping_evidence(document),
             )
             profile.pairs = [
-                row for row in profile.pairs if row.source_bone != target_rig_bone
+                row
+                for row in profile.pairs
+                if row.target_rig_bone != target_rig_bone
             ]
             if source_fbx_bone:
                 target = next(bone for bone in rig.bones if bone.name == target_rig_bone)
@@ -747,7 +818,9 @@ class CrigMappingWorkspace:
                 )
             profile.pairs.sort(
                 key=lambda pair: next(
-                    bone.index for bone in rig.bones if bone.name == pair.source_bone
+                    bone.index
+                    for bone in rig.bones
+                    if bone.name == pair.target_rig_bone
                 )
             )
             set_mapping_profile_origin(profile, "manually_reviewed")
@@ -802,7 +875,8 @@ class CrigMappingWorkspace:
         try:
             profile = GenericBoneMap.load(path)
             rig = self._load_rig()
-            if profile.source_skeleton_hash and profile.source_skeleton_hash != rig.skeleton_hash:
+            expected_bind = profile.target_bind_hash or profile.source_skeleton_hash
+            if expected_bind and expected_bind != rig.skeleton_hash:
                 raise ValueError("Mapping targets a different .crig skeleton")
             self._store_profile(animation, profile)
             self.refresh()

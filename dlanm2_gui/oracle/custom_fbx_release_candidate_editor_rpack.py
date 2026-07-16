@@ -15,7 +15,7 @@ from dlanm2_gui.animation_scr import AnimationScrSequence, build_animation_scr_s
 from dlanm2_gui.anm2 import Anm2Header
 from dlanm2_gui.anm2_components import decode_file_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
-from dlanm2_gui.oracle.binary_fbx_mixamo import FBX_TICKS_PER_SECOND, _FbxDocument
+from dlanm2_gui.fbx_core import FBX_TICKS_PER_SECOND, FbxDocument
 from dlanm2_gui.oracle.custom_fbx_smd_intrinsic_absolute_editor_rpack import (
     _add_absolute_clavicle_globals,
     _add_absolute_limb_globals,
@@ -285,7 +285,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
             "fixed_max_abs_matrix_delta": None,
         }
 
-    source_rest = _FbxDocument(Path(source_rest_fbx))
+    source_rest = FbxDocument(Path(source_rest_fbx))
     _validate_source_aliases(source_rest.limb_models, source_bone_aliases)
     source_rest_globals = apply_canonical_aliases(
         source_rest.global_matrices(tick=0, use_animation=False),
@@ -376,7 +376,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
 
     inventory: list[dict[str, Any]] = []
     for clip in clips:
-        animation = _FbxDocument(clip.path, animation_stack=clip.stack_name or None)
+        animation = FbxDocument(clip.path, animation_stack=clip.stack_name or None)
         if set(animation.limb_models) != set(source_rest.limb_models):
             raise ValueError(f"{clip.path.name}: animation and source-rest skeletons differ")
         _validate_source_aliases(animation.limb_models, source_bone_aliases)
@@ -669,7 +669,7 @@ def _add_controls(
 def _build_clip_candidate(
     *,
     spec: CandidateSpec,
-    animation: _FbxDocument,
+    animation: FbxDocument,
     frame_count: int,
     template_header: Anm2Header,
     descriptors: list[int],
@@ -1381,7 +1381,7 @@ def _reconstruct_target_globals(
 def _apply_root_policy(
     *,
     root_policy: str,
-    animation: _FbxDocument,
+    animation: FbxDocument,
     values: list[list[list[float]]],
     packed_flags: list[list[bool]],
     bind_track_rows: list[list[float]],
@@ -1499,7 +1499,7 @@ def _apply_root_policy(
 def _clip_inventory(
     clip: ClipSpec,
     *,
-    animation: _FbxDocument,
+    animation: FbxDocument,
     source_positions: list[dict[str, np.ndarray]],
     source_body_frames: list[np.ndarray],
 ) -> dict[str, Any]:
