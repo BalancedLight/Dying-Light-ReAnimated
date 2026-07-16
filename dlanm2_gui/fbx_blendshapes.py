@@ -22,6 +22,10 @@ from .fbx_core import (
     _properties70,
     _sample_curve,
 )
+from .model_importer.fbx_model import (
+    FbxFacialShapeGeometryError,
+    FbxLoadPurpose,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,12 +109,25 @@ def _channel_default(node: Any) -> float:
     direct = _child_value(node, "DeformPercent", None)
     if direct is not None:
         try:
-            return float(direct)
+            value = float(direct)
         except (TypeError, ValueError):
             pass
+        else:
+            if not math.isfinite(value):
+                raise FbxFacialShapeGeometryError(
+                    f"BlendShapeChannel {_channel_name(node)!r} has a non-finite "
+                    "default DeformPercent"
+                )
+            return value
     props = _properties70(node)
     values = props.get("DeformPercent") or props.get("Deform Percent") or [0.0]
-    return float(values[0]) if values else 0.0
+    value = float(values[0]) if values else 0.0
+    if not math.isfinite(value):
+        raise FbxFacialShapeGeometryError(
+            f"BlendShapeChannel {_channel_name(node)!r} has a non-finite "
+            "default DeformPercent"
+        )
+    return value
 
 
 def _shape_aliases(document: FbxDocument, channel_id: int, channel_name: str) -> tuple[str, ...]:
@@ -181,7 +198,22 @@ def _channel_curves_for_layer(
                 continue
             times = [int(value) for value in _child_value(curve, "KeyTime", [])]
             values = [float(value) for value in _child_value(curve, "KeyValueFloat", [])]
-            if times and len(times) == len(values):
+            if len(times) != len(values):
+                raise FbxFacialShapeGeometryError(
+                    f"BlendShapeChannel {channel_id} animation curve {curve_id} has "
+                    f"{len(times)} KeyTime rows and {len(values)} KeyValueFloat rows"
+                )
+            if any(not math.isfinite(value) for value in values):
+                raise FbxFacialShapeGeometryError(
+                    f"BlendShapeChannel {channel_id} animation curve {curve_id} contains "
+                    "a non-finite key value"
+                )
+            if any(right < left for left, right in zip(times, times[1:])):
+                raise FbxFacialShapeGeometryError(
+                    f"BlendShapeChannel {channel_id} animation curve {curve_id} has "
+                    "decreasing key times"
+                )
+            if times:
                 curve_rows.append((times, values))
         if curve_rows:
             # A BlendShapeChannel is scalar. Prefer the curve with the most keys if an exporter
@@ -208,7 +240,10 @@ def scan_fbx_blendshapes(
     if document is None:
         if source is None:
             raise ValueError("source or document is required")
-        document = FbxDocument(Path(source))
+        document = FbxDocument(
+            Path(source),
+            purpose=FbxLoadPurpose.ANIMATION_AND_FACIAL,
+        )
     source_path = str(Path(getattr(document, "path", source or "")).resolve())
     layer_id = _selected_layer_id(document, animation_stack)
     if hasattr(document, "frame_ticks"):
@@ -240,7 +275,11 @@ def scan_fbx_blendshapes(
                 _sample_curve(raw_curve, tick, default_raw) * scale
                 for tick in ticks
             ]
-        finite = [float(value) if math.isfinite(float(value)) else 0.0 for value in values]
+        finite = [float(value) for value in values]
+        if any(not math.isfinite(value) for value in finite):
+            raise FbxFacialShapeGeometryError(
+                f"BlendShapeChannel {name!r} samples to a non-finite DeformPercent value"
+            )
         spread = max(finite, default=0.0) - min(finite, default=0.0)
         aliases = _shape_aliases(document, channel_id, name)
         rows.append(FbxBlendShapeCurve(

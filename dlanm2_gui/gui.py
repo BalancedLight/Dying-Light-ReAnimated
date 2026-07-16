@@ -43,6 +43,7 @@ from .helper_retarget import (
 from .fbx_core import FbxDocument
 from .project_builder import build_project, export_project_anm2_files
 from .fbx_preflight import preflight_fbx
+from .model_importer.fbx_model import FbxImportTolerance
 from .retarget_profiles import (
     HUMANOID_ROLES,
     ROLE_BY_ID,
@@ -310,8 +311,22 @@ class MainWindow:
         self.game_combo.currentIndexChanged.connect(self._game_changed)
         self.game_status = qt["QLabel"]()
         self.game_status.setWordWrap(True)
+        self.import_tolerance_combo = self._combo_box()
+        self.import_tolerance_combo.addItem(
+            "Recommended / forgiving", FbxImportTolerance.RECOMMENDED.value
+        )
+        self.import_tolerance_combo.addItem(
+            "Strict diagnostics", FbxImportTolerance.STRICT_DIAGNOSTICS.value
+        )
+        self.import_tolerance_combo.setToolTip(
+            "Recommended recovers safe model discrepancies and reports them. Strict diagnostics "
+            "can block selected model recovery warnings, but irrelevant model geometry never "
+            "blocks animation import."
+        )
+        self.import_tolerance_combo.currentIndexChanged.connect(self._mark_dirty)
         form.addRow("Game", self.game_combo)
         form.addRow("Target status", self.game_status)
+        form.addRow("Import tolerance", self.import_tolerance_combo)
         form.addRow("Project name", self.project_name)
         form.addRow("Notes", self.project_notes)
         layout.addWidget(basics)
@@ -565,6 +580,21 @@ class MainWindow:
         self.range_note.setWordWrap(True)
         detail_form.addRow(self.range_note)
         layout.addWidget(detail)
+
+        diagnostics = qt["QGroupBox"]("Selected clip import diagnostics")
+        diagnostics.setToolTip(
+            "Findings are grouped by requested purpose and disposition. Repaired and ignored "
+            "model details do not prevent skeletal animation import."
+        )
+        diagnostics_layout = qt["QVBoxLayout"](diagnostics)
+        self.animation_import_diagnostics = qt["QPlainTextEdit"]()
+        self.animation_import_diagnostics.setReadOnly(True)
+        self.animation_import_diagnostics.setMaximumHeight(170)
+        self.animation_import_diagnostics.setPlaceholderText(
+            "Select an imported clip to review its FBX diagnostics."
+        )
+        diagnostics_layout.addWidget(self.animation_import_diagnostics)
+        layout.addWidget(diagnostics)
         self.tabs.addTab(page, "Animations")
 
 
@@ -772,8 +802,21 @@ class MainWindow:
             "for a clean user-facing build folder."
         )
         self.keep_anm2.toggled.connect(self._mark_dirty)
+        self.developer_diagnostics = qt["QCheckBox"](
+            "Include Python tracebacks in developer logs"
+        )
+        self.developer_diagnostics.setToolTip(
+            "Developer-only diagnostics. Normal dialogs and logs show actionable messages "
+            "without Python tracebacks."
+        )
+        self.developer_diagnostics.toggled.connect(
+            lambda checked: self.settings.setValue(
+                "developer_diagnostics", bool(checked)
+            )
+        )
         advanced_form.addRow(self.include_controls)
         advanced_form.addRow(self.keep_anm2)
+        advanced_form.addRow(self.developer_diagnostics)
         layout.addWidget(self.advanced_export_group)
 
         warning = qt["QLabel"](
@@ -1187,14 +1230,29 @@ class MainWindow:
                 document = self._source_document(str(path))
             except Exception:
                 preflight = preflight_fbx(
-                    path, purpose="animation", game_id=self.project.game_id
+                    path,
+                    purpose="animation",
+                    game_id=self.project.game_id,
+                    tolerance=self._current_import_tolerance(),
                 )
                 blocked_messages.append(
                     f"{path.name}\n{preflight.actionable_message()}"
                 )
                 continue
             stacks = list(document.animation_stacks)
-            selections = [stack.name for stack in stacks] or [""]
+            preferred_stack = (
+                document.preferred_animation_stack()
+                if hasattr(document, "preferred_animation_stack")
+                else None
+            )
+            if preferred_stack is not None:
+                selections = [preferred_stack.name]
+            elif len(stacks) == 1:
+                selections = [stacks[0].name]
+            else:
+                # Preserve every manual stack choice on one editable row when
+                # curve activity has no unique winner.
+                selections = [""]
             target_rig = None
             target_rig_error = ""
             try:
@@ -1229,6 +1287,8 @@ class MainWindow:
                 preflight = preflight_fbx(
                     path, purpose="animation", animation_stack=stack_name or None,
                     target_rig=target_rig, game_id=self.project.game_id,
+                    document=document,
+                    tolerance=self._current_import_tolerance(),
                 )
                 row.extensions["fbx_preflight"] = preflight.to_dict()
                 if preflight.import_blocking:
@@ -1285,13 +1345,34 @@ class MainWindow:
                     )
 
                 repairable = preflight.repairable_findings
-                if repairable or attention_findings or target_rig_error or mapping_note:
+                grouped_findings: dict[str, list[dict[str, Any]]] = {}
+                for finding in preflight.findings:
+                    grouped_findings.setdefault(finding.group, []).append(
+                        {
+                            "code": finding.code,
+                            "outcome": finding.outcome,
+                            "detected": finding.detected,
+                            "action": finding.action,
+                        }
+                    )
+                if (
+                    preflight.findings
+                    or repairable
+                    or attention_findings
+                    or target_rig_error
+                    or mapping_note
+                ):
+                    mapping_review = bool(
+                        repairable or attention_findings or target_rig_error or mapping_note
+                    )
                     row.extensions["import_state"] = {
                         "status": (
                             "mapping_review"
-                            if (repairable or attention_findings or target_rig_error)
-                            else "ready"
+                            if mapping_review
+                            else "imported_with_warnings"
                         ),
+                        "requested_purpose": "animation",
+                        "finding_groups": grouped_findings,
                         "repairable_codes": [finding.code for finding in repairable],
                         "warning_codes": [finding.code for finding in attention_findings],
                         "mapping_note": mapping_note,
@@ -1335,8 +1416,8 @@ class MainWindow:
             self.qt["QMessageBox"].warning(
                 self.window,
                 "Clips added — mapping review needed",
-                "The clips were added and remain editable. They are not exact skeleton matches, "
-                "so review the generated suggestions with the Edit mapping button before export.\n\n"
+                "The clips were added and remain editable. Review the named stack, bind, or "
+                "mapping findings in the row diagnostics before export.\n\n"
                 + "\n\n---\n\n".join(repair_messages),
             )
 
@@ -1542,7 +1623,7 @@ class MainWindow:
             self._target_rig_cache[resolved] = rig
         return rig
 
-    def _animation_target_status(
+    def _animation_target_status_core(
         self, animation: ProjectAnimation
     ) -> tuple[str, str]:
         selection = resolve_animation_target(
@@ -1616,6 +1697,26 @@ class MainWindow:
             details.append("The selected profile is not a humanoid mapping.")
             return f"{prefix} • Humanoid • wrong map type", "\n".join(details)
         return f"{prefix} • Humanoid • mapping ready", "\n".join(details)
+
+    def _animation_target_status(
+        self, animation: ProjectAnimation
+    ) -> tuple[str, str]:
+        status, tooltip = self._animation_target_status_core(animation)
+        import_state = dict(animation.extensions.get("import_state", {}) or {})
+        groups = dict(import_state.get("finding_groups", {}) or {})
+        nonfatal_count = sum(
+            len(rows)
+            for group, rows in groups.items()
+            if group != "fatal" and isinstance(rows, list)
+        )
+        if nonfatal_count:
+            status = f"Imported with warnings • {status}"
+            tooltip = (
+                f"Imported with {nonfatal_count} non-fatal FBX finding(s). "
+                "Select the row to review grouped diagnostics.\n\n"
+                + tooltip
+            )
+        return status, tooltip
 
     def _refresh_animation_table(self) -> None:
         qt = self.qt
@@ -1835,8 +1936,55 @@ class MainWindow:
                     -1 if animation.end_frame is None else animation.end_frame
                 )
                 self.fps_spin.setValue(animation.fps)
+            if hasattr(self, "animation_import_diagnostics"):
+                self.animation_import_diagnostics.setPlainText(
+                    self._format_animation_import_diagnostics(animation)
+                )
         finally:
             self._refreshing = False
+
+    @staticmethod
+    def _format_animation_import_diagnostics(
+        animation: ProjectAnimation | None,
+    ) -> str:
+        if animation is None:
+            return "Select an imported clip to review its FBX diagnostics."
+        payload = dict(animation.extensions.get("fbx_preflight", {}) or {})
+        if not payload:
+            return (
+                f"File: {animation.source_fbx}\n"
+                "No saved FBX preflight report is available for this project row."
+            )
+        lines = [
+            f"File: {payload.get('path') or animation.source_fbx}",
+            f"Requested purpose: {payload.get('purpose', 'animation')}",
+        ]
+        grouped: dict[str, list[dict[str, Any]]] = {
+            "repaired": [],
+            "ignored": [],
+            "needs_review": [],
+            "fatal": [],
+        }
+        for finding in payload.get("findings", ()) or ():
+            if not isinstance(finding, dict):
+                continue
+            group = str(finding.get("group", "needs_review") or "needs_review")
+            grouped.setdefault(group, []).append(finding)
+        for group in ("repaired", "ignored", "needs_review", "fatal"):
+            rows = grouped.get(group, [])
+            lines.extend(("", f"{group.replace('_', ' ').title()} ({len(rows)})"))
+            if not rows:
+                lines.append("  None")
+                continue
+            for finding in rows:
+                lines.append(
+                    f"  [{finding.get('code', 'fbx_finding')}] "
+                    f"{finding.get('detected', '')}"
+                )
+                action = str(finding.get("action", "") or "")
+                if action:
+                    lines.append(f"    Action: {action}")
+        return "\n".join(lines)
 
     def _selected_range_changed(self) -> None:
         if self._refreshing:
@@ -1895,7 +2043,11 @@ class MainWindow:
         resolved = str(Path(path).resolve())
         document = self._source_cache.get(resolved)
         if document is None:
-            document = FbxDocument(Path(resolved))
+            document = FbxDocument(
+                Path(resolved),
+                purpose="animation",
+                tolerance=self._current_import_tolerance(),
+            )
             self._source_cache[resolved] = document
         return document
 
@@ -2517,8 +2669,25 @@ class MainWindow:
             self.status.showMessage("Ready", 3000)
 
     def _background_build_error(self, title: str, failure: TaskFailure) -> None:
-        self._append_build_log(failure.traceback)
-        self._show_error(title, RuntimeError(failure.display_message()))
+        developer_diagnostics = self._developer_diagnostics_enabled()
+        self._append_build_log(
+            failure.traceback if developer_diagnostics else failure.display_message(False)
+        )
+        self._show_error(
+            title,
+            RuntimeError(failure.display_message(developer_diagnostics)),
+        )
+
+    def _developer_diagnostics_enabled(self) -> bool:
+        advanced = bool(
+            getattr(self, "advanced_mode_toggle", None)
+            and self.advanced_mode_toggle.isChecked()
+        )
+        enabled = bool(
+            getattr(self, "developer_diagnostics", None)
+            and self.developer_diagnostics.isChecked()
+        )
+        return advanced and enabled
 
     def _background_work_active(self) -> bool:
         runners = [self.background_tasks, *getattr(self, "extra_task_runners", [])]
@@ -2913,11 +3082,16 @@ class MainWindow:
                 )
 
         def failed(failure: TaskFailure) -> None:
-            self.reverse_log.appendPlainText(failure.traceback)
+            developer_diagnostics = self._developer_diagnostics_enabled()
+            self.reverse_log.appendPlainText(
+                failure.traceback
+                if developer_diagnostics
+                else failure.display_message(False)
+            )
             if not self._reverse_cancel_event.is_set():
                 self._show_error(
                     "ANM2 to FBX export failed",
-                    RuntimeError(failure.display_message()),
+                    RuntimeError(failure.display_message(developer_diagnostics)),
                 )
 
         def finished() -> None:
@@ -2969,6 +3143,17 @@ class MainWindow:
             self._set_combo_data(self.collision_combo, self.project.export.collision_policy)
             self.include_controls.setChecked(self.project.export.include_validation_controls)
             self.keep_anm2.setChecked(self.project.export.write_intermediate_anm2)
+            self._set_combo_data(
+                self.import_tolerance_combo,
+                str(
+                    self.project.extensions.get(
+                        "import_tolerance", FbxImportTolerance.RECOMMENDED.value
+                    )
+                ),
+            )
+            self.developer_diagnostics.setChecked(
+                self.settings.value("developer_diagnostics", False, type=bool)
+            )
             self._reverse_reload_rigs()
             if self.project.anm2_to_fbx.items:
                 self._set_combo_data(
@@ -3055,7 +3240,20 @@ class MainWindow:
         self.project.export.collision_policy = str(self.collision_combo.currentData())
         self.project.export.include_validation_controls = self.include_controls.isChecked()
         self.project.export.write_intermediate_anm2 = self.keep_anm2.isChecked()
+        self.project.extensions["import_tolerance"] = self._current_import_tolerance()
         self._sync_reverse_from_ui()
+
+    def _current_import_tolerance(self) -> str:
+        combo = getattr(self, "import_tolerance_combo", None)
+        if combo is not None:
+            value = combo.currentData()
+            if value:
+                return FbxImportTolerance.coerce(str(value)).value
+        project = getattr(self, "project", None)
+        extensions = getattr(project, "extensions", {}) if project is not None else {}
+        return FbxImportTolerance.coerce(
+            extensions.get("import_tolerance", FbxImportTolerance.RECOMMENDED.value)
+        ).value
 
     def _combo_box(self) -> Any:
         return self._NoWheelComboBox()

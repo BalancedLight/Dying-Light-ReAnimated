@@ -64,6 +64,7 @@ def _selectable_document() -> _FbxDocument:
     document.curves = {}
     document.animation_start_tick = 0
     document.animation_stop_tick = 0
+    document.limb_models = {"Bone": 10}
     return document
 
 
@@ -123,3 +124,38 @@ def test_stack_inventory_follows_connections_not_layer0_name() -> None:
     assert len(inventory) == 1
     assert inventory[0].name == "Skeleton|SkeletonAction"
     assert inventory[0].layer_names == ("Skeleton|SkeletonAction",)
+
+
+def test_unique_changing_skeletal_stack_is_preferred_over_static_peer() -> None:
+    document = _selectable_document()
+    first_values = next(
+        child
+        for child in document.object_by_id[30].children
+        if child.name == "KeyValueFloat"
+    )
+    first_values.properties[0] = [1.0, 1.0]
+
+    preferred = document.preferred_animation_stack()
+
+    assert preferred is not None
+    assert preferred.name == "Run"
+    activity = {row.name: row for row in document.animation_stack_activity()}
+    assert activity["Walk"].skeletal_channel_count == 1
+    assert activity["Walk"].changing_skeletal_channel_count == 0
+    assert activity["Run"].changing_skeletal_channel_count == 1
+
+
+def test_malformed_curve_is_actionable_stack_data_not_fbx_unreadable() -> None:
+    document = _selectable_document()
+    document.scene = type("Scene", (), {"model_names": {10: "Bone"}})()
+    values = next(
+        child
+        for child in document.object_by_id[31].children
+        if child.name == "KeyValueFloat"
+    )
+    values.properties[0] = [8.0]
+
+    activity = {row.name: row for row in document.animation_stack_activity()}
+
+    assert not activity["Run"].usable
+    assert "KeyTime rows" in activity["Run"].reason

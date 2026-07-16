@@ -286,6 +286,85 @@ def test_cross_rig_animation_is_added_with_editable_map_and_opens_editor(
     shell.window.close()
 
 
+def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_stack(
+    tmp_path, monkeypatch
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    valid = tmp_path / "valid.fbx"
+    corrupt = tmp_path / "corrupt.fbx"
+    valid.write_bytes(b"fixture")
+    corrupt.write_bytes(b"broken")
+    take = SimpleNamespace(name="Take 001")
+    useful = SimpleNamespace(name="mixamo.com")
+    document = SimpleNamespace(
+        animation_stacks=(take, useful),
+        animation_stack_names=(take.name, useful.name),
+        preferred_animation_stack=lambda: useful,
+        limb_models={"Hips": 1, "Spine": 2, "Head": 3},
+        parent_by_name={"Hips": None, "Spine": "Hips", "Head": "Spine"},
+    )
+
+    def source_document(path: str):
+        if Path(path).name == corrupt.name:
+            raise ValueError("truncated binary node stream")
+        return document
+
+    def preflight(path, **_kwargs):
+        report = FbxPreflightReport(str(path), "animation")
+        if Path(path).name == corrupt.name:
+            report.add(
+                ERROR,
+                "fbx_unreadable",
+                "The FBX has a truncated binary node stream.",
+                "Required animation objects cannot be parsed.",
+                "Re-export the corrupt file.",
+            )
+        else:
+            report.add(
+                "informational",
+                "model_geometry_ignored_for_animation",
+                "Model geometry was not loaded for animation import.",
+                "The selected skeletal clip does not consume it.",
+                "No action is required.",
+                group="ignored",
+            )
+        return report
+
+    critical_messages: list[str] = []
+    monkeypatch.setattr(controller, "_source_document", source_document)
+    monkeypatch.setattr(gui, "preflight_fbx", preflight)
+    monkeypatch.setattr(
+        qt["QFileDialog"],
+        "getOpenFileNames",
+        lambda *_args: ([str(corrupt), str(valid)], ""),
+    )
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "critical",
+        lambda _parent, _title, message: critical_messages.append(message),
+    )
+    monkeypatch.setattr(qt["QMessageBox"], "warning", lambda *_args: None)
+
+    controller.add_animations()
+
+    assert len(controller.project.animations) == 1
+    animation = controller.project.animations[0]
+    assert Path(animation.source_fbx).name == valid.name
+    assert animation.source_animation_stack == "mixamo.com"
+    assert animation.extensions["import_state"]["status"] == "imported_with_warnings"
+    assert "model_geometry_ignored_for_animation" in (
+        controller.animation_import_diagnostics.toPlainText()
+    )
+    assert len(critical_messages) == 1
+    assert "truncated binary node stream" in critical_messages[0]
+    status = controller._animation_target_status(animation)[0]
+    assert status.startswith("Imported with warnings")
+    controller.dirty = False
+    shell.window.close()
+
+
 def test_animation_build_uses_background_runner(tmp_path, monkeypatch) -> None:
     qt, app = _application(tmp_path)
     shell = UnifiedMainWindow(qt, gui)

@@ -143,3 +143,13 @@ def test_background_key_error_message_explains_what_the_name_means() -> None:
     assert "not an actual body part" in message
     assert "should not block export" in message
     assert "build log" in message
+
+
+def test_normal_gui_failure_message_has_no_traceback_hint() -> None:
+    failure = TaskFailure("Malformed animation curve data", "Traceback: developer details", "ValueError")
+
+    message = failure.display_message(False)
+
+    assert message == "Malformed animation curve data"
+    assert "Traceback" not in message
+    assert "build log" not in message

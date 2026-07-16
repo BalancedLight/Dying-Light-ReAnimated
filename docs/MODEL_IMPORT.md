@@ -17,7 +17,7 @@ Exact Rig is the safest alternative when a fitted DL1 target role is missing or 
 
 ## Analyze once through the canonical FBX contract
 
-Click **Analyze models** before building. Model and animation paths share the same production FBX evaluator. Model analysis keeps the parsed scene for build and records a serializable transform contract with:
+Click **Analyze models** before building. Model and animation paths share the same production FBX transform/bind evaluator, while each requests only its own data domains. Model analysis requests geometry, topology, materials, skin, and shape payloads; animation import does not. Model analysis keeps the parsed scene for build and records a serializable transform contract with:
 
 - FBX version, source hash, detected units, and axis metadata;
 - requested and resolved orientation policy;
@@ -85,7 +85,9 @@ The model report separates total hierarchy nodes from per-subset palette sizes a
 
 The importer preserves source triangle order and deduplicates only a complete emitted-vertex key: transformed position, normal, tangent/binormal inputs, UV, color, normalized global influences, and morph identity where present. UV seams, hard-normal seams, material boundaries, different weights, and different morph values remain distinct.
 
-Source tangents are imported when valid; otherwise the report states that they were rebuilt. Invalid or repeated indexes, non-finite positions, zero-area triangles, and unsafe concave/non-planar polygons fail with instructions to repair or triangulate the named geometry before export.
+Quads evaluate both diagonals deterministically using geometric/area quality, triangle-normal consistency, and UV consistency when available. Non-planarity is reported as an automatic repair rather than rejected. Simple convex or concave n-gons use a stable best-fit-plane projection and deterministic ear clipping. If numerical ear selection is inconclusive but a simple polygon has a provably valid fan, the importer uses that fan and warns. Every emitted triangle retains its source polygon, material, layer, and corner provenance.
+
+Source normals and tangents are imported when valid; missing normals and invalid/absent tangents are reconstructed and reported. Model output blocks only for out-of-range control-point indexes, non-finite coordinates, fewer than three usable distinct points, irreparably self-intersecting topology, or a face that cannot produce any valid output triangle. **Recommended / forgiving** is the default import tolerance. **Strict diagnostics** can make selected recovery warnings block before output.
 
 The model AABB remains independent from skinned bone-display bounds. A non-rendering ordinary `MESH` carrier after the `MESH_SKINNED` elements stores the exact emitted-vertex bounds without entering the animation prefix or visible skin palettes.
 

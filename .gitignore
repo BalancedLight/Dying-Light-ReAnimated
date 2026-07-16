@@ -12,6 +12,7 @@ venv/
 .coverage
 .coverage.*
 htmlcov/
+.pytest_tmp/
 
 # Packaging and build output
 build/

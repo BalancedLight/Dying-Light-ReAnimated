@@ -130,7 +130,11 @@ If an older project appears to have lost a target override, do not resave it in 
 
 ## Multiple animation stacks or a bind-pose-only row appears
 
-Select the intended stack on each animation row. A source FBX with multiple stacks creates separate selectable clips. A multi-layer stack must be baked/flattened to one layer. A row with no changing skeletal channels may be disabled or warned because it would export a bind-pose clip.
+The importer selects the unique stack with changing skeletal channels automatically and leaves every peer stack available in the row dropdown. If multiple stacks are equally useful, select the intended one manually on the single imported row. A multi-layer stack must be baked/flattened to one layer. A constant skeletal stack remains valid when the file is an intentional T-pose/rest-pose source.
+
+## Animation import reports model polygon problems
+
+Animation loading does not construct or triangulate model geometry. The diagnostics panel may inventory or report an embedded display mesh as ignored, but quads, n-gons, non-planarity, missing tangents/normals, materials, and model skin topology are not inputs to skeletal ANM2 sampling. Repair that mesh only if you later request a model build. If the animation row itself is blocked, follow the scoped `animation_skeleton_unusable` or `animation_stack_unusable` finding; a true `fbx_unreadable` finding means the FBX container or required object/connection data could not be parsed.
 
 ## Custom model is correct at rest but explodes when animation starts
 

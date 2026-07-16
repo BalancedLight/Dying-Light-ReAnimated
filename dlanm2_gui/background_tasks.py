@@ -19,8 +19,14 @@ class TaskFailure:
     def from_exception(cls, exc: Exception) -> "TaskFailure":
         return cls(str(exc), traceback.format_exc(), type(exc).__name__)
 
-    def display_message(self) -> str:
-        """Return a useful dialog message while the traceback stays in the log."""
+    def display_message(self, include_traceback_hint: bool = True) -> str:
+        """Return an actionable dialog message without exposing a traceback."""
+
+        diagnostic_suffix = (
+            " The full technical traceback is in the build log."
+            if include_traceback_hint
+            else ""
+        )
 
         if self.exception_type == "KeyError":
             missing = self.message.strip().strip("'\"") or "(unknown item)"
@@ -32,14 +38,15 @@ class TaskFailure:
                     "HeadTop_End is a non-deforming marker above the head that some "
                     "rigs use to indicate which direction the head points. It is not "
                     "an actual body part and its absence should not block export. The "
-                    "full technical traceback is in the build log."
+                    "HeadTop_End can be left unmapped for this export."
+                    + diagnostic_suffix
                 )
             return (
                 "The exporter tried to use data that is not present.\n\n"
                 f"Missing item: {missing}\n\n"
                 "This usually means a bone, resource, or mapping entry was treated as "
-                "required even though the imported file does not contain it. The full "
-                "technical traceback is in the build log."
+                "required even though the imported file does not contain it."
+                + diagnostic_suffix
             )
         if self.message.strip():
             return self.message

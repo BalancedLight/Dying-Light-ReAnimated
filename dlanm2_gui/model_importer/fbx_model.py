@@ -9,6 +9,7 @@ DCC FBX exports and keeps every coordinate-space conversion explicit.
 
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 import hashlib
@@ -56,6 +57,153 @@ BLENDSHAPE_IDENTITY_NOOP = "identity_noop"
 BLENDSHAPE_REAL_STATIC = "real_static_morph"
 BLENDSHAPE_REAL_ANIMATED = "real_animated_morph"
 BLENDSHAPE_MALFORMED = "malformed"
+
+
+class FbxLoadPurpose(str, Enum):
+    """Requested FBX domains for one consumer."""
+
+    ANIMATION = "animation"
+    MODEL = "model"
+    ANIMATION_AND_FACIAL = "animation_and_facial"
+    FULL_DIAGNOSTIC = "full_diagnostic"
+
+    @classmethod
+    def coerce(cls, value: "FbxLoadPurpose | str") -> "FbxLoadPurpose":
+        if isinstance(value, cls):
+            return value
+        return cls(str(value or cls.MODEL.value).strip().lower())
+
+
+class FbxImportTolerance(str, Enum):
+    RECOMMENDED = "recommended"
+    STRICT_DIAGNOSTICS = "strict_diagnostics"
+
+    @classmethod
+    def coerce(
+        cls,
+        value: "FbxImportTolerance | str",
+    ) -> "FbxImportTolerance":
+        if isinstance(value, cls):
+            return value
+        normalized = str(value or cls.RECOMMENDED.value).strip().lower()
+        aliases = {
+            "forgiving": cls.RECOMMENDED.value,
+            "strict": cls.STRICT_DIAGNOSTICS.value,
+        }
+        return cls(aliases.get(normalized, normalized))
+
+
+class FbxDomainError(ValueError):
+    """A parsed FBX whose requested domain is unusable."""
+
+    def __init__(self, code: str, domain: str, message: str) -> None:
+        super().__init__(message)
+        self.code = str(code)
+        self.domain = str(domain)
+
+
+class FbxUnreadableError(FbxDomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__("fbx_unreadable", "container", message)
+
+
+class FbxModelGeometryError(FbxDomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__("model_geometry_unusable", "model_geometry", message)
+
+
+class FbxAnimationStackError(FbxDomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__("animation_stack_unusable", "animation", message)
+
+
+class FbxAnimationSkeletonError(FbxDomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__("animation_skeleton_unusable", "skeleton", message)
+
+
+class FbxFacialShapeGeometryError(FbxDomainError):
+    def __init__(self, message: str) -> None:
+        super().__init__("facial_shape_geometry_unusable", "facial", message)
+
+
+@dataclass(frozen=True, slots=True)
+class FbxLoadOptions:
+    purpose: FbxLoadPurpose
+    tolerance: FbxImportTolerance
+    load_skeleton: bool
+    load_animation: bool
+    load_bind_pose: bool
+    load_geometry: bool
+    load_skin: bool
+    load_materials: bool
+    load_blendshape_geometry: bool
+    load_blendshape_curves: bool
+
+    @classmethod
+    def for_purpose(
+        cls,
+        purpose: FbxLoadPurpose | str,
+        *,
+        tolerance: FbxImportTolerance | str = FbxImportTolerance.RECOMMENDED,
+    ) -> "FbxLoadOptions":
+        selected = FbxLoadPurpose.coerce(purpose)
+        policy = FbxImportTolerance.coerce(tolerance)
+        if selected == FbxLoadPurpose.ANIMATION:
+            return cls(
+                selected,
+                policy,
+                True,
+                True,
+                True,
+                False,
+                False,
+                False,
+                False,
+                False,
+            )
+        if selected == FbxLoadPurpose.ANIMATION_AND_FACIAL:
+            return cls(
+                selected,
+                policy,
+                True,
+                True,
+                True,
+                False,
+                False,
+                False,
+                False,
+                True,
+            )
+        return cls(
+            selected,
+            policy,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+            True,
+        )
+
+    @property
+    def loaded_domains(self) -> tuple[str, ...]:
+        return tuple(
+            name.removeprefix("load_")
+            for name in (
+                "load_skeleton",
+                "load_animation",
+                "load_bind_pose",
+                "load_geometry",
+                "load_skin",
+                "load_materials",
+                "load_blendshape_geometry",
+                "load_blendshape_curves",
+            )
+            if bool(getattr(self, name))
+        )
 
 
 @dataclass(slots=True)
@@ -295,6 +443,16 @@ class FbxTriangle:
     corners: tuple[FbxTriangleCorner, FbxTriangleCorner, FbxTriangleCorner]
 
 
+@dataclass(frozen=True, slots=True)
+class FbxPolygonTriangulation:
+    """Deterministic triangulation with indexes into the source polygon corners."""
+
+    triangles: tuple[tuple[int, int, int], ...]
+    method: str
+    maximum_plane_deviation: float = 0.0
+    warnings: tuple[str, ...] = ()
+
+
 @dataclass(slots=True)
 class FbxLayerElement:
     kind: str
@@ -455,13 +613,26 @@ class FbxScene:
     blend_shapes: tuple[FbxBlendShapeTarget, ...] = ()
     warnings: list[str] = field(default_factory=list)
     mesh_bind_source_by_geometry: dict[str, str] = field(default_factory=dict)
+    skin_clusters: tuple[FbxCluster, ...] = ()
+    raw_geometry_inventory: tuple[dict[str, Any], ...] = ()
+    geometry_findings: list[dict[str, Any]] = field(default_factory=list)
+    load_purpose: str = FbxLoadPurpose.MODEL.value
+    import_tolerance: str = FbxImportTolerance.RECOMMENDED.value
+    loaded_domains: tuple[str, ...] = ()
 
     @classmethod
-    def from_path(cls, path: str | Path) -> "FbxScene":
+    def from_path(
+        cls,
+        path: str | Path,
+        *,
+        purpose: FbxLoadPurpose | str = FbxLoadPurpose.MODEL,
+        tolerance: FbxImportTolerance | str = FbxImportTolerance.RECOMMENDED,
+    ) -> "FbxScene":
+        options = FbxLoadOptions.for_purpose(purpose, tolerance=tolerance)
         source = Path(path)
         data = source.read_bytes()
         if not data.startswith(b"Kaydara FBX Binary"):
-            raise ValueError(
+            raise FbxUnreadableError(
                 f"Detected an ASCII, non-FBX, or unsupported non-binary file at {source}. "
                 "The canonical importer requires binary FBX transform, bind, and animation "
                 "records and cannot safely infer them from this input. Re-export as FBX "
@@ -469,17 +640,22 @@ class FbxScene:
                 "export contains the intended hierarchy; no model or animation output was written."
             )
         if len(data) < 27:
-            raise ValueError(f"FBX file is truncated: {source}")
+            raise FbxUnreadableError(f"FBX file is truncated: {source}")
         version = struct.unpack_from("<I", data, 23)[0]
         if version < 7100 or version > 7700:
-            raise ValueError(
+            raise FbxUnreadableError(
                 f"unsupported binary FBX version {version} in {source}. Re-export as FBX "
                 "2011-2020 binary (versions 7100-7700); ASCII FBX is not supported."
             )
-        nodes, _ = _parse_nodes(data, 27, version)
+        try:
+            nodes, _ = _parse_nodes(data, 27, version)
+        except (ValueError, IndexError, struct.error, zlib.error) as exc:
+            raise FbxUnreadableError(
+                f"FBX binary node stream is corrupt or truncated: {exc}"
+            ) from exc
         top = {node.name: node for node in nodes}
         if "Objects" not in top or "Connections" not in top:
-            raise ValueError("FBX is missing Objects or Connections")
+            raise FbxUnreadableError("FBX is missing Objects or Connections")
         objects = top["Objects"]
         object_by_id = {
             int(node.properties[0]): node
@@ -515,16 +691,51 @@ class FbxScene:
             object_id: str(object_by_id[object_id].properties[2])
             for object_id in model_ids
         }
-        material_names = {
-            int(node.properties[0]): _clean_name(node.properties[1])
-            for node in objects.children
-            if node.name == "Material" and len(node.properties) >= 2
-        }
-        bind_pose_matrices = _read_bind_pose_matrices(objects)
+        material_names = (
+            {
+                int(node.properties[0]): _clean_name(node.properties[1])
+                for node in objects.children
+                if node.name == "Material" and len(node.properties) >= 2
+            }
+            if options.load_materials
+            else {}
+        )
+        bind_pose_matrices = (
+            _read_bind_pose_matrices(objects) if options.load_bind_pose else {}
+        )
         axis = _axis_settings(top.get("GlobalSettings"))
-        unit_factor = float(axis.get("UnitScaleFactor") or 1.0)
+        try:
+            unit_factor = float(axis.get("UnitScaleFactor") or 1.0)
+        except (TypeError, ValueError, OverflowError) as exc:
+            code = (
+                "animation_skeleton_unusable"
+                if options.purpose
+                in {
+                    FbxLoadPurpose.ANIMATION,
+                    FbxLoadPurpose.ANIMATION_AND_FACIAL,
+                }
+                else "model_geometry_unusable"
+            )
+            raise FbxDomainError(
+                code,
+                "transform",
+                f"invalid FBX UnitScaleFactor {axis.get('UnitScaleFactor')!r}",
+            ) from exc
         if not math.isfinite(unit_factor) or unit_factor <= 0.0:
-            raise ValueError(f"invalid FBX UnitScaleFactor {unit_factor!r}")
+            code = (
+                "animation_skeleton_unusable"
+                if options.purpose
+                in {
+                    FbxLoadPurpose.ANIMATION,
+                    FbxLoadPurpose.ANIMATION_AND_FACIAL,
+                }
+                else "model_geometry_unusable"
+            )
+            raise FbxDomainError(
+                code,
+                "transform",
+                f"invalid FBX UnitScaleFactor {unit_factor!r}",
+            )
         meters_per_unit = unit_factor / 100.0
 
         scene = cls(
@@ -546,12 +757,63 @@ class FbxScene:
             axis_settings=axis,
             meters_per_unit=meters_per_unit,
             blend_shapes=(),
+            raw_geometry_inventory=_raw_geometry_inventory(object_by_id),
+            load_purpose=options.purpose.value,
+            import_tolerance=options.tolerance.value,
+            loaded_domains=options.loaded_domains,
         )
-        scene._validate_axis_contract()
-        scene.animation_stacks = scene._read_animation_stacks()
-        scene.geometries = scene._read_geometries()
-        scene.blend_shapes = scene._read_blend_shapes()
-        scene.blend_shape_names = scene._read_blend_shape_names()
+        try:
+            scene._validate_axis_contract()
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            code = (
+                "animation_skeleton_unusable"
+                if options.purpose
+                in {
+                    FbxLoadPurpose.ANIMATION,
+                    FbxLoadPurpose.ANIMATION_AND_FACIAL,
+                }
+                else "model_geometry_unusable"
+            )
+            raise FbxDomainError(code, "transform", str(exc)) from exc
+        try:
+            scene.animation_stacks = (
+                scene._read_animation_stacks() if options.load_animation else ()
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise FbxAnimationStackError(str(exc)) from exc
+        try:
+            scene.skin_clusters = (
+                scene._read_skin_clusters(include_weights=options.load_skin)
+                if options.load_bind_pose or options.load_skin
+                else ()
+            )
+        except (TypeError, ValueError, OverflowError) as exc:
+            if options.load_geometry:
+                raise FbxModelGeometryError(
+                    f"Skin/Cluster data is malformed: {exc}"
+                ) from exc
+            raise FbxAnimationSkeletonError(
+                f"Bind-pose cluster data is malformed: {exc}"
+            ) from exc
+        if options.load_geometry:
+            try:
+                scene.geometries = scene._read_geometries()
+            except FbxDomainError:
+                raise
+            except (TypeError, ValueError, IndexError, np.linalg.LinAlgError) as exc:
+                raise FbxModelGeometryError(str(exc)) from exc
+        if options.load_blendshape_geometry and options.load_geometry:
+            try:
+                scene.blend_shapes = scene._read_blend_shapes()
+            except FbxDomainError:
+                raise
+            except (TypeError, ValueError, IndexError) as exc:
+                raise FbxFacialShapeGeometryError(str(exc)) from exc
+        scene.blend_shape_names = (
+            scene._read_blend_shape_names()
+            if options.load_blendshape_curves or options.load_blendshape_geometry
+            else ()
+        )
         for geometry in scene.geometries:
             geometry.blend_shapes = tuple(
                 row
@@ -823,11 +1085,17 @@ class FbxScene:
             "size": self.path.stat().st_size,
             "sha256": self.sha256,
             "fbx_version": self.version,
+            "load_purpose": self.load_purpose,
+            "import_tolerance": self.import_tolerance,
+            "loaded_domains": list(self.loaded_domains),
             "axis_settings": self.axis_settings,
             "meters_per_unit": self.meters_per_unit,
             "detected_mode": detected_mode,
             "model_count": len(self.model_ids),
             "mesh_geometry_count": len(self.geometries),
+            "raw_mesh_geometry_count": len(self.raw_geometry_inventory),
+            "raw_geometry_inventory": list(self.raw_geometry_inventory),
+            "geometry_findings": list(self.geometry_findings),
             "limb_node_count": len(self.limb_ids),
             "armature_roots": [self.model_names[row] for row in self.armature_roots],
             "weighted_bone_count": len(weighted_bones),
@@ -869,6 +1137,8 @@ class FbxScene:
             control_points = np.asarray(vertices, dtype=float).reshape((-1, 3))
             geometry_name = _clean_name(node.properties[1])
             raw_indices = [int(value) for value in (_child_value(node, "PolygonVertexIndex", []) or [])]
+            layers = _read_layer_elements(node)
+            uv_layer = min(layers.get("LayerElementUV", []), key=lambda row: row.index, default=None)
             polygons: list[tuple[FbxTriangleCorner, ...]] = []
             triangles: list[FbxTriangle] = []
             current: list[FbxTriangleCorner] = []
@@ -898,23 +1168,63 @@ class FbxScene:
                             f"control point {invalid_control_points[0]} outside 0.."
                             f"{max(0, len(control_points) - 1)}; repair the mesh and re-export"
                         )
-                    _validate_polygon_for_fan(
-                        np.asarray(
-                            [
-                                control_points[corner.control_point_index]
-                                for corner in polygon
-                            ],
-                            dtype=float,
-                        ),
-                        geometry_name=geometry_name,
+                    polygon_points = np.asarray(
+                        [control_points[corner.control_point_index] for corner in polygon],
+                        dtype=float,
+                    )
+                    polygon_uvs = _polygon_layer_values(
+                        uv_layer,
+                        polygon,
                         polygon_index=polygon_index,
                     )
+                    triangulation = _triangulate_polygon(
+                        polygon_points,
+                        geometry_name=geometry_name,
+                        polygon_index=polygon_index,
+                        uvs=polygon_uvs,
+                    )
+                    if triangulation.warnings:
+                        strict_recovery = any(
+                            marker in warning
+                            for warning in triangulation.warnings
+                            for marker in (
+                                "non-planar face",
+                                "duplicate/collinear",
+                                "fan fallback",
+                            )
+                        )
+                        if (
+                            strict_recovery
+                            and self.import_tolerance
+                            == FbxImportTolerance.STRICT_DIAGNOSTICS.value
+                        ):
+                            raise ValueError(
+                                f"geometry {geometry_name!r} polygon {polygon_index} requires "
+                                f"tolerant triangulation ({'; '.join(triangulation.warnings)}). "
+                                "Use Recommended / forgiving import tolerance, or repair the face "
+                                "in the source DCC."
+                            )
+                        self._record_geometry_finding(
+                            code="model_polygon_repaired",
+                            geometry=geometry_name,
+                            polygon_index=polygon_index,
+                            method=triangulation.method,
+                            reason="; ".join(
+                                "non-planar face was projected stably"
+                                if warning.startswith("non-planar face")
+                                else "duplicate/collinear boundary corners without usable surface area were removed"
+                                if warning.startswith("removed ")
+                                else warning
+                                for warning in triangulation.warnings
+                            ),
+                            maximum_plane_deviation=triangulation.maximum_plane_deviation,
+                        )
                     polygons.append(polygon)
-                    for corner_index in range(1, len(polygon) - 1):
+                    for local_indexes in triangulation.triangles:
                         triangles.append(
                             FbxTriangle(
                                 polygon_index,
-                                (polygon[0], polygon[corner_index], polygon[corner_index + 1]),
+                                tuple(polygon[index] for index in local_indexes),
                             )
                         )
                     current = []
@@ -925,7 +1235,19 @@ class FbxScene:
             model_name = self.model_names.get(model_id, _clean_name(node.properties[1]))
             material_ids = self._model_material_ids(model_id) if model_id is not None else ()
             material_names = tuple(self.material_names.get(row, f"material_{row}") for row in material_ids)
-            layers = _read_layer_elements(node)
+            if not layers.get("LayerElementNormal"):
+                if self.import_tolerance == FbxImportTolerance.STRICT_DIAGNOSTICS.value:
+                    raise ValueError(
+                        f"geometry {geometry_name!r} has no normal layer. Use Recommended / "
+                        "forgiving import tolerance to reconstruct normals, or export normals "
+                        "from the source DCC."
+                    )
+                self._record_geometry_finding(
+                    code="model_normal_reconstructed",
+                    geometry=geometry_name,
+                    method="triangle_cross_product",
+                    reason="the source has no normal layer; normals will be reconstructed",
+                )
             clusters = self._geometry_clusters(geometry_id)
             bind = self._resolve_geometry_mesh_bind(
                 geometry_name=geometry_name,
@@ -953,6 +1275,48 @@ class FbxScene:
                 )
             )
         return tuple(result)
+
+    def _record_geometry_finding(
+        self,
+        *,
+        code: str,
+        geometry: str,
+        method: str,
+        reason: str,
+        polygon_index: int | None = None,
+        maximum_plane_deviation: float = 0.0,
+        count: int = 1,
+    ) -> None:
+        """Keep model repair diagnostics useful without emitting one row per face."""
+
+        for finding in self.geometry_findings:
+            if (
+                finding.get("code") == code
+                and finding.get("geometry") == geometry
+                and finding.get("method") == method
+                and finding.get("reason") == reason
+            ):
+                finding["count"] = int(finding.get("count", 1)) + max(1, int(count))
+                finding["maximum_plane_deviation"] = max(
+                    float(finding.get("maximum_plane_deviation", 0.0)),
+                    float(maximum_plane_deviation),
+                )
+                indexes = finding.setdefault("polygon_indexes", [])
+                if polygon_index is not None and len(indexes) < 16:
+                    indexes.append(int(polygon_index))
+                return
+        row: dict[str, Any] = {
+            "code": code,
+            "geometry": geometry,
+            "method": method,
+            "reason": reason,
+            "count": max(1, int(count)),
+            "maximum_plane_deviation": float(maximum_plane_deviation),
+            "polygon_indexes": [],
+        }
+        if polygon_index is not None:
+            row["polygon_indexes"].append(int(polygon_index))
+        self.geometry_findings.append(row)
 
     def _resolve_geometry_mesh_bind(
         self,
@@ -1110,31 +1474,69 @@ class FbxScene:
 
     def _geometry_clusters(self, geometry_id: int) -> tuple[FbxCluster, ...]:
         skin_ids = self._linked_object_ids(geometry_id, object_name="Deformer", subtype="Skin")
+        cached = {row.object_id: row for row in self.skin_clusters}
         clusters: list[FbxCluster] = []
         for skin_id in skin_ids:
             for cluster_id in self._linked_object_ids(skin_id, object_name="Deformer", subtype="Cluster"):
-                node = self.object_by_id[cluster_id]
-                bone_id = self._linked_object_id(cluster_id, object_name="Model", subtype="LimbNode")
-                indexes = tuple(int(value) for value in (_child_value(node, "Indexes", []) or []))
-                weights = tuple(float(value) for value in (_child_value(node, "Weights", []) or []))
-                if len(indexes) != len(weights):
-                    raise ValueError(f"cluster {_clean_name(node.properties[1])!r} index/weight counts differ")
-                clusters.append(
-                    FbxCluster(
-                        object_id=cluster_id,
-                        name=_clean_name(node.properties[1]),
-                        bone_id=bone_id,
-                        bone_name=self.model_names.get(bone_id),
-                        indexes=indexes,
-                        weights=weights,
-                        transform=_matrix_from_array(_child_value(node, "Transform", [])),
-                        transform_link=_matrix_from_array(_child_value(node, "TransformLink", [])),
-                        transform_associate_model=_matrix_from_array(
-                            _child_value(node, "TransformAssociateModel", [])
-                        ),
-                    )
+                cluster = cached.get(cluster_id) or self._cluster_record(
+                    cluster_id,
+                    include_weights=True,
                 )
+                if len(cluster.indexes) != len(cluster.weights):
+                    raise ValueError(
+                        f"cluster {cluster.name!r} index/weight counts differ"
+                    )
+                clusters.append(cluster)
         return tuple(dict((row.object_id, row) for row in clusters).values())
+
+    def _read_skin_clusters(
+        self,
+        *,
+        include_weights: bool,
+    ) -> tuple[FbxCluster, ...]:
+        return tuple(
+            self._cluster_record(object_id, include_weights=include_weights)
+            for object_id, node in self.object_by_id.items()
+            if node.name == "Deformer"
+            and len(node.properties) >= 3
+            and str(node.properties[2]) == "Cluster"
+        )
+
+    def _cluster_record(
+        self,
+        cluster_id: int,
+        *,
+        include_weights: bool,
+    ) -> FbxCluster:
+        node = self.object_by_id[cluster_id]
+        bone_id = self._linked_object_id(
+            cluster_id,
+            object_name="Model",
+            subtype="LimbNode",
+        )
+        indexes = (
+            tuple(int(value) for value in (_child_value(node, "Indexes", []) or []))
+            if include_weights
+            else ()
+        )
+        weights = (
+            tuple(float(value) for value in (_child_value(node, "Weights", []) or []))
+            if include_weights
+            else ()
+        )
+        return FbxCluster(
+            object_id=cluster_id,
+            name=_clean_name(node.properties[1]),
+            bone_id=bone_id,
+            bone_name=self.model_names.get(bone_id),
+            indexes=indexes,
+            weights=weights,
+            transform=_matrix_from_array(_child_value(node, "Transform", [])),
+            transform_link=_matrix_from_array(_child_value(node, "TransformLink", [])),
+            transform_associate_model=_matrix_from_array(
+                _child_value(node, "TransformAssociateModel", [])
+            ),
+        )
 
     def _linked_object_ids(self, object_id: int, *, object_name: str, subtype: str | None = None) -> tuple[int, ...]:
         result: list[int] = []
@@ -1826,18 +2228,43 @@ class FbxScene:
     def _add_scene_warnings(self) -> None:
         if not self.limb_ids:
             self.warnings.append("No LimbNode armature was found; Auto mode will build a static mesh.")
-        if self.limb_ids and not any(row.clusters for row in self.geometries):
+        geometry_loaded = bool(self.geometries) or (
+            "geometry" in self.loaded_domains
+            or self.load_purpose in {
+                FbxLoadPurpose.MODEL.value,
+                FbxLoadPurpose.FULL_DIAGNOSTIC.value,
+            }
+        )
+        if (
+            geometry_loaded
+            and self.limb_ids
+            and not any(row.clusters for row in self.geometries)
+        ):
             self.warnings.append("An armature exists, but no mesh Skin/Cluster weights were found.")
         if len(self.armature_roots) > 1:
             self.warnings.append(f"The FBX contains {len(self.armature_roots)} armature roots.")
         for geometry in self.geometries:
             if not geometry.triangles and len(geometry.control_points):
                 self.warnings.append(f"{geometry.name}: geometry has vertices but no polygons and will be skipped.")
+                self._record_geometry_finding(
+                    code="model_polygon_skipped",
+                    geometry=geometry.name,
+                    method="empty_topology_skip",
+                    reason="geometry has control points but no usable polygons and will be skipped",
+                )
             influences = geometry.skin_influences
             max_influences = max((len(rows) for rows in influences.values()), default=0)
             if max_influences > 4:
+                reduced = sum(1 for rows in influences.values() if len(rows) > 4)
                 self.warnings.append(
                     f"{geometry.name}: up to {max_influences} skin influences will be reduced to four."
+                )
+                self._record_geometry_finding(
+                    code="model_skin_influences_reduced",
+                    geometry=geometry.name,
+                    method="top_four_then_normalize",
+                    reason=f"vertices with up to {max_influences} influences are reduced to Chrome's four-influence limit",
+                    count=reduced,
                 )
             if geometry.clusters:
                 unweighted = sum(index not in influences for index in range(len(geometry.control_points)))
@@ -1845,9 +2272,64 @@ class FbxScene:
                     self.warnings.append(
                         f"{geometry.name}: {unweighted} unweighted control points will be assigned to the rig root."
                     )
+                    self._record_geometry_finding(
+                        code="model_unweighted_vertices_repaired",
+                        geometry=geometry.name,
+                        method="reviewed_rig_root_fallback",
+                        reason="minor unweighted control points are assigned deterministically to the rig root",
+                        count=unweighted,
+                    )
 
 
 # --------------------------------------------------------------------------- raw parser
+
+def _raw_geometry_inventory(
+    object_by_id: Mapping[int, FbxNode],
+) -> tuple[dict[str, Any], ...]:
+    """Inventory mesh payload sizes without constructing model geometry."""
+
+    rows: list[dict[str, Any]] = []
+    for object_id, node in object_by_id.items():
+        if (
+            node.name != "Geometry"
+            or len(node.properties) < 3
+            or str(node.properties[2]) != "Mesh"
+        ):
+            continue
+        vertices = _child_value(node, "Vertices", []) or []
+        raw_indices = _child_value(node, "PolygonVertexIndex", []) or []
+        polygon_sizes: Counter[int] = Counter()
+        current_size = 0
+        inventory_error = ""
+        try:
+            for raw in raw_indices:
+                current_size += 1
+                if int(raw) < 0:
+                    polygon_sizes[current_size] += 1
+                    current_size = 0
+        except (TypeError, ValueError, OverflowError) as exc:
+            # This is deliberately best-effort metadata. Requested animation,
+            # skeleton, bind, or facial domains must not become unusable merely
+            # because an unrequested mesh index array cannot be summarized.
+            inventory_error = str(exc)
+            polygon_sizes.clear()
+            current_size = 0
+        rows.append(
+            {
+                "object_id": int(object_id),
+                "name": _clean_name(node.properties[1]),
+                "control_point_count": len(vertices) // 3,
+                "vertex_component_remainder": len(vertices) % 3,
+                "polygon_index_count": len(raw_indices),
+                "polygon_count": sum(polygon_sizes.values()),
+                "polygon_size_counts": {
+                    str(size): count for size, count in sorted(polygon_sizes.items())
+                },
+                "unterminated_polygon_corner_count": current_size,
+                "inventory_error": inventory_error,
+            }
+        )
+    return tuple(rows)
 
 def _parse_nodes(data: bytes, offset: int, version: int) -> tuple[list[FbxNode], int]:
     nodes: list[FbxNode] = []
@@ -1986,44 +2468,282 @@ def _validate_polygon_for_fan(
     geometry_name: str,
     polygon_index: int,
 ) -> None:
-    """Prove that deterministic first-corner fan triangulation is safe.
+    """Compatibility validator backed by the production tolerant triangulator."""
 
-    Triangles need no additional proof. Convex planar quads/n-gons preserve
-    their source winding under a fan. Concave, self-intersecting, degenerate,
-    or non-planar polygons are rejected with an export-time remedy rather than
-    being silently converted into different visible geometry.
+    _triangulate_polygon(
+        points,
+        geometry_name=geometry_name,
+        polygon_index=polygon_index,
+    )
+
+
+def _polygon_layer_values(
+    layer: FbxLayerElement | None,
+    polygon: Sequence[FbxTriangleCorner],
+    *,
+    polygon_index: int,
+) -> np.ndarray | None:
+    """Read optional per-corner values for triangulation scoring only.
+
+    A malformed optional UV layer must not hide a usable geometric solution;
+    the normal model-layer validation still reports it when the mesh is built.
+    """
+
+    if layer is None:
+        return None
+    try:
+        values = [
+            layer.value(
+                control_point_index=corner.control_point_index,
+                polygon_vertex_index=corner.polygon_vertex_index,
+                polygon_index=polygon_index,
+            )
+            for corner in polygon
+        ]
+    except (IndexError, TypeError, ValueError):
+        return None
+    result = np.asarray(values, dtype=float)
+    if result.shape != (len(polygon), layer.tuple_size) or not np.isfinite(result).all():
+        return None
+    return result
+
+
+def _triangulate_polygon(
+    points: np.ndarray,
+    *,
+    geometry_name: str,
+    polygon_index: int,
+    uvs: np.ndarray | None = None,
+) -> FbxPolygonTriangulation:
+    """Triangulate a source polygon without discarding corner provenance.
+
+    Triangles retain their exact source order. Quads score both diagonals.
+    Larger simple polygons use projected deterministic ear clipping, with a
+    validated fan only as a numerical recovery path.
     """
 
     values = np.asarray(points, dtype=float)
+    prefix = f"geometry {geometry_name!r} polygon {polygon_index}"
     if values.ndim != 2 or values.shape[1:] != (3,):
-        raise ValueError(
-            f"geometry {geometry_name!r} polygon {polygon_index} has malformed positions; "
-            "repair the face and re-export"
-        )
+        raise ValueError(f"{prefix} has malformed positions; repair the face and re-export")
     if not np.isfinite(values).all():
         raise ValueError(
-            f"geometry {geometry_name!r} polygon {polygon_index} contains non-finite "
-            "positions; repair the face and re-export"
+            f"{prefix} contains non-finite positions; repair the face and re-export"
         )
-    if len(values) <= 3:
-        return
+    if len(values) < 3:
+        raise ValueError(
+            f"{prefix} has only {len(values)} corners; at least three are required"
+        )
 
-    extent = float(np.max(np.ptp(values, axis=0)))
-    position_tolerance = max(1.0e-8, extent * 1.0e-7)
-    for left in range(len(values)):
-        for right in range(left + 1, len(values)):
+    extent = max(float(np.max(np.ptp(values, axis=0))), 1.0)
+    position_tolerance = max(1.0e-10, extent * 1.0e-9)
+    area_tolerance = max(1.0e-16, extent * extent * 1.0e-12)
+
+    if len(values) == 3:
+        if _triangle_area_3d(values[0], values[1], values[2]) <= area_tolerance:
+            raise ValueError(
+                f"{prefix} cannot produce a non-degenerate triangle; repair the face and re-export"
+            )
+        return FbxPolygonTriangulation(((0, 1, 2),), "source_triangle")
+
+    kept = list(range(len(values)))
+    removed = 0
+    changed = True
+    while changed and len(kept) >= 3:
+        changed = False
+        for offset, current in enumerate(tuple(kept)):
+            previous = kept[offset - 1]
+            if float(np.linalg.norm(values[current] - values[previous])) <= position_tolerance:
+                kept.pop(offset)
+                removed += 1
+                changed = True
+                break
+    if len(kept) < 3:
+        raise ValueError(
+            f"{prefix} has fewer than three usable distinct points after removing duplicate corners"
+        )
+    for left_offset, left in enumerate(kept):
+        for right in kept[left_offset + 1 :]:
             if float(np.linalg.norm(values[left] - values[right])) <= position_tolerance:
                 raise ValueError(
-                    f"geometry {geometry_name!r} polygon {polygon_index} repeats a corner. "
-                    "Remove the degenerate face, triangulate it in the DCC, and re-export."
+                    f"{prefix} repeats non-adjacent corner positions and is irreparably "
+                    "self-touching; repair the face and re-export"
                 )
 
-    # Newell's method gives a deterministic normal for any simple planar
-    # polygon without choosing a potentially collinear first triple.
-    normal = np.zeros(3, dtype=float)
+    clean_values = values[kept]
+    projected, plane_normal, maximum_deviation, planarity_tolerance = _project_polygon(
+        clean_values,
+        prefix=prefix,
+        extent=extent,
+    )
+    projection_extent = max(float(np.max(np.ptp(projected, axis=0))), 1.0)
+    cross_tolerance = max(1.0e-16, projection_extent * projection_extent * 1.0e-12)
+    if _polygon_self_intersects(projected, cross_tolerance):
+        raise ValueError(
+            f"{prefix} is irreparably self-intersecting in its stable plane projection; "
+            "repair the face and re-export"
+        )
+
+    # Removing a strictly collinear boundary point does not alter the surface,
+    # and avoids manufacturing a zero-area output triangle.
+    collinear_removed = 0
+    changed = True
+    while changed and len(kept) > 3:
+        changed = False
+        for offset in range(len(kept)):
+            before = projected[offset - 1]
+            current = projected[offset]
+            after = projected[(offset + 1) % len(projected)]
+            cross = _cross_2d(current - before, after - current)
+            if abs(cross) > cross_tolerance:
+                continue
+            if float(np.dot(current - before, current - after)) > cross_tolerance:
+                continue
+            kept.pop(offset)
+            projected = np.delete(projected, offset, axis=0)
+            clean_values = np.delete(clean_values, offset, axis=0)
+            collinear_removed += 1
+            changed = True
+            break
+    if len(kept) < 3:
+        raise ValueError(f"{prefix} has fewer than three usable distinct boundary points")
+
+    signed_area = _polygon_signed_area(projected)
+    if abs(signed_area) <= cross_tolerance:
+        raise ValueError(
+            f"{prefix} has no usable projected area; repair the degenerate face and re-export"
+        )
+    winding = 1.0 if signed_area > 0.0 else -1.0
+    warnings: list[str] = []
+    if removed or collinear_removed:
+        warnings.append(
+            "removed "
+            f"{removed + collinear_removed} duplicate/collinear boundary corner(s) "
+            "that did not define usable surface area"
+        )
+    if maximum_deviation > planarity_tolerance:
+        warnings.append(
+            "non-planar face "
+            f"(maximum plane deviation {maximum_deviation:.6g}) was projected stably"
+        )
+
+    clean_uvs = None
+    if uvs is not None:
+        candidate_uvs = np.asarray(uvs, dtype=float)
+        if candidate_uvs.ndim == 2 and len(candidate_uvs) == len(values):
+            clean_uvs = candidate_uvs[kept]
+            if not np.isfinite(clean_uvs).all():
+                clean_uvs = None
+
+    if len(kept) == 3:
+        triangles = ((kept[0], kept[1], kept[2]),)
+        if _triangle_area_3d(*(values[index] for index in triangles[0])) <= area_tolerance:
+            raise ValueError(f"{prefix} cannot produce a valid output triangle")
+        return FbxPolygonTriangulation(
+            triangles,
+            "reduced_source_triangle",
+            maximum_deviation,
+            tuple(warnings),
+        )
+
+    if len(kept) == 4:
+        candidates = (
+            (((0, 1, 2), (0, 2, 3)), (0, 2), "quad_diagonal_02"),
+            (((0, 1, 3), (1, 2, 3)), (1, 3), "quad_diagonal_13"),
+        )
+        scored: list[tuple[tuple[float, ...], int, str, tuple[tuple[int, int, int], ...]]] = []
+        for order, (local_triangles, diagonal, method) in enumerate(candidates):
+            score = _triangulation_candidate_score(
+                clean_values,
+                projected,
+                local_triangles,
+                winding=winding,
+                area_tolerance=area_tolerance,
+                cross_tolerance=cross_tolerance,
+                plane_normal=plane_normal,
+                uvs=clean_uvs,
+                diagonal=diagonal,
+            )
+            if score is not None:
+                scored.append((score, -order, method, local_triangles))
+        if not scored:
+            raise ValueError(
+                f"{prefix} cannot produce valid triangles from either quad diagonal; "
+                "repair the face and re-export"
+            )
+        _score, _tie, method, local_triangles = max(scored, key=lambda row: (row[0], row[1]))
+        triangles = tuple(tuple(kept[index] for index in row) for row in local_triangles)
+        return FbxPolygonTriangulation(
+            triangles,
+            method,
+            maximum_deviation,
+            tuple(warnings),
+        )
+
+    local_triangles = _ear_clip_polygon(
+        clean_values,
+        projected,
+        winding=winding,
+        area_tolerance=area_tolerance,
+        cross_tolerance=cross_tolerance,
+    )
+    method = "projected_ear_clipping"
+    if local_triangles is None:
+        local_triangles = _deterministic_valid_fan(
+            clean_values,
+            projected,
+            winding=winding,
+            area_tolerance=area_tolerance,
+            cross_tolerance=cross_tolerance,
+        )
+        method = "validated_fan_fallback"
+        if local_triangles is None:
+            raise ValueError(
+                f"{prefix} is simple but no valid output triangle set can be produced; "
+                "repair the face and re-export"
+            )
+        warnings.append(
+            "projected ear clipping was numerically inconclusive; used a validated "
+            "deterministic fan fallback"
+        )
+    else:
+        warnings.append("n-gon triangulated with deterministic projected ear clipping")
+    triangles = tuple(tuple(kept[index] for index in row) for row in local_triangles)
+    return FbxPolygonTriangulation(
+        triangles,
+        method,
+        maximum_deviation,
+        tuple(warnings),
+    )
+
+
+def _project_polygon(
+    values: np.ndarray,
+    *,
+    prefix: str,
+    extent: float,
+) -> tuple[np.ndarray, np.ndarray, float, float]:
+    centered = values - np.mean(values, axis=0)
+    try:
+        _u, singular_values, vh = np.linalg.svd(centered, full_matrices=False)
+    except np.linalg.LinAlgError as exc:
+        raise ValueError(f"{prefix} has no stable projection plane") from exc
+    if len(singular_values) < 2 or float(singular_values[1]) <= max(1.0e-14, extent * 1.0e-10):
+        raise ValueError(
+            f"{prefix} has fewer than three usable non-collinear points; repair the face and re-export"
+        )
+    first_axis = np.asarray(vh[0], dtype=float)
+    second_axis = np.asarray(vh[1], dtype=float)
+    plane_normal = np.cross(first_axis, second_axis)
+    normal_length = float(np.linalg.norm(plane_normal))
+    if normal_length <= 1.0e-14:
+        raise ValueError(f"{prefix} has no stable projection plane")
+    plane_normal /= normal_length
+
+    newell = np.zeros(3, dtype=float)
     for index, current in enumerate(values):
         following = values[(index + 1) % len(values)]
-        normal += np.asarray(
+        newell += np.asarray(
             (
                 (current[1] - following[1]) * (current[2] + following[2]),
                 (current[2] - following[2]) * (current[0] + following[0]),
@@ -2031,46 +2751,266 @@ def _validate_polygon_for_fan(
             ),
             dtype=float,
         )
-    normal_length = float(np.linalg.norm(normal))
-    if normal_length <= max(1.0e-12, extent * extent * 1.0e-10):
-        raise ValueError(
-            f"geometry {geometry_name!r} polygon {polygon_index} is degenerate or "
-            "self-intersecting. Triangulate/repair this face in the DCC and re-export."
-        )
-    normal /= normal_length
-    distances = np.abs((values - values[0]) @ normal)
+    if float(np.dot(plane_normal, newell)) < 0.0:
+        second_axis = -second_axis
+        plane_normal = -plane_normal
+    projected = np.column_stack((centered @ first_axis, centered @ second_axis))
+    maximum_deviation = float(np.max(np.abs(centered @ plane_normal)))
     planarity_tolerance = max(1.0e-7, extent * 1.0e-5)
-    maximum_distance = float(np.max(distances))
-    if maximum_distance > planarity_tolerance:
-        raise ValueError(
-            f"geometry {geometry_name!r} polygon {polygon_index} is non-planar "
-            f"(maximum plane deviation {maximum_distance:.6g}). Triangulate this face in "
-            "the DCC before FBX export; automatic fan triangulation is intentionally blocked."
+    return projected, plane_normal, maximum_deviation, planarity_tolerance
+
+
+def _triangle_area_3d(left: np.ndarray, middle: np.ndarray, right: np.ndarray) -> float:
+    return 0.5 * float(np.linalg.norm(np.cross(middle - left, right - left)))
+
+
+def _cross_2d(left: np.ndarray, right: np.ndarray) -> float:
+    return float(left[0] * right[1] - left[1] * right[0])
+
+
+def _polygon_signed_area(points: np.ndarray) -> float:
+    return 0.5 * sum(
+        _cross_2d(points[(index + 1) % len(points)], points[index]) * -1.0
+        for index in range(len(points))
+    )
+
+
+def _segments_intersect(
+    first_a: np.ndarray,
+    first_b: np.ndarray,
+    second_a: np.ndarray,
+    second_b: np.ndarray,
+    tolerance: float,
+) -> bool:
+    def orientation(left: np.ndarray, middle: np.ndarray, right: np.ndarray) -> float:
+        return _cross_2d(middle - left, right - left)
+
+    def on_segment(left: np.ndarray, middle: np.ndarray, right: np.ndarray) -> bool:
+        return bool(
+            min(left[0], right[0]) - tolerance <= middle[0] <= max(left[0], right[0]) + tolerance
+            and min(left[1], right[1]) - tolerance <= middle[1] <= max(left[1], right[1]) + tolerance
         )
 
-    drop_axis = int(np.argmax(np.abs(normal)))
-    projected = np.delete(values, drop_axis, axis=1)
-    signs: list[float] = []
-    cross_tolerance = max(1.0e-14, extent * extent * 1.0e-10)
-    for index in range(len(projected)):
-        before = projected[index - 1]
-        current = projected[index]
-        after = projected[(index + 1) % len(projected)]
-        first = current - before
-        second = after - current
-        cross = float(first[0] * second[1] - first[1] * second[0])
-        if abs(cross) <= cross_tolerance:
-            raise ValueError(
-                f"geometry {geometry_name!r} polygon {polygon_index} has a collinear or "
-                "degenerate n-gon corner. Triangulate/repair this face in the DCC and re-export."
-            )
-        signs.append(cross)
-    if min(signs) < 0.0 < max(signs):
-        raise ValueError(
-            f"geometry {geometry_name!r} polygon {polygon_index} is concave. Triangulate "
-            "this face in the DCC before FBX export; first-corner fan triangulation would "
-            "change or overlap visible geometry."
+    rows = (
+        orientation(first_a, first_b, second_a),
+        orientation(first_a, first_b, second_b),
+        orientation(second_a, second_b, first_a),
+        orientation(second_a, second_b, first_b),
+    )
+    if rows[0] * rows[1] < -tolerance * tolerance and rows[2] * rows[3] < -tolerance * tolerance:
+        return True
+    return bool(
+        (abs(rows[0]) <= tolerance and on_segment(first_a, second_a, first_b))
+        or (abs(rows[1]) <= tolerance and on_segment(first_a, second_b, first_b))
+        or (abs(rows[2]) <= tolerance and on_segment(second_a, first_a, second_b))
+        or (abs(rows[3]) <= tolerance and on_segment(second_a, first_b, second_b))
+    )
+
+
+def _polygon_self_intersects(points: np.ndarray, tolerance: float) -> bool:
+    count = len(points)
+    for left in range(count):
+        left_next = (left + 1) % count
+        for right in range(left + 1, count):
+            right_next = (right + 1) % count
+            if left == right or left_next == right or right_next == left:
+                continue
+            if _segments_intersect(
+                points[left],
+                points[left_next],
+                points[right],
+                points[right_next],
+                tolerance,
+            ):
+                return True
+    return False
+
+
+def _point_in_triangle(
+    point: np.ndarray,
+    first: np.ndarray,
+    second: np.ndarray,
+    third: np.ndarray,
+    *,
+    winding: float,
+    tolerance: float,
+) -> bool:
+    values = (
+        winding * _cross_2d(second - first, point - first),
+        winding * _cross_2d(third - second, point - second),
+        winding * _cross_2d(first - third, point - third),
+    )
+    return min(values) >= -tolerance
+
+
+def _triangle_quality(first: np.ndarray, second: np.ndarray, third: np.ndarray) -> float:
+    area_twice = float(np.linalg.norm(np.cross(second - first, third - first)))
+    edge_sum = (
+        float(np.dot(second - first, second - first))
+        + float(np.dot(third - second, third - second))
+        + float(np.dot(first - third, first - third))
+    )
+    return 0.0 if edge_sum <= 0.0 else (2.0 * math.sqrt(3.0) * area_twice / edge_sum)
+
+
+def _triangulation_candidate_score(
+    values: np.ndarray,
+    projected: np.ndarray,
+    triangles: tuple[tuple[int, int, int], ...],
+    *,
+    winding: float,
+    area_tolerance: float,
+    cross_tolerance: float,
+    plane_normal: np.ndarray,
+    uvs: np.ndarray | None,
+    diagonal: tuple[int, int],
+) -> tuple[float, ...] | None:
+    qualities: list[float] = []
+    normals: list[np.ndarray] = []
+    projected_area = 0.0
+    for first, second, third in triangles:
+        cross = _cross_2d(
+            projected[second] - projected[first],
+            projected[third] - projected[first],
         )
+        if winding * cross <= cross_tolerance:
+            return None
+        area = _triangle_area_3d(values[first], values[second], values[third])
+        if area <= area_tolerance:
+            return None
+        projected_area += abs(cross) * 0.5
+        normal = np.cross(values[second] - values[first], values[third] - values[first])
+        normal /= float(np.linalg.norm(normal))
+        normals.append(normal)
+        qualities.append(_triangle_quality(values[first], values[second], values[third]))
+    polygon_area = abs(_polygon_signed_area(projected))
+    if abs(projected_area - polygon_area) > max(cross_tolerance * len(triangles), polygon_area * 1.0e-8):
+        return None
+    normal_consistency = min(
+        float(np.dot(normals[left], normals[right]))
+        for left in range(len(normals))
+        for right in range(left, len(normals))
+    )
+    plane_consistency = min(abs(float(np.dot(normal, plane_normal))) for normal in normals)
+    perimeter = sum(
+        float(np.linalg.norm(values[(index + 1) % len(values)] - values[index]))
+        for index in range(len(values))
+    )
+    diagonal_length = float(np.linalg.norm(values[diagonal[1]] - values[diagonal[0]]))
+    normalized_diagonal = diagonal_length / max(perimeter, 1.0e-20)
+    uv_consistency = 0.0
+    if uvs is not None:
+        uv_perimeter = sum(
+            float(np.linalg.norm(uvs[(index + 1) % len(uvs)] - uvs[index]))
+            for index in range(len(uvs))
+        )
+        if uv_perimeter > 1.0e-20:
+            uv_diagonal = float(np.linalg.norm(uvs[diagonal[1]] - uvs[diagonal[0]]))
+            uv_consistency = -abs(normalized_diagonal - uv_diagonal / uv_perimeter)
+    return (
+        normal_consistency,
+        plane_consistency,
+        min(qualities),
+        uv_consistency,
+        -normalized_diagonal,
+    )
+
+
+def _ear_clip_polygon(
+    values: np.ndarray,
+    projected: np.ndarray,
+    *,
+    winding: float,
+    area_tolerance: float,
+    cross_tolerance: float,
+) -> tuple[tuple[int, int, int], ...] | None:
+    remaining = list(range(len(values)))
+    triangles: list[tuple[int, int, int]] = []
+    while len(remaining) > 3:
+        candidates: list[tuple[float, int, tuple[int, int, int]]] = []
+        for offset, current in enumerate(remaining):
+            previous = remaining[offset - 1]
+            following = remaining[(offset + 1) % len(remaining)]
+            cross = _cross_2d(
+                projected[current] - projected[previous],
+                projected[following] - projected[current],
+            )
+            if winding * cross <= cross_tolerance:
+                continue
+            if _triangle_area_3d(values[previous], values[current], values[following]) <= area_tolerance:
+                continue
+            if any(
+                _point_in_triangle(
+                    projected[other],
+                    projected[previous],
+                    projected[current],
+                    projected[following],
+                    winding=winding,
+                    tolerance=cross_tolerance,
+                )
+                for other in remaining
+                if other not in {previous, current, following}
+            ):
+                continue
+            quality = _triangle_quality(values[previous], values[current], values[following])
+            candidates.append((quality, -current, (previous, current, following)))
+        if not candidates:
+            return None
+        _quality, _tie, triangle = max(candidates, key=lambda row: (row[0], row[1]))
+        triangles.append(triangle)
+        remaining.remove(triangle[1])
+    final = tuple(remaining)
+    if _triangle_area_3d(*(values[index] for index in final)) <= area_tolerance:
+        return None
+    cross = _cross_2d(
+        projected[final[1]] - projected[final[0]],
+        projected[final[2]] - projected[final[0]],
+    )
+    if winding * cross <= cross_tolerance:
+        return None
+    triangles.append(final)
+    return tuple(triangles)
+
+
+def _deterministic_valid_fan(
+    values: np.ndarray,
+    projected: np.ndarray,
+    *,
+    winding: float,
+    area_tolerance: float,
+    cross_tolerance: float,
+) -> tuple[tuple[int, int, int], ...] | None:
+    polygon_area = abs(_polygon_signed_area(projected))
+    rows: list[tuple[float, int, tuple[tuple[int, int, int], ...]]] = []
+    for anchor in range(len(values)):
+        order = [((anchor + offset) % len(values)) for offset in range(len(values))]
+        triangles = tuple((order[0], order[index], order[index + 1]) for index in range(1, len(order) - 1))
+        projected_area = 0.0
+        minimum_quality = math.inf
+        valid = True
+        for first, second, third in triangles:
+            cross = _cross_2d(
+                projected[second] - projected[first],
+                projected[third] - projected[first],
+            )
+            if winding * cross <= cross_tolerance:
+                valid = False
+                break
+            if _triangle_area_3d(values[first], values[second], values[third]) <= area_tolerance:
+                valid = False
+                break
+            projected_area += abs(cross) * 0.5
+            minimum_quality = min(
+                minimum_quality,
+                _triangle_quality(values[first], values[second], values[third]),
+            )
+        if valid and abs(projected_area - polygon_area) <= max(
+            cross_tolerance * len(triangles), polygon_area * 1.0e-8
+        ):
+            rows.append((minimum_quality, -anchor, triangles))
+    if not rows:
+        return None
+    return max(rows, key=lambda row: (row[0], row[1]))[2]
 
 
 def _matrix_from_array(values: Sequence[float] | None) -> np.ndarray | None:

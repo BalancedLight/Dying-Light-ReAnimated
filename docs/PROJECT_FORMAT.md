@@ -182,6 +182,8 @@ Each row uses explicit `target_rig_descriptor`, `target_rig_bone`, and `source_f
 
 The unified Models workspace is stored under the project extension payload. It retains model FBX/resource/mode/orientation choices, humanoid overrides, generated CRIG references/paths, build settings, and unknown model/settings fields across a round trip.
 
+The optional top-level extension value `import_tolerance` stores `recommended` (the forgiving default) or `strict_diagnostics`. Keeping this preference in the extension payload avoids a schema bump and preserves it through older-project migration alongside all unknown fields. Per-animation saved `fbx_preflight` and `import_state` extension records retain selected targets, mappings, animation settings, and grouped repaired/ignored/review/fatal diagnostics without changing build-authoritative fields.
+
 ### `anm2_to_fbx`
 
 Reverse-conversion jobs and `.dlrbmap.json` payloads use the same portable-path rules. Each item selects the CRIG that provides the otherwise absent ANM2 hierarchy/descriptors.
