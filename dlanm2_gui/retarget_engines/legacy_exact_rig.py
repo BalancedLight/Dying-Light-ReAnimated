@@ -83,6 +83,29 @@ def _row_matrix(row: dict[str, Any]) -> np.ndarray:
     return _bind_local_matrix(_Row())
 
 
+def _native_sparse_helper_to_game_local(
+    matrix: np.ndarray,
+    *,
+    meters_per_unit: float,
+) -> np.ndarray:
+    """Undo Blender FBX Empty axis/unit baking used by sparse native exports.
+
+    Blender's FBX writer serializes an Empty with translations and scale in
+    centimeters and appends the inverse scene-axis basis to its local rotation.
+    LimbNodes take a different FBX armature path and are handled through the
+    stored display-basis corrections, so this conversion is intentionally
+    limited to schema-v2 synthetic helper objects.
+    """
+
+    result = np.asarray(matrix, dtype=float).copy()
+    unit = float(meters_per_unit)
+    if not math.isfinite(unit) or unit <= 0.0:
+        raise ValueError("Native sparse helper has an invalid FBX unit scale")
+    result[:3, :3] *= unit
+    result[:3, 3] *= unit
+    return result @ _Y_UP_TO_BLENDER
+
+
 def _rig_bind_globals(rig: ChromeRig) -> list[np.ndarray]:
     local = [_bind_local_matrix(bone) for bone in rig.bones]
     result: list[np.ndarray | None] = [None] * len(rig.bones)
@@ -270,6 +293,7 @@ def build_exact_rig_anm2(
     motion_helper_name = synthetic_tracks.get(_MOTION_HELPER_DESCRIPTOR)
     native_dlr_export = _is_dlr_native_export(document)
     native_metadata = _dlr_native_metadata(document) if native_dlr_export else {}
+    native_metadata_version = int(native_metadata.get("version", 0) or 0)
     native_helper_tracks = native_metadata.get("helper_tracks", {})
     bind_compatibility = _validate_exact_skeleton(
         rig, document, meters_per_unit=source_meters
@@ -344,9 +368,16 @@ def build_exact_rig_anm2(
                     helper_game = motion_helper_local
                     if not motion_helper_is_game_space:
                         helper_game = (
-                            np.linalg.inv(_Y_UP_TO_BLENDER)
-                            @ motion_helper_local
-                            @ _Y_UP_TO_BLENDER
+                            _native_sparse_helper_to_game_local(
+                                motion_helper_local,
+                                meters_per_unit=source_meters,
+                            )
+                            if native_metadata_version >= 2
+                            else (
+                                np.linalg.inv(_Y_UP_TO_BLENDER)
+                                @ motion_helper_local
+                                @ _Y_UP_TO_BLENDER
+                            )
                         )
                     local = np.linalg.inv(helper_game) @ game_global
                 else:
@@ -384,9 +415,16 @@ def build_exact_rig_anm2(
             )
             if native_dlr_export:
                 local = (
-                    np.linalg.inv(_Y_UP_TO_BLENDER)
-                    @ local
-                    @ _Y_UP_TO_BLENDER
+                    _native_sparse_helper_to_game_local(
+                        local,
+                        meters_per_unit=source_meters,
+                    )
+                    if native_metadata_version >= 2
+                    else (
+                        np.linalg.inv(_Y_UP_TO_BLENDER)
+                        @ local
+                        @ _Y_UP_TO_BLENDER
+                    )
                 )
             translation, quaternion, scale = decompose_local_matrix(local)
             rotation = anm2_cayley_vector_from_quaternion(quaternion)

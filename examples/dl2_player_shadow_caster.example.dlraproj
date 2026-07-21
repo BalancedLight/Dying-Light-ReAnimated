@@ -6,13 +6,13 @@
   "game_id": "dying_light_2",
   "rig": {
     "target_rig_ref": "builtin:dl2_player_shadow_caster",
-    "target_rig_path": "reference/dl2/player_shadow_caster.crig",
+    "target_rig_path": "../reference/dl2/player_shadow_caster.crig",
     "retarget_mode": "exact",
     "use_imported_animation_bind_pose": true,
     "source_rest_fbx": "",
     "trusted_source_rest_json": "",
-    "canonical_smd": "reference/dl2/player_shadow_caster.smd",
-    "target_template_anm2": "reference/dl2/0_m_fpp_farjump.anm2",
+    "canonical_smd": "../reference/dl2/player_shadow_caster.smd",
+    "target_template_anm2": "../reference/dl2/0_m_fpp_farjump.anm2",
     "stock_writer_control_anm2": "",
     "target_rig_name": "Dying Light 2 player shadow caster",
     "extensions": {

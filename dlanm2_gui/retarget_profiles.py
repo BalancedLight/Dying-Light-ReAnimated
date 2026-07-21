@@ -17,7 +17,8 @@ import uuid
 
 
 PROFILE_FORMAT = "dl-reanimated-retarget-profile"
-PROFILE_SCHEMA_VERSION = 1
+PROFILE_SCHEMA_VERSION = 2
+ROLE_MODES = ("auto", "direct", "inherit_bind", "static_bind")
 
 
 @dataclass(frozen=True, slots=True)
@@ -122,9 +123,26 @@ class SourceBoneMappingProfile:
     profile_id: str
     name: str
     source_skeleton_hash: str
+    source_name_parent_hash: str = ""
+    source_bind_hash: str = ""
+    source_animation_hash: str = ""
+    target_policy_id: str = ""
+    target_rig_id: str = ""
+    target_skeleton_hash: str = ""
     role_to_bone: dict[str, str] = field(default_factory=dict)
+    role_modes: dict[str, str] = field(default_factory=dict)
+    cleared_roles: list[str] = field(default_factory=list)
     confidence_by_role: dict[str, float] = field(default_factory=dict)
     method_by_role: dict[str, str] = field(default_factory=dict)
+    evidence_by_role: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # Target-neutral root/locomotion selections and arbitrary target-row
+    # overrides are first-class profile data.  They are optional additions to
+    # schema v2, so existing serialized profiles remain byte-semantically
+    # compatible when these dictionaries are empty.
+    root_motion: dict[str, Any] = field(default_factory=dict)
+    locomotion: dict[str, Any] = field(default_factory=dict)
+    target_bone_overrides: dict[str, dict[str, Any]] = field(default_factory=dict)
+    compiled_map_cache_id: str = ""
     ignored_bones: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     extensions: dict[str, Any] = field(default_factory=dict)
@@ -134,7 +152,14 @@ class SourceBoneMappingProfile:
     @classmethod
     def empty(cls, source_bones: Iterable[str], *, name: str = "Custom Humanoid Mapping", parents: Mapping[str, str | None] | None = None) -> "SourceBoneMappingProfile":
         bones = tuple(str(value) for value in source_bones)
-        return cls(str(uuid.uuid4()), name, source_skeleton_hash(bones, parents=parents), ignored_bones=list(bones))
+        signature = source_skeleton_hash(bones, parents=parents)
+        return cls(
+            str(uuid.uuid4()),
+            name,
+            signature,
+            source_name_parent_hash=signature,
+            ignored_bones=list(bones),
+        )
 
     def canonical_aliases(self) -> dict[str, str]:
         return {CANONICAL_BY_ROLE[key]: value for key, value in self.role_to_bone.items() if key in CANONICAL_BY_ROLE and value}
@@ -142,17 +167,115 @@ class SourceBoneMappingProfile:
     def mapped_bone(self, role_id: str) -> str | None:
         return self.role_to_bone.get(role_id)
 
-    def set_mapping(self, role_id: str, bone_name: str | None, *, confidence: float = 1.0, method: str = "manual") -> None:
+    def set_mapping(
+        self,
+        role_id: str,
+        bone_name: str | None,
+        *,
+        confidence: float = 1.0,
+        method: str = "manual",
+        mode: str | None = None,
+        evidence: Iterable[Mapping[str, Any]] = (),
+    ) -> None:
         if role_id not in ROLE_BY_ID:
             raise KeyError(f"unknown humanoid role: {role_id}")
+        resolved_mode = str(
+            mode or ("direct" if str(method).startswith("manual") else "auto")
+        )
+        if resolved_mode not in ROLE_MODES:
+            raise ValueError(f"unsupported humanoid role mode: {resolved_mode}")
+        self.role_modes[role_id] = resolved_mode
         if not bone_name:
             self.role_to_bone.pop(role_id, None)
             self.confidence_by_role.pop(role_id, None)
             self.method_by_role.pop(role_id, None)
+            self.evidence_by_role.pop(role_id, None)
+            if resolved_mode in {"inherit_bind", "static_bind"}:
+                self.cleared_roles = [
+                    value for value in self.cleared_roles if value != role_id
+                ]
+            elif role_id not in self.cleared_roles:
+                self.cleared_roles.append(role_id)
             return
+        self.cleared_roles = [value for value in self.cleared_roles if value != role_id]
         self.role_to_bone[role_id] = str(bone_name)
         self.confidence_by_role[role_id] = float(confidence)
         self.method_by_role[role_id] = str(method)
+        self.evidence_by_role[role_id] = [dict(row) for row in evidence]
+
+    def set_role_mode(self, role_id: str, mode: str) -> None:
+        if role_id not in ROLE_BY_ID:
+            raise KeyError(f"unknown humanoid role: {role_id}")
+        value = str(mode)
+        if value not in ROLE_MODES:
+            raise ValueError(f"unsupported humanoid role mode: {value}")
+        self.role_modes[role_id] = value
+        if value in {"auto", "inherit_bind", "static_bind"}:
+            self.role_to_bone.pop(role_id, None)
+            self.confidence_by_role.pop(role_id, None)
+            self.method_by_role.pop(role_id, None)
+            self.evidence_by_role.pop(role_id, None)
+        if value in {"inherit_bind", "static_bind"}:
+            self.cleared_roles = [
+                row for row in self.cleared_roles if row != role_id
+            ]
+
+    def role_mode(self, role_id: str) -> str:
+        return str(self.role_modes.get(role_id, "auto") or "auto")
+
+    @property
+    def manual_override_count(self) -> int:
+        role_count = sum(
+            self.role_mode(role_id) in {"direct", "inherit_bind", "static_bind"}
+            for role_id in set(self.role_modes) | set(self.role_to_bone)
+        )
+        target_count = sum(
+            str(row.get("mode", "auto") or "auto") != "auto"
+            for row in self.target_bone_overrides.values()
+        )
+        return role_count + target_count
+
+    def set_target_bone_override(
+        self,
+        target_bone: str,
+        *,
+        mode: str = "auto",
+        source_bone: str = "",
+        transfer_policy: str = "default",
+        component_policy: str = "rotation",
+    ) -> None:
+        from .bone_maps import COMPONENT_POLICIES, TRANSFER_POLICIES
+
+        target = str(target_bone or "")
+        if not target:
+            raise ValueError("target bone override requires a target bone")
+        resolved_mode = str(mode or "auto")
+        if resolved_mode not in ROLE_MODES:
+            raise ValueError(f"unsupported target bone mode: {resolved_mode}")
+        if transfer_policy not in TRANSFER_POLICIES:
+            raise ValueError(f"unsupported target transfer policy: {transfer_policy}")
+        if component_policy not in COMPONENT_POLICIES:
+            raise ValueError(f"unsupported target component policy: {component_policy}")
+        if resolved_mode == "direct" and not source_bone:
+            raise ValueError(f"direct target override {target!r} requires a source bone")
+        if resolved_mode == "auto":
+            self.target_bone_overrides.pop(target, None)
+        else:
+            self.target_bone_overrides[target] = {
+                "mode": resolved_mode,
+                "source_bone": str(source_bone or ""),
+                "transfer_policy": str(transfer_policy),
+                "component_policy": str(component_policy),
+            }
+        self.clear_compiled_cache()
+
+    def clear_compiled_cache(self) -> None:
+        self.compiled_map_cache_id = ""
+        self.extensions.pop("compiled_map_hash", None)
+        self.extensions.pop("compiled_validation", None)
+        self.extensions.pop("selected_engine_hint", None)
+        self.extensions.pop("current_automatic_retarget_plan", None)
+        self.extensions.pop("retarget_readiness", None)
 
     def validate(self, source_bones: Iterable[str] | None = None) -> list[str]:
         source_set = set(source_bones or ())
@@ -160,14 +283,40 @@ class SourceBoneMappingProfile:
         used: dict[str, str] = {}
         for role in HUMANOID_ROLES:
             bone = self.role_to_bone.get(role.role_id)
-            if role.required and not bone:
+            dynamic_target_profile = bool(self.target_policy_id)
+            mode = self.role_mode(role.role_id)
+            if role.required and not dynamic_target_profile and not bone:
                 errors.append(f"Required role is not mapped: {role.label}")
+            if mode == "direct" and not bone:
+                errors.append(f"Direct role has no source bone: {role.label}")
             if bone and source_set and bone not in source_set:
                 errors.append(f"Mapped bone does not exist: {role.label} -> {bone}")
-            if bone and bone in used and used[bone] != role.role_id:
+            if (
+                bone
+                and mode == "direct"
+                and bone in used
+                and used[bone] != role.role_id
+            ):
                 errors.append(f"Source bone is used by more than one role: {bone} ({ROLE_BY_ID[used[bone]].label}, {role.label})")
             if bone:
                 used[bone] = role.role_id
+        from .bone_maps import COMPONENT_POLICIES, TRANSFER_POLICIES
+
+        for target, row in self.target_bone_overrides.items():
+            mode = str(row.get("mode", "auto") or "auto")
+            source = str(row.get("source_bone", "") or "")
+            transfer = str(row.get("transfer_policy", "default") or "default")
+            component = str(row.get("component_policy", "rotation") or "rotation")
+            if mode not in ROLE_MODES:
+                errors.append(f"Target override has unsupported mode: {target} -> {mode}")
+            if mode == "direct" and not source:
+                errors.append(f"Direct target override has no source bone: {target}")
+            if source and source_set and source not in source_set:
+                errors.append(f"Target override source bone does not exist: {target} -> {source}")
+            if transfer not in TRANSFER_POLICIES:
+                errors.append(f"Target override has unsupported transfer policy: {target} -> {transfer}")
+            if component not in COMPONENT_POLICIES:
+                errors.append(f"Target override has unsupported component policy: {target} -> {component}")
         return errors
 
     def to_dict(self) -> dict[str, Any]:
@@ -191,7 +340,28 @@ class SourceBoneMappingProfile:
         row.setdefault("profile_id", str(uuid.uuid4()))
         row.setdefault("name", "Imported Mapping")
         row.setdefault("source_skeleton_hash", "")
-        row.setdefault("schema_version", PROFILE_SCHEMA_VERSION)
+        row.setdefault("source_name_parent_hash", row["source_skeleton_hash"])
+        if version < 2:
+            role_to_bone = dict(row.get("role_to_bone", {}) or {})
+            methods = dict(row.get("method_by_role", {}) or {})
+            migrated_modes = dict(row.get("role_modes", {}) or {})
+            for role_id in role_to_bone:
+                method = str(methods.get(role_id, "") or "").casefold()
+                migrated_modes.setdefault(
+                    role_id,
+                    "direct" if method.startswith("manual") else "auto",
+                )
+            row["role_modes"] = migrated_modes
+            extensions.setdefault("schema_migration", []).append(
+                {
+                    "from": version,
+                    "to": PROFILE_SCHEMA_VERSION,
+                    "manual_assignments_preserved": sum(
+                        value == "direct" for value in migrated_modes.values()
+                    ),
+                }
+            )
+        row["schema_version"] = PROFILE_SCHEMA_VERSION
         row.setdefault("format", PROFILE_FORMAT)
         return cls(**row)
 
@@ -308,4 +478,4 @@ def required_canonical_source_names(*, include_fingers: bool = False) -> tuple[s
     return tuple(role.canonical_source_name for role in HUMANOID_ROLES if role.required or (include_fingers and "Fingers" in role.group))
 
 
-__all__ = ["CANONICAL_BY_ROLE", "HUMANOID_ROLES", "HumanoidRole", "PROFILE_FORMAT", "PROFILE_SCHEMA_VERSION", "ROLE_BY_ID", "SourceBoneMappingProfile", "apply_canonical_aliases", "auto_map_source_bones", "required_canonical_source_names", "source_skeleton_hash"]
+__all__ = ["CANONICAL_BY_ROLE", "HUMANOID_ROLES", "HumanoidRole", "PROFILE_FORMAT", "PROFILE_SCHEMA_VERSION", "ROLE_BY_ID", "ROLE_MODES", "SourceBoneMappingProfile", "apply_canonical_aliases", "auto_map_source_bones", "required_canonical_source_names", "source_skeleton_hash"]

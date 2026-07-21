@@ -9,6 +9,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtCore import QSettings
 
 from dlanm2_gui import gui
+from dlanm2_gui.game_profiles import (
+    DL2_ADVANCED_RIG_REF,
+    DL2_GAME_ID,
+    DL2_LEGACY_RIG_REF,
+)
 from dlanm2_gui.unified_gui import UnifiedMainWindow
 from dlanm2_gui.workspace_project import ProjectAnimation
 from dlanm2_gui.workspaces import models as models_module
@@ -21,6 +26,88 @@ def _application(tmp_path: Path):
     qt = gui._load_qt()
     app = qt["QApplication"].instance() or qt["QApplication"]([])
     return qt, app
+
+
+def test_import_tolerance_is_explicitly_parser_only(tmp_path: Path) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    combo = shell.controller.import_tolerance_combo
+
+    assert combo.itemText(0) == "Recommended / forgiving (FBX parsing)"
+    assert combo.toolTip() == (
+        "Controls recoverable FBX parsing and geometry diagnostics. It does not approve "
+        "cross-rig bone mappings or bypass skeleton safety checks."
+    )
+
+    shell.controller.dirty = False
+    shell.window.close()
+
+
+def test_dl2_gui_switches_complete_builtin_packages_and_validates_v2_rows(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+
+    game_index = controller.game_combo.findData(DL2_GAME_ID)
+    assert game_index >= 0
+    controller.game_combo.setCurrentIndex(game_index)
+    assert controller.project.rig.target_rig_ref == DL2_ADVANCED_RIG_REF
+    assert controller.project.rig.retarget_mode == "auto"
+    assert Path(controller.project.rig.canonical_smd).name == "player_skeleton.smd"
+    assert controller.reverse_source_rig.currentData() == DL2_ADVANCED_RIG_REF
+
+    controller.advanced_mode_toggle.setChecked(True)
+    legacy_index = controller.target_rig_combo.findData(DL2_LEGACY_RIG_REF)
+    assert legacy_index >= 0
+    controller.target_rig_combo.setCurrentIndex(legacy_index)
+    controller._sync_project_from_ui()
+    assert controller.project.rig.target_rig_ref == DL2_LEGACY_RIG_REF
+    assert controller.project.rig.retarget_mode == "auto"
+    assert Path(controller.project.rig.target_rig_path).name == "player_shadow_caster.crig"
+    assert Path(controller.project.rig.canonical_smd).name == "player_shadow_caster.smd"
+    assert controller.project.validate() == []
+
+    sample = (
+        Path(__file__).resolve().parents[1]
+        / "reference"
+        / "dl2"
+        / "0_m_fpp_farjump.anm2"
+    )
+    malformed = tmp_path / "invalid_v2.anm2"
+    malformed_data = bytearray(sample.read_bytes())
+    malformed_data[8:12] = (1).to_bytes(4, "little")
+    malformed.write_bytes(malformed_data)
+    selections = iter(
+        (([str(sample)], "ANM2 animation (*.anm2)"), ([str(malformed)], ""))
+    )
+    monkeypatch.setattr(
+        controller.qt["QFileDialog"],
+        "getOpenFileNames",
+        lambda *_args, **_kwargs: next(selections),
+    )
+
+    controller._reverse_add_files()
+    valid = controller.project.anm2_to_fbx.items[0]
+    assert valid.enabled
+    assert valid.extensions["conversion_status"] == "native_curve_decode_ready"
+    assert controller.reverse_table.item(0, 3).text() == "229"
+    assert controller.reverse_table.item(0, 4).text() == "189"
+    assert controller.reverse_table.cellWidget(0, 0).isEnabled()
+
+    controller._reverse_add_files()
+    invalid = controller.project.anm2_to_fbx.items[1]
+    invalid_toggle = controller.reverse_table.cellWidget(1, 0)
+    assert not invalid.enabled
+    assert invalid.extensions["conversion_status"] == "invalid_layout"
+    assert "does not equal file size" in invalid.extensions["conversion_error"]
+    assert not invalid_toggle.isEnabled()
+    assert "does not equal file size" in invalid_toggle.toolTip()
+
+    controller.dirty = False
+    shell.window.close()
 
 
 def test_model_details_and_artifact_actions_expose_rig_build_evidence(

@@ -4,6 +4,19 @@ A Chrome Rig (`.crig`) is a shareable animation-target definition for a skeletal
 
 A CRIG does not compile a mesh, skin, CHR, physics, ragdoll, AI, or navigation resource. The target model must be installed separately.
 
+## Bundled targets versus custom CRIGs
+
+The bundled DL1 player and both bundled DL2 player targets are product-owned
+humanoid packages. Their CRIG files provide descriptors, hierarchy, and bind data to
+the backend, but normal users edit anatomical source roles on **Retargeting**. The
+271-row DL2 Advanced and 81-row Shadow Caster `GenericBoneMap` artifacts are compiled
+from those roles and are not user-facing CRIG maps.
+
+**Root & .crig Mapping** is the user-facing editor for a target CRIG created or
+imported by the user. Selecting ExactRig does not by itself change a bundled target
+into a custom target. A bundled CRIG table can be exposed only through a deliberately
+recorded expert override; this keeps ownership separate from solver selection.
+
 ## Generate from the authored model
 
 For a new model, use the Models workspace instead of creating a rig independently from its raw FBX:

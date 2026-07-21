@@ -26,7 +26,13 @@ BONE_MAP_FORMAT = "dl-reanimated-bone-map"
 BONE_MAP_SCHEMA_VERSION = 2
 BONE_MAP_EXTENSION = ".dlrbmap.json"
 MAPPING_PROFILE_ORIGINS = frozenset(
-    {"automatic_identity", "automatic_repair", "manually_reviewed", "imported_profile"}
+    {
+        "automatic_identity",
+        "automatic_repair",
+        "automatic_verified",
+        "manually_reviewed",
+        "imported_profile",
+    }
 )
 
 MAPPING_KINDS = ("bone", "helper_override")
@@ -378,6 +384,7 @@ class GenericBoneMap:
         migrated_review = {
             "automatic_identity": "automatic_accepted",
             "automatic_repair": "automatic_unreviewed",
+            "automatic_verified": "automatic_accepted",
             "manually_reviewed": "manually_reviewed",
             "imported_profile": "imported_reviewed",
         }[declared_origin]
@@ -443,6 +450,16 @@ def mapping_profile_origin(profile: GenericBoneMap | None) -> str:
     declared = str(profile.extensions.get("origin", "") or "")
     if declared in MAPPING_PROFILE_ORIGINS:
         return declared
+    certificate = profile.extensions.get("automatic_retarget_certificate")
+    if (
+        isinstance(certificate, Mapping)
+        and certificate.get("format") == "dl2_advanced_body_bridge_v1"
+        and certificate.get("status") == "pass"
+    ):
+        # This is only an origin classification. Solver routing must still
+        # recompute and validate the certificate against live source/target
+        # inputs before it can authorize an incompatible automatic map.
+        return "automatic_verified"
     states = {row.review_state for row in profile.pairs}
     if states and states <= {"manually_reviewed", "intentionally_unmapped"}:
         return "manually_reviewed"
@@ -484,6 +501,8 @@ def set_mapping_profile_origin(
         elif value == "imported_profile":
             row.review_state = "imported_reviewed"
         elif value == "automatic_identity" and row.review_state == "automatic_unreviewed":
+            row.review_state = "automatic_accepted"
+        elif value == "automatic_verified":
             row.review_state = "automatic_accepted"
     return profile
 

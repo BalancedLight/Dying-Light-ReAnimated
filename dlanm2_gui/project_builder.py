@@ -20,6 +20,7 @@ from .animation_scr import (
     parse_animation_scr_sections,
     patch_animation_scr_sequence_ranges,
 )
+from .animation_targets import RetargetUiKind, retarget_ui_kind
 from .fbx_pipeline import FbxAnimationClip, build_fbx_rpack
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_smd_template
@@ -35,9 +36,14 @@ from .pack_manifest import (
     sha256_bytes,
 )
 from .retarget_profiles import SourceBoneMappingProfile, auto_map_source_bones
+from .semantic_retarget import (
+    compile_bundled_semantic_profile,
+    migrate_generic_map_to_semantic_profile,
+    prepare_bundled_semantic_state,
+)
 from .retarget_engines.exact_rig import build_exact_rig_anm2
 from .retarget_engines.mapped_rig import build_mapped_rig_anm2
-from .bone_maps import GenericBoneMap
+from .bone_maps import GenericBoneMap, mapping_profile_origin
 from .runtime_paths import resource_root
 from .runtime_paths import writable_application_root
 from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
@@ -53,9 +59,15 @@ from .fbx_preflight import (
     normalized_bone_name,
     preflight_fbx,
 )
-from .game_profiles import DL2_GAME_ID, get_game_profile
+from .game_profiles import (
+    DL1_GAME_ID,
+    DL2_ADVANCED_RIG_REF,
+    DL2_GAME_ID,
+    get_game_profile,
+)
 from .helper_retarget import helper_rules_from_dicts, helper_rules_to_dicts
 from .root_mapping import RootMappingSelection
+from .root_motion import ROOT_MOTION_EXTENSION_KEY, RootMotionSelection
 from .retarget_routing import select_exact_solver
 from .target_package import validate_target_package
 
@@ -63,6 +75,74 @@ from .target_package import validate_target_package
 
 
 ProgressCallback = Callable[[str], None]
+
+
+def _resolve_bundled_dl2_semantic_map(
+    project: DlReanimatedProject,
+    animation: ProjectAnimation,
+    document: Any,
+    rig: ChromeRig,
+) -> tuple[GenericBoneMap, Any, Any, SourceBoneMappingProfile]:
+    """Live-compile the visible semantic profile into a target-sized map."""
+
+    from .target_retarget_policy import build_target_retarget_policy
+
+    policy = build_target_retarget_policy(
+        rig, game_id=project.game_id, clip_domain="body"
+    )
+    payload = dict(
+        project.mapping_profiles.get(str(animation.mapping_profile_id or ""), {})
+        or {}
+    )
+    profile: SourceBoneMappingProfile | None = None
+    migrated_from = ""
+    if payload.get("format") == "dl-reanimated-retarget-profile":
+        profile = SourceBoneMappingProfile.from_dict(payload)
+    elif payload.get("format") == "dl-reanimated-bone-map":
+        old_map = GenericBoneMap.from_dict(payload)
+        profile = migrate_generic_map_to_semantic_profile(
+            old_map,
+            document.limb_models,
+            document.parent_by_name,
+            policy,
+            name=f"Bundled humanoid mapping: {animation.display_name}",
+        )
+        migrated_from = old_map.profile_id
+    state = prepare_bundled_semantic_state(
+        document,
+        rig,
+        policy,
+        profile,
+        profile_name=f"Bundled humanoid mapping: {animation.display_name}",
+    )
+    if state.profile.root_motion:
+        RootMotionSelection.from_dict(
+            state.profile.root_motion,
+            legacy_policy=animation.root_policy,
+            source_root_bone=animation.source_root_bone,
+            target_root_bone=animation.target_root_bone,
+        ).store(animation)
+    if state.profile.locomotion.get("ik_preset"):
+        animation.ik_preset = str(state.profile.locomotion["ik_preset"])
+    project.mapping_profiles[state.profile.profile_id] = state.profile.to_dict()
+    animation.mapping_profile_id = state.profile.profile_id
+    if migrated_from:
+        animation.extensions["semantic_profile_migration"] = dict(
+            state.profile.extensions.get("migration_audit", {}) or {}
+        )
+        animation.extensions["legacy_target_map_profile_id"] = migrated_from
+    compiled, live, plan = compile_bundled_semantic_profile(
+        document, rig, policy, state.profile
+    )
+    project.mapping_profiles[compiled.profile_id] = compiled.to_dict()
+    project.mapping_profiles[state.profile.profile_id] = state.profile.to_dict()
+    animation.extensions["compiled_target_map_profile_id"] = compiled.profile_id
+    animation.extensions["compiled_target_map_hash"] = str(
+        state.profile.extensions.get("compiled_map_hash", "")
+    )
+    animation.extensions["compiled_target_map_live_validation"] = live.to_dict()
+    animation.extensions.pop("automatic_retarget_generation_failure", None)
+    return compiled, live, plan, state.profile
 
 
 def _reviewed_mapping_is_name_identity(bone_map: GenericBoneMap) -> bool:
@@ -80,6 +160,278 @@ def _reviewed_mapping_is_name_identity(bone_map: GenericBoneMap) -> bool:
         == normalized_bone_name(row.target_bone)
         for row in base_pairs
     )
+
+
+def _resolve_verified_dl2_advanced_map(
+    project: DlReanimatedProject,
+    animation: ProjectAnimation,
+    document: Any,
+    rig: ChromeRig,
+    current: GenericBoneMap | None,
+    current_payload: dict[str, Any],
+) -> tuple[GenericBoneMap | None, Any | None]:
+    """Generate or live-revalidate the one authorized automatic cross-rig map.
+
+    Legacy/manual maps are never promoted.  A generated replacement receives a
+    new profile ID while the complete old payload remains in
+    ``project.mapping_profiles`` and a stable migration record is attached to
+    the replacement and animation.
+    """
+
+    if (
+        project.game_id != DL2_GAME_ID
+        or rig.rig_id != DL2_ADVANCED_RIG_REF
+    ):
+        return current, None
+
+    from .automatic_retarget import (
+        build_dl2_advanced_body_map_with_local_recipe,
+        revalidate_verified_dl2_advanced_body_map,
+    )
+    from .target_retarget_policy import build_target_retarget_policy
+
+    policy = build_target_retarget_policy(
+        rig,
+        game_id=project.game_id,
+        clip_domain="body",
+    )
+    origin = mapping_profile_origin(current)
+    stale_verification = None
+    if origin == "automatic_verified" and current is not None:
+        verification = revalidate_verified_dl2_advanced_body_map(
+            current,
+            document,
+            rig,
+            policy,
+        )
+        if verification.ok and verification.live_revalidated:
+            animation.extensions.setdefault("retarget_domain", "body")
+            return current, verification
+        # A serialized verified map is never repaired/promoted in place.  If
+        # analyzer/policy versions or any live source/target invariant changed,
+        # build a fresh deterministic profile and retain the stale payload for
+        # audit just like the legacy automatic_repair migration.
+        stale_verification = verification
+    if origin in {
+        "manually_reviewed",
+        "imported_profile",
+        "automatic_identity",
+    }:
+        return current, None
+    if current is not None and origin not in {
+        "automatic_repair",
+        "automatic_verified",
+    }:
+        return current, None
+
+    try:
+        replacement = build_dl2_advanced_body_map_with_local_recipe(
+            document,
+            rig,
+            policy,
+        )
+        replacement_origin = mapping_profile_origin(replacement)
+        if replacement_origin == "automatic_verified":
+            verification = revalidate_verified_dl2_advanced_body_map(
+                replacement,
+                document,
+                rig,
+                policy,
+            )
+            verification.require_valid()
+        elif (
+            replacement_origin == "manually_reviewed"
+            and isinstance(
+                replacement.extensions.get("local_retarget_recipe"), dict
+            )
+            and replacement.extensions["local_retarget_recipe"].get(
+                "live_revalidated"
+            )
+            is True
+        ):
+            verification = None
+        else:
+            raise ValueError(
+                "automatic map generation returned an unauthorized profile origin"
+            )
+        old_profile_id = str(animation.mapping_profile_id or "")
+        old_payload_hash = (
+            sha256_bytes(
+                json.dumps(
+                    current_payload,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            )
+            if current_payload
+            else ""
+        )
+        migration = {
+            "format": "dl-reanimated-automatic-mapping-migration-v1",
+            "reason": (
+                "reused_reviewed_local_recipe_over_legacy_automatic_repair"
+                if replacement_origin == "manually_reviewed"
+                and origin == "automatic_repair"
+                else "applied_reviewed_local_recipe"
+                if replacement_origin == "manually_reviewed"
+                else "regenerated_legacy_automatic_repair"
+                if origin == "automatic_repair"
+                else "regenerated_stale_automatic_verified"
+                if origin == "automatic_verified"
+                else "generated_missing_verified_map"
+            ),
+            "old_profile_id": old_profile_id,
+            "old_profile_origin": origin,
+            "old_profile_sha256": old_payload_hash,
+            "old_pair_count": len(current.pairs) if current is not None else 0,
+            "old_payload_retained_in_project": bool(old_profile_id),
+            "new_profile_id": replacement.profile_id,
+            "new_profile_origin": replacement_origin,
+            "target_rig_id": rig.rig_id,
+            "target_skeleton_hash": rig.skeleton_hash,
+            "certificate_status": (
+                verification.status
+                if verification is not None
+                else "not_applicable_reviewed_recipe"
+            ),
+            "local_retarget_recipe": dict(
+                replacement.extensions.get("local_retarget_recipe", {}) or {}
+            ),
+        }
+        replacement.extensions["migration_audit"] = migration
+        project.mapping_profiles[replacement.profile_id] = replacement.to_dict()
+        animation.mapping_profile_id = replacement.profile_id
+        animation.extensions["retarget_domain"] = "body"
+        animation.extensions["automatic_retarget_migration"] = migration
+        animation.extensions.pop("automatic_retarget_generation_failure", None)
+        return replacement, verification
+    except (TypeError, ValueError) as exc:
+        # Preserve the existing no-map/automatic-repair path so the ordinary
+        # review gate remains the sole fallback; never promote the old map.
+        animation.extensions["automatic_retarget_generation_failure"] = {
+            "policy": "dl2_advanced_body_bridge_v1",
+            "error": str(exc),
+            "prior_revalidation_errors": (
+                list(stale_verification.errors)
+                if stale_verification is not None
+                else []
+            ),
+            "action": "Open Retargeting details",
+        }
+        return current, stale_verification
+
+
+def _resolve_local_reviewed_recipe_map(
+    project: DlReanimatedProject,
+    animation: ProjectAnimation,
+    document: Any,
+    rig: ChromeRig,
+    current: GenericBoneMap | None,
+) -> GenericBoneMap | None:
+    """Reuse a reviewed local recipe for a generic/custom exact target."""
+
+    if (
+        project.game_id == DL2_GAME_ID
+        and rig.rig_id == DL2_ADVANCED_RIG_REF
+    ):
+        return current
+    if mapping_profile_origin(current) in {
+        "manually_reviewed",
+        "imported_profile",
+        "automatic_identity",
+    }:
+        return current
+    from .automatic_retarget import build_automatic_retarget_plan
+    from .retarget_recipes import (
+        materialize_reviewed_retarget_recipe,
+        resolve_local_retarget_recipe,
+    )
+    from .target_retarget_policy import build_target_retarget_policy
+
+    try:
+        policy = build_target_retarget_policy(
+            rig,
+            game_id=project.game_id,
+            clip_domain="body",
+        )
+        fresh = build_automatic_retarget_plan(
+            document,
+            rig,
+            policy,
+            clip_domain="body",
+        )
+        local = resolve_local_retarget_recipe(
+            fresh,
+            document,
+            rig,
+            policy,
+        )
+        if not local.applied or local.recipe is None:
+            return current
+        replacement = materialize_reviewed_retarget_recipe(
+            local.recipe,
+            document,
+            rig,
+            policy,
+            clip_domain="body",
+            profile_name="Reviewed local retarget recipe",
+        )
+    except (OSError, TypeError, ValueError):
+        return current
+
+    project.mapping_profiles[replacement.profile_id] = replacement.to_dict()
+    animation.mapping_profile_id = replacement.profile_id
+    animation.extensions["local_retarget_recipe"] = dict(
+        replacement.extensions.get("local_retarget_recipe", {}) or {}
+    )
+    return replacement
+
+
+def _require_live_local_recipe_profile(
+    project: DlReanimatedProject,
+    animation: ProjectAnimation,
+    document: Any,
+    rig: ChromeRig,
+    bone_map: GenericBoneMap | None,
+) -> Any | None:
+    """Enforce cache-independent applied-recipe identity at the build gate."""
+
+    if (
+        bone_map is None
+        or not isinstance(
+            bone_map.extensions.get("local_retarget_recipe"), dict
+        )
+    ):
+        return None
+    from .retarget_recipes import revalidate_materialized_retarget_recipe
+    from .target_retarget_policy import build_target_retarget_policy
+
+    recipe_policy = build_target_retarget_policy(
+        rig,
+        game_id=project.game_id,
+        clip_domain="body",
+    )
+    recipe_validation = revalidate_materialized_retarget_recipe(
+        bone_map,
+        document,
+        rig,
+        recipe_policy,
+        clip_domain="body",
+    )
+    animation.extensions["local_retarget_recipe_validation"] = (
+        recipe_validation.to_dict()
+    )
+    if not recipe_validation.ok:
+        raise ValueError(
+            f"Reviewed retarget recipe for {animation.display_name!r} "
+            "needs attention:\n- "
+            + "\n- ".join(
+                recipe_validation.errors
+                or ("live recipe revalidation did not pass",)
+            )
+        )
+    return recipe_validation
 
 
 @dataclass(slots=True)
@@ -110,6 +462,7 @@ class _AnimationTargetContext:
     rig_ref: str
     rig_path: str
     retarget_mode: str
+    execution_mode: str
     rig: ChromeRig | None
 
 
@@ -117,7 +470,7 @@ def _animation_target_context(
     project: DlReanimatedProject,
     animation: ProjectAnimation,
     *,
-    game_target_rig_ref: str,
+    game_default_target_rig_ref: str,
     cache: dict[str, ChromeRig],
 ) -> _AnimationTargetContext:
     rig_ref = str(animation.target_rig_ref or project.rig.target_rig_ref)
@@ -130,21 +483,42 @@ def _animation_target_context(
             else ""
         )
     )
-    clip_mode = (
-        "humanoid"
-        if project.rig.retarget_mode == "humanoid"
-        and rig_ref == game_target_rig_ref
+    game_profile = get_game_profile(project.game_id)
+    project_mode = str(project.rig.retarget_mode or "auto")
+    if project_mode == "auto" and rig_ref in game_profile.compatible_builtin_rig_refs:
+        clip_mode = "auto"
+        execution_mode = "humanoid" if project.game_id == DL1_GAME_ID else "exact"
+    elif (
+        project_mode == "humanoid"
+        and rig_ref == game_default_target_rig_ref
         and not animation.target_rig_path
-        else "exact"
-    )
-    if clip_mode == "humanoid":
-        return _AnimationTargetContext(rig_ref, rig_path_value, clip_mode, None)
+    ):
+        clip_mode = "humanoid"
+        execution_mode = "humanoid"
+    else:
+        clip_mode = "exact"
+        execution_mode = "exact"
+    if execution_mode == "humanoid":
+        return _AnimationTargetContext(
+            rig_ref, rig_path_value, clip_mode, execution_mode, None
+        )
 
     candidate: Path | None = None
+    registry = ChromeRigRegistry(writable_application_root() / "rigs")
+    bundled_candidate: Path | None = None
+    if rig_ref == BUILTIN_MALE_RIG_REF:
+        bundled = resource_root() / "reference" / "male_npc_infected.crig"
+        bundled_candidate = bundled if bundled.is_file() else None
+    elif rig_ref.startswith("builtin:"):
+        bundled_candidate = registry.resolve(rig_ref)
     if rig_path_value:
         path = Path(rig_path_value)
         if path.is_file():
             candidate = path
+        elif bundled_candidate is not None:
+            # Portable project paths can become stale when a project is moved.
+            # A stable built-in ID still identifies its immutable bundled CRIG.
+            candidate = bundled_candidate
         else:
             raise FileNotFoundError(
                 f"Animation {animation.display_name!r} selects target rig {rig_ref!r}, "
@@ -152,13 +526,7 @@ def _animation_target_context(
                 "choose Inherit project target."
             )
     if candidate is None:
-        if rig_ref == BUILTIN_MALE_RIG_REF:
-            bundled = resource_root() / "reference" / "male_npc_infected.crig"
-            candidate = bundled if bundled.is_file() else None
-        else:
-            candidate = ChromeRigRegistry(
-                writable_application_root() / "rigs"
-            ).resolve(rig_ref)
+        candidate = bundled_candidate or registry.resolve(rig_ref)
     if candidate is None or not candidate.is_file():
         raise FileNotFoundError(
             f"Animation {animation.display_name!r} selects target rig {rig_ref!r}, but no "
@@ -183,7 +551,9 @@ def _animation_target_context(
             f"{rig_game!r}, while the project uses {project.game_id!r}. Choose a CRIG for the "
             "selected game profile."
         )
-    return _AnimationTargetContext(rig_ref or rig.rig_id, resolved, clip_mode, rig)
+    return _AnimationTargetContext(
+        rig_ref or rig.rig_id, resolved, clip_mode, execution_mode, rig
+    )
 
 
 @dataclass(slots=True)
@@ -267,30 +637,57 @@ def _build_body_project(
         animation.animation_id: _animation_target_context(
             project,
             animation,
-            game_target_rig_ref=game_profile.target_rig_ref,
+            game_default_target_rig_ref=game_profile.default_target_rig_ref,
             cache=rig_cache,
         )
         for animation in enabled
     }
     uses_humanoid = any(
-        row.retarget_mode == "humanoid" for row in target_contexts.values()
+        row.execution_mode == "humanoid" for row in target_contexts.values()
     )
     uses_exact = any(
-        row.retarget_mode == "exact" for row in target_contexts.values()
+        row.execution_mode == "exact" for row in target_contexts.values()
     )
-    target_package_coherence: dict[str, Any] = {}
-    uses_profile_target = any(
-        row.rig_ref == game_profile.target_rig_ref for row in target_contexts.values()
-    )
-    if uses_profile_target and game_profile.target_rig_relative_path:
+    target_package_coherences: dict[str, dict[str, Any]] = {}
+    immutable_contexts = {
+        (context.rig_ref, context.rig_path): context
+        for context in target_contexts.values()
+    }
+    for (rig_ref, _resolved_path), context in sorted(immutable_contexts.items()):
+        package = game_profile.package_for_rig_ref(rig_ref)
+        if package is None or not package.rig_relative_path:
+            continue
+        package_paths = game_profile.paths(resource_root(), rig_ref=rig_ref)
+        if rig_ref == project.rig.target_rig_ref:
+            stored_smd = Path(str(project.rig.canonical_smd or ""))
+            stored_reference = Path(str(project.rig.target_template_anm2 or ""))
+            smd_path = (
+                str(stored_smd)
+                if stored_smd.is_file()
+                else package_paths["canonical_smd"]
+            )
+            crig_path = context.rig_path or project.rig.target_rig_path
+            reference_path = (
+                str(stored_reference)
+                if stored_reference.is_file()
+                else package_paths["target_template_anm2"]
+            )
+        else:
+            smd_path = package_paths["canonical_smd"]
+            crig_path = context.rig_path or package_paths["target_rig_path"]
+            reference_path = package_paths["target_template_anm2"]
         coherence = validate_target_package(
             game_profile,
-            smd_path=project.rig.canonical_smd,
-            crig_path=project.rig.target_rig_path,
-            reference_anm2_path=project.rig.target_template_anm2,
+            rig_ref=rig_ref,
+            smd_path=smd_path,
+            crig_path=crig_path,
+            reference_anm2_path=reference_path,
         )
         coherence.require_valid(game_profile.display_name)
-        target_package_coherence = coherence.to_dict()
+        target_package_coherences[rig_ref] = coherence.to_dict()
+    target_package_coherence = target_package_coherences.get(
+        str(project.rig.target_rig_ref), {}
+    )
     rig_paths: dict[str, Path] = {}
     target_rig_definition: ChromeRig | None = None
     if uses_humanoid:
@@ -355,6 +752,7 @@ def _build_body_project(
     preflight_by_animation: dict[str, Any] = {}
     mapping_document_by_animation: dict[str, Any] = {}
     bone_map_by_animation: dict[str, GenericBoneMap | None] = {}
+    automatic_verification_by_animation: dict[str, Any] = {}
     compatibility_by_animation: dict[str, dict[str, Any]] = {}
     solver_by_animation: dict[str, Any] = {}
     humanoid_profile_by_animation: dict[str, SourceBoneMappingProfile] = {}
@@ -388,7 +786,7 @@ def _build_body_project(
                 source_path,
                 purpose="animation",
                 animation_stack=animation.source_animation_stack or None,
-                target_rig=context.rig if context.retarget_mode == "exact" else None,
+                target_rig=context.rig if context.execution_mode == "exact" else None,
                 game_id=project.game_id,
                 document=document,
                 tolerance=import_tolerance,
@@ -412,7 +810,7 @@ def _build_body_project(
         ):
             document.select_animation_stack(animation.source_animation_stack)
         mapping_document_by_animation[animation.animation_id] = document
-        sample_fps = int(animation.fps) if context.retarget_mode == "exact" else 30
+        sample_fps = int(animation.fps) if context.execution_mode == "exact" else 30
         if sample_fps <= 0:
             raise ValueError(
                 f"Animation {animation.display_name!r} has invalid FPS {animation.fps}. "
@@ -424,7 +822,7 @@ def _build_body_project(
         elif hasattr(document, "frame_count"):
             predicted_frame_count = int(document.frame_count(fps=sample_fps))
         if predicted_frame_count is not None:
-            if context.retarget_mode == "exact":
+            if context.execution_mode == "exact":
                 predicted_frame_count = max(2, predicted_frame_count)
             expected_frame_count_by_animation[animation.animation_id] = (
                 predicted_frame_count
@@ -459,7 +857,7 @@ def _build_body_project(
                 "clip and retry; Exact Rig does not make an out-of-range selection viable. "
                 "No ANM2 or RPack output was created."
             )
-        if context.retarget_mode == "humanoid":
+        if context.execution_mode == "humanoid":
             profile = _mapping_profile_for_animation(project, animation, document)
             mapping_errors = profile.validate(document.limb_models)
             if mapping_errors:
@@ -470,6 +868,65 @@ def _build_body_project(
             humanoid_profile_by_animation[animation.animation_id] = profile
             continue
         assert context.rig is not None
+        bundled_dl2_semantic = bool(
+            project.game_id == DL2_GAME_ID
+            and retarget_ui_kind(project, animation)
+            == RetargetUiKind.BUILTIN_HUMANOID
+        )
+        if bundled_dl2_semantic:
+            compatibility = classify_target_compatibility(document, context.rig)
+            try:
+                bone_map, automatic_verification, semantic_plan, semantic_profile = (
+                    _resolve_bundled_dl2_semantic_map(
+                        project, animation, document, context.rig
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                animation.extensions["automatic_retarget_generation_failure"] = {
+                    "status": "needs_attention",
+                    "reason": "The visible semantic profile did not produce a safe live plan.",
+                    "diagnostic": str(exc),
+                    "action": "Open Retargeting and resolve the highlighted semantic roles",
+                }
+                raise ValueError(
+                    f"Animation {animation.display_name!r} has unresolved bundled-humanoid "
+                    f"roles: {exc}. Open Retargeting and correct the highlighted source "
+                    "assignments."
+                ) from exc
+            solver = select_exact_solver(
+                compatibility,
+                bone_map,
+                automatic_verification=automatic_verification,
+            )
+            if not solver.build_allowed:
+                raise ValueError(
+                    f"Animation {animation.display_name!r} cannot compile its semantic "
+                    f"profile: {solver.blocking_error}"
+                )
+            animation.extensions["semantic_retarget_summary"] = {
+                "semantic_profile_id": semantic_profile.profile_id,
+                "manual_override_count": semantic_profile.manual_override_count,
+                "role_to_source": dict(semantic_profile.role_to_bone),
+                "mapping_mode_counts": semantic_plan.mapping_modes,
+                "unresolved_animated_roles": list(
+                    semantic_plan.unresolved_required_roles
+                ),
+                "compiled_internal_map_id": bone_map.profile_id,
+                "compiled_internal_map_hash": animation.extensions.get(
+                    "compiled_target_map_hash", ""
+                ),
+                "target_policy_id": semantic_profile.target_policy_id,
+                "selected_engine": solver.selected_engine,
+                "selected_engine_reason": solver.selection_reason,
+                "live_validation_status": automatic_verification.status,
+            }
+            bone_map_by_animation[animation.animation_id] = bone_map
+            automatic_verification_by_animation[animation.animation_id] = (
+                automatic_verification
+            )
+            compatibility_by_animation[animation.animation_id] = compatibility
+            solver_by_animation[animation.animation_id] = solver
+            continue
         mapping_payload = project.mapping_profiles.get(
             str(animation.mapping_profile_id or ""), {}
         )
@@ -490,13 +947,70 @@ def _build_body_project(
             else None
         )
         compatibility = classify_target_compatibility(document, context.rig)
-        solver = select_exact_solver(compatibility, bone_map)
+        incompatible = bool(
+            compatibility.get("required_missing_bones")
+            or compatibility.get("hierarchy_mismatches")
+        )
+        if incompatible or mapping_profile_origin(bone_map) == "automatic_verified":
+            bone_map, automatic_verification = _resolve_verified_dl2_advanced_map(
+                project,
+                animation,
+                document,
+                context.rig,
+                bone_map,
+                dict(mapping_payload),
+            )
+            if (
+                project.game_id != DL2_GAME_ID
+                or context.rig.rig_id != DL2_ADVANCED_RIG_REF
+            ):
+                bone_map = _resolve_local_reviewed_recipe_map(
+                    project,
+                    animation,
+                    document,
+                    context.rig,
+                    bone_map,
+                )
+        else:
+            automatic_verification = None
+        _require_live_local_recipe_profile(
+            project,
+            animation,
+            document,
+            context.rig,
+            bone_map,
+        )
+        solver = select_exact_solver(
+            compatibility,
+            bone_map,
+            automatic_verification=automatic_verification,
+        )
         if not solver.build_allowed:
+            generation_failure = dict(
+                animation.extensions.get(
+                    "automatic_retarget_generation_failure", {}
+                )
+                or {}
+            )
+            if generation_failure:
+                failed_invariant = str(
+                    generation_failure.get("error", "")
+                    or "the verified DL2 body-map invariants did not pass"
+                )
+                raise ValueError(
+                    f"Animation {animation.display_name!r} could not generate the safe "
+                    f"DL2 advanced body bridge: {failed_invariant}. "
+                    "Open Retargeting details."
+                )
             raise ValueError(
                 f"Animation {animation.display_name!r} cannot target {context.rig.name!r}: "
                 + solver.blocking_error
             )
         bone_map_by_animation[animation.animation_id] = bone_map
+        if automatic_verification is not None:
+            automatic_verification_by_animation[animation.animation_id] = (
+                automatic_verification
+            )
         compatibility_by_animation[animation.animation_id] = compatibility
         solver_by_animation[animation.animation_id] = solver
 
@@ -583,6 +1097,7 @@ def _build_body_project(
         source_path = Path(animation.source_fbx)
         context = target_contexts[animation.animation_id]
         clip_retarget_mode = context.retarget_mode
+        clip_execution_mode = context.execution_mode
         clip_target_rig = context.rig
         log(f"[{index}/{len(enabled)}] Reading skeleton: {source_path.name}")
         preflight = preflight_by_animation.get(animation.animation_id)
@@ -603,7 +1118,7 @@ def _build_body_project(
             f"[{index}/{len(enabled)}] Retargeting {animation.display_name} "
             f"({animation.root_policy}, {script_resource})"
         )
-        if clip_retarget_mode == "exact":
+        if clip_execution_mode == "exact":
             assert clip_target_rig is not None
             source_rest_for_clip = source_path
             clip_out.mkdir(parents=True, exist_ok=True)
@@ -622,6 +1137,7 @@ def _build_body_project(
                     root_mapping=RootMappingSelection.from_animation(animation),
                     transfer_policy=solver_selection.selected_policy,
                     root_policy=animation.root_policy,
+                    root_motion=RootMotionSelection.from_animation(animation),
                     document=mapping_document_by_animation[animation.animation_id],
                 )
                 exact_build.report["mapping_transfer_selection"] = {
@@ -647,9 +1163,19 @@ def _build_body_project(
                     animation_stack=animation.source_animation_stack or None,
                     root_mapping=RootMappingSelection.from_animation(animation),
                     root_policy=animation.root_policy,
+                    root_motion=RootMotionSelection.from_animation(animation),
                     document=mapping_document_by_animation[animation.animation_id],
                 )
             exact_build.report["solver_selection"] = solver_selection.to_dict()
+            automatic_verification = automatic_verification_by_animation.get(
+                animation.animation_id
+            )
+            if automatic_verification is not None:
+                exact_build.report["automatic_retarget_verification"] = (
+                    automatic_verification.to_dict()
+                    if hasattr(automatic_verification, "to_dict")
+                    else dict(automatic_verification)
+                )
             payload = exact_build.payload
             candidate_path = clip_out / f"{resource_name}.anm2"
             candidate_path.write_bytes(payload)
@@ -658,6 +1184,16 @@ def _build_body_project(
             retarget_report["requested_project_root_policy"] = animation.root_policy
         else:
             assert profile is not None
+            root_motion_selection = RootMotionSelection.from_animation(animation)
+            role_to_bone = dict(getattr(profile, "role_to_bone", {}) or {})
+            source_root_bone = (
+                root_motion_selection.source_root_bone
+                or role_to_bone.get("hips", "")
+                or "mixamorig:Hips"
+            )
+            target_root_bone = (
+                root_motion_selection.target_root_bone or "bip01"
+            )
             helper_rules = helper_rules_from_dicts(
                 animation.extensions.get("helper_retarget_rules", ()) or ()
             )
@@ -689,6 +1225,15 @@ def _build_body_project(
                     project.export.include_validation_controls and not controls_added
                 ),
                 helper_rules=helper_rules_to_dicts(helper_rules),
+                source_root_bone=source_root_bone,
+                target_root_bone=target_root_bone,
+                root_heading_modes=(
+                    {
+                        animation.root_policy: root_motion_selection.heading_mode,
+                    }
+                    if ROOT_MOTION_EXTENSION_KEY in animation.extensions
+                    else None
+                ),
             )
             reports = json.loads(
                 (clip_out / "retarget_candidate_summary.json").read_text(encoding="utf-8")
@@ -701,11 +1246,17 @@ def _build_body_project(
             candidate_path = Path(retarget_report["candidate_path"])
             payload = candidate_path.read_bytes()
         retarget_report["game_id"] = project.game_id
-        if (
-            target_package_coherence
-            and context.rig_ref == game_profile.target_rig_ref
-        ):
-            retarget_report["target_package_coherence"] = target_package_coherence
+        retarget_report["requested_retarget_mode"] = clip_retarget_mode
+        retarget_report["resolved_execution_mode"] = clip_execution_mode
+        semantic_summary = dict(
+            animation.extensions.get("semantic_retarget_summary", {}) or {}
+        )
+        if semantic_summary:
+            retarget_report["semantic_retarget"] = semantic_summary
+        if context.rig_ref in target_package_coherences:
+            retarget_report["target_package_coherence"] = target_package_coherences[
+                context.rig_ref
+            ]
         if preflight is not None:
             retarget_report["fbx_preflight"] = preflight.to_dict()
         retarget_report["output_anm2_format"] = (
@@ -794,7 +1345,7 @@ def _build_body_project(
             {
                 "resource_name": resource_name,
                 "script_resource": script_resource,
-                "mapping_profile_id": profile.profile_id if profile is not None else "",
+                "mapping_profile_id": animation.mapping_profile_id,
                 "root_policy": animation.root_policy,
                 "ik_preset": animation.ik_preset,
                 "source_fbx": str(source_path),
@@ -881,7 +1432,7 @@ def _build_body_project(
         )
 
         if (
-            clip_retarget_mode == "humanoid"
+            clip_execution_mode == "humanoid"
             and project.export.include_validation_controls
             and not controls_added
         ):
@@ -990,6 +1541,7 @@ def _build_body_project(
         "target_rig_group_count": len(target_rig_groups),
         "target_rig_groups": target_rig_groups,
         "target_package_coherence": target_package_coherence or None,
+        "target_package_coherences": target_package_coherences,
         "solver_selection": (
             solver_selection_rows[0] if len(solver_selection_rows) == 1 else None
         ),

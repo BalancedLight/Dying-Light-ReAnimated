@@ -16,7 +16,10 @@ def test_host_integration_markers_are_present():
 def test_mimic_gui_uses_safe_qt_column_insertion_and_visible_tab():
     root = Path(__file__).resolve().parents[1]
     source = (root / "dlanm2_gui" / "mimic_gui.py").read_text(encoding="utf-8")
-    assert "table.insertColumn(7)" in source
+    assert "table.setColumnCount(11)" in source
+    assert "table.insertColumn(10)" in source
+    assert '"Target rig", "Compatibility / mapping"' in source
+    assert "table.setCellWidget(row_index, 10, holder)" in source
     assert "removeCellWidget" not in source
     assert 'controller.tabs.insertTab(help_index, controller.facial_page, "Facial")' in source
     assert "controller._mimic_ui_installed = True" in source

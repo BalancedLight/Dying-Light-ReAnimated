@@ -33,8 +33,62 @@ def test_advanced_toggle_does_not_retain_deleted_help_buttons(tmp_path) -> None:
     assert shell.controller.advanced_help_buttons == []
     for checked in (True, False, True, False):
         shell.controller.advanced_mode_toggle.setChecked(checked)
-        assert (shell._animation_tab_index("Root & .crig Mapping") >= 0) is checked
+        assert shell._animation_tab_index("Root & .crig Mapping") < 0
+
+    # Solver mode does not own the editor. A bundled humanoid remains semantic
+    # even when exact execution is selected.
+    shell.controller.project.rig.retarget_mode = "exact"
+    shell.controller.advanced_mode_toggle.setChecked(True)
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+
+    custom, custom_path = _custom_rig(tmp_path, "custom:advanced-tab-test")
+    shell.controller.project.rig.target_rig_ref = custom.rig_id
+    shell.controller.project.rig.target_rig_path = str(custom_path)
+    shell._set_crig_tab_visible(True)
+    assert shell._animation_tab_index("Root & .crig Mapping") >= 0
     shell.controller.dirty = False
+    shell.window.close()
+
+
+def test_dl2_auto_mapping_opens_retargeting_without_crig_tab(tmp_path) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    previous_game = controller.project.game_id
+    controller.project.game_id = "dying_light_2"
+    gui.apply_game_profile_defaults(
+        controller.project,
+        controller.resource_root,
+        previous_game_id=previous_game,
+        force=True,
+    )
+    animation = ProjectAnimation.create(tmp_path / "known_humanoid.fbx")
+    controller.project.animations.append(animation)
+    controller._bundled_semantic_state = lambda _animation: SimpleNamespace(
+        rows=tuple(range(52))
+    )
+    controller._refresh_bundled_semantic_table = (
+        lambda _animation, state: (
+            controller.mapping_table.setRowCount(len(state.rows)),
+            controller.mapping_status.setText(
+                "Ready — automatically retargeted; 52 editable semantic roles"
+            ),
+        )
+    )
+    controller._reload_target_rig_combo()
+    controller._refresh_retarget_clip_combo()
+
+    controller.advanced_mode_toggle.setChecked(True)
+    assert controller.project.rig.retarget_mode == "auto"
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+
+    shell._open_animation_mapping(animation.animation_id)
+
+    assert shell.animation_tabs.tabText(shell.animation_tabs.currentIndex()) == "Retargeting"
+    assert controller.mapping_table.rowCount() == 52
+    assert "editable semantic roles" in controller.mapping_status.text()
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+    controller.dirty = False
     shell.window.close()
 
 
@@ -275,7 +329,8 @@ def test_cross_rig_animation_is_added_with_editable_map_and_opens_editor(
     assert controller.project.mapping_profiles[animation.mapping_profile_id]["format"] == (
         "dl-reanimated-bone-map"
     )
-    assert shell._animation_tab_index("Root & .crig Mapping") >= 0
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+    assert controller.animation_table.cellWidget(0, 11).text() == "Fix mapping…"
 
     controller._open_mapping_for_animation(animation.animation_id)
     assert shell.animation_tabs.tabText(shell.animation_tabs.currentIndex()) == (
@@ -333,6 +388,8 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
         return report
 
     critical_messages: list[str] = []
+    warning_messages: list[str] = []
+    information_messages: list[str] = []
     monkeypatch.setattr(controller, "_source_document", source_document)
     monkeypatch.setattr(gui, "preflight_fbx", preflight)
     monkeypatch.setattr(
@@ -345,7 +402,16 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
         "critical",
         lambda _parent, _title, message: critical_messages.append(message),
     )
-    monkeypatch.setattr(qt["QMessageBox"], "warning", lambda *_args: None)
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "warning",
+        lambda _parent, _title, message: warning_messages.append(message),
+    )
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "information",
+        lambda _parent, _title, message: information_messages.append(message),
+    )
 
     controller.add_animations()
 
@@ -353,14 +419,16 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
     animation = controller.project.animations[0]
     assert Path(animation.source_fbx).name == valid.name
     assert animation.source_animation_stack == "mixamo.com"
-    assert animation.extensions["import_state"]["status"] == "imported_with_warnings"
+    assert animation.extensions["import_state"]["status"] == "ready"
     assert "model_geometry_ignored_for_animation" in (
         controller.animation_import_diagnostics.toPlainText()
     )
     assert len(critical_messages) == 1
     assert "truncated binary node stream" in critical_messages[0]
+    assert warning_messages == []
+    assert information_messages == []
     status = controller._animation_target_status(animation)[0]
-    assert status.startswith("Imported with warnings")
+    assert status.startswith("Ready")
     controller.dirty = False
     shell.window.close()
 
@@ -439,8 +507,9 @@ def test_animation_target_column_overrides_only_one_clip(tmp_path) -> None:
     assert Path(first.target_rig_path) == rig_path
     assert second.target_rig_ref == ""
     assert second.target_rig_path == ""
-    assert "Override" in controller.animation_table.item(0, 7).text()
-    assert "Exact" in controller.animation_table.item(0, 7).text()
+    assert controller.animation_table.item(0, 7).text().startswith("Ready")
+    assert "Override target" in controller.animation_table.item(0, 7).toolTip()
+    assert "exact skeleton match" in controller.animation_table.item(0, 7).text()
     assert shell.crig_mapping._load_rig(first).skeleton_hash == rig.skeleton_hash
 
     controller.dirty = False

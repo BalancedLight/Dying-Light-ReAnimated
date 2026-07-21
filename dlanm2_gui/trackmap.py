@@ -5,6 +5,7 @@ import struct
 import zipfile
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from . import anm2
 from .skeletons import read_chr_bytes
@@ -45,15 +46,18 @@ def dl_name_hash(name: str) -> int:
     return value
 
 
-def read_track_descriptors(path: str | Path) -> tuple[anm2.Anm2Header, list[int]]:
+def read_track_descriptors(path: str | Path) -> tuple[Any, list[int]]:
     data = Path(path).read_bytes()
-    from .dl2_anm2 import detect_anm2_format
+    from .dl2_anm2 import detect_anm2_format, parse_dl2_header42
     detected = detect_anm2_format(data)
     if detected == 42:
-        raise ValueError(
-            "Dying Light 2 format-42 descriptors use the DL2 inspection path and cannot be "
-            "read as a DL1 format-1 track table."
-        )
+        layout = parse_dl2_header42(data)
+        if layout.validation_errors:
+            raise ValueError(
+                "Invalid DL2 Header_Version2 ANM2 layout:\n- "
+                + "\n- ".join(layout.validation_errors)
+            )
+        return layout, list(layout.descriptors)
     header = anm2.Anm2Header.parse(data)
     descriptors = list(struct.unpack_from(f"<{header.track_count}I", data, anm2.HEADER_LENGTH))
     return header, descriptors

@@ -1,72 +1,78 @@
-# Root motion, looping, and IK
+# Root motion, actor basis, looping, and IK
 
-Pose correctness and actor/world accumulation are separate layers.
+Pose transfer, skeletal-root motion, actor/world accumulation, and runtime IK
+are separate contracts. The Retargeting tab stores the source root, actual
+target root, translation owner, and heading owner independently.
 
-The builder exposes three root policies for every imported clip.
+Legacy project strings remain readable adapters:
 
-## `inplace`
+| Serialized value | Translation owner | Default heading owner |
+|---|---|---|
+| `inplace` | none | locked at the initial target-global heading |
+| `bip01` | selected skeletal root (`bip01` in DL1, `pelvis` in DL2) | skeletal root |
+| `motion` | `0xCCC3CDDF` for planar motion; vertical pose stays on the skeletal root | `0xCCC3CDDF` |
 
-```
-bip01 translation: fixed
-0xCCC3CDDF: fixed
-```
+`bip01` is not a target assumption. New profile data uses `skeletal_root` and
+stores the real target name. Old DL1 projects keep their prior byte behavior
+until the new Root & locomotion selection is explicitly saved.
 
-Use this for pose-only playback, static movie placement, or gameplay systems that already control actor movement.
+## Actor-frame displacement mapping
 
-## `bip01`
+Model coordinate normalization and actor motion are deliberately independent.
+For every source root sample the retargeter:
 
-```
-source Hips displacement -> bip01 translation
-0xCCC3CDDF: fixed
-```
+1. subtracts the raw source bind-global position from the raw animated-global
+   position;
+2. applies the FBX unit/wrapper scale exactly once;
+3. decomposes the vector along the analyzed source body frame's right, up, and
+   forward axes;
+4. reconstructs those semantic components along the target bind frame's right,
+   up, and forward axes;
+5. converts the reconstructed target-global vector to the selected target root's
+   parent-local space.
 
-This visibly moves the skeleton during one playback. A repeated raw sequence returns to frame zero, so a strafe or turn restarts instead of continuing.
+The FBX/model basis matrix is never reused as the root vector mapping. This is
+what prevents a source actor-forward `+Z` displacement from becoming target
+vertical `+Y` merely because a model-axis conversion contains that rotation.
+Frames are finite, orthonormal, right-handed, sign-stable, and backed by pelvis,
+axial, and bilateral hip/shoulder evidence. An underdetermined frame stops with
+one focused mapping diagnostic.
 
-## `motion`
+Heading is extracted from the selected target root's global quaternion as a
+swing/twist decomposition about the target profile's world-up axis. No Euler
+conversion or arbitrary source-root bone roll is used. `lock_initial` removes
+only accumulated heading and preserves swing/tilt; `preserve` retains all root
+orientation; `to_motion_accumulator` moves heading to `0xCCC3CDDF`.
 
-```
-vertical / pose placement -> bip01
-horizontal displacement -> 0xCCC3CDDF translation
-body orientation delta -> 0xCCC3CDDF rotation
-```
+## Target-owned locomotion
 
-Manual movie testing showed that this is the useful accumulation-oriented form. Continuous movement still depends on the consuming movie/graph/gameplay system applying the helper transform rather than resetting the actor.
+- DL1 uses the `bip01` root and `l/r_thigh -> calf -> foot` chains. It has no
+  advanced sole-helper or hidden IK-root requirement.
+- DL2 Advanced uses `pelvis`, both leg/foot chains, and `l_sole_helper` /
+  `r_sole_helper`. It deliberately has no `l_iktarget` or `r_iktarget` dependency.
+- DL2 Shadow Caster [Legacy] retains `l_iktarget`, `r_iktarget`, and
+  `player_shadowcaster` as explicit legacy target nodes. They remain at bind
+  unless a user maps them.
 
-For movie keys, the known editor-facing control is:
+The helper-only and complete-target table views never imply runtime ownership.
+Unmapped target rows stay at bind; direct overrides serialize source, mode,
+transfer policy, and component ownership and are recompiled/revalidated before
+build.
 
-```
-CKeyAnimation.m_UseOffsetHelper = true
-```
+## Looping and consumers
 
-Animation-workspace pose objects expose related controls:
-
-```
-CPoseObject.AccumulateMotion
-CPoseObject.MotionAccumulatorBone
-```
-
-Expected accumulated behavior:
-
-```
-strafe-left repetition:
-  each loop continues farther sideways
-
-90-degree turn repetition:
-  first loop reaches roughly 90 degrees
-  second loop continues toward roughly 180 degrees
-```
-
-If a `*_motion` resource still resets, the remaining issue is the consumer setup—not the body pose or ANM2 codec.
+A raw sequence restarts at frame zero. Continuous actor movement requires the
+consumer to apply the accumulator rather than resetting it. Known editor-facing
+controls include `CKeyAnimation.m_UseOffsetHelper`,
+`CPoseObject.AccumulateMotion`, and `CPoseObject.MotionAccumulatorBone`.
 
 ## IK
 
-IK is consumer-side. ANM2 stores sampled local transforms; it does not contain one universal IK-enable bit.
+ANM2 stores sampled local transforms; it has no universal IK-enable bit. The
+per-clip `runtime` / `off` value is an authoring recommendation recorded for the
+movie or animation-graph consumer. The converter does not fabricate IK curves
+or claim that Advanced DL2 has hidden IK roots.
 
-The CLI accepts:
-
-```
---ik-authoring-preset runtime
---ik-authoring-preset off
-```
-
-The GUI stores this choice per animation, and builds record it in `movie_authoring_presets.json`. It does not modify a movie/graph automatically and does not fabricate ANM2 data.
+ANM2-to-FBX decode reports root and accumulator translation ranges and
+target-global accumulated heading as diagnostics only. Those measurements never
+mutate decoded curves or the sparse FBX handoff.
