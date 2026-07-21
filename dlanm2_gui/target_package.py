@@ -32,6 +32,7 @@ def _sha256(path: Path) -> str:
 @dataclass(slots=True)
 class TargetPackageCoherence:
     game_id: str
+    rig_ref: str = ""
     status: str = "fail"
     smd_path: str = ""
     crig_path: str = ""
@@ -54,6 +55,7 @@ class TargetPackageCoherence:
     reference_anm2_hash_match: bool = False
     reference_anm2_format_match: bool = False
     game_id_match: bool = False
+    rig_id_match: bool = False
     primary_root_match: bool = False
     roots: list[str] = field(default_factory=list)
     bind_tolerance: dict[str, float] = field(default_factory=lambda: {
@@ -70,6 +72,7 @@ class TargetPackageCoherence:
         return {
             "status": self.status,
             "game_id": self.game_id,
+            "rig_ref": self.rig_ref,
             "smd_path": self.smd_path,
             "crig_path": self.crig_path,
             "reference_anm2_path": self.reference_anm2_path,
@@ -96,6 +99,7 @@ class TargetPackageCoherence:
             "reference_anm2_hash_match": self.reference_anm2_hash_match,
             "reference_anm2_format_match": self.reference_anm2_format_match,
             "game_id_match": self.game_id_match,
+            "rig_id_match": self.rig_id_match,
             "primary_root_match": self.primary_root_match,
             "errors": list(self.errors),
         }
@@ -115,22 +119,45 @@ def validate_target_package(
     profile: Any,
     root: str | Path | None = None,
     *,
+    rig_ref: str | None = None,
     smd_path: str | Path | None = None,
     crig_path: str | Path | None = None,
     reference_anm2_path: str | Path | None = None,
 ) -> TargetPackageCoherence:
-    """Validate one profile's immutable target assets and embedded provenance."""
+    """Validate one selected immutable package and its embedded provenance.
+
+    ``rig_ref`` matters for games such as DL2 that retain more than one bundled
+    topology.  Omitting it intentionally selects the profile's current default.
+    """
 
     base = Path(root) if root is not None else Path()
-    smd = Path(smd_path) if smd_path is not None else base / profile.canonical_smd_relative_path
-    crig = Path(crig_path) if crig_path is not None else base / profile.target_rig_relative_path
+    selected_ref = str(
+        rig_ref
+        or getattr(profile, "default_target_rig_ref", "")
+        or getattr(profile, "target_rig_ref", "")
+    )
+    package_for_ref = getattr(profile, "package_for_rig_ref", None)
+    package = package_for_ref(selected_ref) if callable(package_for_ref) else None
+    if package is not None:
+        smd_relative = package.canonical_smd_relative_path
+        crig_relative = package.rig_relative_path
+        reference_relative = package.reference_anm2_relative_path
+        expected_primary_root = package.primary_root
+    else:
+        smd_relative = profile.canonical_smd_relative_path
+        crig_relative = profile.target_rig_relative_path
+        reference_relative = profile.reference_anm2_relative_path
+        expected_primary_root = profile.primary_root
+    smd = Path(smd_path) if smd_path is not None else base / smd_relative
+    crig = Path(crig_path) if crig_path is not None else base / crig_relative
     reference = (
         Path(reference_anm2_path)
         if reference_anm2_path is not None
-        else base / profile.reference_anm2_relative_path
+        else base / reference_relative
     )
     result = TargetPackageCoherence(
         game_id=str(profile.game_id),
+        rig_ref=selected_ref,
         smd_path=str(smd),
         crig_path=str(crig),
         reference_anm2_path=str(reference),
@@ -319,17 +346,22 @@ def validate_target_package(
     )
     if not result.game_id_match:
         result.errors.append("CRIG game_id does not match the GameProfile.")
+    result.rig_id_match = not selected_ref or rig.rig_id == selected_ref
+    if not result.rig_id_match:
+        result.errors.append(
+            f"CRIG rig_id {rig.rig_id!r} does not match selected package {selected_ref!r}."
+        )
     declared_primary = str(rig.extensions.get("primary_root", "") or "")
     actual_primary = rig.bones[rig.root_index].name
     result.primary_root_match = (
-        _normalized_name(declared_primary) == _normalized_name(profile.primary_root)
-        and _normalized_name(actual_primary) == _normalized_name(profile.primary_root)
-        and _normalized_name(profile.primary_root)
+        _normalized_name(declared_primary) == _normalized_name(expected_primary_root)
+        and _normalized_name(actual_primary) == _normalized_name(expected_primary_root)
+        and _normalized_name(expected_primary_root)
         in {_normalized_name(name) for name in smd_roots}
     )
     if not result.primary_root_match:
         result.errors.append(
-            f"Primary root mismatch: profile {profile.primary_root!r}, CRIG manifest "
+            f"Primary root mismatch: package {expected_primary_root!r}, CRIG manifest "
             f"{declared_primary!r}, CRIG root_index {actual_primary!r}."
         )
 

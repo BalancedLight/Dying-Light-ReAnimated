@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Explicit root/Bip01 mapping shared by animation workspaces and builders.
+"""Explicit source/target skeletal-root mapping shared by UI and builders.
 
 Dying Light's stock male target contains a bone named ``bip01``, but custom SMD
 and CRIG targets do not have to use that literal name.  The UI stores one
@@ -12,7 +12,7 @@ per-animation mapping with two independent choices:
     the hierarchy root with the largest descendant tree.
 
 ``target_bone``
-    Target SMD/CRIG bone that receives the role traditionally called Bip01.
+    Target SMD/CRIG bone that receives skeletal-root motion.
     Empty means automatic: a real ``bip01``, then ``pelvis``, then the best
     descriptor-backed hierarchy root.
 
@@ -259,13 +259,13 @@ def resolve_target_smd_root(
     if requested_bone:
         if requested_bone not in names:
             raise ValueError(
-                f"Selected Bip01/root target bone {requested_bone!r} is not present in target SMD "
+                f"Selected target skeletal root {requested_bone!r} is not present in target SMD "
                 f"{Path(smd_path).name}. Choose another target root in Animations > Root & .crig Mapping."
             )
         descriptor = dl_name_hash(requested_bone)
         if descriptor not in descriptor_to_index:
             raise ValueError(
-                f"Selected Bip01/root target bone {requested_bone!r} exists in target SMD, but its "
+                f"Selected target skeletal root {requested_bone!r} exists in target SMD, but its "
                 f"descriptor 0x{descriptor:08X} is absent from the selected target ANM2 template. "
                 "Use a template for this skeleton or choose a descriptor-backed target bone."
             )
@@ -280,7 +280,7 @@ def resolve_target_smd_root(
     if not trackable:
         raise ValueError(
             f"Target SMD {Path(smd_path).name} has no bones whose descriptor exists in the target "
-            "ANM2 template. The retargeter cannot choose a Bip01/root track automatically."
+            "ANM2 template. The retargeter cannot choose a skeletal-root track automatically."
         )
     chosen = choose_hierarchy_root(names, parents, allowed=trackable)
     descriptor = dl_name_hash(chosen)
@@ -305,7 +305,7 @@ def resolve_source_root(
     if requested_bone:
         if requested_bone not in names:
             raise ValueError(
-                f"Selected Bip01/root source bone {requested_bone!r} is not present in the animation "
+                f"Selected source root bone {requested_bone!r} is not present in the animation "
                 "FBX. Re-open Animations > Root & .crig Mapping and choose an existing source bone."
             )
         return requested_bone, "manual"
@@ -327,7 +327,7 @@ def resolve_source_root(
 def root_mapping_summary(selection: RootMappingSelection) -> str:
     source = selection.source_bone or "Automatic"
     target = selection.target_bone or "Automatic"
-    return f"Bip01/root mapping — source: {source}; target: {target}"
+    return f"Skeletal-root mapping — source: {source}; target: {target}"
 
 
 __all__ = [

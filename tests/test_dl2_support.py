@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
-import struct
 
 import numpy as np
 import pytest
@@ -13,6 +11,8 @@ from dlanm2_gui.fbx_preflight import classify_target_compatibility, preflight_fb
 from dlanm2_gui.game_profiles import (
     DL1_GAME_ID,
     DL2_GAME_ID,
+    DL2_ADVANCED_RIG_REF,
+    DL2_LEGACY_RIG_REF,
     DL2_RIG_REF,
     apply_game_profile_defaults,
 )
@@ -80,8 +80,9 @@ def test_switching_profiles_updates_only_previous_defaults() -> None:
         project, ROOT, previous_game_id=DL1_GAME_ID
     )
     assert project.rig.target_rig_ref == DL2_RIG_REF
-    assert project.rig.retarget_mode == "exact"
-    assert Path(project.rig.canonical_smd).name == "player_shadow_caster.smd"
+    assert project.rig.target_rig_ref == DL2_ADVANCED_RIG_REF
+    assert project.rig.retarget_mode == "auto"
+    assert Path(project.rig.canonical_smd).name == "player_skeleton.smd"
     assert Path(project.rig.target_template_anm2).name == "0_m_fpp_farjump.anm2"
     assert project.rig.trusted_source_rest_json == "自定义/custom rest.json"
     assert "target rig" in result["changed"]
@@ -93,30 +94,17 @@ def test_cross_game_builtin_target_is_blocked() -> None:
     assert any("DL1 male NPC target" in row for row in project.validate())
 
 
-def _format42_payload() -> bytes:
-    active = (0x11111111, 0x22222222)
-    reference = (0x33333333,)
-    header_size = 28
-    descriptor_end = header_size + 4 * len(active)
-    data_offset = 64
-    header = struct.pack(
-        "<4s12H",
-        b"ANM2", 42, 2, 12, 0, len(active), data_offset, 2,
-        descriptor_end, descriptor_end, 1, len(active) + len(reference), 7,
-    )
-    return header + struct.pack("<3I", *(active + reference)) + bytes(data_offset - 40) + b"curves"
-
-
-def test_format1_format42_dispatch_and_descriptor_inspection(tmp_path: Path) -> None:
+def test_format1_header_v2_dispatch_and_descriptor_inspection() -> None:
     assert detect_anm2_format(ROOT / "reference" / "infected_turn_90r.template.anm2") == 1
-    path = tmp_path / "动画 формат 42.anm2"
-    path.write_bytes(_format42_payload())
+    path = ROOT / "reference" / "dl2" / "0_m_fpp_farjump.anm2"
     assert detect_anm2_format(path) == 42
-    header = parse_dl2_header42(path)
-    assert header.frame_count == 12
-    assert header.active_descriptors == (0x11111111, 0x22222222)
-    assert header.reference_descriptors == (0x33333333,)
-    assert header.validation_errors == ()
+    layout = parse_dl2_header42(path)
+    assert layout.frame_count == 229
+    assert layout.track_count == 189
+    assert len(layout.descriptors) == 189
+    assert layout.validation_errors == ()
+    assert not hasattr(layout, "active_descriptors")
+    assert not hasattr(layout, "reference_descriptors")
 
 
 def test_global_bind_basis_correction_reconstructs_target_bind_with_wrapper_scale() -> None:
@@ -189,7 +177,7 @@ def test_cross_rig_rotation_delta_preserves_target_translation_and_scale() -> No
     assert not np.allclose(result[:3, :3], target[:3, :3])
 
 
-def test_dl2_root_policies_keep_pelvis_and_independent_motion_tracks_coherent() -> None:
+def test_legacy_dl2_root_policies_keep_pelvis_and_motion_tracks_coherent() -> None:
     rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_shadow_caster.crig")
     bind = rig.bind_track_values()
     values = [[list(row) for row in bind] for _ in range(2)]
@@ -232,16 +220,26 @@ def test_fbx_scene_bind_priority_pose_then_transformlink_then_fallback() -> None
     assert np.array_equal(values[3], np.eye(4) * 6.0)
 
 
-def test_bundled_dl2_target_has_pelvis_independent_helpers_and_finger_roots() -> None:
-    rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_shadow_caster.crig")
-    assert rig.extensions["game_id"] == DL2_GAME_ID
-    assert rig.bones[rig.root_index].name == "pelvis"
-    roots = {bone.name for bone in rig.bones if bone.parent_index < 0}
-    assert roots == {"pelvis", "l_iktarget", "r_iktarget", "player_shadowcaster"}
-    names = {bone.name for bone in rig.bones}
-    for side in ("l", "r"):
-        assert {f"{side}_finger10", f"{side}_finger20", f"{side}_finger30", f"{side}_finger40"} <= names
-    assert not any("hand1" in bone.tags for bone in rig.bones)
+def test_bundled_dl2_targets_keep_advanced_and_legacy_root_contracts() -> None:
+    advanced = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
+    legacy = ChromeRig.load(ROOT / "reference" / "dl2" / "player_shadow_caster.crig")
+    assert advanced.rig_id == DL2_ADVANCED_RIG_REF
+    assert legacy.rig_id == DL2_LEGACY_RIG_REF
+    assert advanced.extensions["game_id"] == legacy.extensions["game_id"] == DL2_GAME_ID
+    assert advanced.bones[advanced.root_index].name == "pelvis"
+    assert legacy.bones[legacy.root_index].name == "pelvis"
+    assert {bone.name for bone in advanced.bones if bone.parent_index < 0} == {"pelvis"}
+    assert {bone.name for bone in legacy.bones if bone.parent_index < 0} == {
+        "pelvis", "l_iktarget", "r_iktarget", "player_shadowcaster"
+    }
+    for rig in (advanced, legacy):
+        names = {bone.name for bone in rig.bones}
+        for side in ("l", "r"):
+            assert {
+                f"{side}_finger10", f"{side}_finger20",
+                f"{side}_finger30", f"{side}_finger40",
+            } <= names
+        assert not any("hand1" in bone.tags for bone in rig.bones)
 
 
 @pytest.mark.skipif(not PRIVATE_FBX.is_file(), reason="private supplied DL2 FBX is not available")

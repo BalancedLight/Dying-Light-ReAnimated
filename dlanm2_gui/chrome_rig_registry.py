@@ -10,7 +10,7 @@ import shutil
 import tempfile
 
 from .chrome_rig import CRIG_EXTENSION, ChromeRig
-from .game_profiles import DL2_RIG_REF
+from .game_profiles import DL2_ADVANCED_RIG_REF, DL2_LEGACY_RIG_REF
 from .runtime_paths import resource_root
 
 
@@ -40,13 +40,22 @@ class ChromeRigRegistry:
                 True,
             )
         ]
-        dl2_path = resource_root() / "reference" / "dl2" / "player_shadow_caster.crig"
-        if dl2_path.is_file():
+        dl2_advanced_path = resource_root() / "reference" / "dl2" / "player_skeleton.crig"
+        if dl2_advanced_path.is_file():
             rows.append(ChromeRigRecord(
-                DL2_RIG_REF,
-                "Dying Light 2 Player / Shadow Caster (bundled)",
+                DL2_ADVANCED_RIG_REF,
+                "Dying Light 2 Player — Advanced (bundled)",
                 "Humanoid",
-                str(dl2_path),
+                str(dl2_advanced_path),
+                True,
+            ))
+        dl2_legacy_path = resource_root() / "reference" / "dl2" / "player_shadow_caster.crig"
+        if dl2_legacy_path.is_file():
+            rows.append(ChromeRigRecord(
+                DL2_LEGACY_RIG_REF,
+                "Dying Light 2 Player — Shadow Caster [Legacy] (bundled)",
+                "Humanoid",
+                str(dl2_legacy_path),
                 True,
             ))
         if self.root.is_dir():
@@ -83,7 +92,10 @@ class ChromeRigRegistry:
     def resolve(self, rig_ref: str, explicit_path: str = "") -> Path | None:
         if rig_ref == BUILTIN_MALE_RIG_REF:
             return None
-        if rig_ref == DL2_RIG_REF:
+        if rig_ref == DL2_ADVANCED_RIG_REF:
+            path = resource_root() / "reference" / "dl2" / "player_skeleton.crig"
+            return path if path.is_file() else None
+        if rig_ref == DL2_LEGACY_RIG_REF:
             path = resource_root() / "reference" / "dl2" / "player_shadow_caster.crig"
             return path if path.is_file() else None
         if explicit_path:

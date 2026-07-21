@@ -37,6 +37,9 @@ def build_fbx_rpack(
     include_controls: bool = True,
     helper_rules: Sequence[Mapping[str, Any]] | None = None,
     helper_target_profile: str = "dl1_legacy_70_track",
+    source_root_bone: str = "mixamorig:Hips",
+    target_root_bone: str = "bip01",
+    root_heading_modes: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build custom ANM2 resources and one editor-loadable RPack.
 
@@ -75,6 +78,9 @@ def build_fbx_rpack(
         include_controls=include_controls,
         helper_rules=helper_rules,
         helper_target_profile=helper_target_profile,
+        source_root_bone=source_root_bone,
+        target_root_bone=target_root_bone,
+        root_heading_modes=root_heading_modes,
     )
 
 

@@ -15,6 +15,7 @@ from dlanm2_gui.animation_scr import AnimationScrSequence, build_animation_scr_s
 from dlanm2_gui.anm2 import Anm2Header
 from dlanm2_gui.anm2_components import decode_file_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
+from dlanm2_gui.chrome_rig import ChromeRig, ChromeRigBone
 from dlanm2_gui.fbx_core import FBX_TICKS_PER_SECOND, FbxDocument
 from dlanm2_gui.oracle.custom_fbx_smd_intrinsic_absolute_editor_rpack import (
     _add_absolute_clavicle_globals,
@@ -72,6 +73,9 @@ from dlanm2_gui.retarget_engines.mapped_rig import (
     source_global_to_target_basis,
     source_local_to_target_basis,
 )
+from dlanm2_gui.root_heading import apply_target_root_policy
+from dlanm2_gui.root_motion import RootMotionSelection
+from dlanm2_gui.trackmap import dl_name_hash
 
 PACK_NAME = "common_anims_sp_pc.rpack"
 SCRIPT_RESOURCE_NAME = "anims_man_all_DLC60"
@@ -227,6 +231,9 @@ def build_custom_fbx_release_candidate_editor_rpack(
     include_controls: bool = True,
     helper_rules: Sequence[Mapping[str, Any]] | None = None,
     helper_target_profile: str = LEGACY_HELPER_PROFILE_ID,
+    source_root_bone: str = "mixamorig:Hips",
+    target_root_bone: str = "bip01",
+    root_heading_modes: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Build the post-greeting validation pack.
 
@@ -250,6 +257,11 @@ def build_custom_fbx_release_candidate_editor_rpack(
     # inventory. No hidden profile is required to expose or emit a helper.
     _ = helper_target_profile
     parsed_helper_rules = helper_rules_from_dicts(helper_rules or ())
+    selected_source_root = str(source_root_bone or "mixamorig:Hips")
+    selected_target_root = str(target_root_bone or "bip01")
+    selected_heading_modes = {
+        str(key): str(value) for key, value in dict(root_heading_modes or {}).items()
+    }
 
     out = Path(out_dir)
     if out.exists():
@@ -329,7 +341,10 @@ def build_custom_fbx_release_candidate_editor_rpack(
     target_bone_names = tuple(bone.name for bone in target_pose.bones)
     descriptors = extend_track_descriptors_for_helpers(
         list(template_sample.descriptors),
-        (rule.target_bone for rule in parsed_helper_rules),
+        (
+            *(rule.target_bone for rule in parsed_helper_rules),
+            selected_target_root,
+        ),
         target_bone_names,
     )
     target_local = smd_local_matrices(target_pose)
@@ -354,7 +369,11 @@ def build_custom_fbx_release_candidate_editor_rpack(
             base_targets_by_source.setdefault(source_name, []).append(role.target_name)
     target_body_bind = _target_body_frame(target_global)
     motion_track_index = descriptors.index(MOTION_DESCRIPTOR)
-    bip01_track_index = track_index_by_name["bip01"]
+    if selected_target_root not in track_index_by_name:
+        raise ValueError(
+            f"Selected target skeletal root {selected_target_root!r} has no output track"
+        )
+    target_root_track_index = track_index_by_name[selected_target_root]
 
     packaged: list[tuple[str, bytes]] = []
     sequences: list[AnimationScrSequence] = []
@@ -429,6 +448,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
             animation=animation,
             source_positions=source_positions,
             source_body_frames=source_body_frames,
+            source_root_bone=selected_source_root,
         ))
 
         for root_policy in selected_root_policies:
@@ -443,7 +463,10 @@ def build_custom_fbx_release_candidate_editor_rpack(
                 names_by_descriptor=names_by_descriptor,
                 track_index_by_name=track_index_by_name,
                 motion_track_index=motion_track_index,
-                bip01_track_index=bip01_track_index,
+            target_root_track_index=target_root_track_index,
+            target_root_bone=selected_target_root,
+            source_root_bone=selected_source_root,
+            heading_mode=selected_heading_modes.get(spec.root_policy, ""),
                 source_globals=source_globals,
                 source_positions=source_positions,
                 source_body_frames=source_body_frames,
@@ -677,7 +700,10 @@ def _build_clip_candidate(
     names_by_descriptor: dict[int, str],
     track_index_by_name: dict[str, int],
     motion_track_index: int,
-    bip01_track_index: int,
+    target_root_track_index: int,
+    target_root_bone: str,
+    source_root_bone: str,
+    heading_mode: str,
     source_globals: list[dict[str, np.ndarray]],
     source_positions: list[dict[str, np.ndarray]],
     source_body_frames: list[np.ndarray],
@@ -811,7 +837,10 @@ def _build_clip_candidate(
         values=values,
         packed_flags=packed_flags,
         bind_track_rows=bind_track_rows,
-        bip01_track_index=bip01_track_index,
+        target_root_track_index=target_root_track_index,
+        target_root_bone=target_root_bone,
+        source_root_bone=source_root_bone,
+        heading_mode=heading_mode,
         motion_track_index=motion_track_index,
         source_positions=source_positions,
         source_body_frames=source_body_frames,
@@ -819,6 +848,33 @@ def _build_clip_candidate(
         source_rest_body=source_rest_body,
         target_body_bind=target_body_bind,
     )
+    if heading_mode:
+        preserved_motion_translation = [
+            list(frame[motion_track_index][3:6]) for frame in values
+        ]
+        motion_mode = {
+            "inplace": "inplace",
+            "bip01": "skeletal_root",
+            "motion": "motion_accumulator",
+        }[spec.root_policy]
+        heading_report = apply_target_root_policy(
+            values,
+            _root_policy_rig(target_pose, target_local, descriptors),
+            target_root_bone,
+            RootMotionSelection(
+                source_root_bone,
+                target_root_bone,
+                motion_mode,
+                heading_mode,
+            ),
+        )
+        if spec.root_policy == "motion":
+            for frame, translation in zip(values, preserved_motion_translation):
+                frame[motion_track_index][3:6] = translation
+        packed_flags[target_root_track_index][0:3] = [True, True, True]
+        if spec.root_policy == "motion":
+            packed_flags[motion_track_index][0:6] = [True] * 6
+        motion_summary["target_global_heading_policy"] = heading_report.to_dict()
 
     target_parents = {
         bone.name: (
@@ -1378,6 +1434,50 @@ def _reconstruct_target_globals(
     return result
 
 
+def _root_policy_rig(
+    target_pose: Any,
+    target_local: Mapping[str, np.ndarray],
+    descriptors: Sequence[int],
+) -> ChromeRig:
+    """Build the minimal track-backed hierarchy needed for global root policy."""
+
+    descriptor_set = set(int(value) for value in descriptors)
+    included = [
+        bone for bone in target_pose.bones if dl_name_hash(bone.name) in descriptor_set
+    ]
+    original_to_new = {bone.index: index for index, bone in enumerate(included)}
+    by_original = target_pose.by_index
+    bones: list[ChromeRigBone] = []
+    for index, bone in enumerate(included):
+        parent = bone.parent_index
+        while parent >= 0 and parent not in original_to_new:
+            parent = by_original[parent].parent_index
+        local = np.asarray(target_local[bone.name], dtype=float)
+        scale = np.linalg.norm(local[:3, :3], axis=0)
+        rotation = local[:3, :3] / scale
+        bones.append(
+            ChromeRigBone(
+                index,
+                bone.name,
+                original_to_new.get(parent, -1),
+                dl_name_hash(bone.name),
+                tuple(float(value) for value in local[:3, 3]),
+                tuple(float(value) for value in quaternion_wxyz_from_matrix(rotation)),
+                tuple(float(value) for value in scale),
+            )
+        )
+    roots = [bone.index for bone in bones if bone.parent_index < 0]
+    return ChromeRig(
+        "internal:dl1_root_policy",
+        "DL1 target root policy",
+        "Humanoid",
+        tuple(bones),
+        roots[0],
+        track_descriptors=tuple(int(value) for value in descriptors),
+        extensions={"world_up_axis": (0.0, 1.0, 0.0)},
+    )
+
+
 def _apply_root_policy(
     *,
     root_policy: str,
@@ -1385,7 +1485,10 @@ def _apply_root_policy(
     values: list[list[list[float]]],
     packed_flags: list[list[bool]],
     bind_track_rows: list[list[float]],
-    bip01_track_index: int,
+    target_root_track_index: int,
+    target_root_bone: str,
+    source_root_bone: str,
+    heading_mode: str,
     motion_track_index: int,
     source_positions: list[dict[str, np.ndarray]],
     source_body_frames: list[np.ndarray],
@@ -1396,6 +1499,9 @@ def _apply_root_policy(
     if root_policy == "inplace":
         return {
             "policy": "inplace",
+            "heading_mode": heading_mode or "lock_initial",
+            "source_root_bone": source_root_bone,
+            "target_root_bone": target_root_bone,
             "meters_per_fbx_unit": animation.meters_per_unit,
             "bip01_translation_dynamic": False,
             "ccc3_translation_dynamic": False,
@@ -1406,25 +1512,34 @@ def _apply_root_policy(
 
     scale = animation.meters_per_unit
     source_to_target = _orthogonalize(target_body_bind @ source_rest_body.T)
-    rest_hips = source_rest_positions["mixamorig:Hips"]
-    first_hips = source_positions[0]["mixamorig:Hips"]
+    if source_root_bone not in source_rest_positions or any(
+        source_root_bone not in row for row in source_positions
+    ):
+        raise ValueError(
+            f"Selected source root bone {source_root_bone!r} is missing from bind or animation poses"
+        )
+    rest_hips = source_rest_positions[source_root_bone]
+    first_hips = source_positions[0][source_root_bone]
     first_body = source_body_frames[0]
 
-    bip01_base = np.asarray(bind_track_rows[bip01_track_index][3:6], dtype=float)
+    bip01_base = np.asarray(bind_track_rows[target_root_track_index][3:6], dtype=float)
     motion_base = np.asarray(bind_track_rows[motion_track_index][3:6], dtype=float)
 
     if root_policy == "bip01":
         skeletal_rows: list[np.ndarray] = []
         for frame_index, row in enumerate(source_positions):
-            offset = source_to_target @ (row["mixamorig:Hips"] - rest_hips) * scale
-            values[frame_index][bip01_track_index][3:6] = [
+            offset = source_to_target @ (row[source_root_bone] - rest_hips) * scale
+            values[frame_index][target_root_track_index][3:6] = [
                 float(value) for value in bip01_base + offset
             ]
             skeletal_rows.append(offset)
-        packed_flags[bip01_track_index][3:6] = [True, True, True]
+        packed_flags[target_root_track_index][3:6] = [True, True, True]
         skeletal_array = np.asarray(skeletal_rows, dtype=float)
         return {
             "policy": "bip01",
+            "heading_mode": heading_mode or "preserve",
+            "source_root_bone": source_root_bone,
+            "target_root_bone": target_root_bone,
             "meters_per_fbx_unit": scale,
             "bip01_translation_dynamic": True,
             "ccc3_translation_dynamic": False,
@@ -1443,13 +1558,13 @@ def _apply_root_policy(
     motion_rotation_vectors: list[np.ndarray] = []
 
     for frame_index, row in enumerate(source_positions):
-        absolute_offset = source_to_target @ (row["mixamorig:Hips"] - rest_hips) * scale
-        accumulated = source_to_target @ (row["mixamorig:Hips"] - first_hips) * scale
+        absolute_offset = source_to_target @ (row[source_root_bone] - rest_hips) * scale
+        accumulated = source_to_target @ (row[source_root_bone] - first_hips) * scale
         horizontal = accumulated.copy()
         horizontal[1] = 0.0
         pose_offset = absolute_offset - horizontal
 
-        values[frame_index][bip01_track_index][3:6] = [
+        values[frame_index][target_root_track_index][3:6] = [
             float(value) for value in bip01_base + pose_offset
         ]
         values[frame_index][motion_track_index][3:6] = [
@@ -1472,7 +1587,7 @@ def _apply_root_policy(
         mapped_pose_rows.append(pose_offset)
         motion_rotation_vectors.append(rotation_vector)
 
-    packed_flags[bip01_track_index][3:6] = [True, True, True]
+    packed_flags[target_root_track_index][3:6] = [True, True, True]
     packed_flags[motion_track_index][0:6] = [True, True, True, True, True, True]
 
     motion_array = np.asarray(mapped_motion_rows, dtype=float)
@@ -1480,6 +1595,9 @@ def _apply_root_policy(
     rotation_array = np.asarray(motion_rotation_vectors, dtype=float)
     return {
         "policy": "motion",
+        "heading_mode": heading_mode or "to_motion_accumulator",
+        "source_root_bone": source_root_bone,
+        "target_root_bone": target_root_bone,
         "meters_per_fbx_unit": scale,
         "bip01_translation_dynamic": True,
         "ccc3_translation_dynamic": True,
@@ -1502,8 +1620,13 @@ def _clip_inventory(
     animation: FbxDocument,
     source_positions: list[dict[str, np.ndarray]],
     source_body_frames: list[np.ndarray],
+    source_root_bone: str = "mixamorig:Hips",
 ) -> dict[str, Any]:
-    hips = np.asarray([row["mixamorig:Hips"] for row in source_positions], dtype=float)
+    if any(source_root_bone not in row for row in source_positions):
+        raise ValueError(
+            f"Selected source root bone {source_root_bone!r} is missing from sampled poses"
+        )
+    hips = np.asarray([row[source_root_bone] for row in source_positions], dtype=float)
     delta = (hips - hips[0]) * animation.meters_per_unit
     body0 = source_body_frames[0]
     body_end = source_body_frames[-1]
@@ -1518,6 +1641,7 @@ def _clip_inventory(
         "fps": FPS,
         "duration_seconds": (len(source_positions) - 1) / FPS,
         "meters_per_fbx_unit": animation.meters_per_unit,
+        "source_root_bone": source_root_bone,
         "root_delta_meters": delta[-1].tolist(),
         "root_range_meters": np.ptp(delta, axis=0).tolist(),
         "maximum_root_displacement_meters": float(np.max(np.linalg.norm(delta, axis=1))),

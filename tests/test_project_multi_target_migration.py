@@ -90,7 +90,8 @@ def test_old_project_animation_inherits_target_without_losing_settings_or_map() 
     project = DlReanimatedProject.from_dict(payload)
     row = project.animations[0]
 
-    assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION == 8
+    assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
+    assert CURRENT_PROJECT_SCHEMA_VERSION >= 9
     assert project.rig.default_target_rig_ref == "custom:legacy"
     assert row.target_rig_ref == ""
     assert row.target_rig_path == ""

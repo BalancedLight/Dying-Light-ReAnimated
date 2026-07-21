@@ -90,9 +90,11 @@ void DLR_ApplyRootMotionSourceBoneOverride(
     int root_policy)
 {
     /*
-     * The target is still bip01. Only the source position used to author its
-     * translation changes. OffsetHelper horizontal translation is updated for
-     * accumulator mode. Existing stable body-frame yaw is preserved.
+     * The legacy caller supplies bip01; the implementation receives the real
+     * selected target-root descriptor independently. Only the source position
+     * used to author its translation changes. OffsetHelper horizontal
+     * translation is updated for accumulator mode. Existing stable body-frame
+     * yaw is preserved.
      */
     Transform source_bind = FbxGlobalBindTransform(source, source_motion_bone);
     Transform source_first = FbxGlobalAnimatedTransform(source, source_motion_bone, 0);

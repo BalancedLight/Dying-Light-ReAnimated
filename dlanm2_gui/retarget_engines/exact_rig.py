@@ -18,6 +18,7 @@ def build_exact_rig_anm2(
     document=None,
     root_mapping=None,
     root_policy="bip01",
+    root_motion=None,
 ):
     document = document if document is not None else document_factory(Path(animation_fbx))
     selected_stack = getattr(document, "selected_animation_stack", None)
@@ -153,6 +154,7 @@ def build_exact_rig_anm2(
         transfer_policy=transfer_policy,
         root_mapping=exact_root_mapping,
         root_policy=root_policy,
+        root_motion=root_motion,
     )
     if automatic_exact_root:
         result.report["root_mapping"].update(

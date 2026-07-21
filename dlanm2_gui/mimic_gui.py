@@ -314,12 +314,15 @@ def install_mimic_ui(controller: Any) -> None:
     original_refresh_table = controller._refresh_animation_table
     def refresh_animation_table(self) -> None:
         table = self.animation_table
-        table.setColumnCount(9)
+        # Preserve the complete animation target/readiness/action surface, then
+        # insert facial mode immediately before the contextual Retarget action.
+        table.setColumnCount(11)
         original_refresh_table()
-        table.insertColumn(7)
+        table.insertColumn(10)
         table.setHorizontalHeaderLabels([
             "Use", "Display name", "FBX source", "FBX animation", "Resource name",
-            "Animation SCR", "Root motion", "Body / face", "IK", "Retarget",
+            "Animation SCR", "Target rig", "Compatibility / mapping", "Root motion",
+            "IK", "Body / face", "Retarget",
         ])
         for row_index, animation in enumerate(self.project.animations):
             combo = self._combo_box()
@@ -339,8 +342,8 @@ def install_mimic_ui(controller: Any) -> None:
             button.clicked.connect(lambda _checked=False, aid=animation.animation_id: (_set_combo_data(self.mimic_clip_combo, aid), map_selected()))
             holder_layout.addWidget(combo, 1)
             holder_layout.addWidget(button)
-            table.setCellWidget(row_index, 7, holder)
-        table.setColumnWidth(7, 220)
+            table.setCellWidget(row_index, 10, holder)
+        table.setColumnWidth(10, 220)
         refresh_facial()
     controller._refresh_animation_table = types.MethodType(refresh_animation_table, controller)
 

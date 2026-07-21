@@ -1,4 +1,4 @@
-"""Advanced source-bone override for humanoid bip01/OffsetHelper translation."""
+"""Target-neutral source-root override for skeletal-root/accumulator translation."""
 
 from __future__ import annotations
 
@@ -74,26 +74,31 @@ def apply_root_motion_source_override(
     fps: int,
     animation_stack: str | None = None,
     source_bone_aliases: Mapping[str, str] | None = None,
+    target_root_bone: str = "bip01",
+    baseline_source_root_bone: str = "mixamorig:Hips",
 ) -> tuple[bytes, dict[str, Any]]:
-    """Replace only the source position used to author bip01/root translation.
+    """Replace only the source position used to author skeletal-root translation.
 
-    The target track remains ``bip01``. In motion-accumulator mode, the selected
-    source bone drives the horizontal OffsetHelper translation and bip01 pose
+    ``target_root_bone`` defaults to the legacy DL1 ``bip01`` adapter. In
+    motion-accumulator mode, the selected source bone drives horizontal
+    OffsetHelper translation and the selected skeletal-root pose
     offset. Actor/body yaw continues to come from the established source body
     frame; using an arbitrary bone's roll as actor yaw would be unstable.
     """
 
     if root_policy not in {"bip01", "motion"}:
-        raise ValueError("A custom motion source bone is used only by bip01 or motion policies")
+        raise ValueError("A custom motion source bone is used only by skeletal-root or accumulator policies")
     header = Anm2Header.parse(payload)
     sample = decode_samples(payload, [float(index) for index in range(header.frame_count)])
     descriptors = list(sample.descriptors)
-    bip_descriptor = dl_name_hash("bip01")
-    if bip_descriptor not in descriptors:
-        raise ValueError("Generated ANM2 does not contain the target bip01 track")
+    root_descriptor = dl_name_hash(target_root_bone)
+    if root_descriptor not in descriptors:
+        raise ValueError(
+            f"Generated ANM2 does not contain selected target root track {target_root_bone!r}"
+        )
     if root_policy == "motion" and MOTION_HELPER_DESCRIPTOR not in descriptors:
         raise ValueError("Generated ANM2 does not contain the 0xCCC3CDDF motion-helper track")
-    bip_index = descriptors.index(bip_descriptor)
+    bip_index = descriptors.index(root_descriptor)
     motion_index = descriptors.index(MOTION_HELPER_DESCRIPTOR) if MOTION_HELPER_DESCRIPTOR in descriptors else -1
     values = [[list(track) for track in frame.tracks] for frame in sample.frames]
 
@@ -117,7 +122,7 @@ def apply_root_motion_source_override(
         for tick in ticks
     ]
     missing = [
-        name for name in ("mixamorig:Hips", source_bone)
+        name for name in (baseline_source_root_bone, source_bone)
         if name not in rest_globals or any(name not in frame for frame in animated_globals)
     ]
     if missing:
@@ -141,8 +146,8 @@ def apply_root_motion_source_override(
     source_to_target = _orthogonalize(target_body @ rest_body.T)
     scale = float(animation.meters_per_unit)
 
-    old_rest = rest_positions["mixamorig:Hips"]
-    old_first = positions[0]["mixamorig:Hips"]
+    old_rest = rest_positions[baseline_source_root_bone]
+    old_first = positions[0][baseline_source_root_bone]
     selected_rest = rest_positions[source_bone]
     selected_first = positions[0][source_bone]
     old_absolute0 = source_to_target @ (old_first - old_rest) * scale
@@ -193,7 +198,8 @@ def apply_root_motion_source_override(
     report: dict[str, Any] = {
         "status": "ok",
         "source_bone": source_bone,
-        "target_root_track": "bip01",
+        "target_root_track": target_root_bone,
+        "baseline_source_root_bone": baseline_source_root_bone,
         "root_policy": root_policy,
         "orientation_policy": "preserve validated source-body-frame accumulator rotation",
         "meters_per_fbx_unit": scale,

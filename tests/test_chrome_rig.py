@@ -332,7 +332,7 @@ def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
     assert CURRENT_PROJECT_SCHEMA_VERSION >= 5
     assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
     assert project.rig.target_rig_ref == "builtin:male_npc_infected"
-    assert project.rig.retarget_mode == "humanoid"
+    assert project.rig.retarget_mode == "auto"
     assert "legacy_target_files" in project.rig.extensions
 
 

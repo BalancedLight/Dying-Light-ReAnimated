@@ -5,18 +5,23 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
+import hashlib
+import json
 import math
 
 import numpy as np
 
 from . import anm2
-from .anm2_components import decode_samples
+from .anm2_components import decode_all_frames_cached
 from .bone_maps import GenericBoneMap, skeleton_signature
 from .chrome_rig import ChromeRig, ChromeRigBone
 from .chrome_rig_builder import decompose_local_matrix, _topological_bone_names
 from .fbx_core import FbxDocument
+from .root_heading import accumulated_heading_degrees, infer_target_up_axis
 
 MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
+UNKNOWN_TRACK_POLICIES = ("sidecar", "helpers", "drop")
+ANM2_COMPONENT_ORDER = ("rx", "ry", "rz", "tx", "ty", "tz", "sx", "sy", "sz")
 
 @dataclass(frozen=True, slots=True)
 class DecodedAnm2Animation:
@@ -29,10 +34,49 @@ class DecodedAnm2Animation:
     values: np.ndarray
     quaternions_wxyz: np.ndarray
     warnings: tuple[str, ...] = ()
+    source_sha256: str = ""
+    container: str = "dl1_header_version_1"
+    signature: int = 42
+    header_version: int = 1
+    container_frame_count: int = 0
+    static_stream_count: int = 0
+    packed_stream_count: int = 0
+    block_count: int = 0
+    block_frame_spans: tuple[int, ...] = ()
+    vfr_words: tuple[int, ...] = ()
+    container_track_count: int = 0
+    container_descriptors: tuple[int, ...] = ()
+    unique_packed_slots_decoded: int = 0
+    prepared_base_segment_count: int = 0
 
     @property
     def frame_count(self) -> int:
         return int(self.values.shape[0])
+
+    @property
+    def track_count(self) -> int:
+        return len(self.descriptors)
+
+    def decode_report(self, *, unknown_descriptor_count: int = 0) -> dict[str, Any]:
+        """Return stable, JSON-ready provenance for a decoded clip."""
+
+        return {
+            "container": self.container,
+            "signature": self.signature,
+            "header_version": self.header_version,
+            "frame_count": self.container_frame_count or self.frame_count,
+            "track_count": self.container_track_count or self.track_count,
+            "decoded_track_count": self.track_count,
+            "static_stream_count": self.static_stream_count,
+            "packed_stream_count": self.packed_stream_count,
+            "block_count": self.block_count,
+            "block_frame_spans": list(self.block_frame_spans),
+            "vfr_words": list(self.vfr_words),
+            "unknown_descriptor_count": int(unknown_descriptor_count),
+            "source_anm2_sha256": self.source_sha256,
+            "unique_packed_slots_decoded": self.unique_packed_slots_decoded,
+            "prepared_base_segment_count": self.prepared_base_segment_count,
+        }
 
 @dataclass(frozen=True, slots=True)
 class SceneBone:
@@ -61,6 +105,7 @@ class AnimationScene:
         return int(self.translations.shape[0])
 
     def to_job_dict(self, output_path: str | Path) -> dict[str, Any]:
+        """Compatibility JSON view; production Blender jobs use sparse NPZ."""
         return {
             "format": "dl-reanimated-blender-fbx-job",
             "schema_version": 1,
@@ -97,6 +142,193 @@ class AnimationScene:
             "warnings": list(self.warnings),
         }
 
+
+@dataclass(frozen=True, slots=True)
+class SparseFbxJob:
+    metadata: dict[str, Any]
+    arrays: dict[str, np.ndarray]
+
+    @property
+    def animated_bone_count(self) -> int:
+        return int(self.metadata["sparse_summary"]["animated_bone_count"])
+
+    @property
+    def fcurve_count(self) -> int:
+        return int(self.metadata["sparse_summary"]["fcurve_count"])
+
+    @property
+    def scalar_key_count(self) -> int:
+        return int(self.metadata["sparse_summary"]["scalar_key_count"])
+
+
+def _continuous_quaternion_array(values: np.ndarray) -> np.ndarray:
+    result = np.asarray(values, dtype=np.float64).copy()
+    norms = np.linalg.norm(result, axis=-1)
+    if not np.isfinite(norms).all() or np.any(norms <= 1.0e-12):
+        raise ValueError("animation contains a non-finite or singular quaternion")
+    result /= norms[..., np.newaxis]
+    if result.shape[0] > 1:
+        steps = np.where(
+            np.sum(result[1:] * result[:-1], axis=-1) < 0.0, -1.0, 1.0
+        )
+        signs = np.concatenate(
+            (
+                np.ones((1, *steps.shape[1:]), dtype=np.float64),
+                np.cumprod(steps, axis=0),
+            ),
+            axis=0,
+        )
+        result *= signs[..., np.newaxis]
+    return result
+
+
+def build_sparse_fbx_job(
+    scene: AnimationScene,
+    output_path: str | Path,
+    arrays_path: str | Path,
+    *,
+    tolerance: float = 1.0e-7,
+) -> SparseFbxJob:
+    """Build a complete bind skeleton plus sparse moving TRS component arrays."""
+
+    if not math.isfinite(float(tolerance)) or tolerance <= 0.0:
+        raise ValueError("sparse FBX tolerance must be finite and positive")
+    frame_count = scene.frame_count
+    bone_count = len(scene.bones)
+    expected = (frame_count, bone_count)
+    if scene.translations.shape[:2] != expected or scene.translations.shape[-1] != 3:
+        raise ValueError("scene translation array does not match its frames and bones")
+    if scene.rotations_wxyz.shape[:2] != expected or scene.rotations_wxyz.shape[-1] != 4:
+        raise ValueError("scene rotation array does not match its frames and bones")
+    if scene.scales.shape[:2] != expected or scene.scales.shape[-1] != 3:
+        raise ValueError("scene scale array does not match its frames and bones")
+    if not (
+        np.isfinite(scene.translations).all()
+        and np.isfinite(scene.rotations_wxyz).all()
+        and np.isfinite(scene.scales).all()
+    ):
+        raise ValueError("scene animation arrays must be finite")
+
+    bind_translation = np.asarray(
+        [bone.bind_translation for bone in scene.bones], dtype=np.float64
+    )
+    bind_rotation = _continuous_quaternion_array(
+        np.asarray([bone.bind_rotation_wxyz for bone in scene.bones], dtype=np.float64)[
+            np.newaxis, ...
+        ]
+    )[0]
+    bind_scale = np.asarray([bone.bind_scale for bone in scene.bones], dtype=np.float64)
+    rotations = _continuous_quaternion_array(scene.rotations_wxyz)
+    aligned = rotations.copy()
+    aligned[
+        np.sum(aligned * bind_rotation[np.newaxis, ...], axis=-1) < 0.0
+    ] *= -1.0
+
+    location_indices = np.flatnonzero(
+        np.max(
+            np.abs(scene.translations - bind_translation[np.newaxis, ...]),
+            axis=(0, 2),
+        )
+        > tolerance
+    ).astype(np.int32)
+    rotation_indices = np.flatnonzero(
+        np.max(
+            np.abs(aligned - bind_rotation[np.newaxis, ...]), axis=(0, 2)
+        )
+        > tolerance
+    ).astype(np.int32)
+    scale_indices = np.flatnonzero(
+        np.max(
+            np.abs(scene.scales - bind_scale[np.newaxis, ...]), axis=(0, 2)
+        )
+        > tolerance
+    ).astype(np.int32)
+    arrays = {
+        "frames": np.arange(frame_count, dtype=np.float64),
+        "location_bone_indices": location_indices,
+        "locations": np.asarray(
+            scene.translations[:, location_indices, :], dtype=np.float64
+        ),
+        "rotation_bone_indices": rotation_indices,
+        "rotations_wxyz": np.asarray(
+            rotations[:, rotation_indices, :], dtype=np.float64
+        ),
+        "scale_bone_indices": scale_indices,
+        "scales": np.asarray(scene.scales[:, scale_indices, :], dtype=np.float64),
+    }
+    animated_indices = sorted(
+        set(map(int, location_indices))
+        | set(map(int, rotation_indices))
+        | set(map(int, scale_indices))
+    )
+    fcurve_count = (
+        3 * len(location_indices)
+        + 4 * len(rotation_indices)
+        + 3 * len(scale_indices)
+    )
+    metadata = {
+        "format": "dl-reanimated-blender-fbx-job",
+        "schema_version": 2,
+        "array_format": "numpy_npz_compressed",
+        "arrays_path": str(Path(arrays_path).resolve()),
+        "name": scene.name,
+        "fps": scene.fps,
+        "frame_start": 0,
+        "frame_end": frame_count - 1,
+        "source_frame_start": scene.source_frame_start,
+        "output_path": str(Path(output_path).resolve()),
+        "sparse_tolerance": float(tolerance),
+        "bones": [
+            {
+                "name": bone.name,
+                "parent_index": bone.parent_index,
+                "descriptor": bone.descriptor,
+                "bind_translation": list(bone.bind_translation),
+                "bind_rotation_wxyz": list(bone.bind_rotation_wxyz),
+                "bind_scale": list(bone.bind_scale),
+                "deform": bone.deform,
+                "helper": bone.helper,
+            }
+            for bone in scene.bones
+        ],
+        "sparse_summary": {
+            "skeleton_bone_count": sum(not bone.helper for bone in scene.bones),
+            "helper_count": sum(bone.helper for bone in scene.bones),
+            "animated_bone_count": len(animated_indices),
+            "bind_only_bone_count": bone_count - len(animated_indices),
+            "location_bone_count": len(location_indices),
+            "rotation_bone_count": len(rotation_indices),
+            "scale_bone_count": len(scale_indices),
+            "fcurve_count": fcurve_count,
+            "scalar_key_count": frame_count * fcurve_count,
+            "frame_count": frame_count,
+            "animated_bone_indices": animated_indices,
+        },
+        "warnings": list(scene.warnings),
+    }
+    return SparseFbxJob(metadata, arrays)
+
+
+def write_sparse_fbx_job(
+    scene: AnimationScene,
+    job_path: str | Path,
+    arrays_path: str | Path,
+    output_path: str | Path,
+    *,
+    tolerance: float = 1.0e-7,
+) -> SparseFbxJob:
+    job = build_sparse_fbx_job(
+        scene, output_path, arrays_path, tolerance=tolerance
+    )
+    metadata_path = Path(job_path)
+    binary_path = Path(arrays_path)
+    metadata_path.write_text(
+        json.dumps(job.metadata, separators=(",", ":"), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    np.savez_compressed(binary_path, **job.arrays)
+    return job
+
 def cayley_to_quaternion_wxyz(vector: Iterable[float]) -> np.ndarray:
     value = np.asarray(tuple(vector), dtype=float)
     d = float(value @ value)
@@ -106,48 +338,85 @@ def cayley_to_quaternion_wxyz(vector: Iterable[float]) -> np.ndarray:
         raise ValueError("ANM2 rotation decoded to a singular quaternion")
     return result / norm
 
+
+def cayley_to_quaternions_wxyz(vectors: np.ndarray) -> np.ndarray:
+    """Vectorized Cayley conversion with frame-axis hemisphere continuity."""
+
+    value = np.asarray(vectors, dtype=np.float64)
+    if value.ndim < 1 or value.shape[-1] != 3 or not np.isfinite(value).all():
+        raise ValueError("ANM2 Cayley rotations must be a finite array ending in XYZ")
+    squared = np.sum(value * value, axis=-1)
+    denominator = 1.0 + squared
+    result = np.empty((*value.shape[:-1], 4), dtype=np.float64)
+    result[..., 0] = (1.0 - squared) / denominator
+    result[..., 1:4] = 2.0 * value / denominator[..., np.newaxis]
+    norms = np.linalg.norm(result, axis=-1)
+    if not np.isfinite(norms).all() or np.any(norms <= 1.0e-12):
+        raise ValueError("ANM2 rotation decoded to a singular quaternion")
+    result /= norms[..., np.newaxis]
+    if result.shape[0] > 1:
+        adjacent_dot = np.sum(result[1:] * result[:-1], axis=-1)
+        steps = np.where(adjacent_dot < 0.0, -1.0, 1.0)
+        signs = np.concatenate(
+            (
+                np.ones((1, *steps.shape[1:]), dtype=np.float64),
+                np.cumprod(steps, axis=0),
+            ),
+            axis=0,
+        )
+        result *= signs[..., np.newaxis]
+    return result
+
 def decode_anm2_animation(
     path: str | Path,
     *,
     fps: int = 30,
     start_frame: int | None = None,
     end_frame: int | None = None,
+    selected_descriptors: Iterable[int] | None = None,
+    progress: Any | None = None,
+    cancel_check: Any | None = None,
 ) -> DecodedAnm2Animation:
     source = Path(path)
     data = source.read_bytes()
-    from .dl2_anm2 import detect_anm2_format
-    detected_format = detect_anm2_format(data)
-    if detected_format == 42:
-        raise ValueError(
-            "Dying Light 2 ANM2 format 42 detected. Header and descriptor inspection is "
-            "available, but the animation curve decoder is incomplete; no static FBX was exported."
-        )
-    header = anm2.Anm2Header.parse(data)
-    layout = anm2.probe_v1_layout(header, data)
-    if layout is None:
-        raise ValueError("Only the decoded PC ANM2 Version-1 sampler layout is supported.")
-    if layout.validation_errors:
-        raise ValueError("Invalid ANM2 layout:\n- " + "\n- ".join(layout.validation_errors))
+    if progress is not None:
+        progress("Reading ANM2", 1, 1)
     if not 1 <= int(fps) <= 240:
         raise ValueError("FBX playback FPS must be between 1 and 240.")
+    cached = decode_all_frames_cached(
+        data,
+        selected_descriptors=selected_descriptors,
+        progress=progress,
+        cancel_check=cancel_check,
+    )
+    total_frame_count = cached.frame_count
     first = 0 if start_frame is None else int(start_frame)
-    last = header.frame_count - 1 if end_frame is None else int(end_frame)
-    if first < 0 or last < first or last >= header.frame_count:
+    last = total_frame_count - 1 if end_frame is None else int(end_frame)
+    if first < 0 or last < first or last >= total_frame_count:
         raise ValueError(
-            f"Frame range {first}..{last} is outside ANM2 range 0..{header.frame_count - 1}."
+            f"Frame range {first}..{last} is outside ANM2 range 0..{total_frame_count - 1}."
         )
-    sample = decode_samples(data, [float(frame) for frame in range(first, last + 1)])
-    values = np.asarray([frame.tracks for frame in sample.frames], dtype=float)
-    quaternions = np.empty((values.shape[0], values.shape[1], 4), dtype=float)
-    for frame_index in range(values.shape[0]):
-        for track_index in range(values.shape[1]):
-            quaternion = cayley_to_quaternion_wxyz(values[frame_index, track_index, :3])
-            if frame_index and float(quaternion @ quaternions[frame_index - 1, track_index]) < 0.0:
-                quaternion = -quaternion
-            quaternions[frame_index, track_index] = quaternion
+    values = cached.values[first : last + 1].copy()
+    quaternions = cayley_to_quaternions_wxyz(values[..., :3])
+    metadata: dict[str, Any] = {
+        "source_sha256": hashlib.sha256(data).hexdigest().upper(),
+        "container": cached.container,
+        "signature": cached.signature,
+        "header_version": cached.header_version,
+        "container_frame_count": total_frame_count,
+        "static_stream_count": cached.static_stream_count,
+        "packed_stream_count": cached.packed_stream_count,
+        "block_count": cached.block_count,
+        "block_frame_spans": cached.block_frame_spans,
+        "vfr_words": cached.vfr_words,
+        "container_track_count": cached.container_track_count,
+        "container_descriptors": cached.container_descriptors,
+        "unique_packed_slots_decoded": cached.unique_packed_slots_decoded,
+        "prepared_base_segment_count": cached.prepared_base_segment_count,
+    }
     return DecodedAnm2Animation(
         str(source.resolve()), source.stem, int(fps), first, last,
-        sample.descriptors, values, quaternions,
+        cached.descriptors, values, quaternions, **metadata,
     )
 
 def _matrix_from_trs(translation, rotation_wxyz, scale) -> np.ndarray:
@@ -168,16 +437,259 @@ def _scene_bone_from_crig(bone: ChromeRigBone, *, parent_index: int | None = Non
     return SceneBone(
         bone.name, bone.parent_index if parent_index is None else parent_index, bone.descriptor,
         bone.bind_translation, bone.bind_rotation_wxyz, bone.bind_scale,
-        bone.deform, bone.helper,
+        # CRIG helper/non-deform rows are still members of the authored
+        # skeleton hierarchy. ``SceneBone.helper`` is reserved for optional
+        # unknown-track EMPTY objects outside the armature.
+        bone.deform, False,
+    )
+
+
+def normalize_unknown_track_policy(
+    animation: DecodedAnm2Animation,
+    policy: str | None = None,
+    *,
+    preserve_extra_tracks: bool | None = None,
+) -> str:
+    """Resolve the compatibility flag and the explicit three-way policy."""
+
+    if policy is not None:
+        value = str(policy).strip().casefold()
+        if value not in UNKNOWN_TRACK_POLICIES:
+            raise ValueError(
+                "Unknown-track policy must be one of: " + ", ".join(UNKNOWN_TRACK_POLICIES)
+            )
+        return value
+    if preserve_extra_tracks is not None:
+        return "helpers" if preserve_extra_tracks else "drop"
+    return "sidecar" if animation.header_version == 2 else "helpers"
+
+
+def unknown_track_indices(
+    animation: DecodedAnm2Animation,
+    rig: ChromeRig,
+) -> tuple[int, ...]:
+    """Return unresolved animation tracks in original descriptor-table order."""
+
+    bone_descriptors = {int(bone.descriptor) for bone in rig.bones}
+    return tuple(
+        index
+        for index, descriptor in enumerate(animation.descriptors)
+        if int(descriptor) not in bone_descriptors
+    )
+
+
+def build_decode_report(
+    animation: DecodedAnm2Animation,
+    rig: ChromeRig | None = None,
+) -> dict[str, Any]:
+    unknown_count = 0
+    if rig is not None:
+        known = {int(bone.descriptor) for bone in rig.bones}
+        inventory = animation.container_descriptors or animation.descriptors
+        unknown_count = sum(int(value) not in known for value in inventory)
+    report = animation.decode_report(unknown_descriptor_count=unknown_count)
+    if rig is not None:
+        report["root_motion_diagnostics"] = build_root_motion_decode_diagnostics(
+            animation, rig
+        )
+    return report
+
+
+def _decoded_track_diagnostics(
+    animation: DecodedAnm2Animation,
+    track_index: int,
+    *,
+    up_axis: tuple[float, float, float],
+) -> dict[str, Any]:
+    rows = np.asarray(animation.values[:, track_index], dtype=float)
+    translations = rows[:, 3:6]
+    globals_: list[np.ndarray] = []
+    for values, quaternion in zip(rows, animation.quaternions_wxyz[:, track_index]):
+        globals_.append(_matrix_from_trs(values[3:6], quaternion, values[6:9]))
+    return {
+        "translation_start_m": translations[0].tolist(),
+        "translation_end_m": translations[-1].tolist(),
+        "translation_net_m": (translations[-1] - translations[0]).tolist(),
+        "translation_min_m": np.min(translations, axis=0).tolist(),
+        "translation_max_m": np.max(translations, axis=0).tolist(),
+        "translation_range_m": np.ptp(translations, axis=0).tolist(),
+        "accumulated_heading_degrees": accumulated_heading_degrees(
+            globals_, up_axis
+        ),
+        "finite": bool(np.isfinite(rows).all()),
+    }
+
+
+def build_root_motion_decode_diagnostics(
+    animation: DecodedAnm2Animation,
+    rig: ChromeRig,
+) -> dict[str, Any]:
+    """Measure decoded root/accumulator curves without altering export arrays."""
+
+    primary = rig.bones[rig.root_index]
+    up_axis = infer_target_up_axis(rig)
+    descriptor_to_index = {
+        int(descriptor): index for index, descriptor in enumerate(animation.descriptors)
+    }
+    result: dict[str, Any] = {
+        "target_primary_root": primary.name,
+        "target_primary_root_descriptor": f"0x{int(primary.descriptor):08X}",
+        "target_up_axis": list(up_axis),
+        "diagnostic_only_no_curve_mutation": True,
+    }
+    root_track = descriptor_to_index.get(int(primary.descriptor))
+    if root_track is None:
+        result["skeletal_root"] = {"available": False}
+    else:
+        result["skeletal_root"] = {
+            "available": True,
+            "track_index": root_track,
+            **_decoded_track_diagnostics(
+                animation, root_track, up_axis=up_axis
+            ),
+        }
+    motion_track = descriptor_to_index.get(MOTION_HELPER_DESCRIPTOR)
+    if motion_track is None:
+        result["motion_accumulator"] = {"available": False}
+    else:
+        result["motion_accumulator"] = {
+            "available": True,
+            "descriptor": f"0x{MOTION_HELPER_DESCRIPTOR:08X}",
+            "track_index": motion_track,
+            **_decoded_track_diagnostics(
+                animation, motion_track, up_axis=up_axis
+            ),
+        }
+    return result
+
+
+def build_unknown_track_sidecar(
+    animation: DecodedAnm2Animation,
+    rig: ChromeRig,
+) -> dict[str, Any]:
+    """Preserve unresolved transforms without claiming they are skeleton bones."""
+
+    unresolved = unknown_track_indices(animation, rig)
+    source_hash = animation.source_sha256
+    tracks: list[dict[str, Any]] = []
+    for track_index in unresolved:
+        frame_table = [
+            [
+                animation.source_frame_start + frame_index,
+                *(float(value) for value in animation.values[frame_index, track_index]),
+            ]
+            for frame_index in range(animation.frame_count)
+        ]
+        tracks.append(
+            {
+                "track_index": (
+                    animation.container_descriptors.index(
+                        animation.descriptors[track_index]
+                    )
+                    if animation.container_descriptors
+                    else track_index
+                ),
+                "descriptor": f"0x{int(animation.descriptors[track_index]):08X}",
+                "semantic": "unknown_transform_track",
+                "source_anm2_sha256": source_hash,
+                "frame_table": frame_table,
+            }
+        )
+    return {
+        "format": "dl-reanimated-unknown-tracks",
+        "schema_version": 1,
+        "container": animation.container,
+        "source_anm2_name": Path(animation.source_path).name,
+        "source_anm2_sha256": source_hash,
+        "source_frame_start": animation.source_frame_start,
+        "source_frame_end": animation.source_frame_end,
+        "frame_count": animation.frame_count,
+        "component_order": ["frame", *ANM2_COMPONENT_ORDER],
+        "unknown_descriptor_count": len(tracks),
+        "tracks": tracks,
+    }
+
+
+def unknown_track_sidecar_path(output_path: str | Path) -> Path:
+    destination = Path(output_path)
+    return destination.with_suffix(".dlr_unknown_tracks.json")
+
+
+def write_unknown_track_sidecar(
+    animation: DecodedAnm2Animation,
+    rig: ChromeRig,
+    output_path: str | Path,
+) -> Path | None:
+    payload = build_unknown_track_sidecar(animation, rig)
+    if not payload["tracks"]:
+        return None
+    destination = unknown_track_sidecar_path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return destination.resolve()
+
+
+def append_unknown_track_helpers(
+    scene: AnimationScene,
+    animation: DecodedAnm2Animation,
+    source_rig: ChromeRig,
+) -> AnimationScene:
+    """Attach unresolved tracks as independent, non-deforming FBX helper roots."""
+
+    unresolved = unknown_track_indices(animation, source_rig)
+    if not unresolved:
+        return scene
+    helper_bones = [
+        SceneBone(
+            (
+                "DLR_OffsetHelper_CCC3CDDF"
+                if animation.descriptors[index] == MOTION_HELPER_DESCRIPTOR
+                else f"DLR_Track_{animation.descriptors[index]:08X}"
+            ),
+            -1,
+            animation.descriptors[index],
+            (0.0, 0.0, 0.0),
+            (1.0, 0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            False,
+            True,
+        )
+        for index in unresolved
+    ]
+    helper_translations = animation.values[:, unresolved, 3:6]
+    helper_rotations = animation.quaternions_wxyz[:, unresolved]
+    helper_scales = animation.values[:, unresolved, 6:9]
+    return AnimationScene(
+        scene.name,
+        scene.fps,
+        [*scene.bones, *helper_bones],
+        np.concatenate((scene.translations, helper_translations), axis=1),
+        np.concatenate((scene.rotations_wxyz, helper_rotations), axis=1),
+        np.concatenate((scene.scales, helper_scales), axis=1),
+        scene.source_frame_start,
+        [
+            *scene.warnings,
+            f"{len(unresolved)} unresolved ANM2 track(s) are included as "
+            "non-deforming hash-named helper roots.",
+        ],
     )
 
 def reconstruct_native_scene(
     animation: DecodedAnm2Animation,
     rig: ChromeRig,
     *,
-    preserve_extra_tracks: bool = True,
+    preserve_extra_tracks: bool | None = None,
+    unknown_track_policy: str | None = None,
 ) -> AnimationScene:
     rig.validate().require_valid()
+    resolved_policy = normalize_unknown_track_policy(
+        animation,
+        unknown_track_policy,
+        preserve_extra_tracks=preserve_extra_tracks,
+    )
     track_by_descriptor = {value: index for index, value in enumerate(animation.descriptors)}
     bones: list[SceneBone] = []
     motion_index: int | None = None
@@ -185,7 +697,8 @@ def reconstruct_native_scene(
         value for value in animation.descriptors
         if value not in {bone.descriptor for bone in rig.bones}
     ]
-    if preserve_extra_tracks and MOTION_HELPER_DESCRIPTOR in extra_descriptors:
+    include_helpers = resolved_policy == "helpers"
+    if include_helpers and MOTION_HELPER_DESCRIPTOR in extra_descriptors:
         motion_index = 0
         bones.append(SceneBone(
             "DLR_OffsetHelper_CCC3CDDF", -1, MOTION_HELPER_DESCRIPTOR,
@@ -197,7 +710,7 @@ def reconstruct_native_scene(
             motion_index if motion_index is not None else -1
         )
         bones.append(_scene_bone_from_crig(bone, parent_index=parent))
-    if preserve_extra_tracks:
+    if include_helpers:
         for descriptor in extra_descriptors:
             if descriptor == MOTION_HELPER_DESCRIPTOR:
                 continue
@@ -219,10 +732,25 @@ def reconstruct_native_scene(
             translations[:, bone_index] = animation.values[:, track_index, 3:6]
             rotations[:, bone_index] = animation.quaternions_wxyz[:, track_index]
             scales[:, bone_index] = animation.values[:, track_index, 6:9]
-    missing = [bone.name for bone in rig.bones if bone.descriptor not in track_by_descriptor]
     warnings = []
-    if missing:
-        warnings.append(f"{len(missing)} rig bone(s) are absent from the ANM2 and remain at bind pose.")
+    # Missing descriptors are the normal sparse case: the complete skeleton is
+    # retained at bind and receives no curves. Do not surface that as a warning.
+    if extra_descriptors:
+        if resolved_policy == "sidecar":
+            warnings.append(
+                f"{len(extra_descriptors)} unresolved ANM2 track(s) are excluded from the skeleton "
+                "and will be preserved in a deterministic .dlr_unknown_tracks.json sidecar."
+            )
+        elif resolved_policy == "helpers":
+            warnings.append(
+                f"{len(extra_descriptors)} unresolved ANM2 track(s) are included as "
+                "non-deforming hash-named helper roots."
+            )
+        else:
+            warnings.append(
+                f"{len(extra_descriptors)} unresolved ANM2 track(s) were explicitly dropped; "
+                "their transform curves are not present in the FBX or a sidecar."
+            )
     return AnimationScene(
         animation.name, animation.fps, bones, translations, rotations, scales,
         animation.source_frame_start, warnings,
@@ -376,7 +904,12 @@ def retarget_decoded_animation(
     )
 
 __all__ = [
-    "AnimationScene", "DecodedAnm2Animation", "MOTION_HELPER_DESCRIPTOR", "SceneBone",
-    "cayley_to_quaternion_wxyz", "chrome_rig_from_fbx_skeleton",
-    "decode_anm2_animation", "reconstruct_native_scene", "retarget_decoded_animation",
+    "ANM2_COMPONENT_ORDER", "AnimationScene", "DecodedAnm2Animation",
+    "MOTION_HELPER_DESCRIPTOR", "SceneBone", "UNKNOWN_TRACK_POLICIES",
+    "append_unknown_track_helpers", "build_decode_report", "build_root_motion_decode_diagnostics", "build_unknown_track_sidecar",
+    "SparseFbxJob", "build_sparse_fbx_job", "cayley_to_quaternion_wxyz",
+    "cayley_to_quaternions_wxyz", "chrome_rig_from_fbx_skeleton",
+    "decode_anm2_animation", "normalize_unknown_track_policy", "reconstruct_native_scene",
+    "retarget_decoded_animation", "unknown_track_indices", "unknown_track_sidecar_path",
+    "write_sparse_fbx_job", "write_unknown_track_sidecar",
 ]

@@ -15,7 +15,7 @@ from .game_profiles import DL1_GAME_ID, SUPPORTED_GAME_IDS, infer_game_id, proje
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
-CURRENT_PROJECT_SCHEMA_VERSION = 8
+CURRENT_PROJECT_SCHEMA_VERSION = 9
 
 
 def now() -> str:
@@ -106,7 +106,10 @@ class ProjectAnimation:
 class RigSettings:
     target_rig_ref: str = "builtin:male_npc_infected"
     target_rig_path: str = ""
-    retarget_mode: str = "humanoid"
+    # ``auto`` is the normal built-in workflow.  ``humanoid`` and ``exact``
+    # remain readable expert/legacy policies, and custom CRIG selection still
+    # switches to ``exact`` explicitly.
+    retarget_mode: str = "auto"
     use_imported_animation_bind_pose: bool = True
     source_rest_fbx: str = ""
     trusted_source_rest_json: str = ""
@@ -217,8 +220,8 @@ class DlReanimatedProject:
             errors.append("Project name cannot be empty.")
         if self.game_id not in SUPPORTED_GAME_IDS:
             errors.append(f"Unsupported game identifier {self.game_id!r}.")
-        if self.rig.retarget_mode not in {"humanoid", "exact"}:
-            errors.append("Retarget mode must be humanoid or exact.")
+        if self.rig.retarget_mode not in {"auto", "humanoid", "exact"}:
+            errors.append("Retarget mode must be auto, humanoid, or exact.")
         if self.rig.retarget_mode == "exact" and any(
             row.enabled
             and not row.target_rig_ref
@@ -230,7 +233,13 @@ class DlReanimatedProject:
                 "project target; alternatively select a target rig on every enabled animation."
             )
         if (
-            self.rig.retarget_mode == "humanoid"
+            (
+                self.rig.retarget_mode == "humanoid"
+                or (
+                    self.rig.retarget_mode == "auto"
+                    and self.game_id == DL1_GAME_ID
+                )
+            )
             and not self.rig.use_imported_animation_bind_pose
             and not self.rig.source_rest_fbx.strip()
         ):
@@ -330,6 +339,42 @@ class DlReanimatedProject:
                 },
             )
             rig_raw["extensions"] = rig_extensions
+        if schema_version < 9:
+            rig_extensions = dict(rig_raw.get("extensions", {}) or {})
+            target_ref = str(rig_raw.get("target_rig_ref", "") or "")
+            previous_mode = str(rig_raw.get("retarget_mode", "") or "")
+            override = rig_extensions.get("expert_solver_override")
+            deliberate_exact = (
+                override is True
+                or str(override).casefold() == "exact"
+                or (
+                    isinstance(override, Mapping)
+                    and bool(override.get("deliberate", False))
+                    and str(
+                        override.get("retarget_mode", override.get("mode", ""))
+                    ).casefold()
+                    == "exact"
+                )
+            )
+            builtin_default = target_ref in {
+                "builtin:male_npc_infected",
+                "builtin:dl2_player_advanced",
+            }
+            if builtin_default and not deliberate_exact and previous_mode in {
+                "",
+                "humanoid",
+                "exact",
+            }:
+                rig_extensions.setdefault(
+                    "retarget_mode_migration_v9",
+                    {
+                        "from": previous_mode or "implicit",
+                        "to": "auto",
+                        "reason": "built-in target uses automatic solver routing",
+                    },
+                )
+                rig_raw["retarget_mode"] = "auto"
+                rig_raw["extensions"] = rig_extensions
         export_raw = dict(raw.get("export", {}) or {})
         reverse_raw = dict(raw.get("anm2_to_fbx", {}) or {})
         item_rows = reverse_raw.pop("items", []) or []
