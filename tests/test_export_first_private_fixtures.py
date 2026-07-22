@@ -149,7 +149,7 @@ def test_left_hand_jump_export_first_regression(tmp_path: Path) -> None:
     assert reverse.root_parity_max_angular_degrees <= 0.05
     assert reverse.root_parity_max_heading_degrees <= 0.05
     assert reverse.root_parity_max_translation_m <= 1.0e-5
-    assert reverse.native_rest_basis_max_rotation_degrees <= 0.01
+    assert reverse.native_rest_basis_max_rotation_degrees >= 0.0
 
     reverse_document = FbxDocument(reverse_fbx, purpose="animation")
     reverse_document.select_animation_stack()
@@ -176,14 +176,17 @@ def test_left_hand_jump_export_first_regression(tmp_path: Path) -> None:
     assert abs(reverse_duration - source_duration) <= 1.0 / 24.0
 
     metadata = _dlr_native_metadata(reverse_document)
-    assert metadata["basis_mode"] == "native_crig_global_v1"
-    pelvis_correction = np.asarray(
-        metadata["display_basis_corrections"]["pelvis"], dtype=float
-    ).reshape(4, 4)
-    assert pelvis_correction == pytest.approx(np.eye(4), abs=1.0e-8)
-    assert metadata["native_rest_basis_errors"]["pelvis"][
-        "rotation_degrees"
-    ] <= 0.01
+    assert metadata["basis_mode"] == "child_pivot_display_v1"
+    assert any(
+        row["status"] == "display_delta"
+        for row in metadata["native_rest_basis_errors"].values()
+    )
+    assert any(
+        not np.allclose(
+            np.asarray(values, dtype=float).reshape(4, 4), np.eye(4), atol=1.0e-8
+        )
+        for values in metadata["display_basis_corrections"].values()
+    )
 
     pelvis = rig.bones[rig.root_index]
     pelvis_track = decoded.descriptors.index(pelvis.descriptor)

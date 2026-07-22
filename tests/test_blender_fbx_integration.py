@@ -98,7 +98,7 @@ def test_bundled_native_fbx_uses_readable_helpers_and_roundtrips(tmp_path: Path)
         assert float(np.min(quaternion_dots)) >= 1.0 - 2.0e-5
 
 
-def test_native_edit_bones_use_crig_axes_not_off_axis_child_pivots(
+def test_native_edit_bones_follow_child_pivots_and_roundtrip(
     tmp_path: Path,
 ) -> None:
     blender = discover_blender()
@@ -150,17 +150,41 @@ def test_native_edit_bones_use_crig_axes_not_off_axis_child_pivots(
     assert result.root_parity_max_angular_degrees <= 0.05
     assert result.root_parity_max_heading_degrees <= 0.05
     assert result.root_parity_max_translation_m <= 1.0e-5
-    assert result.native_rest_basis_max_rotation_degrees <= 0.01
+    assert result.native_rest_basis_max_rotation_degrees > 10.0
 
     document = _FbxDocument(output)
     assert document.parent_by_name["child"] == "root"
+    rest_globals = document.global_matrices(tick=0, use_animation=False)
+    root_head = rest_globals["root"][:3, 3]
+    child_head = rest_globals["child"][:3, 3]
+    child_direction = child_head - root_head
+    child_direction /= np.linalg.norm(child_direction)
+    root_y_axis = rest_globals["root"][:3, 1]
+    root_y_axis /= np.linalg.norm(root_y_axis)
+    assert float(np.dot(root_y_axis, child_direction)) >= 0.999
+
     metadata = _dlr_native_metadata(document)
-    assert metadata["basis_mode"] == "native_crig_global_v1"
-    for name in ("root", "child"):
-        correction = np.asarray(
-            metadata["display_basis_corrections"][name], dtype=float
-        ).reshape(4, 4)
-        assert correction == pytest.approx(np.eye(4), abs=1.0e-8)
-        assert metadata["native_rest_basis_errors"][name][
-            "rotation_degrees"
-        ] <= 0.01
+    assert metadata["basis_mode"] == "child_pivot_display_v1"
+    correction = np.asarray(
+        metadata["display_basis_corrections"]["root"], dtype=float
+    ).reshape(4, 4)
+    assert correction != pytest.approx(np.eye(4), abs=1.0e-8)
+    assert metadata["native_rest_basis_errors"]["root"]["status"] == "display_delta"
+
+    rebuilt = build_exact_rig_anm2(output, rig, fps=30)
+    rebuilt_path = tmp_path / "native_off_axis_roundtrip.anm2"
+    rebuilt_path.write_bytes(rebuilt.payload)
+    expected = decode_anm2_animation(source)
+    actual = decode_anm2_animation(rebuilt_path)
+    for descriptor in expected.descriptors:
+        expected_index = expected.descriptors.index(descriptor)
+        actual_index = actual.descriptors.index(descriptor)
+        assert actual.values[:, actual_index, 3:] == pytest.approx(
+            expected.values[:, expected_index, 3:], abs=2.0e-4
+        )
+        quaternion_dots = np.abs(np.sum(
+            actual.quaternions_wxyz[:, actual_index]
+            * expected.quaternions_wxyz[:, expected_index],
+            axis=1,
+        ))
+        assert float(np.min(quaternion_dots)) >= 1.0 - 2.0e-5

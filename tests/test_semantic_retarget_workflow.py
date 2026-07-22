@@ -161,6 +161,31 @@ def test_bundled_dl2_targets_share_52_role_editor_and_verified_compile(
     assert plan.target_policy_id == certificate_format
 
 
+def test_dl1_eye_helper_animation_compiles_without_dl2_eye_mappings() -> None:
+    rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
+    policy = build_target_retarget_policy(rig, game_id=DL2_GAME_ID)
+    eye_helpers = ("l_eye_pos", "r_eye", "r_eye_pos")
+    source = _semantic_analysis(policy, extra_bones=eye_helpers)
+    source.animated_bones = frozenset((*source.animated_bones, *eye_helpers))
+    source.unresolved_animated_chains = eye_helpers
+
+    state = prepare_bundled_semantic_state(source, rig, policy)
+    compiled, live, plan = compile_bundled_semantic_profile(
+        source, rig, policy, state.profile
+    )
+    left_eye_target = next(
+        row
+        for row in compiled.pairs
+        if row.target_rig_bone == "l_eyeballaimbase_bone"
+    )
+
+    assert state.validation.ok
+    assert live.ok and live.live_revalidated
+    assert set(eye_helpers).issubset(plan.ignored_animated_source_bones)
+    assert left_eye_target.source_fbx_bone == ""
+    assert left_eye_target.transfer_policy == "bind"
+
+
 def test_manual_semantic_role_override_changes_compiled_pair_and_solver() -> None:
     rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
     policy = build_target_retarget_policy(rig, game_id=DL2_GAME_ID)
@@ -227,7 +252,8 @@ def test_target_override_clears_matching_unresolved_source_before_validation() -
     source.unresolved_animated_chains = ("source_sole",)
     source.animated_bones = frozenset((*source.animated_bones, "source_sole"))
     state = prepare_bundled_semantic_state(source, rig, policy)
-    assert not state.validation.ok
+    assert state.validation.ok
+    assert "source_sole" in state.plan.ignored_animated_source_bones
 
     state.profile.set_target_bone_override(
         "l_sole_helper",

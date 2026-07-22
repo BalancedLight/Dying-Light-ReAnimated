@@ -45,6 +45,22 @@ source ANM2 SHA-256, original descriptor-table index, `0xXXXXXXXX` descriptor, n
 component values for every selected frame, and the neutral semantic
 `unknown_transform_track`.
 
+### Motion accumulator / OffsetHelper
+
+`0xCCC3CDDF` is recognized as Chrome's OffsetHelper motion-accumulator track rather
+than as an anonymous transform. When its translation, rotation, or scale changes over
+the selected frame range, ANM2 â†’ FBX exports bake its complete TRS transform into the
+primary skeleton root before resampling. This gives both native and cross-rig DL1/DL2
+exports their visible accumulated trajectory without requiring an FBX consumer to
+understand Chrome's runtime graph.
+
+For an active bake, the raw track is also preserved as the animated non-deforming
+Empty `DLR_OffsetHelper_CCC3CDDF`, tagged as `motion_accumulator`; DL2 sidecars retain
+that same descriptor with the `motion_accumulator` semantic. The **Bake detected motion
+accumulator into root** control is enabled by default. Disable it (or pass
+`--no-bake-motion-accumulator`) when inspecting raw helper curves only. This does not
+claim to recreate the game's external `AccumulateMotion` / movie configuration.
+
 The **Unresolved ANM2 tracks** setting (or the CLI option below) also offers:
 
 - `helpers`: place unresolved descriptors in the FBX as non-deforming hash-named roots;
@@ -70,9 +86,9 @@ parity audit. Export uses
 `bake_anim_use_all_bones=False` and
 `bake_anim_force_startend_keying=False`.
 
-Chrome's internal bone axes do not necessarily point toward the next visible joint. Native export makes each edit bone's Y/Z axes from the converted CRIG bind-global rotation; child pivots choose display length only. Every bone keeps its authored CRIG parent and `use_connect=False`. Rest rotation is expected within 0.01° and hard-fails above 0.05°.
+Chrome's internal bone axes do not necessarily point toward the next visible joint. Native export therefore aims each visible edit bone at its nearest usable child pivot, with a parent-direction or native-axis fallback for terminal and coincident joints. Every bone keeps its authored CRIG parent and `use_connect=False`.
 
-Animation globals stay in that native orientation; no child-directed display correction is conjugated into the root. Before writing FBX, Blender audits the evaluated primary root on every frame and hard-fails above 0.05° total rotation, 0.05° heading, or `1e-5 m` translation error. This preserves real root pitch/roll swing while preventing spurious heading.
+The FBX stores a per-bone display-basis correction so its child-facing Blender rest pose converts back to the original CRIG game-space axes when it is imported into DL ReAnimated again. Before writing FBX, Blender audits the evaluated primary root in that displayed basis on every frame and hard-fails above 0.05° total rotation, 0.05° heading, or `1e-5 m` translation error.
 
 ### Timing provenance
 
@@ -115,6 +131,9 @@ Use `--auto-map --save-auto-map mapping.dlrbmap.json` to generate a conservative
 
 `--unknown-track-policy` accepts `sidecar`, `helpers`, or `drop`. When omitted, DL2
 uses `sidecar` and DL1 retains its existing `helpers` behavior.
+
+`--no-bake-motion-accumulator` disables the default root bake for an animated
+`0xCCC3CDDF` helper while preserving the selected unresolved-track policy.
 
 ## Progress and cancellation
 

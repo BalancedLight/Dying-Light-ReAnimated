@@ -128,7 +128,7 @@ def _chain_problem(nodes: tuple[SemanticChainNode, ...]) -> str:
     return ""
 
 
-def _manual_decisions(
+def _bind_fallback_decisions(
     targets: tuple[SemanticChainNode, ...],
     *,
     confidence: float,
@@ -138,14 +138,22 @@ def _manual_decisions(
     return tuple(
         ChainAlignmentDecision(
             target_bone=row.name,
-            mode="static_bind" if row.static else "manual_required",
+            mode=(
+                "static_bind"
+                if row.static or not row.parent
+                else "inherit_bind"
+            ),
             source_bones=(),
             semantic_role=row.semantic_role,
             side=_canonical_side(row.side),
             confidence=float(confidence),
             confidence_margin=float(confidence_margin),
             source_weights=(),
-            reason=("target is declared static" if row.static else reason),
+            reason=(
+                "target is declared static"
+                if row.static
+                else f"{reason}; retain target bind-local transform"
+            ),
         )
         for row in targets
     )
@@ -182,9 +190,9 @@ def align_semantic_chains(
     The input order is authoritative topology.  Unique semantic-role matches
     become anchors first.  Remaining ordered segments are mapped directly,
     composed when the source is longer, or distributed when the target is
-    longer.  Optional missing target nodes use bind-local inheritance.  A side,
-    topology, duplicate-role, or confidence ambiguity fails closed with
-    ``manual_required`` decisions.
+    longer. Missing target nodes use bind-local inheritance. A side, topology,
+    duplicate-role, or confidence ambiguity retains target bind transforms so
+    incomplete source anatomy never blocks export.
     """
 
     sources = _coerce_nodes(source_chain, default_side=source_side)
@@ -212,14 +220,14 @@ def align_semantic_chains(
             f"source side {source_declared_side!r} conflicts with target side "
             f"{target_declared_side!r}"
         )
-        return _manual_decisions(
+        return _bind_fallback_decisions(
             targets,
             confidence=confidence,
             confidence_margin=confidence_margin,
             reason=reason,
         )
     if confidence < minimum_confidence or confidence_margin < minimum_margin:
-        return _manual_decisions(
+        return _bind_fallback_decisions(
             targets,
             confidence=confidence,
             confidence_margin=confidence_margin,
@@ -275,7 +283,7 @@ def align_semantic_chains(
         if len(source_roles[role]) != 1 or len(target_roles[role]) != 1
     }
     if ambiguous_roles:
-        return _manual_decisions(
+        return _bind_fallback_decisions(
             targets,
             confidence=confidence,
             confidence_margin=confidence_margin,
@@ -294,7 +302,7 @@ def align_semantic_chains(
         left[1] >= right[1]
         for left, right in zip(anchors, anchors[1:])
     ):
-        return _manual_decisions(
+        return _bind_fallback_decisions(
             targets,
             confidence=confidence,
             confidence_margin=confidence_margin,
@@ -424,7 +432,7 @@ def align_semantic_chains(
         for target in remaining_targets:
             decisions[target.name] = ChainAlignmentDecision(
                 target.name,
-                "inherit_bind" if target.optional else "manual_required",
+                "inherit_bind",
                 (),
                 target.semantic_role,
                 _canonical_side(target.side),
@@ -432,9 +440,7 @@ def align_semantic_chains(
                 confidence_margin,
                 (),
                 (
-                    "optional target segment has no independent source; inherit bind-local"
-                    if target.optional
-                    else "required target segment has no remaining source segment"
+                    "target segment has no independent source; inherit bind-local"
                 ),
             )
 

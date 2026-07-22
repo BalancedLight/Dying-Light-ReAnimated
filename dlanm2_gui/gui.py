@@ -294,6 +294,7 @@ def _exact_import_mapping_profile_for_request(
 def _prepare_animation_import(
     request: _AnimationImportRequest,
     progress: Callable[[str], None],
+    partial: Callable[[_AnimationImportResult], None] | None = None,
 ) -> _AnimationImportResult:
     """Parse and map FBX files off the Qt event thread."""
 
@@ -320,6 +321,39 @@ def _prepare_animation_import(
 
     total = len(request.paths)
     for index, raw in enumerate(request.paths, start=1):
+        row_start = len(result.rows)
+        repair_start = len(result.repair_messages)
+        blocked_start = len(result.blocked_messages)
+        known_profiles = set(result.mapping_profiles)
+        known_documents = set(result.documents)
+        known_states = set(result.semantic_states)
+
+        def publish_file_result() -> None:
+            if partial is None:
+                return
+            partial(
+                _AnimationImportResult(
+                    rows=list(result.rows[row_start:]),
+                    mapping_profiles={
+                        key: value
+                        for key, value in result.mapping_profiles.items()
+                        if key not in known_profiles
+                    },
+                    documents={
+                        key: value
+                        for key, value in result.documents.items()
+                        if key not in known_documents
+                    },
+                    semantic_states={
+                        key: value
+                        for key, value in result.semantic_states.items()
+                        if key not in known_states
+                    },
+                    repair_messages=list(result.repair_messages[repair_start:]),
+                    blocked_messages=list(result.blocked_messages[blocked_start:]),
+                )
+            )
+
         path = Path(raw).resolve()
         progress(f"Importing animation {index}/{total}: {path.name}")
         try:
@@ -338,6 +372,7 @@ def _prepare_animation_import(
             result.blocked_messages.append(
                 f"{path.name}\n{preflight.actionable_message()}"
             )
+            publish_file_result()
             continue
 
         result.documents[str(path)] = document
@@ -557,6 +592,8 @@ def _prepare_animation_import(
                 )
             result.rows.append(row)
             existing.add(key)
+        publish_file_result()
+        progress(f"Finished animation {index}/{total}: {path.name}")
     return result
 
 
@@ -652,7 +689,7 @@ def _default_unknown_track_policy(game_id: str) -> str:
 
 def _load_qt() -> dict[str, Any]:
     try:
-        from PySide6.QtCore import QSettings, QUrl, Qt
+        from PySide6.QtCore import QSettings, QTimer, QUrl, Qt
         from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
         from PySide6.QtWidgets import (
             QAbstractItemView,
@@ -749,10 +786,26 @@ class MainWindow:
         class _ProjectWindow(qt["QMainWindow"]):
             def closeEvent(self, event) -> None:  # type: ignore[override]
                 if controller._background_work_active():
+                    if (
+                        controller.background_tasks.busy
+                        and controller._animation_operation_kind
+                    ):
+                        controller._close_when_background_idle = True
+                        controller.cancel_animation_operation()
+                        controller._poll_close_when_background_idle()
+                        controller.qt["QMessageBox"].information(
+                            self,
+                            "Cancelling animation work",
+                            "The active animation import or retarget is being cancelled. "
+                            "DL ReAnimated will close automatically at the next safe checkpoint.",
+                        )
+                        event.ignore()
+                        return
                     controller.qt["QMessageBox"].information(
                         self,
                         "Work still running",
-                        "Wait for the active build or export to finish before closing DL ReAnimated.",
+                        "Wait for the active build, export, or model operation to finish "
+                        "before closing DL ReAnimated.",
                     )
                     event.ignore()
                     return
@@ -775,6 +828,8 @@ class MainWindow:
         self.project_path: Path | None = None
         self.dirty = False
         self._refreshing = False
+        self._animation_operation_kind = ""
+        self._close_when_background_idle = False
         self._source_cache: dict[str, FbxDocument] = {}
         self.mapping_navigation_callback = None
         self.target_selection_changed_callback = None
@@ -1028,6 +1083,14 @@ class MainWindow:
         self.add_animations_button = add_button
         self.add_animations_button.setToolTip("Import one or more FBX animation files into this project.")
         self.add_animations_button.clicked.connect(self.add_animations)
+        self.cancel_animation_operation_button = qt["QPushButton"]("Cancel import")
+        self.cancel_animation_operation_button.setToolTip(
+            "Stop after the FBX currently being parsed reaches a safe checkpoint."
+        )
+        self.cancel_animation_operation_button.clicked.connect(
+            self.cancel_animation_operation
+        )
+        self.cancel_animation_operation_button.hide()
         self.remove_animation_button = qt["QPushButton"]("Remove selected")
         self.remove_animation_button.setToolTip("Remove the selected animation from the project only.")
         self.remove_animation_button.clicked.connect(self.remove_selected_animation)
@@ -1038,6 +1101,7 @@ class MainWindow:
         )
         self.duplicate_animation_button.clicked.connect(self.duplicate_selected_animation)
         row.addWidget(self.add_animations_button)
+        row.addWidget(self.cancel_animation_operation_button)
         row.addWidget(self.remove_animation_button)
         row.addWidget(self.duplicate_animation_button)
         row.addStretch(1)
@@ -1189,9 +1253,10 @@ class MainWindow:
         layout = qt["QVBoxLayout"](page)
         layout.setSpacing(8)
         intro = qt["QLabel"](
-            "Auto-map handles standard Mixamo and common humanoid names. Review required roles, "
-            "then change any incorrect source-bone dropdown manually. Enable Show helper bones "
-            "to map refcamera, eyecamera, holders, twists, and other target helpers."
+            "Auto-map handles standard Mixamo and common humanoid names. Unmapped source tracks "
+            "are ignored and unmapped target bones keep their bind pose. Change a source-bone "
+            "dropdown only when you want an explicit override. Enable Show helper bones to map "
+            "refcamera, eyecamera, holders, twists, and other target helpers."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
@@ -1570,6 +1635,17 @@ class MainWindow:
         )
         self.reverse_unknown_track_policy.currentIndexChanged.connect(self._mark_dirty)
         form.addRow("Unresolved ANM2 tracks", self.reverse_unknown_track_policy)
+        self.reverse_bake_motion_accumulator = qt["QCheckBox"](
+            "Bake detected motion accumulator into root"
+        )
+        self.reverse_bake_motion_accumulator.setChecked(True)
+        self.reverse_bake_motion_accumulator.setToolTip(
+            "When 0xCCC3CDDF contains animated offset-helper motion, compose its full "
+            "transform into the exported primary root while retaining the original helper "
+            "as a non-deforming FBX Empty. Disable this for raw helper-only inspection."
+        )
+        self.reverse_bake_motion_accumulator.toggled.connect(self._mark_dirty)
+        form.addRow("Motion accumulator", self.reverse_bake_motion_accumulator)
         self.reverse_mode = self._combo_box()
         self.reverse_mode.addItem("Native rig (recommended)", "native")
         self.reverse_mode.addItem("Retarget onto another skeleton", "retarget")
@@ -1788,6 +1864,7 @@ class MainWindow:
         self.project = self._new_default_project()
         self.project_path = None
         self._source_cache.clear()
+        getattr(self, "_semantic_state_cache", {}).clear()
         self.dirty = False
         self._refresh_all()
 
@@ -1814,6 +1891,7 @@ class MainWindow:
             self.project = DlReanimatedProject.load(path)
             self.project_path = Path(path).expanduser().resolve()
             self._source_cache.clear()
+            getattr(self, "_semantic_state_cache", {}).clear()
             self.dirty = False
             self._refresh_all()
             self._remember_recent_project(self.project_path)
@@ -2056,20 +2134,43 @@ class MainWindow:
             resource_prefix=self.project.export.resource_prefix.strip(),
             tolerance=self._current_import_tolerance(),
         )
+        self._animation_operation_kind = "import"
         self._set_animation_operation_busy(
             True,
             f"Importing {len(request.paths)} animation FBX file(s) in the background…",
         )
 
-        def succeeded(result: _AnimationImportResult) -> None:
+        imported = {"rows": 0, "blocked": 0}
+
+        def partial_result(result: _AnimationImportResult) -> None:
+            imported["rows"] += len(result.rows)
+            imported["blocked"] += len(result.blocked_messages)
             self._apply_animation_import_result(result)
 
+        def succeeded(_result: _AnimationImportResult) -> None:
+            if imported["rows"]:
+                self.status.showMessage(
+                    f"Imported {imported['rows']} animation clip(s).", 6000
+                )
+            elif imported["blocked"]:
+                self.status.showMessage(
+                    "No animation clips were imported; review the import diagnostics.",
+                    12000,
+                )
+
         if not self.background_tasks.start(
-            lambda progress: _prepare_animation_import(request, progress),
+            lambda progress, partial: _prepare_animation_import(
+                request, progress, partial
+            ),
             progress=lambda message: self.status.showMessage(message),
+            partial=partial_result,
             succeeded=succeeded,
             failed=lambda failure: self._background_animation_error(
                 "Animation import failed", failure
+            ),
+            cancelled=lambda: self.status.showMessage(
+                f"Import cancelled; kept {imported['rows']} completed clip(s).",
+                8000,
             ),
             finished=lambda: self._set_animation_operation_busy(False),
         ):
@@ -2321,7 +2422,7 @@ class MainWindow:
         if added_rows:
             self._mark_dirty()
         self._refresh_animation_table()
-        self._refresh_retarget_clip_combo()
+        self._refresh_retarget_clip_combo(analyze=False)
         if self.project.animations:
             self.animation_table.selectRow(len(self.project.animations) - 1)
         if blocked_messages:
@@ -2372,7 +2473,7 @@ class MainWindow:
         if result.rows:
             self._mark_dirty()
         self._refresh_animation_table()
-        self._refresh_retarget_clip_combo()
+        self._refresh_retarget_clip_combo(analyze=False)
         if self.project.animations:
             self.animation_table.selectRow(len(self.project.animations) - 1)
         if result.blocked_messages:
@@ -2400,10 +2501,47 @@ class MainWindow:
         ):
             if widget is not None:
                 widget.setEnabled(not busy)
+        cancel_button = getattr(self, "cancel_animation_operation_button", None)
+        if cancel_button is not None:
+            cancel_button.setVisible(busy)
+            cancel_button.setEnabled(busy)
+            cancel_button.setText(
+                "Cancel import"
+                if self._animation_operation_kind == "import"
+                else "Cancel retarget"
+            )
         if message:
             self.status.showMessage(message)
-        elif not busy:
-            self.status.showMessage("Ready", 3000)
+        if not busy:
+            self._animation_operation_kind = ""
+            self._poll_close_when_background_idle()
+
+    def cancel_animation_operation(self) -> None:
+        if not self.background_tasks.busy or not self._animation_operation_kind:
+            return
+        if self.background_tasks.cancel():
+            button = getattr(self, "cancel_animation_operation_button", None)
+            if button is not None:
+                button.setEnabled(False)
+            operation = (
+                "import"
+                if self._animation_operation_kind == "import"
+                else "automatic retarget"
+            )
+            self.status.showMessage(
+                f"Cancelling {operation} at the next safe checkpoint…"
+            )
+
+    def _poll_close_when_background_idle(self) -> None:
+        if not self._close_when_background_idle:
+            return
+        if self._background_work_active():
+            self.qt["QTimer"].singleShot(
+                100, self._poll_close_when_background_idle
+            )
+            return
+        self._close_when_background_idle = False
+        self.window.close()
 
     def _background_animation_error(self, title: str, failure: TaskFailure) -> None:
         self._show_error(title, RuntimeError(failure.display_message(False)))
@@ -2417,7 +2555,7 @@ class MainWindow:
         ]
         self._mark_dirty()
         self._refresh_animation_table()
-        self._refresh_retarget_clip_combo()
+        self._refresh_retarget_clip_combo(analyze=False)
 
     def duplicate_selected_animation(self) -> None:
         source = self._selected_animation()
@@ -2443,7 +2581,7 @@ class MainWindow:
         self.project.animations.append(row)
         self._mark_dirty()
         self._refresh_animation_table()
-        self._refresh_retarget_clip_combo()
+        self._refresh_retarget_clip_combo(analyze=False)
         self.animation_table.selectRow(len(self.project.animations) - 1)
 
     def _animation_target_mode(self, animation: ProjectAnimation) -> str:
@@ -2593,7 +2731,10 @@ class MainWindow:
         return rig
 
     def _animation_target_status_core(
-        self, animation: ProjectAnimation
+        self,
+        animation: ProjectAnimation,
+        *,
+        analyze: bool = True,
     ) -> tuple[str, str]:
         selection = resolve_animation_target(
             self.project,
@@ -2609,6 +2750,47 @@ class MainWindow:
             f"Rig reference: {selection.rig_ref or '(empty)'}",
             f"Resolved mode: {selection.retarget_mode}",
         ]
+
+        # Table painting and project loading must never open an FBX or build a
+        # retarget plan.  A cached import result is enough for a useful status;
+        # full analysis is performed only when the user opens Retargeting (or
+        # explicitly rebuilds the map).
+        if not analyze:
+            if self._retarget_ui_kind(animation) == RetargetUiKind.CUSTOM_CRIG:
+                details.append(
+                    "Exact skeleton validation is deferred until build; project loading "
+                    "does not open the source FBX."
+                )
+                return "Ready â€” exact skeleton match", "\n".join(details)
+
+            cached = getattr(self, "_semantic_state_cache", {}).get(
+                animation.animation_id
+            )
+            if cached is not None:
+                state = cached[1]
+                readiness = readiness_for_state(state)
+                details.extend((readiness.reason, *readiness.details))
+                return readiness.label, "\n".join(details)
+
+            import_state = dict(animation.extensions.get("import_state", {}) or {})
+            saved_label = str(import_state.get("label", "") or "")
+            if saved_label:
+                details.append(
+                    "Detailed retarget analysis is deferred until Retargeting is opened."
+                )
+                return saved_label, "\n".join(details)
+
+            payload = dict(
+                self.project.mapping_profiles.get(animation.mapping_profile_id, {}) or {}
+            )
+            if payload:
+                details.append("Using the mapping saved with the project.")
+                return "Ready â€” saved mapping", "\n".join(details)
+
+            details.append(
+                "Detailed retarget analysis is deferred until Retargeting is opened."
+            )
+            return "Ready â€” analysis deferred", "\n".join(details)
         if selection.rig_path:
             details.append(f"CRIG path: {selection.rig_path}")
 
@@ -2853,9 +3035,14 @@ class MainWindow:
         return "Ready — automatically retargeted", "\n".join(details)
 
     def _animation_target_status(
-        self, animation: ProjectAnimation
+        self,
+        animation: ProjectAnimation,
+        *,
+        analyze: bool = True,
     ) -> tuple[str, str]:
-        status, tooltip = self._animation_target_status_core(animation)
+        status, tooltip = self._animation_target_status_core(
+            animation, analyze=analyze
+        )
         import_state = dict(animation.extensions.get("import_state", {}) or {})
         import_level = str(
             import_state.get("level", import_state.get("status", "")) or ""
@@ -2928,10 +3115,12 @@ class MainWindow:
                 stack = self._combo_box()
                 stack.setMinimumHeight(32)
                 stack.setToolTip("Animation stack/action inside the selected FBX file.")
-                try:
-                    stack_names = self._source_document(animation.source_fbx).animation_stack_names
-                except Exception:
-                    stack_names = ()
+                document = self._cached_source_document(animation.source_fbx)
+                stack_names = document.animation_stack_names if document is not None else ()
+                if not stack_names and animation.source_animation_stack:
+                    # The saved stack remains editable without reparsing the
+                    # FBX merely to paint a project row.
+                    stack_names = (animation.source_animation_stack,)
                 if len(stack_names) > 1:
                     stack.addItem("Choose animation…", "")
                 elif not stack_names:
@@ -2978,7 +3167,9 @@ class MainWindow:
                 )
                 table.setCellWidget(row_index, 6, target)
 
-                status_text, status_tooltip = self._animation_target_status(animation)
+                status_text, status_tooltip = self._animation_target_status(
+                    animation, analyze=False
+                )
                 target_status = qt["QTableWidgetItem"](status_text)
                 target_status.setToolTip(status_tooltip)
                 target_status.setFlags(
@@ -3076,7 +3267,7 @@ class MainWindow:
         setattr(animation, field_name, value)
         self._mark_dirty()
         if field_name in {"display_name", "source_fbx"}:
-            self._refresh_retarget_clip_combo()
+            self._refresh_retarget_clip_combo(analyze=False)
 
     def _selected_animation(self) -> ProjectAnimation | None:
         row = self.animation_table.currentRow()
@@ -3357,7 +3548,7 @@ class MainWindow:
         except Exception as exc:
             self._show_error("Could not update root and locomotion", exc)
 
-    def _refresh_retarget_clip_combo(self) -> None:
+    def _refresh_retarget_clip_combo(self, *, analyze: bool = True) -> None:
         current = self.retarget_clip_combo.currentData()
         self._refreshing = True
         try:
@@ -3368,7 +3559,24 @@ class MainWindow:
                 self._set_combo_data(self.retarget_clip_combo, current)
         finally:
             self._refreshing = False
-        self._retarget_clip_changed()
+        if analyze:
+            self._retarget_clip_changed()
+        else:
+            self.root_locomotion_panel.setVisible(False)
+            self.mapping_table.setRowCount(0)
+            if self.project.animations:
+                self.mapping_status.setText(
+                    "Retargeting analysis is deferred until this tab is opened."
+                )
+                self.ignored_bones.setPlainText(
+                    "Import and project loading remain responsive; open Retargeting "
+                    "to inspect the selected clip."
+                )
+            else:
+                self.mapping_status.setText(
+                    "Add an FBX animation to create a humanoid mapping."
+                )
+                self.ignored_bones.clear()
 
     def _bundled_semantic_state(
         self,
@@ -3671,6 +3879,15 @@ class MainWindow:
             self._refreshing = False
 
         readiness = readiness_for_state(state)
+        mapped_count = sum(
+            row.mode in {"direct", "composed", "distributed"}
+            for row in state.plan.decisions
+        )
+        bind_count = sum(
+            row.mode in {"inherit_bind", "static_bind"}
+            for row in state.plan.decisions
+        )
+        ignored_animated = state.plan.ignored_animated_source_bones
         color = (
             "#2e7d32"
             if readiness.state == "ready"
@@ -3681,7 +3898,9 @@ class MainWindow:
         self.mapping_status.setText(
             f"<b style='color:{color}'>{readiness.label}</b> — "
             f"{len(state.rows)} editable semantic roles; "
-            f"{len(extra_targets)} additional target row(s); "
+            f"{mapped_count} target row(s) mapped; "
+            f"{bind_count} target row(s) use bind defaults; "
+            f"{len(ignored_animated)} animated source track(s) ignored; "
             f"{state.profile.manual_override_count} manual override(s).<br>"
             f"{readiness.reason}"
         )
@@ -3882,6 +4101,11 @@ class MainWindow:
             )
             self._source_cache[resolved] = document
         return document
+
+    def _cached_source_document(self, path: str) -> FbxDocument | None:
+        """Return a parsed source only when another operation already loaded it."""
+
+        return self._source_cache.get(str(Path(path).resolve()))
 
     def _profile_for_animation(
         self,
@@ -4172,10 +4396,6 @@ class MainWindow:
     ) -> None:
         errors = profile.validate(source_bones)
         mapped = len(profile.role_to_bone)
-        required_count = sum(1 for role in HUMANOID_ROLES if role.required)
-        required_mapped = sum(
-            1 for role in HUMANOID_ROLES if role.required and role.role_id in profile.role_to_bone
-        )
         color = "#2e7d32" if not errors else "#b71c1c"
         helper_rules = (
             helper_rules_from_dicts(
@@ -4192,7 +4412,7 @@ class MainWindow:
         )
         self.mapping_status.setText(
             f"<b style='color:{color}'>{'Ready' if not errors else 'Needs attention'}</b> — "
-            f"{mapped} roles mapped; {required_mapped}/{required_count} required roles. "
+            f"{mapped} roles mapped; unmapped roles retain target defaults. "
             f"Skeleton hash: {profile.source_skeleton_hash[:16]}…"
             + ("<br>" + "<br>".join(errors[:8]) if errors else "")
             + helper_note
@@ -4267,6 +4487,7 @@ class MainWindow:
             tolerance=self._current_import_tolerance(),
         )
         animation_id = animation.animation_id
+        self._animation_operation_kind = "retarget"
         self._set_animation_operation_busy(
             True, "Rebuilding the automatic retarget map in the background…"
         )
@@ -4965,6 +5186,9 @@ class MainWindow:
             self.reverse_unknown_track_policy.currentData()
             or _default_unknown_track_policy(self.project.game_id)
         )
+        settings.extensions["bake_motion_accumulator"] = bool(
+            self.reverse_bake_motion_accumulator.isChecked()
+        )
         rig_ref = str(self.reverse_source_rig.currentData() or BUILTIN_MALE_RIG_REF)
         rig_path = getattr(self, "_rig_paths_by_ref", {}).get(rig_ref, "")
         for row_index, item in enumerate(settings.items):
@@ -5164,6 +5388,9 @@ class MainWindow:
                 _default_unknown_track_policy(self.project.game_id),
             )
         )
+        bake_motion_accumulator = bool(
+            settings.extensions.get("bake_motion_accumulator", True)
+        )
         mapping = deepcopy(mapping)
         rig_paths = dict(getattr(self, "_rig_paths_by_ref", {}))
         resource_root_path = Path(self.resource_root)
@@ -5205,6 +5432,7 @@ class MainWindow:
                     target_fbx=target_fbx if mode == "retarget" else None,
                     bone_map=mapping, translation_scale=scale, blender_executable=blender,
                     unknown_track_policy=unknown_track_policy,
+                    bake_motion_accumulator=bake_motion_accumulator,
                     progress=progress,
                     cancel_check=self._reverse_cancel_event.is_set,
                 )
@@ -5215,6 +5443,17 @@ class MainWindow:
                     f"{result.root_parity_max_heading_degrees:.6f}° heading, "
                     f"{result.root_parity_max_translation_m:.3g} m translation"
                 )
+                if result.motion_accumulator_detected:
+                    state = "baked" if result.motion_accumulator_baked else "preserved only"
+                    activity = "active" if result.motion_accumulator_active else "static"
+                    root_name = (
+                        f" into {result.motion_accumulator_root}"
+                        if result.motion_accumulator_root
+                        else ""
+                    )
+                    progress(
+                        f"Motion accumulator {item.output_name}: {activity}, {state}{root_name}"
+                    )
                 exported += 1
             return exported, warnings, self._reverse_cancel_event.is_set()
 
@@ -5326,6 +5565,13 @@ class MainWindow:
                     )
                 ),
             )
+            self.reverse_bake_motion_accumulator.setChecked(
+                bool(
+                    self.project.anm2_to_fbx.extensions.get(
+                        "bake_motion_accumulator", True
+                    )
+                )
+            )
             saved_blender = str(self.settings.value("blender_executable", "") or "")
             detected_blender = discover_blender(saved_blender)
             self.reverse_blender_path.setText(str(detected_blender or saved_blender))
@@ -5339,7 +5585,7 @@ class MainWindow:
         self.existing_rpack.setEnabled(self.project.export.mode == "append")
         self._refresh_animation_table()
         self._reverse_refresh_table()
-        self._refresh_retarget_clip_combo()
+        self._refresh_retarget_clip_combo(analyze=False)
         self._refreshing = True
         try:
             self._script_default_changed()

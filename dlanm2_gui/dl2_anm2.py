@@ -403,9 +403,12 @@ def _parse_block(
                 if word_index and word <= previous:
                     errors.append("dictionary entries are not strictly increasing")
                 previous = word
-            if zero_index is None:
-                errors.append("dictionary has no zero terminator")
-            elif any(raw_words[zero_index:]):
+            # The table size is encoded by the first word.  Short tables use
+            # zero padding, but a block with the maximum number of slots uses
+            # every table entry and therefore has no padding/zero terminator.
+            # In that case the final positive entry still terminates the final
+            # playable stream through ``stream_bounds``.
+            if zero_index is not None and any(raw_words[zero_index:]):
                 errors.append("dictionary contains nonzero entries after its terminator")
             dictionary = tuple(positive)
 

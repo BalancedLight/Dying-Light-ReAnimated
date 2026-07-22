@@ -22,6 +22,9 @@ from .root_heading import accumulated_heading_degrees, infer_target_up_axis
 MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
 UNKNOWN_TRACK_POLICIES = ("sidecar", "helpers", "drop")
 ANM2_COMPONENT_ORDER = ("rx", "ry", "rz", "tx", "ty", "tz", "sx", "sy", "sz")
+MOTION_ACCUMULATOR_TRANSLATION_EPSILON_M = 1.0e-6
+MOTION_ACCUMULATOR_ROTATION_EPSILON_DEGREES = 1.0e-4
+MOTION_ACCUMULATOR_SCALE_EPSILON = 1.0e-6
 
 @dataclass(frozen=True, slots=True)
 class DecodedAnm2Animation:
@@ -78,6 +81,31 @@ class DecodedAnm2Animation:
             "prepared_base_segment_count": self.prepared_base_segment_count,
         }
 
+
+@dataclass(frozen=True, slots=True)
+class MotionAccumulatorInfo:
+    """Decoded state of Chrome's recognized offset-helper transform track."""
+
+    present: bool
+    active: bool
+    track_index: int | None = None
+    descriptor: int = MOTION_HELPER_DESCRIPTOR
+    translation_range_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    max_rotation_delta_degrees: float = 0.0
+    scale_range: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "present": self.present,
+            "active": self.active,
+            "descriptor": f"0x{self.descriptor:08X}",
+            "track_index": self.track_index,
+            "translation_range_m": list(self.translation_range_m),
+            "max_rotation_delta_degrees": self.max_rotation_delta_degrees,
+            "scale_range": list(self.scale_range),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class SceneBone:
     name: str
@@ -88,6 +116,7 @@ class SceneBone:
     bind_scale: tuple[float, float, float]
     deform: bool = True
     helper: bool = False
+    semantic: str = ""
 
 @dataclass(slots=True)
 class AnimationScene:
@@ -102,6 +131,7 @@ class AnimationScene:
     anm2_input_fps: float | None = None
     primary_root_index: int | None = None
     target_up_axis: tuple[float, float, float] = (0.0, 1.0, 0.0)
+    motion_accumulator: dict[str, Any] = field(default_factory=dict)
 
     @property
     def frame_count(self) -> int:
@@ -132,6 +162,7 @@ class AnimationScene:
                     "bind_scale": list(bone.bind_scale),
                     "deform": bone.deform,
                     "helper": bone.helper,
+                    "semantic": bone.semantic,
                 }
                 for bone in self.bones
             ],
@@ -147,6 +178,7 @@ class AnimationScene:
                 for f in range(self.frame_count)
             ],
             "warnings": list(self.warnings),
+            "motion_accumulator": dict(self.motion_accumulator),
         }
 
 
@@ -282,6 +314,7 @@ def resample_animation_scene(
         anm2_input_fps=source_rate,
         primary_root_index=scene.primary_root_index,
         target_up_axis=scene.target_up_axis,
+        motion_accumulator=dict(scene.motion_accumulator),
     )
 
 
@@ -397,6 +430,7 @@ def build_sparse_fbx_job(
                 "bind_scale": list(bone.bind_scale),
                 "deform": bone.deform,
                 "helper": bone.helper,
+                "semantic": bone.semantic,
             }
             for bone in scene.bones
         ],
@@ -414,6 +448,7 @@ def build_sparse_fbx_job(
             "animated_bone_indices": animated_indices,
         },
         "warnings": list(scene.warnings),
+        "motion_accumulator": dict(scene.motion_accumulator),
     }
     return SparseFbxJob(metadata, arrays)
 
@@ -528,6 +563,46 @@ def decode_anm2_animation(
         str(source.resolve()), source.stem, rate, first, last,
         cached.descriptors, values, quaternions, **metadata,
     )
+
+
+def inspect_motion_accumulator(animation: DecodedAnm2Animation) -> MotionAccumulatorInfo:
+    """Identify whether the known offset helper has meaningful animated motion.
+
+    A static ``0xCCC3CDDF`` row is preserved by the generic unresolved-track
+    policy, but must not modify the exported armature root.  We deliberately
+    compare every sample to frame zero rather than treating an authored initial
+    placement alone as accumulator motion.
+    """
+
+    try:
+        track_index = animation.descriptors.index(MOTION_HELPER_DESCRIPTOR)
+    except ValueError:
+        return MotionAccumulatorInfo(present=False, active=False)
+    rows = np.asarray(animation.values[:, track_index], dtype=np.float64)
+    translations = rows[:, 3:6]
+    scales = rows[:, 6:9]
+    translation_range = np.ptp(translations, axis=0)
+    scale_range = np.ptp(scales, axis=0)
+    quaternions = _continuous_quaternion_array(
+        animation.quaternions_wxyz[:, track_index : track_index + 1]
+    )[:, 0]
+    dot = np.abs(np.sum(quaternions * quaternions[0], axis=1))
+    dot = np.clip(dot, 0.0, 1.0)
+    max_rotation_delta = float(np.degrees(2.0 * np.arccos(np.min(dot))))
+    active = bool(
+        np.max(translation_range) > MOTION_ACCUMULATOR_TRANSLATION_EPSILON_M
+        or max_rotation_delta > MOTION_ACCUMULATOR_ROTATION_EPSILON_DEGREES
+        or np.max(scale_range) > MOTION_ACCUMULATOR_SCALE_EPSILON
+    )
+    return MotionAccumulatorInfo(
+        present=True,
+        active=active,
+        track_index=track_index,
+        translation_range_m=tuple(float(value) for value in translation_range),
+        max_rotation_delta_degrees=max_rotation_delta,
+        scale_range=tuple(float(value) for value in scale_range),
+    )
+
 
 def _matrix_from_trs(translation, rotation_wxyz, scale) -> np.ndarray:
     w, x, y, z = map(float, rotation_wxyz)
@@ -700,7 +775,11 @@ def build_unknown_track_sidecar(
                     else track_index
                 ),
                 "descriptor": f"0x{int(animation.descriptors[track_index]):08X}",
-                "semantic": "unknown_transform_track",
+                "semantic": (
+                    "motion_accumulator"
+                    if int(animation.descriptors[track_index]) == MOTION_HELPER_DESCRIPTOR
+                    else "unknown_transform_track"
+                ),
                 "source_anm2_sha256": source_hash,
                 "frame_table": frame_table,
             }
@@ -746,10 +825,17 @@ def append_unknown_track_helpers(
     scene: AnimationScene,
     animation: DecodedAnm2Animation,
     source_rig: ChromeRig,
+    *,
+    excluded_descriptors: Iterable[int] = (),
 ) -> AnimationScene:
     """Attach unresolved tracks as independent, non-deforming FBX helper roots."""
 
-    unresolved = unknown_track_indices(animation, source_rig)
+    excluded = {int(value) for value in excluded_descriptors}
+    unresolved = tuple(
+        index
+        for index in unknown_track_indices(animation, source_rig)
+        if int(animation.descriptors[index]) not in excluded
+    )
     if not unresolved:
         return scene
     helper_bones = [
@@ -766,6 +852,11 @@ def append_unknown_track_helpers(
             (1.0, 1.0, 1.0),
             False,
             True,
+            (
+                "motion_accumulator"
+                if int(animation.descriptors[index]) == MOTION_HELPER_DESCRIPTOR
+                else "unknown_transform_track"
+            ),
         )
         for index in unresolved
     ]
@@ -788,6 +879,46 @@ def append_unknown_track_helpers(
         scene.anm2_input_fps,
         scene.primary_root_index,
         scene.target_up_axis,
+        dict(scene.motion_accumulator),
+    )
+
+
+def append_motion_accumulator_helper(
+    scene: AnimationScene,
+    animation: DecodedAnm2Animation,
+) -> AnimationScene:
+    """Preserve the raw recognized helper as one inspectable FBX Empty."""
+
+    info = inspect_motion_accumulator(animation)
+    if not info.present or info.track_index is None:
+        return scene
+    if any(int(bone.descriptor or -1) == MOTION_HELPER_DESCRIPTOR for bone in scene.bones):
+        raise ValueError("scene already contains the motion-accumulator helper")
+    track_index = info.track_index
+    helper = SceneBone(
+        "DLR_OffsetHelper_CCC3CDDF",
+        -1,
+        MOTION_HELPER_DESCRIPTOR,
+        (0.0, 0.0, 0.0),
+        (1.0, 0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0),
+        False,
+        True,
+        "motion_accumulator",
+    )
+    return AnimationScene(
+        scene.name,
+        scene.fps,
+        [*scene.bones, helper],
+        np.concatenate((scene.translations, animation.values[:, track_index : track_index + 1, 3:6]), axis=1),
+        np.concatenate((scene.rotations_wxyz, animation.quaternions_wxyz[:, track_index : track_index + 1]), axis=1),
+        np.concatenate((scene.scales, animation.values[:, track_index : track_index + 1, 6:9]), axis=1),
+        scene.source_frame_start,
+        [*scene.warnings, "Motion accumulator preserved as DLR_OffsetHelper_CCC3CDDF."],
+        scene.anm2_input_fps,
+        scene.primary_root_index,
+        scene.target_up_axis,
+        dict(scene.motion_accumulator),
     )
 
 def reconstruct_native_scene(
@@ -804,32 +935,27 @@ def reconstruct_native_scene(
         preserve_extra_tracks=preserve_extra_tracks,
     )
     track_by_descriptor = {value: index for index, value in enumerate(animation.descriptors)}
-    bones: list[SceneBone] = []
-    motion_index: int | None = None
+    bones = [_scene_bone_from_crig(bone) for bone in rig.bones]
     extra_descriptors = [
         value for value in animation.descriptors
         if value not in {bone.descriptor for bone in rig.bones}
     ]
     include_helpers = resolved_policy == "helpers"
-    if include_helpers and MOTION_HELPER_DESCRIPTOR in extra_descriptors:
-        motion_index = 0
-        bones.append(SceneBone(
-            "DLR_OffsetHelper_CCC3CDDF", -1, MOTION_HELPER_DESCRIPTOR,
-            (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0), False, True,
-        ))
-    offset = len(bones)
-    for bone in rig.bones:
-        parent = bone.parent_index + offset if bone.parent_index >= 0 else (
-            motion_index if motion_index is not None else -1
-        )
-        bones.append(_scene_bone_from_crig(bone, parent_index=parent))
     if include_helpers:
         for descriptor in extra_descriptors:
-            if descriptor == MOTION_HELPER_DESCRIPTOR:
-                continue
             bones.append(SceneBone(
-                f"DLR_Track_{descriptor:08X}", -1, descriptor,
+                (
+                    "DLR_OffsetHelper_CCC3CDDF"
+                    if int(descriptor) == MOTION_HELPER_DESCRIPTOR
+                    else f"DLR_Track_{descriptor:08X}"
+                ),
+                -1, descriptor,
                 (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0), False, True,
+                (
+                    "motion_accumulator"
+                    if int(descriptor) == MOTION_HELPER_DESCRIPTOR
+                    else "unknown_transform_track"
+                ),
             ))
     frames, count = animation.frame_count, len(bones)
     translations = np.zeros((frames, count, 3), dtype=float)
@@ -867,7 +993,7 @@ def reconstruct_native_scene(
     return AnimationScene(
         animation.name, animation.fps, bones, translations, rotations, scales,
         animation.source_frame_start, warnings, animation.fps,
-        offset + rig.root_index, infer_target_up_axis(rig),
+        rig.root_index, infer_target_up_axis(rig),
     )
 
 def chrome_rig_from_fbx_skeleton(path: str | Path) -> ChromeRig:
@@ -907,7 +1033,101 @@ def _global_matrices(local: list[np.ndarray], bones: list[SceneBone]) -> list[np
         return result[index]  # type: ignore[return-value]
     return [resolve(index) for index in range(len(bones))]
 
-def _translation_scale(source: ChromeRig, target: ChromeRig, mapping: GenericBoneMap) -> float:
+
+def bake_motion_accumulator_into_root(
+    scene: AnimationScene,
+    animation: DecodedAnm2Animation,
+    *,
+    translation_scale: float = 1.0,
+) -> AnimationScene:
+    """Compose an active offset-helper transform onto the scene's primary root.
+
+    The helper is not made a skeleton parent: that representation is not
+    stable across FBX tools and cannot survive cross-rig export.  Instead, its
+    complete transform is applied in the root's global space and then converted
+    back to the root local space.  Descendant locals stay unchanged, so every
+    child inherits the same world-space trajectory.
+    """
+
+    info = inspect_motion_accumulator(animation)
+    if not info.active or info.track_index is None:
+        return scene
+    if animation.frame_count != scene.frame_count:
+        raise ValueError("motion-accumulator samples do not match the export scene frame count")
+    root_index = scene.primary_root_index
+    if root_index is None or not 0 <= int(root_index) < len(scene.bones):
+        raise ValueError("motion-accumulator baking requires a valid primary root")
+    factor = float(translation_scale)
+    if not math.isfinite(factor) or factor <= 0.0:
+        raise ValueError("motion-accumulator translation scale must be finite and positive")
+
+    root_index = int(root_index)
+    translations = np.asarray(scene.translations, dtype=np.float64).copy()
+    rotations = np.asarray(scene.rotations_wxyz, dtype=np.float64).copy()
+    scales = np.asarray(scene.scales, dtype=np.float64).copy()
+    previous_rotation: np.ndarray | None = None
+    helper_index = info.track_index
+    for frame_index in range(scene.frame_count):
+        local = [
+            _matrix_from_trs(translations[frame_index, index], rotations[frame_index, index], scales[frame_index, index])
+            for index in range(len(scene.bones))
+        ]
+        globals_ = _global_matrices(local, scene.bones)
+        helper_translation = np.asarray(
+            animation.values[frame_index, helper_index, 3:6], dtype=np.float64
+        ) * factor
+        helper = _matrix_from_trs(
+            helper_translation,
+            animation.quaternions_wxyz[frame_index, helper_index],
+            animation.values[frame_index, helper_index, 6:9],
+        )
+        desired_global = helper @ globals_[root_index]
+        parent_index = scene.bones[root_index].parent_index
+        if parent_index >= 0:
+            desired_local = np.linalg.inv(globals_[parent_index]) @ desired_global
+        else:
+            desired_local = desired_global
+        translation, quaternion, scale = decompose_local_matrix(desired_local)
+        quaternion = np.asarray(quaternion, dtype=np.float64)
+        if previous_rotation is not None and float(quaternion @ previous_rotation) < 0.0:
+            quaternion *= -1.0
+        previous_rotation = quaternion
+        translations[frame_index, root_index] = translation
+        rotations[frame_index, root_index] = quaternion
+        scales[frame_index, root_index] = scale
+
+    motion_metadata = {
+        **info.to_dict(),
+        "baked": True,
+        "preserved_helper": True,
+        "root_index": root_index,
+        "root_name": scene.bones[root_index].name,
+        "translation_scale": factor,
+    }
+    return AnimationScene(
+        scene.name,
+        scene.fps,
+        list(scene.bones),
+        translations,
+        rotations,
+        scales,
+        scene.source_frame_start,
+        [
+            *scene.warnings,
+            f"Baked motion accumulator into primary root {scene.bones[root_index].name!r}.",
+        ],
+        scene.anm2_input_fps,
+        root_index,
+        scene.target_up_axis,
+        motion_metadata,
+    )
+
+
+def resolve_translation_scale(
+    source: ChromeRig,
+    target: ChromeRig,
+    mapping: GenericBoneMap,
+) -> float:
     source_by_descriptor = {bone.descriptor: bone for bone in source.bones}
     target_by_name = {bone.name: bone for bone in target.bones}
     pairs = {row.source_descriptor: row.target_bone for row in mapping.pairs}
@@ -941,7 +1161,11 @@ def retarget_decoded_animation(
         raise ValueError("Bone map source skeleton hash does not match the selected source rig.")
     if mapping.target_skeleton_hash and mapping.target_skeleton_hash != target_rig.skeleton_hash:
         raise ValueError("Bone map target skeleton hash does not match the selected target FBX.")
-    scale_factor = _translation_scale(source_rig, target_rig, mapping) if translation_scale == "auto" else float(translation_scale)
+    scale_factor = (
+        resolve_translation_scale(source_rig, target_rig, mapping)
+        if translation_scale == "auto"
+        else float(translation_scale)
+    )
     native = reconstruct_native_scene(animation, source_rig, preserve_extra_tracks=False)
     source_bones = native.bones
     source_index = {bone.descriptor: index for index, bone in enumerate(source_bones)}
@@ -1021,10 +1245,12 @@ def retarget_decoded_animation(
 __all__ = [
     "ANM2_COMPONENT_ORDER", "AnimationScene", "DecodedAnm2Animation",
     "MOTION_HELPER_DESCRIPTOR", "SceneBone", "UNKNOWN_TRACK_POLICIES",
-    "append_unknown_track_helpers", "build_decode_report", "build_root_motion_decode_diagnostics", "build_unknown_track_sidecar",
+    "append_motion_accumulator_helper", "append_unknown_track_helpers", "bake_motion_accumulator_into_root",
+    "build_decode_report", "build_root_motion_decode_diagnostics", "build_unknown_track_sidecar",
     "SparseFbxJob", "build_sparse_fbx_job", "cayley_to_quaternion_wxyz",
     "cayley_to_quaternions_wxyz", "chrome_rig_from_fbx_skeleton",
-    "decode_anm2_animation", "normalize_unknown_track_policy", "reconstruct_native_scene",
-    "resample_animation_scene", "retarget_decoded_animation", "unknown_track_indices", "unknown_track_sidecar_path",
+    "decode_anm2_animation", "inspect_motion_accumulator", "normalize_unknown_track_policy",
+    "reconstruct_native_scene", "resample_animation_scene", "resolve_translation_scale",
+    "retarget_decoded_animation", "unknown_track_indices", "unknown_track_sidecar_path",
     "write_sparse_fbx_job", "write_unknown_track_sidecar",
 ]

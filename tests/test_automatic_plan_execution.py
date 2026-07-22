@@ -364,5 +364,6 @@ def test_analyzed_bone_side_conflict_blocks_animated_critical_candidate() -> Non
     conflict_row = next(
         row for row in plan.decisions if row.target_bone == "target_composed"
     )
-    assert conflict_row.mode == "manual_required"
+    assert conflict_row.mode == "inherit_bind"
+    assert conflict_row.source_bones == ()
     assert "ambiguous" in conflict_row.reason

@@ -46,8 +46,8 @@ def build_exact_rig_anm2(
     if _is_dlr_native_export(document):
         # Native ANM2->FBX exports carry an explicit basis/helper contract. Its
         # marker selects the metadata-aware inverse after hard transform
-        # preflight; v3 files use native CRIG axes and identity corrections,
-        # while older files retain their stored display-basis corrections.
+        # preflight. Current exports intentionally use child-facing Blender
+        # display axes; the stored correction restores Chrome game-space axes.
         from .legacy_exact_rig import build_exact_rig_anm2 as build_legacy_exact
         return build_legacy_exact(
             animation_fbx,

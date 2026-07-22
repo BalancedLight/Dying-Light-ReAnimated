@@ -968,14 +968,13 @@ def _build_body_project(
             except (TypeError, ValueError) as exc:
                 animation.extensions["automatic_retarget_generation_failure"] = {
                     "status": "needs_attention",
-                    "reason": "The visible semantic profile did not produce a safe live plan.",
+                    "reason": "The target rig or retarget data is invalid.",
                     "diagnostic": str(exc),
-                    "action": "Open Retargeting and resolve the highlighted semantic roles",
+                    "action": "Verify the source file and selected target rig",
                 }
                 raise ValueError(
-                    f"Animation {animation.display_name!r} has unresolved bundled-humanoid "
-                    f"roles: {exc}. Open Retargeting and correct the highlighted source "
-                    "assignments."
+                    f"Animation {animation.display_name!r} cannot build against the selected "
+                    f"target rig: {exc}"
                 ) from exc
             solver = select_exact_solver(
                 compatibility,
@@ -992,8 +991,19 @@ def _build_body_project(
                 "manual_override_count": semantic_profile.manual_override_count,
                 "role_to_source": dict(semantic_profile.role_to_bone),
                 "mapping_mode_counts": semantic_plan.mapping_modes,
-                "unresolved_animated_roles": list(
-                    semantic_plan.unresolved_required_roles
+                "mapped_target_count": sum(
+                    row.mode in {"direct", "composed", "distributed"}
+                    for row in semantic_plan.decisions
+                ),
+                "bind_default_target_count": sum(
+                    row.mode in {"inherit_bind", "static_bind"}
+                    for row in semantic_plan.decisions
+                ),
+                "ignored_animated_source_count": len(
+                    semantic_plan.ignored_animated_source_bones
+                ),
+                "ignored_animated_source_bones": list(
+                    semantic_plan.ignored_animated_source_bones
                 ),
                 "compiled_internal_map_id": bone_map.profile_id,
                 "compiled_internal_map_hash": animation.extensions.get(

@@ -243,6 +243,7 @@ def main(argv=None):
     scene.frame_end = int(job["frame_end"])
 
     bones = job["bones"]
+    motion_accumulator = dict(job.get("motion_accumulator", {}) or {})
     armature_indices = [
         index for index, row in enumerate(bones) if not row.get("helper", False)
     ]
@@ -263,6 +264,16 @@ def main(argv=None):
     armature = bpy.data.objects.new(job["name"], armature_data)
     armature["dlr_native_anm2_export"] = 1
     armature["dlr_scene_unit_meters"] = 1.0
+    if motion_accumulator:
+        armature["dlr_motion_accumulator_detected"] = bool(
+            motion_accumulator.get("present", False)
+        )
+        armature["dlr_motion_accumulator_baked"] = bool(
+            motion_accumulator.get("baked", False)
+        )
+        armature["dlr_motion_accumulator_root"] = str(
+            motion_accumulator.get("root_name", "")
+        )
     bpy.context.collection.objects.link(armature)
     bpy.context.view_layer.objects.active = armature
     armature.select_set(True)
@@ -276,17 +287,33 @@ def main(argv=None):
         head = bind_heads[index]
         child_index = display_child(index, bones, bind_heads, children)
         if child_index is not None:
-            display_length = (bind_heads[child_index] - head).length
+            # The edit bone's Y axis is Blender's visible bone direction.
+            # Chrome rigs do not require that axis to point at a child pivot,
+            # but doing so makes the exported armature readable and editable.
+            tail = bind_heads[child_index].copy()
         else:
             parent = int(row["parent_index"])
             if parent >= 0:
-                parent_distance = (head - bind_heads[parent]).length
-                display_length = max(parent_distance * 0.4, 0.01)
+                direction = head - bind_heads[parent]
+                if direction.length > 1.0e-5:
+                    tail = head + direction.normalized() * max(
+                        direction.length * 0.4, 0.01
+                    )
+                else:
+                    tail = (
+                        head
+                        + proper_rotation(bind_global[index]).col[1].normalized()
+                        * 0.03
+                    )
             else:
-                display_length = 0.05
-        display_length = max(float(display_length), 0.001)
-        native_y = proper_rotation(bind_global[index]).col[1].normalized()
-        bind_tails[index] = head + native_y * display_length
+                tail = (
+                    head
+                    + proper_rotation(bind_global[index]).col[1].normalized()
+                    * 0.05
+                )
+        if (tail - head).length < 0.001:
+            tail = head + Vector((0.0, 0.01, 0.0))
+        bind_tails[index] = tail
     for completed, index in enumerate(armature_indices, start=1):
         row = bones[index]
         bone = armature_data.edit_bones.new(row["name"])
@@ -342,23 +369,19 @@ def main(argv=None):
         native_rest_basis_errors[row["name"]] = {
             "rotation_degrees": float(rotation_error),
             "translation_m": float(translation_error),
-            "status": "edge" if rotation_error > 0.01 else "normal",
+            "status": "display_delta" if rotation_error > 0.01 else "aligned",
         }
-        if rotation_error > 0.05:
-            raise ValueError(
-                f"Native rest basis parity failed for {row['name']!r}: "
-                f"{rotation_error:.9f} degrees exceeds 0.05"
-            )
         if rotation_error > 0.01:
             edge_case_rest_bones.append(row["name"])
-        # New native-basis exports animate directly in the converted CRIG
-        # global frame.  Identity values preserve the old metadata field's
-        # contract for reverse importers without claiming a correction was
-        # applied to animation.
-        display_basis_corrections[index] = Matrix.Identity(4)
+        # The visible Blender rest basis intentionally differs from Chrome's
+        # native basis whenever a child pivot is off-axis. Preserve that fixed
+        # delta so the FBX->ANM2 importer can recover game-space globals.
+        display_basis_corrections[index] = (
+            bind_global[index].inverted_safe() @ display_rest_global
+        )
     native_metadata = {
-        "version": 3,
-        "basis_mode": "native_crig_global_v1",
+        "version": 4,
+        "basis_mode": "child_pivot_display_v1",
         "sparse_summary": job["sparse_summary"],
         "display_basis_corrections": {
             bones[index]["name"]: [
@@ -382,6 +405,7 @@ def main(argv=None):
             for index in helper_indices
             if bones[index].get("descriptor") is not None
         ],
+        "motion_accumulator": motion_accumulator,
     }
     active_armature = sorted(
         (
@@ -451,10 +475,13 @@ def main(argv=None):
         animated_global = [
             convert(value) for value in global_matrices(animated_local, bones)
         ]
-        expected_root_globals.append(animated_global[primary_root_index].copy())
         desired_pose_globals = {
-            index: animated_global[index] for index in armature_indices
+            index: animated_global[index] @ display_basis_corrections[index]
+            for index in armature_indices
         }
+        expected_root_globals.append(
+            desired_pose_globals[primary_root_index].copy()
+        )
         sampled_basis = {}
         for index in order:
             row = bones[index]
@@ -602,6 +629,16 @@ def main(argv=None):
             else f"0x{int(row['descriptor']):08X}"
         )
         helper["dlr_helper"] = True
+        semantic = str(row.get("semantic", "") or "")
+        if semantic:
+            helper["dlr_semantic"] = semantic
+        if semantic == "motion_accumulator":
+            helper["dlr_baked_into_root"] = str(
+                motion_accumulator.get("root_name", "")
+            )
+            helper["dlr_motion_accumulator_baked"] = bool(
+                motion_accumulator.get("baked", False)
+            )
         bpy.context.collection.objects.link(helper)
         helper.rotation_mode = "QUATERNION"
         component_tables = {}
