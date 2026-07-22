@@ -437,6 +437,75 @@ def test_model_and_animation_wrapper_scale_axis_normalization_reach_same_bind(
     assert animation_normalizer.to_report()["axis_conversion_count"] == 1
 
 
+def test_animation_sampling_retains_proper_blender_wrapper_axis_basis(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "blender_wrapper_animation.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(-90.0, 0.0, 0.0),
+        scale=(100.0, 100.0, 100.0),
+    )
+    root = _model_node(
+        2,
+        "root",
+        "LimbNode",
+        translation=(0.0, 1.0, 0.0),
+    )
+    scene = _scene(
+        path,
+        (wrapper, root),
+        parents={2: [("OO", 1, [])]},
+        children={1: [("OO", 2, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+
+    raw = scene.model_global_matrices()
+    expected = np.asarray(raw[2], dtype=float).copy()
+    expected[:3, :3] /= 100.0
+    expected[:3, 3] /= 100.0
+
+    assert document.wrapper_axis_conversion_is_retained("root")
+    np.testing.assert_allclose(
+        document.global_matrices(tick=0, use_animation=False)["root"],
+        expected,
+        atol=1.0e-10,
+    )
+
+
+def test_animation_sampling_removes_reflected_wrapper_axis_basis(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "reflected_wrapper_animation.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(-90.0, 0.0, 0.0),
+        scale=(-100.0, 100.0, 100.0),
+    )
+    root = _model_node(2, "root", "LimbNode", translation=(0.0, 1.0, 0.0))
+    scene = _scene(
+        path,
+        (wrapper, root),
+        parents={2: [("OO", 1, [])]},
+        children={1: [("OO", 2, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+
+    raw = scene.model_global_matrices()
+    assert not document.wrapper_axis_conversion_is_retained("root")
+    np.testing.assert_allclose(
+        document.global_matrices(tick=0, use_animation=False)["root"],
+        np.linalg.inv(raw[1]) @ raw[2],
+        atol=1.0e-10,
+    )
+
+
 def test_auto_axis_policy_accepts_signed_orthonormal_permutations(tmp_path: Path) -> None:
     path = tmp_path / "z_up.fbx"
     path.write_bytes(b"synthetic")

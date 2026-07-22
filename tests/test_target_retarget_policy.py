@@ -266,7 +266,7 @@ def test_semantic_chain_alignment_static_side_topology_and_margin_safety() -> No
         [SemanticChainNode("source_arm", "arm", "left")],
         [SemanticChainNode("target_arm", "arm", "right")],
     )
-    assert wrong_side[0].mode == "manual_required"
+    assert wrong_side[0].mode == "static_bind"
     assert "conflicts" in wrong_side[0].reason
 
     broken_topology = align_semantic_chains(
@@ -276,7 +276,7 @@ def test_semantic_chain_alignment_static_side_topology_and_margin_safety() -> No
         ],
         [SemanticChainNode("target", "a")],
     )
-    assert broken_topology[0].mode == "manual_required"
+    assert broken_topology[0].mode == "static_bind"
     assert "parent-consistent" in broken_topology[0].reason
 
     ambiguous = align_semantic_chains(
@@ -285,5 +285,5 @@ def test_semantic_chain_alignment_static_side_topology_and_margin_safety() -> No
         confidence=0.95,
         confidence_margin=0.01,
     )
-    assert ambiguous[0].mode == "manual_required"
+    assert ambiguous[0].mode == "static_bind"
     assert "margin" in ambiguous[0].reason

@@ -726,10 +726,10 @@ def test_named_arm_interior_gap_is_not_positionally_compressed(
     by_target = {row.target_bone: row for row in plan.decisions}
     for side, prefix in (("left", "l"), ("right", "r")):
         missing = by_target[f"{prefix}_{missing_target}"]
-        assert missing.mode == "manual_required"
+        assert missing.mode == "inherit_bind"
         assert missing.source_bones == ()
         assert missing.critical
-        assert missing.animated
+        assert not missing.animated
         for role, target in (
             ("clavicle", "clavicle"),
             ("upper_arm", "upperarm"),
@@ -742,19 +742,11 @@ def test_named_arm_interior_gap_is_not_positionally_compressed(
                     f"{side}_{role}",
                 )
 
-    assert set(plan.unresolved_required_roles) == {
-        f"left_{missing_role}",
-        f"right_{missing_role}",
-    }
+    assert plan.unresolved_required_roles == ()
     readiness = classify_retarget_readiness(plan)
-    assert not readiness.ready
-    assert readiness.state == "needs_attention"
+    assert readiness.ready
     validation = validate_automatic_retarget_plan(plan, analysis, rig, policy)
-    assert not validation.ok
-    assert all(
-        any(target in error for error in validation.errors)
-        for target in (f"l_{missing_target}", f"r_{missing_target}")
-    )
+    assert validation.ok
 
 
 def test_anonymous_animated_arm_gap_stays_unresolved_without_side_only_roles(
@@ -817,14 +809,16 @@ def test_anonymous_animated_arm_gap_stays_unresolved_without_side_only_roles(
     by_target = {row.target_bone: row for row in plan.decisions}
     assert set(gap_names).issubset(plan.unresolved_animated_chains)
     for prefix in ("l", "r"):
-        assert by_target[f"{prefix}_upperarm"].mode == "manual_required"
+        assert by_target[f"{prefix}_upperarm"].mode == "inherit_bind"
         assert by_target[f"{prefix}_upperarm"].source_bones == ()
     readiness = classify_retarget_readiness(plan)
-    assert not readiness.ready
-    assert readiness.state == "needs_attention"
+    assert readiness.ready
     validation = validate_automatic_retarget_plan(plan, analysis, rig, policy)
-    assert not validation.ok
-    assert any("unresolved animated source chains" in error for error in validation.errors)
+    assert validation.ok
+    assert any(
+        "ignored unmapped animated source chains" in warning
+        for warning in validation.warnings
+    )
 
 
 def test_name_tokens_do_not_force_a_non_humanoid_chain() -> None:

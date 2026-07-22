@@ -1167,7 +1167,13 @@ def build_mapped_rig_anm2(
                 )
                 wrapper_linear = wrapper_matrix[:3, :3]
                 wrapper_linear_scales = np.linalg.norm(wrapper_linear, axis=0)
-                if np.all(wrapper_linear_scales > 1.0e-12):
+                rotation_retained = True
+                policy = getattr(
+                    document, "wrapper_axis_conversion_is_retained", None
+                )
+                if callable(policy):
+                    rotation_retained = bool(policy(source_root_name))
+                if rotation_retained and np.all(wrapper_linear_scales > 1.0e-12):
                     wrapper_rotation = wrapper_linear / wrapper_linear_scales
                     wrapper_axis_conversion = bool(
                         np.allclose(

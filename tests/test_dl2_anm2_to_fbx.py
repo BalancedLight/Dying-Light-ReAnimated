@@ -156,7 +156,9 @@ def test_unknown_sidecar_is_complete_and_deterministic(
     )
     for row in payload["tracks"]:
         assert row["descriptor"].startswith("0x")
-        assert row["semantic"] == "unknown_transform_track"
+        assert row["semantic"] in {"unknown_transform_track", "motion_accumulator"}
+        if row["descriptor"] == "0xCCC3CDDF":
+            assert row["semantic"] == "motion_accumulator"
         assert row["source_anm2_sha256"] == SOURCE_SHA256
         assert len(row["frame_table"]) == 229
         assert all(len(frame) == 10 for frame in row["frame_table"])
@@ -200,12 +202,12 @@ def test_export_service_writes_default_dl2_sidecar_without_interactive_blender(
     destination = tmp_path / "farjump.fbx"
 
     def fake_blender_export(scene, output_path, **_kwargs):
-        assert len(scene.bones) == 271
+        assert sum(not bone.helper for bone in scene.bones) == 271
         return FbxExportResult(
             str(Path(output_path).resolve()),
             scene.frame_count,
             scene.fps,
-            len(scene.bones),
+            sum(not bone.helper for bone in scene.bones),
             tuple(scene.warnings),
             "non-interactive test",
         )
@@ -216,6 +218,11 @@ def test_export_service_writes_default_dl2_sidecar_without_interactive_blender(
     assert result.bone_count == 271
     assert result.unknown_track_policy == "sidecar"
     assert result.unknown_track_count == 97
+    assert result.motion_accumulator_detected
+    assert not result.motion_accumulator_active
+    assert not result.motion_accumulator_baked
+    assert not result.motion_accumulator_helper_preserved
+    assert not result.motion_accumulator_root
     assert Path(result.unknown_tracks_sidecar).name == "farjump.dlr_unknown_tracks.json"
     assert Path(result.unknown_tracks_sidecar).is_file()
 
@@ -237,6 +244,7 @@ def test_optional_blender_exports_the_advanced_dl2_scene(
     assert result.frame_count == 229
     assert result.bone_count == 271
     assert result.unknown_track_count == 97
+    assert not result.motion_accumulator_baked
     assert destination.is_file() and destination.stat().st_size > 0
     assert Path(result.unknown_tracks_sidecar).is_file()
 
@@ -273,7 +281,7 @@ def test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively(
     rig = cli.load_source_rig("builtin:dl2_player_advanced")
     assert rig.rig_id == "builtin:dl2_player_advanced"
     assert len(rig.bones) == 271
-    calls: list[tuple[Path, str, str | None, float | None, float | None]] = []
+    calls: list[tuple[Path, str, str | None, float | None, float | None, bool]] = []
 
     def fake_export(source, source_rig, output, **kwargs):
         calls.append(
@@ -281,6 +289,7 @@ def test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively(
                 Path(source), source_rig.rig_id,
                 kwargs.get("unknown_track_policy"),
                 kwargs.get("anm2_input_fps"), kwargs.get("fbx_output_fps"),
+                kwargs.get("bake_motion_accumulator"),
             )
         )
         return FbxExportResult(
@@ -315,8 +324,19 @@ def test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively(
     )
     assert result == 0
     assert calls == [
-        (SAMPLE, "builtin:dl2_player_advanced", "sidecar", 30.0, 24.0)
+        (SAMPLE, "builtin:dl2_player_advanced", "sidecar", 30.0, 24.0, True)
     ]
+    assert cli.main(
+        [
+            str(SAMPLE),
+            "--source-rig",
+            "builtin:dl2_player_advanced",
+            "--no-bake-motion-accumulator",
+            "--output-directory",
+            str(tmp_path),
+        ]
+    ) == 0
+    assert calls[-1][-1] is False
 
 
 def test_advanced_read_export_example_and_manifest_are_coherent() -> None:

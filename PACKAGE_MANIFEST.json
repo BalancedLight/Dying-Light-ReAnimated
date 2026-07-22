@@ -1,6 +1,6 @@
 {
   "package": "DL ReAnimated DL1/DL2 Preview",
-  "version": "0.6.1a0",
+  "version": "0.6.2",
   "source_basis": "BalancedLight/Dying-Light-ReAnimated model-testing branch, modified locally only",
   "git_operations_performed": false,
   "games": {
@@ -43,8 +43,8 @@
     {
       "path": "dlanm2_gui/semantic_chain_alignment.py",
       "install_surface": "python_package",
-      "size": 16186,
-      "sha256": "8DDB7A3DE1849D309724A9A3621EB5B32B6464ED912780A6E4D4B64050BE2EBD"
+      "size": 16251,
+      "sha256": "EA94BA609984F563F51CE1651D7DD6E2A4EB5F126C821385544D8E17C9845D4C"
     },
     {
       "path": "dlanm2_gui/animation_targets.py",
@@ -55,8 +55,8 @@
     {
       "path": "dlanm2_gui/automatic_retarget.py",
       "install_surface": "python_package",
-      "size": 111416,
-      "sha256": "D320410D61F85AE5067B70BB8E9D6F46564AFE3E5592D390CD64146D350B676F"
+      "size": 115979,
+      "sha256": "176E25EF0E6B050DA9FA7EB9FB5329846778CA3B672D1CC2DF1D0E73783CA0E1"
     },
     {
       "path": "dlanm2_gui/retarget_profiles.py",
@@ -67,14 +67,14 @@
     {
       "path": "dlanm2_gui/semantic_retarget.py",
       "install_surface": "python_package",
-      "size": 14567,
-      "sha256": "4B91EFB5CEDFDCF65622734EC8D08918F5C3AAAD3640240A52BA7F27E73F7BC4"
+      "size": 14647,
+      "sha256": "33D28ECBEF005B5EA7E1001658FDEE09C8711DE12FA79D01BC1F228EAED84418"
     },
     {
       "path": "dlanm2_gui/retarget_recipes.py",
       "install_surface": "python_package",
-      "size": 38930,
-      "sha256": "0A28E8DA171020B54DC5F7FF10D5AF14D2A1052CEF7B541B20191F56794A544B"
+      "size": 39128,
+      "sha256": "24B937F9749B7ECB9D611738A550E114732FBD8012E5DE69A14F0F49813F4BE0"
     },
     {
       "path": "dlanm2_gui/target_retarget_policy.py",
@@ -121,8 +121,8 @@
     {
       "path": "docs/ANM2_TO_FBX.md",
       "install_surface": "windows_bundle_docs",
-      "size": 10305,
-      "sha256": "59CBE310E3A00115473631CE71F1CA62F941C4FA6445C1D433641C89C3C638D7"
+      "size": 11449,
+      "sha256": "D665A522DEC6C466AD3FB3A9B89AC4EE489BAECF7B2E11F9A3354C18854A7491"
     },
     {
       "path": "docs/CHROME_RIGS.md",

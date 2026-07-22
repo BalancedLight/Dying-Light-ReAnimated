@@ -904,18 +904,15 @@ class FbxDocument:
         for name, object_id in {**self.null_models, **self.limb_models}.items():
             value = globals_by_id[object_id]
             if object_id in limb_ids:
-                if self.load_purpose == FbxLoadPurpose.ANIMATION.value:
-                    wrapper_id = self._wrapper_id_for_bone(object_id)
-                    if wrapper_id is not None:
-                        wrapper = np.asarray(globals_by_id[wrapper_id], dtype=float)
-                        try:
-                            value = np.linalg.inv(wrapper) @ value
-                        except np.linalg.LinAlgError:
-                            # The transform contract records the singular
-                            # wrapper as a build blocker with one focused row.
-                            value = np.full((4, 4), np.nan, dtype=float)
-                else:
-                    value = self._scene_scale_normalizer(object_id) @ value
+                # Bind resolution and animated samples must use the same
+                # wrapper policy.  In particular, a proper Blender Armature
+                # wrapper carries the Y-up -> game-axis conversion in its
+                # rotation; stripping that rotation from animated samples but
+                # retaining the old mapper assumption loses the animation
+                # basis.  ``_scene_scale_normalizer`` retains that proper
+                # rotation while cancelling only its uniform scale, and still
+                # removes unsupported/reflected wrappers for animation.
+                value = self._scene_scale_normalizer(object_id) @ value
             result[name] = value.copy()
         return result
 
@@ -977,6 +974,53 @@ class FbxDocument:
             parent = self.scene.model_parent_id(parent)
         return wrapper_id
 
+    def _animation_wrapper_rotation_is_retained(self, wrapper_id: int) -> bool:
+        """Whether animation sampling keeps this wrapper's proper rotation.
+
+        Blender commonly serializes an Armature as a static, uniform-scale
+        Null whose rotation is the coordinate-basis conversion.  The animation
+        path removes its scale, but deliberately retains that proper rotation.
+        Reflected, non-uniform, singular, and native-DLR wrappers instead use
+        full removal so their basis cannot leak into skeletal animation.
+        """
+
+        if self.load_purpose != FbxLoadPurpose.ANIMATION.value:
+            return False
+        props = _properties70(self.object_by_id[wrapper_id])
+        if bool((props.get("dlr_native_anm2_export") or [0])[0]):
+            return False
+        wrapper = np.asarray(self.scene.model_global_matrix(wrapper_id), dtype=float)
+        linear = wrapper[:3, :3]
+        scales = np.linalg.norm(linear, axis=0)
+        uniform = float(np.mean(scales))
+        if (
+            not np.isfinite(wrapper).all()
+            or not np.isfinite(scales).all()
+            or uniform <= 1.0e-12
+            or max(abs(scales - uniform)) > max(1.0e-5, uniform * 1.0e-5)
+        ):
+            return False
+        rotation = linear / uniform
+        return bool(
+            np.linalg.det(rotation) > 1.0e-12
+            and np.allclose(
+                rotation.T @ rotation,
+                np.eye(3, dtype=float),
+                rtol=1.0e-5,
+                atol=1.0e-5,
+            )
+        )
+
+    def wrapper_axis_conversion_is_retained(self, bone: int | str) -> bool:
+        """Return whether ``bone`` is sampled with its wrapper rotation intact."""
+
+        bone_id = int(bone) if not isinstance(bone, str) else int(self.limb_models[bone])
+        wrapper_id = self._wrapper_id_for_bone(bone_id)
+        return bool(
+            wrapper_id is not None
+            and self._animation_wrapper_rotation_is_retained(wrapper_id)
+        )
+
     def _scene_scale_normalizer(self, bone_id: int) -> np.ndarray:
         cached = self._normalizer_cache.get(bone_id)
         if cached is not None:
@@ -986,7 +1030,12 @@ class FbxDocument:
             result = np.eye(4, dtype=float)
         else:
             wrapper = self.scene.model_global_matrix(wrapper_id)
-            if self.load_purpose == FbxLoadPurpose.ANIMATION.value:
+            if (
+                self.load_purpose == FbxLoadPurpose.ANIMATION.value
+                and not self._animation_wrapper_rotation_is_retained(wrapper_id)
+            ):
+                # Reflected, singular, non-uniform, and native-DLR wrappers
+                # are canonicalized out of animation sampling entirely.
                 try:
                     result = np.linalg.inv(wrapper)
                 except np.linalg.LinAlgError:

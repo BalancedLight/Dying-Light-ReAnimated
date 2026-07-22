@@ -105,11 +105,17 @@ def semantic_role_overrides(
         mode = profile.role_mode(profile_role)
         if mode == "auto":
             continue
+        source_bone = str(profile.role_to_bone.get(profile_role, "") or "")
+        if mode not in {"direct", "inherit_bind", "static_bind"}:
+            mode = "inherit_bind"
+            source_bone = ""
+        elif mode == "direct" and not source_bone:
+            mode = "inherit_bind"
         rows.append(
             RoleMappingOverride(
                 semantic_role,
                 mode,
-                str(profile.role_to_bone.get(profile_role, "") or ""),
+                source_bone,
                 profile_role,
             )
         )
@@ -183,9 +189,7 @@ def semantic_ui_rows(
         decision = by_target.get(str(slot.target_bone))
         if role is None or decision is None:
             continue
-        if decision.mode == "manual_required":
-            requirement = "Needs attention"
-        elif decision.mode == "inherit_bind":
+        if decision.mode == "inherit_bind":
             requirement = "Inherits parent"
         elif decision.mode == "static_bind":
             requirement = "Held at bind"
@@ -202,9 +206,7 @@ def semantic_ui_rows(
         )
         source_text = " + ".join(decision.source_bones)
         result = (
-            decision.reason
-            if decision.mode == "manual_required"
-            else f"{decision.mode}: {source_text}"
+            f"{decision.mode}: {source_text}"
             if source_text
             else decision.mode.replace("_", " ")
         )
@@ -337,11 +339,7 @@ def compile_bundled_semantic_profile(
     policy: Any,
     profile: SourceBoneMappingProfile,
 ) -> tuple[GenericBoneMap, AutomaticRetargetValidation, AutomaticRetargetPlan]:
-    profile_errors = profile.validate(source.limb_models)
-    if profile_errors:
-        raise ValueError(
-            "Semantic profile validation failed:\n- " + "\n- ".join(profile_errors)
-        )
+    profile_diagnostics = profile.validate(source.limb_models)
     overrides = semantic_role_overrides(profile, policy)
     plan = build_automatic_retarget_plan(
         source,
@@ -373,6 +371,10 @@ def compile_bundled_semantic_profile(
     compiled.extensions["semantic_manual_override_count"] = (
         profile.manual_override_count
     )
+    if profile_diagnostics:
+        compiled.extensions["ignored_semantic_profile_diagnostics"] = list(
+            profile_diagnostics
+        )
     compiled.extensions["semantic_role_to_source"] = dict(profile.role_to_bone)
     compiled.extensions["semantic_root_motion"] = dict(profile.root_motion)
     compiled.extensions["semantic_locomotion"] = dict(profile.locomotion)

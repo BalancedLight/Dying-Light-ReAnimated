@@ -13,7 +13,7 @@ future analyzers without teaching it vendor-specific FBX names.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 import hashlib
 import json
 import math
@@ -265,6 +265,7 @@ class AutomaticRetargetPlan:
     source_name_languages_or_scripts: tuple[str, ...] = ()
     animated_chains_detected: tuple[str, ...] = ()
     unresolved_animated_chains: tuple[str, ...] = ()
+    ignored_animated_source_bones: tuple[str, ...] = ()
     optional_missing_source_roles: tuple[str, ...] = ()
     findings: tuple[dict[str, Any], ...] = ()
     warnings_shown_to_user: tuple[str, ...] = ()
@@ -698,19 +699,40 @@ def _coerce_role_overrides(
 ) -> dict[str, RoleMappingOverride]:
     if value is None:
         return {}
+
+    def make_row(
+        semantic_role: Any,
+        mode: Any,
+        source_bone: Any = "",
+        profile_role: Any = "",
+    ) -> RoleMappingOverride:
+        resolved_mode = str(mode or "auto")
+        resolved_source = str(source_bone or "")
+        if resolved_mode not in {"auto", "direct", "inherit_bind", "static_bind"}:
+            resolved_mode = "inherit_bind"
+            resolved_source = ""
+        elif resolved_mode == "direct" and not resolved_source:
+            resolved_mode = "inherit_bind"
+        return RoleMappingOverride(
+            str(semantic_role),
+            resolved_mode,
+            resolved_source,
+            str(profile_role or ""),
+        )
+
     rows: list[RoleMappingOverride] = []
     if isinstance(value, Mapping):
         for semantic_role, raw in value.items():
             if isinstance(raw, RoleMappingOverride):
                 row = raw
             elif isinstance(raw, str):
-                row = RoleMappingOverride(str(semantic_role), "direct", raw)
+                row = make_row(semantic_role, "direct", raw)
             elif isinstance(raw, Mapping):
-                row = RoleMappingOverride(
-                    str(raw.get("semantic_role", semantic_role)),
-                    str(raw.get("mode", "auto") or "auto"),
-                    str(raw.get("source_bone", "") or ""),
-                    str(raw.get("profile_role", "") or ""),
+                row = make_row(
+                    raw.get("semantic_role", semantic_role),
+                    raw.get("mode", "auto"),
+                    raw.get("source_bone", ""),
+                    raw.get("profile_role", ""),
                 )
             else:
                 raise TypeError(
@@ -720,10 +742,17 @@ def _coerce_role_overrides(
             rows.append(row)
     else:
         for raw in value:
+            if isinstance(raw, RoleMappingOverride):
+                rows.append(raw)
+                continue
+            payload = dict(raw)
             rows.append(
-                raw
-                if isinstance(raw, RoleMappingOverride)
-                else RoleMappingOverride(**dict(raw))
+                make_row(
+                    payload.get("semantic_role", ""),
+                    payload.get("mode", "auto"),
+                    payload.get("source_bone", ""),
+                    payload.get("profile_role", ""),
+                )
             )
     result: dict[str, RoleMappingOverride] = {}
     for row in rows:
@@ -748,20 +777,49 @@ def _coerce_target_bone_overrides(
 ) -> dict[str, TargetBoneOverride]:
     if value is None:
         return {}
+
+    def make_row(
+        target_bone: Any,
+        mode: Any,
+        source_bone: Any = "",
+        transfer_policy: Any = "default",
+        component_policy: Any = "rotation",
+    ) -> TargetBoneOverride:
+        resolved_mode = str(mode or "auto")
+        resolved_source = str(source_bone or "")
+        resolved_transfer = str(transfer_policy or "default")
+        resolved_component = str(component_policy or "rotation")
+        if resolved_mode not in {"auto", "direct", "inherit_bind", "static_bind"}:
+            resolved_mode = "inherit_bind"
+            resolved_source = ""
+        elif resolved_mode == "direct" and not resolved_source:
+            resolved_mode = "inherit_bind"
+        if resolved_transfer not in TRANSFER_POLICIES:
+            resolved_transfer = "default"
+        if resolved_component not in COMPONENT_POLICIES:
+            resolved_component = "rotation"
+        return TargetBoneOverride(
+            str(target_bone),
+            resolved_mode,
+            resolved_source,
+            resolved_transfer,
+            resolved_component,
+        )
+
     rows: list[TargetBoneOverride] = []
     if isinstance(value, Mapping):
         for target_bone, raw in value.items():
             if isinstance(raw, TargetBoneOverride):
                 row = raw
             elif isinstance(raw, str):
-                row = TargetBoneOverride(str(target_bone), "direct", raw)
+                row = make_row(target_bone, "direct", raw)
             elif isinstance(raw, Mapping):
-                row = TargetBoneOverride(
-                    str(raw.get("target_bone", target_bone) or target_bone),
-                    str(raw.get("mode", "auto") or "auto"),
-                    str(raw.get("source_bone", "") or ""),
-                    str(raw.get("transfer_policy", "default") or "default"),
-                    str(raw.get("component_policy", "rotation") or "rotation"),
+                row = make_row(
+                    raw.get("target_bone", target_bone) or target_bone,
+                    raw.get("mode", "auto"),
+                    raw.get("source_bone", ""),
+                    raw.get("transfer_policy", "default"),
+                    raw.get("component_policy", "rotation"),
                 )
             else:
                 raise TypeError(
@@ -771,10 +829,18 @@ def _coerce_target_bone_overrides(
             rows.append(row)
     else:
         for raw in value:
+            if isinstance(raw, TargetBoneOverride):
+                rows.append(raw)
+                continue
+            payload = dict(raw)
             rows.append(
-                raw
-                if isinstance(raw, TargetBoneOverride)
-                else TargetBoneOverride(**dict(raw))
+                make_row(
+                    payload.get("target_bone", ""),
+                    payload.get("mode", "auto"),
+                    payload.get("source_bone", ""),
+                    payload.get("transfer_policy", "default"),
+                    payload.get("component_policy", "rotation"),
+                )
             )
     return {row.target_bone: row for row in rows if row.mode != "auto"}
 
@@ -1180,6 +1246,33 @@ def _bind_mode(category: str, parent: str) -> str:
     return "inherit_bind" if parent else "static_bind"
 
 
+def normalize_nonblocking_decisions(
+    decisions: Iterable[MappingDecision],
+) -> tuple[MappingDecision, ...]:
+    """Convert legacy attention rows into executable bind fallbacks.
+
+    ``manual_required`` remains a readable serialized mode for compatibility,
+    but it is no longer emitted or allowed to stop a live build. Preserve its
+    diagnostic evidence while removing any unsafe source assignment.
+    """
+
+    return tuple(
+        replace(
+            row,
+            mode=_bind_mode(row.target_category, row.parent_target_bone),
+            source_bones=(),
+            reason=(
+                f"{row.reason}; retained target bind transform"
+                if row.reason
+                else "unresolved legacy mapping retained target bind transform"
+            ),
+        )
+        if row.mode == "manual_required"
+        else row
+        for row in decisions
+    )
+
+
 def _decision(
     bone: Any,
     target_rig: Any,
@@ -1472,24 +1565,17 @@ def build_automatic_retarget_plan(
         for bone in _tuple(_value(target_rig, "bones", ()))
     }
     unknown_targets = sorted(set(target_overrides) - target_names, key=str.casefold)
+    planner_warnings: list[str] = []
     if unknown_targets:
-        raise ValueError(
-            "Target-bone overrides refer to unknown target bones: "
-            + ", ".join(repr(name) for name in unknown_targets)
+        planner_warnings.append(
+            "Ignored stale overrides for unknown target bones: "
+            + ", ".join(unknown_targets)
         )
-    missing_override_sources = sorted(
-        {
-            row.source_bone
-            for row in target_overrides.values()
-            if row.mode == "direct" and row.source_bone not in nodes
-        },
-        key=str.casefold,
-    )
-    if missing_override_sources:
-        raise ValueError(
-            "Target-bone overrides refer to missing source bones: "
-            + ", ".join(repr(name) for name in missing_override_sources)
-        )
+        target_overrides = {
+            name: row
+            for name, row in target_overrides.items()
+            if name in target_names
+        }
     animated_bones = {
         str(value) for value in _tuple(_value(analysis, "animated_bones", ()))
     }
@@ -1520,6 +1606,34 @@ def build_automatic_retarget_plan(
         if target_override is not None:
             source_name = target_override.source_bone
             mapped = target_override.mode == "direct"
+            if mapped and source_name not in nodes:
+                fallback = _bind_mode(category, parent)
+                planner_warnings.append(
+                    f"{target_name}: ignored stale manual source {source_name!r}; "
+                    f"using {fallback}"
+                )
+                decisions.append(
+                    _decision(
+                        bone,
+                        target_rig,
+                        category=category,
+                        mode=fallback,
+                        role=role,
+                        confidence=0.0,
+                        evidence=(
+                            MappingEvidence(
+                                "manual_target_override_rejected",
+                                0.0,
+                                "selected source bone does not exist",
+                                "semantic_profile",
+                            ),
+                        ),
+                        reason="stale manual target assignment; retain target bind transform",
+                        critical=critical,
+                        animated=False,
+                    )
+                )
+                continue
             decisions.append(
                 _decision(
                     bone,
@@ -1643,14 +1757,19 @@ def build_automatic_retarget_plan(
             if source_name in used_sources:
                 unsafe_reasons.append("selected source bone is already consumed")
             if unsafe_reasons:
+                fallback = _bind_mode(category, parent)
+                planner_warnings.append(
+                    f"{target_name}: ignored invalid manual source {source_name!r}; "
+                    f"using {fallback} ({'; '.join(unsafe_reasons)})"
+                )
                 decisions.append(
                     _decision(
                         bone,
                         target_rig,
                         category=category,
-                        mode="manual_required",
+                        mode=fallback,
                         role=role,
-                        sources=(source_name,) if source_name else (),
+                        sources=(),
                         confidence=0.0,
                         evidence=(
                             MappingEvidence(
@@ -1662,7 +1781,7 @@ def build_automatic_retarget_plan(
                         ),
                         reason="; ".join(unsafe_reasons),
                         critical=critical,
-                        animated=True,
+                        animated=False,
                     )
                 )
                 continue
@@ -1786,63 +1905,55 @@ def build_automatic_retarget_plan(
             used_sources.add(candidate.bone_name)
             continue
 
-        # Reaching this branch means no safe deterministic assignment exists.
-        # Only a genuinely animated core role blocks; optional absent anatomy
-        # remains a quiet bind/inherit decision.
-        manual = bool(animated and critical)
-        if manual:
-            reasons = []
-            if not archetype_compatible:
-                reasons.append("source archetype is not safely humanoid")
-            if candidate is not None and candidate.endpoint:
-                reasons.append("only candidate is an endpoint/helper")
-            if candidate is not None and candidate.spatial_only:
-                reasons.append("candidate has spatial-only evidence")
-            if candidate is not None and (
-                candidate.ambiguous or candidate.margin < minimum_margin
-            ):
-                reasons.append("candidate confidence margin is ambiguous")
-            if side_conflict:
-                reasons.append("left/right evidence conflicts")
-            if duplicate:
-                reasons.append("source bone is already consumed")
-            if chain_unresolved:
-                reasons.append("animated semantic chain is unresolved")
-            decisions.append(
-                _decision(
-                    bone,
-                    target_rig,
-                    category=category,
-                    mode="manual_required",
-                    role=role,
-                    sources=(candidate.bone_name,) if candidate else (),
-                    confidence=candidate.confidence if candidate else 0.0,
-                    margin=candidate.margin if candidate else 0.0,
-                    evidence=candidate.evidence if candidate else (),
-                    reason="; ".join(reasons) or "animated critical chain is ambiguous",
-                    critical=critical,
-                    animated=True,
-                )
+        # No deterministic assignment is still exportable: retain the target
+        # bind transform and report the dropped source motion diagnostically.
+        reasons = []
+        if not archetype_compatible:
+            reasons.append("source archetype is not safely humanoid")
+        if candidate is not None and candidate.endpoint:
+            reasons.append("only candidate is an endpoint/helper")
+        if candidate is not None and candidate.spatial_only:
+            reasons.append("candidate has spatial-only evidence")
+        if candidate is not None and (
+            candidate.ambiguous or candidate.margin < minimum_margin
+        ):
+            reasons.append("candidate confidence margin is ambiguous")
+        if side_conflict:
+            reasons.append("left/right evidence conflicts")
+        if duplicate:
+            reasons.append("source bone is already consumed")
+        if chain_unresolved:
+            reasons.append("animated semantic chain is unresolved")
+        optional_missing.add(role)
+        fallback = _bind_mode(category, parent)
+        if animated:
+            planner_warnings.append(
+                f"{target_name}: no safe source assignment; using {fallback}"
             )
-        else:
-            optional_missing.add(role)
-            decisions.append(
-                _decision(
-                    bone,
-                    target_rig,
-                    category=category,
-                    mode=_bind_mode(category, parent),
-                    role=role,
-                    reason=(
-                        "optional source role is absent; retain bind-local transform "
-                        "under the animated target parent"
-                    ),
-                    critical=critical,
-                    animated=False,
-                )
+        decisions.append(
+            _decision(
+                bone,
+                target_rig,
+                category=category,
+                mode=fallback,
+                role=role,
+                confidence=candidate.confidence if candidate else 0.0,
+                margin=candidate.margin if candidate else 0.0,
+                evidence=candidate.evidence if candidate else (),
+                reason=(
+                    "; ".join(reasons)
+                    or "source role is absent; retain target bind-local transform"
+                ),
+                critical=critical,
+                animated=False,
             )
+        )
 
-    decisions = _apply_declared_chain_alignment(decisions, analysis, policy)
+    decisions = list(
+        normalize_nonblocking_decisions(
+            _apply_declared_chain_alignment(decisions, analysis, policy)
+        )
+    )
     remaining_unresolved_chains = tuple(
         sorted(
             name
@@ -1888,6 +1999,15 @@ def build_automatic_retarget_plan(
             )
         )
     )
+    consumed_animated_sources = {
+        source_name
+        for row in decisions
+        if row.mode in {"direct", "composed", "distributed"}
+        for source_name in row.source_bones
+    }
+    ignored_animated_sources = tuple(
+        sorted(animated_bones - consumed_animated_sources, key=str.casefold)
+    )
     return AutomaticRetargetPlan(
         source_skeleton_hash=source_hash,
         source_name_parent_hash=name_parent_hash,
@@ -1919,11 +2039,12 @@ def build_automatic_retarget_plan(
         ),
         animated_chains_detected=animated_chains,
         unresolved_animated_chains=remaining_unresolved_chains,
+        ignored_animated_source_bones=ignored_animated_sources,
         optional_missing_source_roles=tuple(
             sorted(value for value in optional_missing if value)
         ),
         findings=findings,
-        warnings_shown_to_user=(),
+        warnings_shown_to_user=tuple(dict.fromkeys(planner_warnings)),
         diagnostic_findings_suppressed_from_basic_ui=sum(
             row.mode in {"inherit_bind", "static_bind"} for row in decisions
         ),
@@ -2062,6 +2183,12 @@ def _certificate_for_plan(
         "unresolved_required_roles": list(plan.unresolved_required_roles),
         "animated_chains_detected": list(plan.animated_chains_detected),
         "unresolved_animated_chains": list(plan.unresolved_animated_chains),
+        "ignored_animated_source_count": len(
+            plan.ignored_animated_source_bones
+        ),
+        "ignored_animated_source_bones": list(
+            plan.ignored_animated_source_bones
+        ),
         "optional_missing_source_roles": list(
             plan.optional_missing_source_roles
         ),
@@ -2094,6 +2221,7 @@ def validate_automatic_retarget_plan(
         policy
     )
     errors: list[str] = []
+    warnings: list[str] = list(plan.warnings_shown_to_user)
     live_hashes = _analysis_hashes(analysis)
     recorded_hashes = (
         plan.source_skeleton_hash,
@@ -2160,10 +2288,10 @@ def validate_automatic_retarget_plan(
         if not _unresolved_chain_was_resolved(name, plan.decisions)
     )
     if plan.unresolved_animated_chains != expected_unresolved_chains:
-        errors.append("unresolved animated source-chain inventory changed")
+        warnings.append("unresolved animated source-chain inventory changed")
     if expected_unresolved_chains:
-        errors.append(
-            "unresolved animated source chains require attention: "
+        warnings.append(
+            "ignored unmapped animated source chains: "
             + ", ".join(expected_unresolved_chains)
         )
 
@@ -2248,8 +2376,8 @@ def validate_automatic_retarget_plan(
                 f"{row.target_bone}: bind decision unexpectedly names source bones"
             )
         if row.mode == "manual_required":
-            errors.append(
-                f"animated critical chain requires attention at {row.target_bone!r}: {row.reason}"
+            warnings.append(
+                f"{row.target_bone}: legacy manual-required row uses its target bind fallback"
             )
     missing_targets = sorted(set(expected) - seen, key=str.casefold)
     if missing_targets:
@@ -2288,7 +2416,7 @@ def validate_automatic_retarget_plan(
     return AutomaticRetargetValidation(
         status,
         tuple(dict.fromkeys(errors)),
-        (),
+        tuple(dict.fromkeys(warnings)),
         certificate,
         plan.plan_hash,
     )
@@ -2490,6 +2618,9 @@ def materialize_automatic_retarget_plan(
 
     analysis = _coerce_analysis(source)
     policy = _coerce_policy(target_rig, target_policy, plan.clip_domain)
+    normalized_decisions = normalize_nonblocking_decisions(plan.decisions)
+    if normalized_decisions != plan.decisions:
+        plan = replace(plan, decisions=normalized_decisions)
     validation = validate_automatic_retarget_plan(
         plan, analysis, target_rig, policy
     )
@@ -2927,34 +3058,29 @@ def classify_retarget_readiness(
             "Fix mapping…",
             value.errors,
         )
-    unresolved = tuple(dict.fromkeys(value.unresolved_animated_chains))
-    if unresolved:
+    ignored = tuple(dict.fromkeys(value.ignored_animated_source_bones))
+    if ignored:
         return RetargetReadiness(
-            "needs_attention",
-            "action_required",
-            f"Needs attention — {unresolved[0]} is unresolved",
+            "ready",
+            "info",
+            f"Ready — {len(ignored)} unmapped animated source track(s) ignored",
             (
-                f"{len(unresolved)} animated source chain(s) have no "
-                "deterministic target assignment."
+                "Mapped target rows will export; unmatched source animation is dropped "
+                "and unmapped target rows retain bind transforms."
             ),
-            "Fix mapping…",
-            tuple(
-                f"{name}: animated source chain has no deterministic target assignment"
-                for name in unresolved
+            details=tuple(
+                f"{name}: ignored because it has no safe target assignment"
+                for name in ignored
             ),
         )
     manual = [row for row in value.decisions if row.mode == "manual_required"]
     if manual:
-        chains = sorted(
-            {row.semantic_role or row.target_bone for row in manual}
-        )
         return RetargetReadiness(
-            "needs_attention",
-            "action_required",
-            f"Needs attention — {chains[0]} is ambiguous",
-            f"{len(chains)} animated critical chain(s) need a focused mapping decision.",
-            "Fix mapping…",
-            tuple(row.reason for row in manual),
+            "ready",
+            "info",
+            f"Ready — {len(manual)} legacy mapping row(s) use bind fallback",
+            "Legacy unresolved rows are non-blocking and retain target bind transforms.",
+            details=tuple(row.reason for row in manual),
         )
     if value.exact_identity:
         return RetargetReadiness(
@@ -3018,6 +3144,7 @@ __all__ = [
     "AutomaticRetargetValidation",
     "MappingDecision",
     "MappingEvidence",
+    "normalize_nonblocking_decisions",
     "RoleMappingOverride",
     "TargetBoneOverride",
     "RetargetReadiness",

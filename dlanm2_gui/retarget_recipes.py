@@ -25,6 +25,7 @@ from .automatic_retarget import (
     PLANNER_VERSION,
     build_automatic_retarget_plan,
     materialize_automatic_retarget_plan,
+    normalize_nonblocking_decisions,
     validate_automatic_retarget_plan,
 )
 
@@ -408,18 +409,19 @@ def build_retarget_recipe(
         raise ValueError("Unsupported automatic retarget plan format.")
     if plan.planner_version != PLANNER_VERSION:
         raise ValueError("Cannot store a recipe produced by a stale planner.")
-    rows = tuple(decisions) if decisions is not None else plan.decisions
-    inventory_errors = _target_inventory_errors(rows, plan.decisions)
+    baseline_rows = normalize_nonblocking_decisions(plan.decisions)
+    rows = normalize_nonblocking_decisions(
+        tuple(decisions) if decisions is not None else baseline_rows
+    )
+    inventory_errors = _target_inventory_errors(rows, baseline_rows)
     if inventory_errors:
         raise ValueError(
             "A retarget recipe must preserve the exact target inventory:\n- "
             + "\n- ".join(inventory_errors)
         )
-    if any(row.mode == "manual_required" for row in rows):
-        raise ValueError("Resolve animated critical rows before storing a recipe.")
     decisions_differ = _stable_hash(
         _structural_decision_payload(rows)
-    ) != _stable_hash(_structural_decision_payload(plan.decisions))
+    ) != _stable_hash(_structural_decision_payload(baseline_rows))
     if decisions_differ and not _has_reviewed_provenance(created_by):
         raise ValueError(
             "Differing retarget decisions require explicit reviewed provenance "
@@ -484,12 +486,19 @@ def validate_retarget_recipe(
     ):
         if recorded_key[name] != current_key[name]:
             errors.append(f"recipe key field {name!r} changed")
-    errors.extend(_target_inventory_errors(recipe.decisions, fresh.decisions))
+    normalized_recipe_decisions = normalize_nonblocking_decisions(
+        recipe.decisions
+    )
+    errors.extend(
+        _target_inventory_errors(normalized_recipe_decisions, fresh.decisions)
+    )
 
     fresh_fingerprint = _stable_hash(
         _structural_decision_payload(fresh.decisions)
     )
-    decisions_differ = recipe.decision_fingerprint != fresh_fingerprint
+    decisions_differ = _stable_hash(
+        _structural_decision_payload(normalized_recipe_decisions)
+    ) != fresh_fingerprint
     reviewed_override = decisions_differ and _has_reviewed_provenance(
         recipe.created_by
     )
@@ -499,7 +508,7 @@ def validate_retarget_recipe(
         errors.append("live structural mapping decisions changed")
     if not errors:
         candidate_decisions = (
-            _merge_reviewed_decisions(recipe.decisions, fresh.decisions)
+            _merge_reviewed_decisions(normalized_recipe_decisions, fresh.decisions)
             if reviewed_override
             else fresh.decisions
         )

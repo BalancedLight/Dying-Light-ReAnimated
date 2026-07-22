@@ -72,6 +72,24 @@ def test_exact_block_dictionaries_and_base_segments() -> None:
     assert layout.blocks[1].available_bytes == 41696
 
 
+def test_full_dictionary_table_does_not_require_zero_padding() -> None:
+    """A maximum-size block table ends in a stream boundary, not a zero."""
+    data = bytearray(SAMPLE.read_bytes())
+    layout = parse_dl2_header42(data)
+    block = layout.blocks[0]
+    assert len(block.dictionary) == 10
+
+    # The table reserves 16 u16 values.  Replace its six unused zero-padded
+    # entries with valid increasing offsets, as in a full DL2 dictionary.
+    for table_index, offset in enumerate(range(3654, 3660), start=10):
+        struct.pack_into("<H", data, block.file_offset + table_index * 2, offset)
+
+    full = parse_dl2_header42(data)
+    assert full.is_valid, full.validation_errors
+    assert full.blocks[0].dictionary[-1] == 3659
+    assert full.blocks[0].playable_slot_count == 14
+
+
 @pytest.mark.parametrize(
     ("time", "block", "slot", "frame", "fraction"),
     [
@@ -148,4 +166,3 @@ def test_malformed_layouts_are_rejected(mutate, expected_error: str) -> None:
     assert any(expected_error in error for error in malformed.validation_errors)
     with pytest.raises(ValueError, match="invalid DL2 Header_Version2 layout"):
         malformed.require_valid()
-

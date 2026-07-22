@@ -201,6 +201,60 @@ def test_exact_identity_consumes_nonsemantic_animated_source_bones() -> None:
     assert validate_automatic_retarget_plan(plan, analysis, rig, policy).ok
 
 
+def test_dl1_eye_helpers_are_ignored_without_blocking_export() -> None:
+    rig = _rig(("root", "pelvis", "spine"))
+    roles = {"pelvis": "pelvis", "spine": "spine_1"}
+    policy = _policy(rig, roles)
+    base = _analysis_for_roles(roles)
+    eye_helpers = ("l_eye_pos", "r_eye", "r_eye_pos")
+    analysis = replace(
+        base,
+        nodes=base.nodes
+        + tuple(Node(name, base.nodes[-1].name) for name in eye_helpers),
+        animated_bones=frozenset((*base.animated_bones, *eye_helpers)),
+        unresolved_animated_chains=eye_helpers,
+    )
+
+    plan = build_automatic_retarget_plan(analysis, rig, policy)
+    validation = validate_automatic_retarget_plan(plan, analysis, rig, policy)
+
+    assert validation.ok
+    assert plan.unresolved_required_roles == ()
+    assert set(eye_helpers).issubset(plan.ignored_animated_source_bones)
+    assert validation.certificate["ignored_animated_source_count"] == len(
+        plan.ignored_animated_source_bones
+    )
+    assert classify_retarget_readiness(plan).ready
+
+
+def test_stale_manual_source_assignments_fall_back_to_bind() -> None:
+    rig = _rig(("root", "pelvis", "spine"))
+    roles = {"pelvis": "pelvis", "spine": "spine_1"}
+    policy = _policy(rig, roles)
+    analysis = _analysis_for_roles(roles)
+
+    plan = build_automatic_retarget_plan(
+        analysis,
+        rig,
+        policy,
+        role_overrides={
+            "spine_1": {"mode": "direct", "source_bone": "deleted_spine"}
+        },
+        target_bone_overrides={
+            "pelvis": {"mode": "direct", "source_bone": "deleted_pelvis"},
+            "deleted_target": {"mode": "direct", "source_bone": "deleted_source"},
+        },
+    )
+    by_target = {row.target_bone: row for row in plan.decisions}
+
+    assert by_target["pelvis"].mode == "inherit_bind"
+    assert by_target["spine"].mode == "inherit_bind"
+    assert not by_target["pelvis"].source_bones
+    assert not by_target["spine"].source_bones
+    assert validate_automatic_retarget_plan(plan, analysis, rig, policy).ok
+    assert any("deleted_target" in warning for warning in plan.warnings_shown_to_user)
+
+
 def test_missing_optional_limbs_quietly_inherit_bind() -> None:
     names = (
         "root",
@@ -245,7 +299,7 @@ def test_missing_optional_limbs_quietly_inherit_bind() -> None:
     assert "partial skeleton" in readiness.label.lower()
 
 
-def test_only_ambiguous_animated_critical_role_blocks() -> None:
+def test_ambiguous_animated_roles_use_nonblocking_bind_fallbacks() -> None:
     rig = _rig(("root", "upperarm", "foot"))
     roles = {"upperarm": "left_upper_arm", "foot": "left_foot"}
     policy = _policy(rig, roles)
@@ -257,12 +311,13 @@ def test_only_ambiguous_animated_critical_role_blocks() -> None:
     plan = build_automatic_retarget_plan(analysis, rig, policy)
     by_role = {row.semantic_role: row for row in plan.decisions if row.semantic_role}
 
-    assert by_role["left_upper_arm"].mode == "manual_required"
+    assert by_role["left_upper_arm"].mode == "inherit_bind"
     assert by_role["left_foot"].mode == "inherit_bind"
-    assert not validate_automatic_retarget_plan(plan, analysis, rig, policy).ok
+    assert not plan.unresolved_required_roles
+    assert validate_automatic_retarget_plan(plan, analysis, rig, policy).ok
 
 
-def test_unknown_nonhumanoid_source_fails_safe_for_animated_core() -> None:
+def test_unknown_nonhumanoid_source_exports_with_bind_fallbacks() -> None:
     rig = _rig(("root", "pelvis", "upperarm"))
     roles = {"pelvis": "pelvis", "upperarm": "left_upper_arm"}
     policy = _policy(rig, roles)
@@ -270,8 +325,9 @@ def test_unknown_nonhumanoid_source_fails_safe_for_animated_core() -> None:
 
     plan = build_automatic_retarget_plan(analysis, rig, policy)
 
-    assert any(row.mode == "manual_required" for row in plan.decisions)
-    assert not validate_automatic_retarget_plan(plan, analysis, rig, policy).ok
+    assert all(row.mode != "manual_required" for row in plan.decisions)
+    assert any(row.mode in {"inherit_bind", "static_bind"} for row in plan.decisions)
+    assert validate_automatic_retarget_plan(plan, analysis, rig, policy).ok
 
 
 @pytest.mark.parametrize(
@@ -552,7 +608,7 @@ def test_reviewed_recipe_store_reuses_correction_for_same_skeleton_new_clip(
         )
 
 
-def test_recipe_replay_rejects_newly_animated_unresolved_source_chain() -> None:
+def test_recipe_replay_ignores_newly_animated_unmapped_source_chain() -> None:
     rig = _rig(("root", "pelvis", "spine"))
     roles = {"pelvis": "pelvis", "spine": "spine_1"}
     policy = _policy(rig, roles)
@@ -582,28 +638,30 @@ def test_recipe_replay_rejects_newly_animated_unresolved_source_chain() -> None:
     assert fresh.source_animation_hash != baseline.source_animation_hash
     assert recipe_key_for_plan(fresh) == recipe.key
     assert fresh.unresolved_animated_chains == ("mystery_driver",)
-    assert not classify_retarget_readiness(fresh).ready
+    assert fresh.ignored_animated_source_bones == ("mystery_driver",)
+    assert classify_retarget_readiness(fresh).ready
     fresh_validation = validate_automatic_retarget_plan(
         fresh, next_clip, rig, policy
     )
-    assert not fresh_validation.ok
+    assert fresh_validation.ok
     assert any(
-        "unresolved animated source chains require attention" in error
-        for error in fresh_validation.errors
+        "ignored unmapped animated source chains" in warning
+        for warning in fresh_validation.warnings
     )
 
     validation = validate_retarget_recipe(
         recipe, next_clip, rig, policy
     )
 
-    assert not validation.ok
+    assert validation.ok
     assert validation.fresh_plan is not None
     assert validation.fresh_plan.unresolved_animated_chains == (
         "mystery_driver",
     )
-    assert not classify_retarget_readiness(validation.fresh_plan).ready
-    with pytest.raises(ValueError, match="verification failed"):
-        apply_retarget_recipe(recipe, next_clip, rig, policy)
+    assert classify_retarget_readiness(validation.fresh_plan).ready
+    assert apply_retarget_recipe(recipe, next_clip, rig, policy).source_animation_hash == (
+        fresh.source_animation_hash
+    )
 
 
 def test_reviewed_recipe_can_resolve_newly_animated_unknown_source(
@@ -745,7 +803,7 @@ def test_profile_recipe_export_requires_reviewed_provenance() -> None:
     assert recipe.created_by == "manual_reviewed"
 
 
-def test_recipe_rejects_unresolved_manual_rows() -> None:
+def test_recipe_accepts_ambiguous_rows_as_bind_fallbacks() -> None:
     rig = _rig(("root", "upperarm"))
     roles = {"upperarm": "left_upper_arm"}
     policy = _policy(rig, roles)
@@ -755,5 +813,19 @@ def test_recipe_rejects_unresolved_manual_rows() -> None:
     plan = build_automatic_retarget_plan(analysis, rig, policy)
 
     assert any(isinstance(row, MappingDecision) for row in plan.decisions)
-    with pytest.raises(ValueError, match="Resolve animated critical"):
-        build_retarget_recipe(plan)
+    legacy_rows = tuple(
+        replace(
+            row,
+            mode="manual_required",
+            source_bones=("源骨_00",),
+        )
+        if row.target_bone == "upperarm"
+        else row
+        for row in plan.decisions
+    )
+    legacy_plan = replace(plan, decisions=legacy_rows)
+    recipe = build_retarget_recipe(legacy_plan)
+    assert all(row.mode != "manual_required" for row in recipe.decisions)
+    assert next(
+        row for row in recipe.decisions if row.target_bone == "upperarm"
+    ).mode == "inherit_bind"

@@ -2,7 +2,7 @@
   "format": "dl-reanimated-project",
   "schema_version": 10,
   "minimum_reader_version": 1,
-  "created_with": "0.6.1a0",
+  "created_with": "0.6.2",
   "project_id": "b6f67ed7-5476-4a85-bb7b-27f9914ff31b",
   "name": "DL2 advanced player ANM2 to FBX",
   "created_utc": "2026-07-20T00:00:00+00:00",

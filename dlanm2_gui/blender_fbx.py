@@ -20,12 +20,17 @@ import numpy as np
 from .anm2_fbx import (
     AnimationScene,
     DecodedAnm2Animation,
+    MOTION_HELPER_DESCRIPTOR,
+    append_motion_accumulator_helper,
     append_unknown_track_helpers,
+    bake_motion_accumulator_into_root,
     chrome_rig_from_fbx_skeleton,
     decode_anm2_animation,
+    inspect_motion_accumulator,
     normalize_unknown_track_policy,
     reconstruct_native_scene,
     resample_animation_scene,
+    resolve_translation_scale,
     retarget_decoded_animation,
     unknown_track_indices,
     write_sparse_fbx_job,
@@ -61,6 +66,11 @@ class FbxExportResult:
     root_parity_max_heading_degrees: float = 0.0
     root_parity_max_translation_m: float = 0.0
     native_rest_basis_max_rotation_degrees: float = 0.0
+    motion_accumulator_detected: bool = False
+    motion_accumulator_active: bool = False
+    motion_accumulator_baked: bool = False
+    motion_accumulator_helper_preserved: bool = False
+    motion_accumulator_root: str = ""
 
 
 class _StageProgress:
@@ -258,7 +268,10 @@ def run_blender_export(
         os.replace(temporary_output, destination)
         stages("Starting Blender", 1, 1)
     return FbxExportResult(
-        str(destination.resolve()), scene.frame_count, scene.fps, len(scene.bones),
+        str(destination.resolve()),
+        scene.frame_count,
+        scene.fps,
+        sum(not bone.helper for bone in scene.bones),
         tuple(scene.warnings), log,
         animated_bone_count=sparse_job.animated_bone_count,
         fcurve_count=sparse_job.fcurve_count,
@@ -345,6 +358,7 @@ def export_anm2_to_fbx(
     bone_map: GenericBoneMap | None = None,
     translation_scale: str | float = "auto",
     unknown_track_policy: str | None = None,
+    bake_motion_accumulator: bool = True,
     blender_executable: str | Path | None = None,
     progress: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
@@ -405,8 +419,15 @@ def export_anm2_to_fbx(
     )
     unresolved_count = len(unresolved_descriptors)
     unknown_animation: DecodedAnm2Animation | None = None
-    animation_with_helpers = animation
-    if unresolved_count and resolved_unknown_policy in {"sidecar", "helpers"}:
+    helper_is_unresolved = MOTION_HELPER_DESCRIPTOR in unresolved_descriptors
+    selected_unresolved_descriptors: tuple[int, ...]
+    if resolved_unknown_policy in {"sidecar", "helpers"}:
+        selected_unresolved_descriptors = unresolved_descriptors
+    elif bake_motion_accumulator and helper_is_unresolved:
+        selected_unresolved_descriptors = (MOTION_HELPER_DESCRIPTOR,)
+    else:
+        selected_unresolved_descriptors = ()
+    if selected_unresolved_descriptors:
         # Unknown transforms are intentionally decoded in their own selected
         # pass. They never inflate the main 271-bone skeleton decode/job.
         unknown_animation = decode_anm2_animation(
@@ -414,45 +435,75 @@ def export_anm2_to_fbx(
             fps=input_rate,
             start_frame=start_frame,
             end_frame=end_frame,
-            selected_descriptors=unresolved_descriptors,
+            selected_descriptors=selected_unresolved_descriptors,
             progress=stages,
             cancel_check=cancel_check,
         )
-        if resolved_unknown_policy == "helpers":
-            animation_with_helpers = _merge_decoded_tracks(
-                animation, unknown_animation
-            )
+
+    accumulator_animation: DecodedAnm2Animation | None = None
+    if MOTION_HELPER_DESCRIPTOR in animation.descriptors:
+        accumulator_animation = animation
+    elif (
+        unknown_animation is not None
+        and MOTION_HELPER_DESCRIPTOR in unknown_animation.descriptors
+    ):
+        accumulator_animation = unknown_animation
+    accumulator_info = (
+        inspect_motion_accumulator(accumulator_animation)
+        if accumulator_animation is not None
+        else None
+    )
+    bake_active_accumulator = bool(
+        bake_motion_accumulator
+        and accumulator_info is not None
+        and accumulator_info.active
+    )
+    motion_translation_scale = 1.0
     if target_fbx is None:
         scene = reconstruct_native_scene(
-            animation_with_helpers,
+            animation,
             source_rig,
-            unknown_track_policy=resolved_unknown_policy,
+            unknown_track_policy="drop",
         )
-        if unresolved_count and resolved_unknown_policy == "sidecar":
-            scene.warnings.append(
-                f"{unresolved_count} unresolved ANM2 track(s) are excluded from the skeleton "
-                "and will be preserved in a deterministic .dlr_unknown_tracks.json sidecar."
-            )
     else:
         if bone_map is None:
             raise ValueError("Cross-rig FBX export requires a reviewed generic bone map.")
         target_rig = chrome_rig_from_fbx_skeleton(target_fbx)
+        motion_translation_scale = (
+            resolve_translation_scale(source_rig, target_rig, bone_map)
+            if translation_scale == "auto"
+            else float(translation_scale)
+        )
         scene = retarget_decoded_animation(
             animation, source_rig, target_rig, bone_map,
             translation_scale=translation_scale,
         )
-        if unresolved_count and resolved_unknown_policy == "helpers":
-            scene = append_unknown_track_helpers(
-                scene, animation_with_helpers, source_rig
-            )
-        elif unresolved_count and resolved_unknown_policy == "sidecar":
+    if bake_active_accumulator:
+        assert accumulator_animation is not None
+        scene = bake_motion_accumulator_into_root(
+            scene,
+            accumulator_animation,
+            translation_scale=motion_translation_scale,
+        )
+        scene = append_motion_accumulator_helper(scene, accumulator_animation)
+    if unknown_animation is not None and resolved_unknown_policy == "helpers":
+        scene = append_unknown_track_helpers(
+            scene,
+            unknown_animation,
+            source_rig,
+            excluded_descriptors=(MOTION_HELPER_DESCRIPTOR,) if bake_active_accumulator else (),
+        )
+    if unresolved_count and resolved_unknown_policy == "sidecar":
+        scope = "retargeted " if target_fbx is not None else ""
+        scene.warnings.append(
+            f"{unresolved_count} unresolved ANM2 track(s) are excluded from the {scope}skeleton "
+            "and will be preserved in a deterministic .dlr_unknown_tracks.json sidecar."
+        )
+    elif unresolved_count and resolved_unknown_policy == "drop":
+        dropped_count = unresolved_count - int(bake_active_accumulator and helper_is_unresolved)
+        if dropped_count:
             scene.warnings.append(
-                f"{unresolved_count} unresolved ANM2 track(s) are excluded from the retargeted "
-                "skeleton and will be preserved in a deterministic .dlr_unknown_tracks.json sidecar."
-            )
-        elif unresolved_count:
-            scene.warnings.append(
-                f"{unresolved_count} unresolved ANM2 track(s) were explicitly dropped; "
+                f"{dropped_count} unresolved ANM2 track(s) were explicitly dropped; "
                 "their transform curves are not present in the FBX or a sidecar."
             )
     scene.warnings[:] = list(dict.fromkeys([*provenance_warnings, *scene.warnings]))
@@ -479,6 +530,7 @@ def export_anm2_to_fbx(
         )
         if progress and sidecar is not None:
             progress(f"Preserved {unresolved_count} unresolved track(s): {sidecar.name}")
+    motion_metadata = dict(scene.motion_accumulator)
     return replace(
         result,
         unknown_track_policy=resolved_unknown_policy,
@@ -488,6 +540,17 @@ def export_anm2_to_fbx(
         fbx_output_fps=output_rate,
         timing_metadata_status=provenance_status,
         timing_metadata_path=provenance.path,
+        motion_accumulator_detected=bool(
+            accumulator_info is not None and accumulator_info.present
+        ),
+        motion_accumulator_active=bool(
+            accumulator_info is not None and accumulator_info.active
+        ),
+        motion_accumulator_baked=bool(motion_metadata.get("baked", False)),
+        motion_accumulator_helper_preserved=bool(
+            motion_metadata.get("preserved_helper", False)
+        ),
+        motion_accumulator_root=str(motion_metadata.get("root_name", "")),
     )
 
 __all__ = [

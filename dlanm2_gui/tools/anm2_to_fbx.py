@@ -70,6 +70,16 @@ def main(argv: list[str] | None = None) -> int:
             "drop explicitly discards them with a warning."
         ),
     )
+    parser.add_argument(
+        "--no-bake-motion-accumulator",
+        action="store_false",
+        dest="bake_motion_accumulator",
+        default=True,
+        help=(
+            "Leave an animated 0xCCC3CDDF offset-helper track separate instead of "
+            "baking it into the exported primary root."
+        ),
+    )
     parser.add_argument("--blender", type=Path)
     parser.add_argument("--output-directory", type=Path, default=Path("build/fbx"))
     args = parser.parse_args(argv)
@@ -104,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
             target_fbx=args.target_fbx, bone_map=mapping,
             translation_scale=translation_scale, blender_executable=args.blender,
             unknown_track_policy=args.unknown_track_policy,
+            bake_motion_accumulator=args.bake_motion_accumulator,
             progress=print,
         )
         print(
@@ -116,7 +127,8 @@ def main(argv: list[str] | None = None) -> int:
             f"{result.root_parity_max_angular_degrees:.6f} deg angular, "
             f"{result.root_parity_max_heading_degrees:.6f} deg heading, "
             f"{result.root_parity_max_translation_m:.3g} m translation; "
-            f"rest basis {result.native_rest_basis_max_rotation_degrees:.6f} deg max"
+            "display-vs-native rest basis "
+            f"{result.native_rest_basis_max_rotation_degrees:.6f} deg max"
         )
         if result.unknown_track_count:
             if result.unknown_tracks_sidecar:
@@ -127,7 +139,16 @@ def main(argv: list[str] | None = None) -> int:
             elif result.unknown_track_policy == "helpers":
                 print(f"Unknown tracks: {result.unknown_track_count} included as FBX helper roots")
             else:
-                print(f"WARNING: {result.unknown_track_count} unknown tracks were explicitly dropped")
+                dropped_count = result.unknown_track_count - int(
+                    result.motion_accumulator_helper_preserved
+                )
+                if dropped_count:
+                    print(f"WARNING: {dropped_count} unknown tracks were explicitly dropped")
+        if result.motion_accumulator_detected:
+            state = "baked" if result.motion_accumulator_baked else "preserved only"
+            active = "active" if result.motion_accumulator_active else "static"
+            root = f" into {result.motion_accumulator_root}" if result.motion_accumulator_root else ""
+            print(f"Motion accumulator: {active}, {state}{root}")
         for warning in result.warnings:
             print(f"WARNING: {warning}")
     return 0
