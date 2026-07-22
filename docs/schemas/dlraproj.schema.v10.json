@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://balancedlight.github.io/dl-reanimated/schemas/dlraproj.schema.v10.json",
+  "title": "DL ReAnimated Project v10",
+  "description": "Separates FBX source, ANM2 sampling, and playback timing, and separates reverse ANM2 input cadence from FBX output cadence.",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "minimum_reader_version",
+    "game_id",
+    "rig",
+    "animations",
+    "anm2_to_fbx"
+  ],
+  "properties": {
+    "format": {"const": "dl-reanimated-project"},
+    "schema_version": {"const": 10},
+    "minimum_reader_version": {"type": "integer", "minimum": 1},
+    "game_id": {"enum": ["dying_light_1", "dying_light_2"]},
+    "rig": {"$ref": "#/$defs/rig"},
+    "export": {"type": "object", "additionalProperties": true},
+    "animations": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/animation"}
+    },
+    "mapping_profiles": {
+      "type": "object",
+      "additionalProperties": {"type": "object"}
+    },
+    "anm2_to_fbx": {"$ref": "#/$defs/anm2_to_fbx"},
+    "extensions": {"type": "object", "additionalProperties": true}
+  },
+  "$defs": {
+    "positive_fps": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "rig": {
+      "type": "object",
+      "required": ["retarget_mode", "target_rig_ref", "target_rig_path"],
+      "properties": {
+        "retarget_mode": {"enum": ["auto", "humanoid", "exact"]},
+        "target_rig_ref": {"type": "string"},
+        "target_rig_path": {"type": "string"},
+        "default_target_rig_ref": {"type": "string"},
+        "default_target_rig_path": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "animation": {
+      "type": "object",
+      "required": [
+        "animation_id",
+        "source_fbx",
+        "display_name",
+        "resource_name",
+        "source_fps",
+        "sample_fps",
+        "playback_fps"
+      ],
+      "properties": {
+        "animation_id": {"type": "string", "minLength": 1},
+        "source_fbx": {"type": "string"},
+        "display_name": {"type": "string"},
+        "resource_name": {"type": "string"},
+        "fps": {"$ref": "#/$defs/positive_fps"},
+        "source_fps": {
+          "anyOf": [
+            {"$ref": "#/$defs/positive_fps"},
+            {"type": "null"}
+          ]
+        },
+        "sample_fps": {
+          "anyOf": [
+            {"$ref": "#/$defs/positive_fps"},
+            {"type": "null"}
+          ]
+        },
+        "playback_fps": {
+          "anyOf": [
+            {"$ref": "#/$defs/positive_fps"},
+            {"type": "null"}
+          ]
+        },
+        "mapping_profile_id": {"type": "string"},
+        "target_rig_ref": {"type": "string"},
+        "target_rig_path": {"type": "string"},
+        "source_root_bone": {"type": "string"},
+        "target_root_bone": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "anm2_to_fbx": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/anm2_to_fbx_item"}
+        }
+      },
+      "additionalProperties": true
+    },
+    "anm2_to_fbx_item": {
+      "type": "object",
+      "required": [
+        "conversion_id",
+        "source_anm2",
+        "output_name",
+        "anm2_input_fps",
+        "fbx_output_fps"
+      ],
+      "properties": {
+        "conversion_id": {"type": "string", "minLength": 1},
+        "source_anm2": {"type": "string"},
+        "output_name": {"type": "string"},
+        "fps": {"$ref": "#/$defs/positive_fps"},
+        "anm2_input_fps": {
+          "anyOf": [
+            {"$ref": "#/$defs/positive_fps"},
+            {"type": "null"}
+          ]
+        },
+        "fbx_output_fps": {
+          "anyOf": [
+            {"$ref": "#/$defs/positive_fps"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

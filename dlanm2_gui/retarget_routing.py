@@ -67,9 +67,12 @@ def select_exact_solver(
 
     origin = mapping_profile_origin(mapping_profile)
     classification = str(compatibility.get("classification", "incompatible"))
-    compatible = not (
-        compatibility.get("required_missing_bones")
-        or compatibility.get("hierarchy_mismatches")
+    compatible = bool(
+        not compatibility.get("hierarchy_mismatches")
+        and (
+            not compatibility.get("required_missing_bones")
+            or classification == "exact_target_subset"
+        )
     )
     if compatible:
         semantic_manual_overrides = int(
@@ -122,6 +125,8 @@ def select_exact_solver(
         reason = (
             "exact target identity"
             if classification == "exact_identity"
+            else "exact normalized target subset; target-only rows held at bind"
+            if classification == "exact_target_subset"
             else "target-compatible source superset"
         )
         return SolverSelection(

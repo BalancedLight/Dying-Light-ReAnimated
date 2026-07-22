@@ -9,14 +9,14 @@ The **ANM2 → FBX** workspace converts extracted Dying Light animations into ed
 - The matching Chrome Rig (`.crig`). Bundled rigs include the DL1 male NPC/infected
   rig and the 271-node Dying Light 2 advanced player rig.
 
-ANM2 contains descriptor hashes and sampled local transforms, but no bone names, hierarchy, or bind pose. Choosing the correct rig is therefore required. Standalone ANM2 also has no authoritative playback FPS; the default is 30 FPS.
+ANM2 contains descriptor hashes and sampled local transforms, but no bone names, hierarchy, bind pose, or authoritative cadence. Choosing the correct rig is therefore required. A sibling `<name>.anm2.dlrmeta.json` written by DL ReAnimated can supply hash-validated timing provenance; otherwise reverse conversion defaults to 30 FPS input and 30 FPS output.
 
 ## Native export
 
 1. Open **ANM2 → FBX** and add one or more ANM2 files.
 2. Select the matching source Chrome Rig.
 3. Leave **Native rig** selected.
-4. Set FPS/frame range and choose an output folder.
+4. Set **ANM2 FPS**, **FBX FPS**, and the frame range, then choose an output folder.
 5. Choose Blender if it was not detected, then export.
 
 Rig bones omitted by a clip remain at bind pose.
@@ -25,7 +25,11 @@ The Blender handoff is sparse and binary. JSON contains the complete hierarchy a
 bind metadata; compressed NPZ arrays contain frame numbers and only TRS components
 that differ from bind by more than `1e-7`. Static rows remain in the armature with no
 curves, and a rotation-only row receives quaternion curves but no location/scale
-curves. Quaternions are hemisphere-continuous and frames are never decimated.
+curves. Quaternions are hemisphere-continuous. When input and output rates differ,
+the complete reconstructed/retargeted scene is resampled before sparse-curve
+generation: translation and scale use linear interpolation, rotation uses normalized
+shortest-hemisphere SLERP (or NLERP near identity), duration is preserved, and both
+endpoints are exact. For example, 381 samples at 30 FPS become 305 samples at 24 FPS.
 
 For DL1, the compatibility default preserves descriptors that do not resolve to rig
 bones as non-deforming Empty objects. `0xCCC3CDDF` is named
@@ -61,12 +65,20 @@ all-frame audit did not finish within 180 seconds); these figures are audit evid
 not absolute CI timing thresholds.
 
 Blender installs FCurves in bulk with `keyframe_points.add` and
-`foreach_set("co")`. If display-basis evaluation is needed, it sets all active bones
-for a frame and updates the view layer once. Export uses
+`foreach_set("co")`. It evaluates the completed action once per frame for the root
+parity audit. Export uses
 `bake_anim_use_all_bones=False` and
 `bake_anim_force_startend_keying=False`.
 
-Chrome's internal bone axes do not necessarily point toward the next visible joint. Native export keeps the exact Chrome joint transforms but applies a fixed Blender display-basis correction, so ordinary limb and spine bones point at their anatomical children. Zero-length upper-arm and thigh twist nodes use a display-only grandparent; their animated world transforms and round-trip descriptor data remain unchanged.
+Chrome's internal bone axes do not necessarily point toward the next visible joint. Native export makes each edit bone's Y/Z axes from the converted CRIG bind-global rotation; child pivots choose display length only. Every bone keeps its authored CRIG parent and `use_connect=False`. Rest rotation is expected within 0.01° and hard-fails above 0.05°.
+
+Animation globals stay in that native orientation; no child-directed display correction is conjugated into the root. Before writing FBX, Blender audits the evaluated primary root on every frame and hard-fails above 0.05° total rotation, 0.05° heading, or `1e-5 m` translation error. This preserves real root pitch/roll swing while preventing spurious heading.
+
+### Timing provenance
+
+Forward standalone/intermediate ANM2 writes deterministic `<name>.anm2.dlrmeta.json` containing the ANM2 and source-FBX SHA-256 values, source/sample/playback FPS, source duration, frame count, and externally named root-motion/heading modes. Reverse conversion uses it only when its format, schema, timing values, ANM2 hash, and frame count validate. A stale or malformed sidecar produces one advisory and contributes no timing values.
+
+Valid provenance defaults ANM2 input cadence from `sample_fps` and FBX output cadence from `source_fbx_fps`; `playback_fps` remains the separate animation-script playback intent. Explicit GUI/CLI rates override provenance. Fractional FBX rates are preserved through Blender's `render.fps` plus `render.fps_base` instead of integer truncation.
 
 ## Doors, props, and other rigs
 
@@ -93,10 +105,13 @@ python -m dlanm2_gui.tools.anm2_to_fbx \
 
 dlanm2-anm2-to-fbx clip.anm2 --source-rig source.crig \
   --target-fbx renamed-door.fbx --bone-map door.dlrbmap.json \
+  --anm2-fps 30 --fbx-fps 24 \
   --blender "C:\Program Files\Blender Foundation\Blender 4.2\blender.exe"
 ```
 
 Use `--auto-map --save-auto-map mapping.dlrbmap.json` to generate a conservative CLI mapping for review.
+
+`--anm2-fps` selects the input cadence and `--fbx-fps` selects the output cadence. The legacy `--fps` option remains as an alias that sets both. Omitting all three allows valid provenance to supply defaults.
 
 `--unknown-track-policy` accepts `sidecar`, `helpers`, or `drop`. When omitted, DL2
 uses `sidecar` and DL1 retains its existing `helpers` behavior.
@@ -104,9 +119,9 @@ uses `sidecar` and DL1 retains its existing `helpers` behavior.
 ## Progress and cancellation
 
 The operation stays nonmodal and reports elapsed time plus current/total work for:
-**Reading ANM2**, **Decoding pages/segments**, **Building sparse curves**,
+**Reading ANM2**, **Decoding pages/segments**, **Resampling animation**, **Building sparse curves**,
 **Starting Blender**, **Creating armature**, **Installing animation curves**, and
-**Writing FBX**. Cancellation is checked during cached decoding and while Blender is
+**Auditing root parity**, **Writing FBX**. Cancellation is checked during cached decoding and while Blender is
 running; a cancelled job removes its temporary FBX. Expected bind-only rows do not
 produce warnings.
 
@@ -132,11 +147,14 @@ SparseJob dlr_build_sparse_fbx_job(Decoded scene, double tolerance) {
 
 void dlr_blender_install_sparse_action(SparseJob job) {
     armature = create_complete_armature(job.json.bind_hierarchy);
-    for (frame in job.npz.frames) { set_active_pose_bones(frame); dependency_update_once(); }
     for (channel in job.npz.channels) {
         fcurve.keyframe_points.add(job.frame_count);
         fcurve.keyframe_points.foreach_set("co", interleaved_frame_value_pairs(channel));
         fcurve.interpolation = LINEAR;
+    }
+    for (frame in job.npz.frames) {
+        dependency_update_once();
+        require_native_root_parity(frame, 0.05, 0.05, 1e-5);
     }
 }
 ```

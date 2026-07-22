@@ -273,11 +273,15 @@ def test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively(
     rig = cli.load_source_rig("builtin:dl2_player_advanced")
     assert rig.rig_id == "builtin:dl2_player_advanced"
     assert len(rig.bones) == 271
-    calls: list[tuple[Path, str, str | None]] = []
+    calls: list[tuple[Path, str, str | None, float | None, float | None]] = []
 
     def fake_export(source, source_rig, output, **kwargs):
         calls.append(
-            (Path(source), source_rig.rig_id, kwargs.get("unknown_track_policy"))
+            (
+                Path(source), source_rig.rig_id,
+                kwargs.get("unknown_track_policy"),
+                kwargs.get("anm2_input_fps"), kwargs.get("fbx_output_fps"),
+            )
         )
         return FbxExportResult(
             str(Path(output).resolve()),
@@ -289,6 +293,8 @@ def test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively(
             "sidecar",
             97,
             str(Path(output).with_suffix(".dlr_unknown_tracks.json").resolve()),
+            anm2_input_fps=30.0,
+            fbx_output_fps=24.0,
         )
 
     monkeypatch.setattr(cli, "export_anm2_to_fbx", fake_export)
@@ -299,13 +305,17 @@ def test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively(
             "builtin:dl2_player_advanced",
             "--unknown-track-policy",
             "sidecar",
+            "--anm2-fps",
+            "30",
+            "--fbx-fps",
+            "24",
             "--output-directory",
             str(tmp_path),
         ]
     )
     assert result == 0
     assert calls == [
-        (SAMPLE, "builtin:dl2_player_advanced", "sidecar")
+        (SAMPLE, "builtin:dl2_player_advanced", "sidecar", 30.0, 24.0)
     ]
 
 

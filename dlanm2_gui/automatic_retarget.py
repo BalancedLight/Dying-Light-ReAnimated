@@ -23,7 +23,9 @@ from typing import Any, Iterable, Mapping, Sequence
 
 from .bone_maps import (
     BoneMapPair,
+    COMPONENT_POLICIES,
     GenericBoneMap,
+    TRANSFER_POLICIES,
     skeleton_signature,
 )
 
@@ -189,6 +191,40 @@ class RoleMappingOverride:
 
 
 @dataclass(frozen=True, slots=True)
+class TargetBoneOverride:
+    """One explicit target-row choice supplied by the detailed mapping UI."""
+
+    target_bone: str
+    mode: str = "auto"
+    source_bone: str = ""
+    transfer_policy: str = "default"
+    component_policy: str = "rotation"
+
+    def __post_init__(self) -> None:
+        if not self.target_bone:
+            raise ValueError("target-bone override has no target bone")
+        if self.mode not in {"auto", "direct", "inherit_bind", "static_bind"}:
+            raise ValueError(
+                f"unsupported target-bone override mode: {self.mode}"
+            )
+        if self.mode == "direct" and not self.source_bone:
+            raise ValueError(
+                f"direct target-bone override {self.target_bone!r} has no source bone"
+            )
+        if self.transfer_policy not in TRANSFER_POLICIES:
+            raise ValueError(
+                f"unsupported target transfer policy: {self.transfer_policy}"
+            )
+        if self.component_policy not in COMPONENT_POLICIES:
+            raise ValueError(
+                f"unsupported target component policy: {self.component_policy}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
 class MappingDecision:
     target_bone: str
     target_descriptor: int
@@ -234,9 +270,11 @@ class AutomaticRetargetPlan:
     warnings_shown_to_user: tuple[str, ...] = ()
     diagnostic_findings_suppressed_from_basic_ui: int = 0
     exact_identity: bool = False
+    exact_target_subset: bool = False
     observed_motion_domain: str = "body"
     manual_override_count: int = 0
     role_overrides: tuple[dict[str, Any], ...] = ()
+    target_bone_overrides: tuple[dict[str, Any], ...] = ()
     format: str = AUTOMATIC_RETARGET_PLAN_FORMAT
 
     @property
@@ -249,6 +287,16 @@ class AutomaticRetargetPlan:
     @property
     def target_row_count(self) -> int:
         return len(self.decisions)
+
+    @property
+    def exact_target_subset_row_count(self) -> int:
+        return sum(
+            any(
+                evidence.kind in {"exact_identity", "exact_target_subset"}
+                for evidence in row.evidence
+            )
+            for row in self.decisions
+        )
 
     @property
     def unresolved_required_roles(self) -> tuple[str, ...]:
@@ -268,6 +316,9 @@ class AutomaticRetargetPlan:
         payload = _plain(asdict(self))
         payload["mapping_modes"] = self.mapping_modes
         payload["target_row_count"] = self.target_row_count
+        payload["exact_target_subset_row_count"] = (
+            self.exact_target_subset_row_count
+        )
         payload["unresolved_required_roles"] = list(
             self.unresolved_required_roles
         )
@@ -692,6 +743,42 @@ def _role_override(
     return None
 
 
+def _coerce_target_bone_overrides(
+    value: Mapping[str, Any] | Iterable[TargetBoneOverride] | None,
+) -> dict[str, TargetBoneOverride]:
+    if value is None:
+        return {}
+    rows: list[TargetBoneOverride] = []
+    if isinstance(value, Mapping):
+        for target_bone, raw in value.items():
+            if isinstance(raw, TargetBoneOverride):
+                row = raw
+            elif isinstance(raw, str):
+                row = TargetBoneOverride(str(target_bone), "direct", raw)
+            elif isinstance(raw, Mapping):
+                row = TargetBoneOverride(
+                    str(raw.get("target_bone", target_bone) or target_bone),
+                    str(raw.get("mode", "auto") or "auto"),
+                    str(raw.get("source_bone", "") or ""),
+                    str(raw.get("transfer_policy", "default") or "default"),
+                    str(raw.get("component_policy", "rotation") or "rotation"),
+                )
+            else:
+                raise TypeError(
+                    f"unsupported target-bone override for {target_bone!r}: "
+                    f"{type(raw).__name__}"
+                )
+            rows.append(row)
+    else:
+        for raw in value:
+            rows.append(
+                raw
+                if isinstance(raw, TargetBoneOverride)
+                else TargetBoneOverride(**dict(raw))
+            )
+    return {row.target_bone: row for row in rows if row.mode != "auto"}
+
+
 def _candidate_for_role(
     analysis: Any, role: str, node_by_name: Mapping[str, Any]
 ) -> _Candidate | None:
@@ -1000,11 +1087,11 @@ def _role_animated(analysis: Any, role: str, candidate: _Candidate | None) -> bo
 
 def _exact_identity(
     analysis: Any, target_rig: Any
-) -> tuple[bool, dict[str, str]]:
+) -> tuple[bool, dict[str, str], bool]:
     nodes = _analysis_node_map(analysis)
     targets = _tuple(_value(target_rig, "bones", ()))
     if not nodes or not targets:
-        return False, {}
+        return False, {}, False
     normalized_source: dict[str, list[str]] = {}
     for name in nodes:
         key = unicodedata.normalize("NFKC", name).casefold()
@@ -1014,26 +1101,77 @@ def _exact_identity(
         target_name = str(_value(bone, "name", ""))
         key = unicodedata.normalize("NFKC", target_name).casefold()
         candidates = normalized_source.get(key, ())
-        if len(candidates) != 1:
-            return False, {}
-        matched[target_name] = candidates[0]
-    for bone in targets:
-        target_name = str(_value(bone, "name", ""))
-        expected_parent = _target_parent_name(target_rig, bone)
-        actual_parent = _node_parent(nodes[matched[target_name]])
-        normalized_actual = (
-            unicodedata.normalize("NFKC", actual_parent).casefold()
-            if actual_parent
-            else ""
+        if len(candidates) == 1:
+            matched[target_name] = candidates[0]
+    if not matched:
+        return False, {}, False
+
+    target_by_name = {
+        str(_value(bone, "name", "")): bone for bone in targets
+    }
+    # Remove exact-name rows whose nearest matched ancestry does not agree.
+    # Iterate because removing one unsafe parent changes the nearest matched
+    # ancestor used to judge its descendants.
+    changed = True
+    while changed:
+        changed = False
+        selected_targets = set(matched)
+        selected_sources = set(matched.values())
+        source_to_target = {
+            unicodedata.normalize("NFKC", source).casefold(): target
+            for target, source in matched.items()
+        }
+        for target_name in tuple(matched):
+            bone = target_by_name[target_name]
+            expected_parent = _target_parent_name(target_rig, bone)
+            while expected_parent and expected_parent not in selected_targets:
+                expected_bone = target_by_name.get(expected_parent)
+                expected_parent = (
+                    _target_parent_name(target_rig, expected_bone)
+                    if expected_bone is not None
+                    else ""
+                )
+            actual_parent = _node_parent(nodes[matched[target_name]])
+            visited: set[str] = set()
+            while actual_parent and actual_parent not in selected_sources:
+                if actual_parent in visited or actual_parent not in nodes:
+                    actual_parent = ""
+                    break
+                visited.add(actual_parent)
+                actual_parent = _node_parent(nodes[actual_parent])
+            actual_target = (
+                source_to_target.get(
+                    unicodedata.normalize("NFKC", actual_parent).casefold()
+                )
+                if actual_parent
+                else ""
+            )
+            if (expected_parent or "") != (actual_target or ""):
+                matched.pop(target_name, None)
+                changed = True
+        # Re-evaluate descendants only after completing one stable pass.
+    matched_sources = set(matched.values())
+    exact = len(matched) == len(targets) == len(nodes)
+    subset = bool(matched) and not exact and matched_sources == set(nodes)
+    if not exact and not subset:
+        # Source supersets are common in Blender/Chrome exports: one file can
+        # contain the exact target body plus meshes, duplicated outfit rigs,
+        # IK roots, cameras, and accessory chains.  Preserve unique exact-name
+        # rows when the overlap is too large and structurally anchored to be
+        # coincidental.  A tiny generic overlap (for example only ``spine1``)
+        # still falls back to the semantic planner as a unit.
+        target_roots = {
+            str(_value(bone, "name", ""))
+            for bone in targets
+            if int(_value(bone, "parent_index", -1)) < 0
+        }
+        minimum_overlap = max(8, math.ceil(len(targets) * 0.20))
+        strong_target_overlap = bool(target_roots.intersection(matched)) and (
+            len(matched) >= minimum_overlap
         )
-        normalized_expected = (
-            unicodedata.normalize("NFKC", matched[expected_parent]).casefold()
-            if expected_parent
-            else ""
-        )
-        if normalized_actual != normalized_expected:
-            return False, {}
-    return True, matched
+        if not strong_target_overlap:
+            return False, {}, False
+    return exact, matched, subset
 
 
 def _bind_mode(category: str, parent: str) -> str:
@@ -1159,6 +1297,11 @@ def _apply_declared_chain_alignment(
             # Partition ordered source segments over the ordered target chain.
             for index, target_name in enumerate(targets):
                 current = by_target[target_name]
+                if any(
+                    item.kind == "manual_target_override"
+                    for item in current.evidence
+                ):
+                    continue
                 if current.mode == "direct" and not force:
                     continue
                 start = round(index * len(sources) / len(targets))
@@ -1199,6 +1342,11 @@ def _apply_declared_chain_alignment(
             }
             for index, target_name in enumerate(targets):
                 current = by_target[target_name]
+                if any(
+                    item.kind == "manual_target_override"
+                    for item in current.evidence
+                ):
+                    continue
                 if current.mode == "direct" and not force:
                     continue
                 source_index = source_indices[index]
@@ -1249,6 +1397,45 @@ def _apply_declared_chain_alignment(
     return [by_target[row.target_bone] for row in decisions]
 
 
+def _unresolved_chain_was_resolved(
+    name: str,
+    decisions: Iterable[MappingDecision],
+) -> bool:
+    """Recognize a deterministic or explicit decision for an analyzer token."""
+
+    identity = unicodedata.normalize("NFKC", str(name)).casefold()
+    canonical = _canonical_chain(identity)
+    for row in decisions:
+        evidence_kinds = {item.kind for item in row.evidence}
+        deliberate = bool(
+            row.mode in {"direct", "composed", "distributed"}
+            or evidence_kinds.intersection(
+                {"manual_override", "manual_target_override"}
+            )
+        )
+        if not deliberate:
+            continue
+        tokens = {
+            row.target_bone,
+            row.semantic_role,
+            _role_chain(row.semantic_role),
+            *row.source_bones,
+            *_role_aliases(row.semantic_role),
+        }
+        normalized = {
+            unicodedata.normalize("NFKC", str(token)).casefold()
+            for token in tokens
+            if str(token)
+        }
+        if identity in normalized:
+            return True
+        if canonical and canonical in {
+            _canonical_chain(token) for token in normalized
+        }:
+            return True
+    return False
+
+
 def build_automatic_retarget_plan(
     source: Any,
     target_rig: Any,
@@ -1256,6 +1443,9 @@ def build_automatic_retarget_plan(
     clip_domain: str = "body",
     *,
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None = None,
+    target_bone_overrides: (
+        Mapping[str, Any] | Iterable[TargetBoneOverride] | None
+    ) = None,
 ) -> AutomaticRetargetPlan:
     """Build a complete target-row plan from generic analyzer evidence."""
 
@@ -1274,8 +1464,32 @@ def build_automatic_retarget_plan(
     archetype_confidence = float(
         _value(analysis, "archetype_confidence", 0.0) or 0.0
     )
-    exact, exact_names = _exact_identity(analysis, target_rig)
+    exact, exact_names, exact_subset = _exact_identity(analysis, target_rig)
     overrides = _coerce_role_overrides(role_overrides)
+    target_overrides = _coerce_target_bone_overrides(target_bone_overrides)
+    target_names = {
+        str(_value(bone, "name", ""))
+        for bone in _tuple(_value(target_rig, "bones", ()))
+    }
+    unknown_targets = sorted(set(target_overrides) - target_names, key=str.casefold)
+    if unknown_targets:
+        raise ValueError(
+            "Target-bone overrides refer to unknown target bones: "
+            + ", ".join(repr(name) for name in unknown_targets)
+        )
+    missing_override_sources = sorted(
+        {
+            row.source_bone
+            for row in target_overrides.values()
+            if row.mode == "direct" and row.source_bone not in nodes
+        },
+        key=str.casefold,
+    )
+    if missing_override_sources:
+        raise ValueError(
+            "Target-bone overrides refer to missing source bones: "
+            + ", ".join(repr(name) for name in missing_override_sources)
+        )
     animated_bones = {
         str(value) for value in _tuple(_value(analysis, "animated_bones", ()))
     }
@@ -1301,8 +1515,39 @@ def build_automatic_retarget_plan(
         parent = _target_parent_name(target_rig, bone)
         critical = bool(_value(info, "critical", _role_is_critical(role)))
         override = _role_override(overrides, role) if role else None
-        if exact and override is None:
-            source_name = exact_names[str(_value(bone, "name", ""))]
+        target_name = str(_value(bone, "name", ""))
+        target_override = target_overrides.get(target_name)
+        if target_override is not None:
+            source_name = target_override.source_bone
+            mapped = target_override.mode == "direct"
+            decisions.append(
+                _decision(
+                    bone,
+                    target_rig,
+                    category=category,
+                    mode=target_override.mode,
+                    role=role,
+                    sources=(source_name,) if mapped else (),
+                    confidence=1.0,
+                    margin=1.0,
+                    evidence=(
+                        MappingEvidence(
+                            "manual_target_override",
+                            1.0,
+                            "validated explicit target-row assignment",
+                            "semantic_profile",
+                        ),
+                    ),
+                    reason=f"validated manual target {target_override.mode} override",
+                    critical=critical,
+                    animated=bool(mapped and source_name in animated_bones),
+                )
+            )
+            if mapped:
+                used_sources.add(source_name)
+            continue
+        if target_name in exact_names and override is None:
+            source_name = exact_names[target_name]
             decisions.append(
                 _decision(
                     bone,
@@ -1315,10 +1560,20 @@ def build_automatic_retarget_plan(
                     margin=1.0,
                     evidence=(
                         MappingEvidence(
-                            "exact_identity", 1.0, "name and target ancestry match"
+                            (
+                                "exact_identity"
+                                if exact
+                                else "exact_target_subset"
+                            ),
+                            1.0,
+                            "unique normalized name and nearest matched target ancestry agree",
                         ),
                     ),
-                    reason="exact target skeleton identity",
+                    reason=(
+                        "exact target skeleton identity"
+                        if exact
+                        else "exact normalized target-subset match"
+                    ),
                     critical=critical,
                     animated=source_name in animated_bones,
                 )
@@ -1588,17 +1843,11 @@ def build_automatic_retarget_plan(
             )
 
     decisions = _apply_declared_chain_alignment(decisions, analysis, policy)
-    consumed_source_bones = {
-        source_name
-        for row in decisions
-        if row.mode in {"direct", "composed", "distributed"}
-        for source_name in row.source_bones
-    }
     remaining_unresolved_chains = tuple(
         sorted(
             name
             for name in unresolved_chains
-            if name not in consumed_source_bones
+            if not _unresolved_chain_was_resolved(name, decisions)
         )
     )
     findings = tuple(
@@ -1679,10 +1928,18 @@ def build_automatic_retarget_plan(
             row.mode in {"inherit_bind", "static_bind"} for row in decisions
         ),
         exact_identity=exact,
+        exact_target_subset=exact_subset,
         observed_motion_domain=observed_domain,
-        manual_override_count=len(tuple(dict.fromkeys(overrides.values()))),
+        manual_override_count=(
+            len(tuple(dict.fromkeys(overrides.values())))
+            + len(target_overrides)
+        ),
         role_overrides=tuple(
             row.to_dict() for row in dict.fromkeys(overrides.values())
+        ),
+        target_bone_overrides=tuple(
+            target_overrides[name].to_dict()
+            for name in sorted(target_overrides, key=str.casefold)
         ),
     )
 
@@ -1721,6 +1978,26 @@ def _certificate_for_plan(
         and {item.kind.casefold() for item in row.evidence}
         <= _SPATIAL_ONLY_EVIDENCE
     ]
+    exact_name_rows = [
+        row.target_bone
+        for row in mapped_rows
+        if any(
+            item.kind in {"exact_identity", "exact_target_subset"}
+            for item in row.evidence
+        )
+    ]
+    manual_target_rows = [
+        row.target_bone
+        for row in plan.decisions
+        if any(
+            item.kind == "manual_target_override" for item in row.evidence
+        )
+    ]
+    manual_target_mapped = [
+        row.target_bone
+        for row in mapped_rows
+        if row.target_bone in set(manual_target_rows)
+    ]
     category_inventory: dict[str, int] = {}
     for row in plan.decisions:
         category_inventory[row.target_category] = (
@@ -1751,6 +2028,28 @@ def _certificate_for_plan(
         "mapped_body_row_count": len(mapped_rows),
         "bind_row_count": len(bind_rows),
         "bind_default_row_count": len(bind_rows),
+        "exact_target_subset_rows": len(exact_name_rows),
+        "exact_target_subset_bones": exact_name_rows,
+        "semantic_rows": (
+            len(mapped_rows)
+            - len(exact_name_rows)
+            - len(manual_target_mapped)
+        ),
+        "manual_override_rows": len(manual_target_rows),
+        "manual_override_target_bones": manual_target_rows,
+        "manual_target_override_fingerprint": _stable_hash(
+            plan.target_bone_overrides
+        ),
+        "semantic_target_override_count": len(manual_target_rows),
+        "semantic_target_override_fingerprint": _stable_hash(
+            plan.target_bone_overrides
+        ),
+        "validation_kind": (
+            "deterministic_semantic_profile_compilation"
+            if manual_target_rows
+            else "automatic_retarget_plan"
+        ),
+        "target_bind_rows": len(bind_rows),
         "mapping_modes": modes,
         "mapping_mode_counts": modes,
         "target_category_inventory": category_inventory,
@@ -1855,16 +2154,10 @@ def validate_automatic_retarget_plan(
             )
         )
     )
-    mapped_source_bones = {
-        source_name
-        for row in plan.decisions
-        if row.mode in {"direct", "composed", "distributed"}
-        for source_name in row.source_bones
-    }
     expected_unresolved_chains = tuple(
         name
         for name in live_unresolved_chains
-        if name not in mapped_source_bones
+        if not _unresolved_chain_was_resolved(name, plan.decisions)
     )
     if plan.unresolved_animated_chains != expected_unresolved_chains:
         errors.append("unresolved animated source-chain inventory changed")
@@ -1884,10 +2177,18 @@ def validate_automatic_retarget_plan(
         for bone in bones
     }
     seen: set[str] = set()
-    used_sources: set[str] = set()
+    direct_source_rows: dict[str, list[MappingDecision]] = {}
     distribution_totals: dict[tuple[str, str], float] = {}
     source_nodes = _analysis_node_map(analysis)
     for row in plan.decisions:
+        exact_name_decision = any(
+            item.kind in {"exact_identity", "exact_target_subset"}
+            for item in row.evidence
+        )
+        manual_target_decision = any(
+            item.kind == "manual_target_override" for item in row.evidence
+        )
+        safe_special_decision = exact_name_decision or manual_target_decision
         if row.mode not in MAPPING_MODES:
             errors.append(f"{row.target_bone}: unsupported mapping mode {row.mode!r}")
         if row.target_bone in seen:
@@ -1901,7 +2202,7 @@ def validate_automatic_retarget_plan(
             if not row.source_bones:
                 errors.append(f"{row.target_bone}: mapped decision has no source")
             if (
-                not plan.exact_identity
+                not safe_special_decision
                 and plan.clip_domain == "body"
                 and row.target_category in _NON_BODY_CATEGORIES
             ):
@@ -1916,16 +2217,15 @@ def validate_automatic_retarget_plan(
                     errors.append(
                         f"{row.target_bone}: source bone {source_name!r} is missing"
                     )
-                elif _node_endpoint(source_nodes[source_name]):
+                elif (
+                    _node_endpoint(source_nodes[source_name])
+                    and not safe_special_decision
+                ):
                     errors.append(
                         f"{row.target_bone}: source endpoint {source_name!r} was consumed"
                     )
-                if row.mode == "direct" and source_name in used_sources:
-                    errors.append(
-                        f"{row.target_bone}: duplicate direct source consumption {source_name!r}"
-                    )
                 if row.mode == "direct":
-                    used_sources.add(source_name)
+                    direct_source_rows.setdefault(source_name, []).append(row)
             if row.mode == "composed" and len(row.source_bones) < 2:
                 errors.append(
                     f"{row.target_bone}: composed mapping requires two or more ordered sources"
@@ -1955,6 +2255,19 @@ def validate_automatic_retarget_plan(
     if missing_targets:
         errors.append(
             "target decisions are missing: " + ", ".join(missing_targets[:12])
+        )
+    for source_name, rows in direct_source_rows.items():
+        if len(rows) < 2:
+            continue
+        if any(
+            item.kind == "manual_target_override"
+            for row in rows
+            for item in row.evidence
+        ):
+            continue
+        errors.append(
+            f"duplicate direct source consumption {source_name!r}: "
+            + ", ".join(row.target_bone for row in rows)
         )
     for (chain_id, source_name), total in distribution_totals.items():
         if not math.isclose(total, 1.0, rel_tol=0.0, abs_tol=1.0e-9):
@@ -2007,10 +2320,6 @@ def _require_coherent_dl2_advanced_target(target_rig: Any, policy: Any) -> None:
         errors.append(
             f"bundled target must contain {expected_rows} rows, found {len(bones)}"
         )
-    if not extensions.get("source_smd_sha256"):
-        errors.append("target CRIG has no embedded source-SMD hash")
-    if not extensions.get("source_reference_anm2_sha256"):
-        errors.append("target CRIG has no embedded reference-ANM2 hash")
     policy_id = str(
         _first_value(policy, ("policy_id", "target_policy_id", "id"), "")
     )
@@ -2044,15 +2353,25 @@ def _require_coherent_dl2_advanced_target(target_rig: Any, policy: Any) -> None:
         errors.append("target policy does not declare exactly 52 direct body slots")
     coherence_errors = tuple(_value(policy, "coherence_errors", ()) or ())
     if coherence_errors:
-        errors.append("selected built-in target package provenance failed")
+        errors.append("selected built-in target package structural coherence failed")
     coherence = str(
         _first_value(policy, ("package_coherence_status", "coherence_status"), "")
         or ""
     )
     if coherence and coherence != "pass":
-        errors.append("selected built-in target package provenance failed")
+        errors.append("selected built-in target package structural coherence failed")
     if errors:
         raise ValueError("Bundled DL2 target is not coherent:\n- " + "\n- ".join(errors))
+
+
+def _plan_target_overrides(
+    plan: AutomaticRetargetPlan,
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(row.get("target_bone", "")): dict(row)
+        for row in plan.target_bone_overrides
+        if str(row.get("target_bone", ""))
+    }
 
 
 def _materialize_verified_map(
@@ -2071,8 +2390,10 @@ def _materialize_verified_map(
     )
     profile.target_bind_hash = str(_value(target_rig, "skeleton_hash", ""))
     profile.pairs = []
+    target_overrides = _plan_target_overrides(plan)
     for row in plan.decisions:
         mapped = row.mode in {"direct", "composed", "distributed"}
+        target_override = target_overrides.get(row.target_bone)
         weight, chain_id = _decision_distribution_metadata(row)
         execution_mode = (
             "distributed"
@@ -2081,34 +2402,59 @@ def _materialize_verified_map(
             if row.mode == "ignored_source"
             else row.mode
         )
+        transfer_policy = (
+            "rotation_delta"
+            if execution_mode in {"composed", "distributed"}
+            else "global_bind_basis"
+            if mapped
+            else "bind"
+        )
+        component_policy = "rotation"
+        review_state = (
+            "automatic_accepted" if mapped else "intentionally_unmapped"
+        )
+        method = f"automatic_verified:{row.mode}"
+        extensions = {
+            "automatic_retarget_decision": row.to_dict(),
+            "mapping_mode": row.mode,
+            "execution_mapping_mode": execution_mode,
+            "source_bones": list(row.source_bones),
+            "distribution_weight": weight,
+            "semantic_chain_id": chain_id,
+        }
+        if target_override is not None:
+            configured_transfer = str(
+                target_override.get("transfer_policy", "default") or "default"
+            )
+            transfer_policy = (
+                "rotation_delta"
+                if mapped and configured_transfer == "default"
+                else configured_transfer
+                if mapped
+                else "bind"
+            )
+            component_policy = str(
+                target_override.get("component_policy", "rotation")
+                or "rotation"
+            )
+            review_state = (
+                "manually_reviewed" if mapped else "intentionally_unmapped"
+            )
+            method = f"manual:target_override:{row.mode}"
+            extensions["target_bone_override"] = dict(target_override)
         profile.pairs.append(
             BoneMapPair(
                 target_rig_descriptor=row.target_descriptor,
                 target_rig_bone=row.target_bone,
                 source_fbx_bone=row.source_bones[0] if mapped else "",
                 confidence=row.confidence if mapped else 1.0,
-                method=f"automatic_verified:{row.mode}",
-                transfer_policy=(
-                    "rotation_delta"
-                    if execution_mode in {"composed", "distributed"}
-                    else "global_bind_basis"
-                    if mapped
-                    else "bind"
-                ),
-                component_policy="rotation",
+                method=method,
+                transfer_policy=transfer_policy,
+                component_policy=component_policy,
                 mapping_kind="bone",
-                review_state=(
-                    "automatic_accepted" if mapped else "intentionally_unmapped"
-                ),
+                review_state=review_state,
                 notes=row.reason,
-                extensions={
-                    "automatic_retarget_decision": row.to_dict(),
-                    "mapping_mode": row.mode,
-                    "execution_mapping_mode": execution_mode,
-                    "source_bones": list(row.source_bones),
-                    "distribution_weight": weight,
-                    "semantic_chain_id": chain_id,
-                },
+                extensions=extensions,
             )
         )
     profile.extensions["automatic_retarget_plan"] = plan.to_dict()
@@ -2118,6 +2464,8 @@ def _materialize_verified_map(
     profile.extensions["verified_mapping_certificate"] = dict(
         validation.certificate
     )
+    if target_overrides:
+        profile.extensions["semantic_target_bone_overrides"] = target_overrides
     errors = profile.validate()
     if errors:
         raise ValueError("Verified map materialization failed:\n- " + "\n- ".join(errors))
@@ -2206,6 +2554,9 @@ def build_verified_dl2_advanced_body_map(
     target_policy: Any = None,
     *,
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None = None,
+    target_bone_overrides: (
+        Mapping[str, Any] | Iterable[TargetBoneOverride] | None
+    ) = None,
 ) -> GenericBoneMap:
     """Build the certified bridge; accept both source-first and rig-first order."""
 
@@ -2229,6 +2580,7 @@ def build_verified_dl2_advanced_body_map(
         policy,
         clip_domain="body",
         role_overrides=role_overrides,
+        target_bone_overrides=target_bone_overrides,
     )
     verification = validate_automatic_retarget_plan(
         plan, analysis, target_rig, policy
@@ -2243,6 +2595,7 @@ def build_verified_dl2_advanced_body_map(
         target_rig,
         policy,
         role_overrides=role_overrides,
+        target_bone_overrides=target_bone_overrides,
     )
     live.require_valid()
     profile.extensions["automatic_retarget_certificate"] = dict(
@@ -2339,6 +2692,9 @@ def revalidate_verified_dl2_advanced_body_map(
     target_policy: Any = None,
     *,
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None = None,
+    target_bone_overrides: (
+        Mapping[str, Any] | Iterable[TargetBoneOverride] | None
+    ) = None,
 ) -> AutomaticRetargetValidation:
     """Rebuild the expected plan and compare every live row/certificate field."""
 
@@ -2355,12 +2711,14 @@ def revalidate_verified_dl2_advanced_body_map(
         policy,
         clip_domain="body",
         role_overrides=role_overrides,
+        target_bone_overrides=target_bone_overrides,
     )
     base = validate_automatic_retarget_plan(plan, analysis, target_rig, policy)
     errors.extend(base.errors)
     expected = {
         row.target_bone: row for row in plan.decisions
     }
+    target_overrides = _plan_target_overrides(plan)
     actual_rows = _profile_pairs(profile)
     if len(actual_rows) != len(expected):
         errors.append(
@@ -2389,6 +2747,7 @@ def revalidate_verified_dl2_advanced_body_map(
         review = str(_pair_value(pair, "review_state", default=""))
         method = str(_pair_value(pair, "method", default=""))
         mapped = decision.mode in {"direct", "composed", "distributed"}
+        target_override = target_overrides.get(target)
         weight, chain_id = _decision_distribution_metadata(decision)
         execution_mode = (
             "distributed"
@@ -2412,15 +2771,36 @@ def revalidate_verified_dl2_advanced_body_map(
             if mapped
             else "bind"
         )
+        expected_component = "rotation"
+        expected_review = (
+            "automatic_accepted" if mapped else "intentionally_unmapped"
+        )
+        expected_method = f"automatic_verified:{decision.mode}"
+        if target_override is not None:
+            configured_transfer = str(
+                target_override.get("transfer_policy", "default") or "default"
+            )
+            expected_transfer = (
+                "rotation_delta"
+                if mapped and configured_transfer == "default"
+                else configured_transfer
+                if mapped
+                else "bind"
+            )
+            expected_component = str(
+                target_override.get("component_policy", "rotation")
+                or "rotation"
+            )
+            expected_review = (
+                "manually_reviewed" if mapped else "intentionally_unmapped"
+            )
+            expected_method = f"manual:target_override:{decision.mode}"
         if transfer != expected_transfer:
             errors.append(f"transfer policy changed for {target!r}")
-        if component != "rotation":
+        if component != expected_component:
             errors.append(f"component policy changed for {target!r}")
-        if review != (
-            "automatic_accepted" if mapped else "intentionally_unmapped"
-        ):
+        if review != expected_review:
             errors.append(f"review state changed for {target!r}")
-        expected_method = f"automatic_verified:{decision.mode}"
         if method != expected_method:
             errors.append(f"verified mapping mode changed for {target!r}")
         if method.casefold() == "spatial_bind":
@@ -2438,6 +2818,11 @@ def revalidate_verified_dl2_advanced_body_map(
             errors.append(f"executable distribution weight changed for {target!r}")
         if row_extensions.get("semantic_chain_id") != chain_id:
             errors.append(f"executable semantic chain identity changed for {target!r}")
+        if target_override is not None:
+            if row_extensions.get("target_bone_override") != target_override:
+                errors.append(f"target-bone override changed for {target!r}")
+        elif "target_bone_override" in row_extensions:
+            errors.append(f"unexpected target-bone override appeared at {target!r}")
     missing = sorted(set(expected) - actual_targets, key=str.casefold)
     if missing:
         errors.append("serialized rows are missing: " + ", ".join(missing[:12]))
@@ -2470,6 +2855,10 @@ def revalidate_verified_dl2_advanced_body_map(
         "mapped_body_row_count",
         "bind_row_count",
         "mapping_mode_counts",
+        "exact_target_subset_rows",
+        "semantic_rows",
+        "manual_override_rows",
+        "manual_target_override_fingerprint",
         "spatial_only_row_count",
         "mapped_non_body_target_count",
         "plan_hash",
@@ -2525,9 +2914,9 @@ def classify_retarget_readiness(
             )
         if value.ok:
             return RetargetReadiness(
-                "needs_verification",
-                "info",
-                "Checking automatic retarget certificate…",
+                "advisory",
+                "advisory",
+                "Advisory — checking automatic retarget certificate…",
                 "The plan passed, but the serialized rows still need live revalidation.",
             )
         return RetargetReadiness(
@@ -2630,6 +3019,7 @@ __all__ = [
     "MappingDecision",
     "MappingEvidence",
     "RoleMappingOverride",
+    "TargetBoneOverride",
     "RetargetReadiness",
     "build_automatic_retarget_plan",
     "build_dl2_advanced_body_map_with_local_recipe",

@@ -1,6 +1,6 @@
 {
   "package": "DL ReAnimated DL1/DL2 Preview",
-  "version": "0.6.0a2",
+  "version": "0.6.1a0",
   "source_basis": "BalancedLight/Dying-Light-ReAnimated model-testing branch, modified locally only",
   "git_operations_performed": false,
   "games": {
@@ -55,8 +55,8 @@
     {
       "path": "dlanm2_gui/automatic_retarget.py",
       "install_surface": "python_package",
-      "size": 96361,
-      "sha256": "9AADB56DB0C1191749B9861F85140305A4807592CC5D31309B15F44407355DBA"
+      "size": 111416,
+      "sha256": "D320410D61F85AE5067B70BB8E9D6F46564AFE3E5592D390CD64146D350B676F"
     },
     {
       "path": "dlanm2_gui/retarget_profiles.py",
@@ -67,8 +67,8 @@
     {
       "path": "dlanm2_gui/semantic_retarget.py",
       "install_surface": "python_package",
-      "size": 19389,
-      "sha256": "E422541398E0CB1B239A6AEC3899C162C6385CAB6D86D7A03E0AEC7C53A997BF"
+      "size": 14567,
+      "sha256": "4B91EFB5CEDFDCF65622734EC8D08918F5C3AAAD3640240A52BA7F27E73F7BC4"
     },
     {
       "path": "dlanm2_gui/retarget_recipes.py",
@@ -79,14 +79,14 @@
     {
       "path": "dlanm2_gui/target_retarget_policy.py",
       "install_surface": "python_package",
-      "size": 23731,
-      "sha256": "438EEDE1C499F3F44CDB07835C47081F1160522ADB50EA5E4872FBEAA93787BF"
+      "size": 23328,
+      "sha256": "9AFEC04D0FA11C75B75CCEEC5EAFB1120C3113DA3E743C14C83CB728F390E412"
     },
     {
       "path": "dlanm2_gui/retarget_routing.py",
       "install_surface": "python_package",
-      "size": 7747,
-      "sha256": "A4D696AF3628BE72ACAF0AE44217CA19A7FA53ABD55C6D7352626B565624EF1A"
+      "size": 7971,
+      "sha256": "9D3931B7DAD9D9BAEA8F33A11572052676B18103B86A69B4DE88589735F5D4EF"
     },
     {
       "path": "dlanm2_gui/root_motion.py",
@@ -121,8 +121,8 @@
     {
       "path": "docs/ANM2_TO_FBX.md",
       "install_surface": "windows_bundle_docs",
-      "size": 8407,
-      "sha256": "516A04DE803BF29BDF02CFCEB991FB65D032BDF910CEE5BEFD53B8637AB9D3E0"
+      "size": 10305,
+      "sha256": "59CBE310E3A00115473631CE71F1CA62F941C4FA6445C1D433641C89C3C638D7"
     },
     {
       "path": "docs/CHROME_RIGS.md",
@@ -151,14 +151,14 @@
     {
       "path": "docs/FBX_PREFLIGHT.md",
       "install_surface": "windows_bundle_docs",
-      "size": 13456,
-      "sha256": "843585CDD37BEB5FFBB238EA16E1F93C6506012C68AD138AA7D50DA5588AE707"
+      "size": 13568,
+      "sha256": "1431F711DC519A7ABF19A8C891605A1369FD13C21D34A612E728452F0E1E6E67"
     },
     {
       "path": "docs/GUI_GUIDE.md",
       "install_surface": "windows_bundle_docs",
-      "size": 17165,
-      "sha256": "8B08D1C14FAE9CF7AD17C2D6A20D7BA842A77AE89748872F1E245B015E964529"
+      "size": 17873,
+      "sha256": "4640CC11A5E8D32A7EBCC294039936E86C9425BAD165A17BFAC99A767971047C"
     },
     {
       "path": "reverse_engineering/pseudocode/UniversalAutomaticRetargetPolicy.c",
@@ -171,18 +171,24 @@
       "install_surface": "source_release_policy_reconstruction",
       "size": 2334,
       "sha256": "3EEB39874BF736B5B8669AAA4F99EC00BBB64F8FF970CFEE33492087D8945D7B"
+    },
+    {
+      "path": "reverse_engineering/pseudocode/dlr_anm2_fbx_native_basis_and_timing.c",
+      "install_surface": "source_release_policy_reconstruction",
+      "size": 5863,
+      "sha256": "8B8F92A164FE3DA721A7CA676A4C7D49970A877F4ACA68A9A0D3DEF0D03118C9"
     }
   ],
   "key_files": [
     {
       "path": "reference/dl2/player_skeleton.smd",
-      "size": 24591,
-      "sha256": "D2FED6A5DA455147F85B8002671A23A6CD1E4890E8D50B62878C056457340904"
+      "size": 24043,
+      "sha256": "E298D421E8DD398ED66DEC44115D7E2DF03930E8EAEE3A162BABD0268F17A7C5"
     },
     {
       "path": "reference/dl2/player_skeleton.crig",
-      "size": 165845,
-      "sha256": "14275E87CBF7C2199C42C39D2ED1577FACF09AD107874AE47F031419A381333F"
+      "size": 156956,
+      "sha256": "50F24632B11078EC69FB088F66CE03B0881F17C91A8CAE46A5ABC8100B182D3E"
     },
     {
       "path": "reference/dl2/player_shadow_caster.smd",
@@ -196,13 +202,13 @@
     },
     {
       "path": "reference/dl2/player_shadow_caster.crig",
-      "size": 48119,
-      "sha256": "D620F08B0509FE347D45DC09EDE30541A135AA3B735D9CD6E56AB7B363AB8A05"
+      "size": 45602,
+      "sha256": "62A611A62435E8D25C4B240B2D3C5C8EDDCB58BF44931EF91289D0A6592A1D14"
     },
     {
       "path": "examples/dl2_player_advanced.example.dlraproj",
-      "size": 2532,
-      "sha256": "555280DB2750690ECC41C7D2FC30555549803D3338671CAC0CA724E9003AB54E"
+      "size": 2597,
+      "sha256": "33BB30320B7A7B65BC11D0FDA0BCCCBD0C5D936FA432BB6876A994C3447C97AB"
     },
     {
       "path": "examples/dl2_player_shadow_caster.example.dlraproj",

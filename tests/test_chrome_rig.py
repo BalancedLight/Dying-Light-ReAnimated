@@ -12,7 +12,7 @@ import pytest
 from dlanm2_gui.anm2_components import decode_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
 from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
-from dlanm2_gui.chrome_rig import ChromeRig
+from dlanm2_gui.chrome_rig import Anm2WriterProfile, ChromeRig
 from dlanm2_gui.chrome_rig_builder import (
     build_chrome_rig_from_fbx,
     build_chrome_rig_from_smd_template,
@@ -49,9 +49,9 @@ class _ObjectFbx:
         }
         self.meters_per_unit = 0.01
 
-    def frame_count(self, *, fps: int) -> int:
-        assert fps == 30
-        return 3
+    def frame_count(self, *, fps: float) -> int:
+        # The synthetic clip spans two source frames at 30 FPS.
+        return round((2.0 / 30.0) * float(fps)) + 1
 
     def _local_matrix(self, object_id: int, *, tick: int, use_animation: bool) -> np.ndarray:
         frame = int(round(tick * 30 / FBX_TICKS_PER_SECOND)) if use_animation else 0
@@ -121,6 +121,84 @@ def test_exact_engine_reuses_one_canonical_document_across_legacy_adapter(
     )
 
     assert len(created) == 1
+
+
+def test_exact_and_mapped_writers_accept_fbx_time_mode_12_rate(
+    tmp_path: Path,
+) -> None:
+    names = ("root",)
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "target.fbx", document_factory=_factory(names)
+    )
+    document = _ObjectFbx(tmp_path / "animated.fbx", names)
+    bone_map = GenericBoneMap.create(
+        "1000 FPS",
+        rig.skeleton_hash,
+        skeleton_signature((("root", None),)),
+        source_rig_ref=rig.rig_id,
+    )
+    bone_map.pairs = [
+        BoneMapPair(rig.bones[0].descriptor, "root", "root", 1.0, "manual")
+    ]
+
+    exact = build_exact_rig_anm2(
+        tmp_path / "animated.fbx",
+        rig,
+        fps=1000.0,
+        document_factory=lambda _path: document,
+    )
+    mapped = build_mapped_rig_anm2(
+        tmp_path / "animated.fbx",
+        rig,
+        bone_map,
+        fps=1000.0,
+        document_factory=lambda _path: document,
+        transfer_policy="mapped_local_rotation_delta",
+        root_policy="bip01",
+    )
+
+    assert exact.frame_count == 68
+    assert mapped.frame_count == 68
+    assert exact.report["fps"] == 1000.0
+    assert mapped.report["fps"] == 1000.0
+
+
+def test_crig_writer_profile_preserves_fractional_default_fps(
+    tmp_path: Path,
+) -> None:
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "target.fbx", document_factory=_factory(("root",))
+    )
+    rate = 24_000.0 / 1_001.0
+    rig.writer_profile = Anm2WriterProfile(default_fps=rate)
+
+    loaded = ChromeRig.from_bytes(rig.to_bytes())
+
+    assert loaded.writer_profile.default_fps == pytest.approx(rate)
+
+
+def test_static_exact_clip_writes_two_identical_frames(tmp_path: Path) -> None:
+    names = ("root",)
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "static_model.fbx",
+        document_factory=_factory(names),
+    )
+    document = _ObjectFbx(tmp_path / "static_animation.fbx", names)
+    document.frame_count = lambda *, fps: 1  # type: ignore[method-assign]
+
+    build = build_exact_rig_anm2(
+        tmp_path / "static_animation.fbx",
+        rig,
+        document_factory=lambda _path: document,
+    )
+    decoded = decode_samples(build.payload, [0.0, 1.0])
+
+    assert build.frame_count == 2
+    np.testing.assert_allclose(
+        np.asarray(decoded.frames[0].tracks),
+        np.asarray(decoded.frames[1].tracks),
+        atol=1.0e-8,
+    )
 
 
 def test_exact_rig_rejects_parent_mismatch(tmp_path: Path) -> None:

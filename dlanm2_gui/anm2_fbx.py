@@ -27,7 +27,7 @@ ANM2_COMPONENT_ORDER = ("rx", "ry", "rz", "tx", "ty", "tz", "sx", "sy", "sz")
 class DecodedAnm2Animation:
     source_path: str
     name: str
-    fps: int
+    fps: float
     source_frame_start: int
     source_frame_end: int
     descriptors: tuple[int, ...]
@@ -92,13 +92,16 @@ class SceneBone:
 @dataclass(slots=True)
 class AnimationScene:
     name: str
-    fps: int
+    fps: float
     bones: list[SceneBone]
     translations: np.ndarray
     rotations_wxyz: np.ndarray
     scales: np.ndarray
     source_frame_start: int = 0
     warnings: list[str] = field(default_factory=list)
+    anm2_input_fps: float | None = None
+    primary_root_index: int | None = None
+    target_up_axis: tuple[float, float, float] = (0.0, 1.0, 0.0)
 
     @property
     def frame_count(self) -> int:
@@ -111,6 +114,10 @@ class AnimationScene:
             "schema_version": 1,
             "name": self.name,
             "fps": self.fps,
+            "anm2_input_fps": (
+                self.anm2_input_fps if self.anm2_input_fps is not None else self.fps
+            ),
+            "fbx_output_fps": self.fps,
             "frame_start": 0,
             "frame_end": self.frame_count - 1,
             "source_frame_start": self.source_frame_start,
@@ -180,6 +187,102 @@ def _continuous_quaternion_array(values: np.ndarray) -> np.ndarray:
         )
         result *= signs[..., np.newaxis]
     return result
+
+
+def resample_animation_scene(
+    scene: AnimationScene,
+    *,
+    input_fps: float,
+    output_fps: float,
+) -> AnimationScene:
+    """Resample a complete scene while preserving duration and exact endpoints."""
+
+    source_rate = float(input_fps)
+    target_rate = float(output_fps)
+    if not math.isfinite(source_rate) or source_rate <= 0.0:
+        raise ValueError("ANM2 input FPS must be finite and positive.")
+    if not math.isfinite(target_rate) or target_rate <= 0.0:
+        raise ValueError("FBX output FPS must be finite and positive.")
+    frame_count = scene.frame_count
+    if frame_count < 1:
+        raise ValueError("Animation scene must contain at least one frame.")
+
+    rotations = _continuous_quaternion_array(scene.rotations_wxyz)
+    if frame_count == 1:
+        translations = np.asarray(scene.translations, dtype=np.float64).copy()
+        scales = np.asarray(scene.scales, dtype=np.float64).copy()
+        result_rotations = rotations.copy()
+    else:
+        duration = float(frame_count - 1) / source_rate
+        output_count = max(2, int(round(duration * target_rate)) + 1)
+        positions = np.arange(output_count, dtype=np.float64) * (
+            source_rate / target_rate
+        )
+        positions[-1] = float(frame_count - 1)
+        positions = np.clip(positions, 0.0, float(frame_count - 1))
+        lower = np.floor(positions).astype(np.int64)
+        upper = np.minimum(lower + 1, frame_count - 1)
+        amount = (positions - lower).reshape((-1, 1, 1))
+
+        source_translations = np.asarray(scene.translations, dtype=np.float64)
+        source_scales = np.asarray(scene.scales, dtype=np.float64)
+        translations = (
+            source_translations[lower] * (1.0 - amount)
+            + source_translations[upper] * amount
+        )
+        scales = source_scales[lower] * (1.0 - amount) + source_scales[upper] * amount
+
+        q0 = rotations[lower]
+        q1 = rotations[upper].copy()
+        dots = np.sum(q0 * q1, axis=-1)
+        q1[dots < 0.0] *= -1.0
+        dots = np.clip(np.sum(q0 * q1, axis=-1), 0.0, 1.0)
+        alpha = np.broadcast_to(amount[..., 0], dots.shape)
+        result_rotations = np.empty_like(q0)
+        near = dots > 0.9995
+        if np.any(near):
+            result_rotations[near] = (
+                q0[near] * (1.0 - alpha[near, np.newaxis])
+                + q1[near] * alpha[near, np.newaxis]
+            )
+        far = ~near
+        if np.any(far):
+            theta = np.arccos(dots[far])
+            sine = np.sin(theta)
+            weight0 = np.sin((1.0 - alpha[far]) * theta) / sine
+            weight1 = np.sin(alpha[far] * theta) / sine
+            result_rotations[far] = (
+                q0[far] * weight0[:, np.newaxis]
+                + q1[far] * weight1[:, np.newaxis]
+            )
+        result_rotations = _continuous_quaternion_array(result_rotations)
+        # Do not let interpolation or floating-point rate ratios perturb the
+        # selected clip's endpoints.
+        translations[0] = source_translations[0]
+        translations[-1] = source_translations[-1]
+        scales[0] = source_scales[0]
+        scales[-1] = source_scales[-1]
+        result_rotations[0] = rotations[0]
+        endpoint = rotations[-1].copy()
+        if output_count > 1:
+            endpoint[
+                np.sum(result_rotations[-2] * endpoint, axis=-1) < 0.0
+            ] *= -1.0
+        result_rotations[-1] = endpoint
+
+    return AnimationScene(
+        name=scene.name,
+        fps=target_rate,
+        bones=list(scene.bones),
+        translations=translations,
+        rotations_wxyz=result_rotations,
+        scales=scales,
+        source_frame_start=scene.source_frame_start,
+        warnings=list(scene.warnings),
+        anm2_input_fps=source_rate,
+        primary_root_index=scene.primary_root_index,
+        target_up_axis=scene.target_up_axis,
+    )
 
 
 def build_sparse_fbx_job(
@@ -273,9 +376,15 @@ def build_sparse_fbx_job(
         "arrays_path": str(Path(arrays_path).resolve()),
         "name": scene.name,
         "fps": scene.fps,
+        "anm2_input_fps": (
+            scene.anm2_input_fps if scene.anm2_input_fps is not None else scene.fps
+        ),
+        "fbx_output_fps": scene.fps,
         "frame_start": 0,
         "frame_end": frame_count - 1,
         "source_frame_start": scene.source_frame_start,
+        "primary_root_index": scene.primary_root_index,
+        "target_up_axis": list(scene.target_up_axis),
         "output_path": str(Path(output_path).resolve()),
         "sparse_tolerance": float(tolerance),
         "bones": [
@@ -370,7 +479,7 @@ def cayley_to_quaternions_wxyz(vectors: np.ndarray) -> np.ndarray:
 def decode_anm2_animation(
     path: str | Path,
     *,
-    fps: int = 30,
+    fps: float = 30.0,
     start_frame: int | None = None,
     end_frame: int | None = None,
     selected_descriptors: Iterable[int] | None = None,
@@ -381,8 +490,9 @@ def decode_anm2_animation(
     data = source.read_bytes()
     if progress is not None:
         progress("Reading ANM2", 1, 1)
-    if not 1 <= int(fps) <= 240:
-        raise ValueError("FBX playback FPS must be between 1 and 240.")
+    rate = float(fps)
+    if not math.isfinite(rate) or rate <= 0.0:
+        raise ValueError("ANM2 input FPS must be finite and positive.")
     cached = decode_all_frames_cached(
         data,
         selected_descriptors=selected_descriptors,
@@ -415,7 +525,7 @@ def decode_anm2_animation(
         "prepared_base_segment_count": cached.prepared_base_segment_count,
     }
     return DecodedAnm2Animation(
-        str(source.resolve()), source.stem, int(fps), first, last,
+        str(source.resolve()), source.stem, rate, first, last,
         cached.descriptors, values, quaternions, **metadata,
     )
 
@@ -675,6 +785,9 @@ def append_unknown_track_helpers(
             f"{len(unresolved)} unresolved ANM2 track(s) are included as "
             "non-deforming hash-named helper roots.",
         ],
+        scene.anm2_input_fps,
+        scene.primary_root_index,
+        scene.target_up_axis,
     )
 
 def reconstruct_native_scene(
@@ -753,7 +866,8 @@ def reconstruct_native_scene(
             )
     return AnimationScene(
         animation.name, animation.fps, bones, translations, rotations, scales,
-        animation.source_frame_start, warnings,
+        animation.source_frame_start, warnings, animation.fps,
+        offset + rig.root_index, infer_target_up_axis(rig),
     )
 
 def chrome_rig_from_fbx_skeleton(path: str | Path) -> ChromeRig:
@@ -900,7 +1014,8 @@ def retarget_decoded_animation(
         warnings.append(f"{len(unmapped)} source bone(s) are unmapped and were not transferred.")
     return AnimationScene(
         animation.name, animation.fps, target_bones, translations, rotations, scales,
-        animation.source_frame_start, warnings,
+        animation.source_frame_start, warnings, animation.fps,
+        target_rig.root_index, infer_target_up_axis(target_rig),
     )
 
 __all__ = [
@@ -910,6 +1025,6 @@ __all__ = [
     "SparseFbxJob", "build_sparse_fbx_job", "cayley_to_quaternion_wxyz",
     "cayley_to_quaternions_wxyz", "chrome_rig_from_fbx_skeleton",
     "decode_anm2_animation", "normalize_unknown_track_policy", "reconstruct_native_scene",
-    "retarget_decoded_animation", "unknown_track_indices", "unknown_track_sidecar_path",
+    "resample_animation_scene", "retarget_decoded_animation", "unknown_track_indices", "unknown_track_sidecar_path",
     "write_sparse_fbx_job", "write_unknown_track_sidecar",
 ]

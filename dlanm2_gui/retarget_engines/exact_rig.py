@@ -41,21 +41,13 @@ def build_exact_rig_anm2(
         document_factory=document_factory,
         document=document,
     )
-    hard_findings = [
-        row
-        for row in report.findings
-        if row.severity == "error" and not row.can_continue
-    ]
-    if hard_findings:
-        raise ValueError(
-            "Exact-rig FBX preflight blocked the build before ANM2 output:\n"
-            + report.actionable_message(hard_findings)
-        )
+    report.require_buildable()
     from .legacy_exact_rig import _is_dlr_native_export
     if _is_dlr_native_export(document):
-        # Native ANM2->FBX round trips deliberately use display-only parents for
-        # zero-length twist bones. Their export marker selects the established
-        # helper/display-basis solver after hard transform preflight.
+        # Native ANM2->FBX exports carry an explicit basis/helper contract. Its
+        # marker selects the metadata-aware inverse after hard transform
+        # preflight; v3 files use native CRIG axes and identity corrections,
+        # while older files retain their stored display-basis corrections.
         from .legacy_exact_rig import build_exact_rig_anm2 as build_legacy_exact
         return build_legacy_exact(
             animation_fbx,
@@ -66,7 +58,12 @@ def build_exact_rig_anm2(
             document=document,
         )
     compatibility = classify_target_compatibility(document, rig)
-    if compatibility["required_missing_bones"] or compatibility["hierarchy_mismatches"]:
+    exact_target_subset = (
+        compatibility.get("classification") == "exact_target_subset"
+    )
+    if compatibility["hierarchy_mismatches"] or (
+        compatibility["required_missing_bones"] and not exact_target_subset
+    ):
         rows = []
         if compatibility["required_missing_bones"]:
             rows.append("required target bones missing: " + ", ".join(compatibility["required_missing_bones"][:20]))
@@ -119,6 +116,26 @@ def build_exact_rig_anm2(
                     component_policy=automatic_components,
                 )
             )
+        else:
+            bind_mode = "inherit_bind" if bone.parent_index >= 0 else "static_bind"
+            bone_map.pairs.append(
+                BoneMapPair(
+                    bone.descriptor,
+                    bone.name,
+                    "",
+                    1.0,
+                    "exact_subset_target_bind",
+                    transfer_policy="bind",
+                    component_policy="rotation",
+                    review_state="intentionally_unmapped",
+                    notes="target-only row retains target bind-local transform",
+                    extensions={
+                        "mapping_mode": bind_mode,
+                        "execution_mapping_mode": bind_mode,
+                        "source_bones": [],
+                    },
+                )
+            )
     transfer_policy = (
         "global_bind_basis_correction"
         if getattr(document, "bind_global_matrices", None) and hasattr(document, "global_matrices")
@@ -165,7 +182,13 @@ def build_exact_rig_anm2(
         )
     result.report.update(
         {
-            "retarget_mode": "exact" if compatibility["classification"] == "exact_identity" else "target_compatible_source_superset",
+            "retarget_mode": (
+                "exact"
+                if compatibility["classification"] == "exact_identity"
+                else "exact_target_subset"
+                if compatibility["classification"] == "exact_target_subset"
+                else "target_compatible_source_superset"
+            ),
             "engine": "ExactRigRetargetEngine",
             "skeleton_classification": compatibility["classification"],
             **compatibility,
@@ -174,6 +197,18 @@ def build_exact_rig_anm2(
             "fbx_preflight": report.to_dict(),
         }
     )
+    result.report["mapping"] = {
+        "exact_target_subset_rows": int(
+            compatibility.get("exact_target_subset_rows", len(bone_map.pairs))
+            or 0
+        ),
+        "semantic_rows": 0,
+        "manual_target_overrides": 0,
+        "target_bind_rows": int(
+            compatibility.get("target_bind_rows", 0) or 0
+        ),
+        "spatial_only_rows": 0,
+    }
     return result
 
 

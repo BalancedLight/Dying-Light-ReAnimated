@@ -234,6 +234,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
     source_root_bone: str = "mixamorig:Hips",
     target_root_bone: str = "bip01",
     root_heading_modes: Mapping[str, str] | None = None,
+    sample_fps: float = float(FPS),
 ) -> dict[str, Any]:
     """Build the post-greeting validation pack.
 
@@ -262,6 +263,9 @@ def build_custom_fbx_release_candidate_editor_rpack(
     selected_heading_modes = {
         str(key): str(value) for key, value in dict(root_heading_modes or {}).items()
     }
+    selected_sample_fps = float(sample_fps)
+    if not math.isfinite(selected_sample_fps) or selected_sample_fps <= 0.0:
+        raise ValueError("sample_fps must be finite and positive")
 
     out = Path(out_dir)
     if out.exists():
@@ -399,7 +403,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
         if set(animation.limb_models) != set(source_rest.limb_models):
             raise ValueError(f"{clip.path.name}: animation and source-rest skeletons differ")
         _validate_source_aliases(animation.limb_models, source_bone_aliases)
-        ticks = animation.frame_ticks(fps=FPS)
+        ticks = animation.frame_ticks(fps=selected_sample_fps)
         frame_count = len(ticks)
         source_globals = [
             apply_canonical_aliases(
@@ -449,6 +453,7 @@ def build_custom_fbx_release_candidate_editor_rpack(
             source_positions=source_positions,
             source_body_frames=source_body_frames,
             source_root_bone=selected_source_root,
+            sample_fps=selected_sample_fps,
         ))
 
         for root_policy in selected_root_policies:
@@ -485,9 +490,15 @@ def build_custom_fbx_release_candidate_editor_rpack(
                 helper_source_bind_global=helper_source_bind_global,
                 helper_source_global_frames=helper_source_global_frames,
                 base_targets_by_source=base_targets_by_source,
+                sample_fps=selected_sample_fps,
             )
             packaged.append((spec.resource_name, payload))
-            sequences.append(_sequence(spec.resource_name, frame_count))
+            sequences.append(
+                replace(
+                    _sequence(spec.resource_name, frame_count),
+                    fps=selected_sample_fps,
+                )
+            )
             manifests.append(_manifest(
                 candidate_name=spec.name,
                 role=spec.role,
@@ -549,7 +560,8 @@ def build_custom_fbx_release_candidate_editor_rpack(
         "target_track_count": len(descriptors),
         "canonical_smd": str(canonical_smd),
         "target_template_anm2": str(target_template_anm2),
-        "fps": FPS,
+        "fps": selected_sample_fps,
+        "sample_fps": selected_sample_fps,
         "fbx_rotation_evaluation": "intrinsic order; XYZ => Rz @ Ry @ Rx for column vectors",
         "target_reference_strategy": "player_1_tpp SMD bind pose",
         "pose_strategy": "absolute source pose in animated body space; target lengths and bind roll retained",
@@ -722,6 +734,7 @@ def _build_clip_candidate(
     helper_source_bind_global: Mapping[str, np.ndarray] | None = None,
     helper_source_global_frames: Sequence[Mapping[str, np.ndarray]] = (),
     base_targets_by_source: Mapping[str, Iterable[str]] | None = None,
+    sample_fps: float = float(FPS),
 ) -> tuple[dict[str, Any], bytes]:
     out_dir.mkdir(parents=True, exist_ok=True)
     header = replace(
@@ -959,7 +972,8 @@ def _build_clip_candidate(
             else ""
         ),
         "frame_count": frame_count,
-        "fps": FPS,
+        "fps": float(sample_fps),
+        "sample_fps": float(sample_fps),
         "track_count": len(descriptors),
         "target_track_count": len(descriptors),
         "root_policy": spec.root_policy,
@@ -1621,6 +1635,7 @@ def _clip_inventory(
     source_positions: list[dict[str, np.ndarray]],
     source_body_frames: list[np.ndarray],
     source_root_bone: str = "mixamorig:Hips",
+    sample_fps: float = float(FPS),
 ) -> dict[str, Any]:
     if any(source_root_bone not in row for row in source_positions):
         raise ValueError(
@@ -1638,8 +1653,9 @@ def _clip_inventory(
         "path": str(clip.path),
         "sha256": _sha256(clip.path),
         "frame_count": len(source_positions),
-        "fps": FPS,
-        "duration_seconds": (len(source_positions) - 1) / FPS,
+        "fps": float(sample_fps),
+        "sample_fps": float(sample_fps),
+        "duration_seconds": (len(source_positions) - 1) / float(sample_fps),
         "meters_per_fbx_unit": animation.meters_per_unit,
         "source_root_bone": source_root_bone,
         "root_delta_meters": delta[-1].tolist(),

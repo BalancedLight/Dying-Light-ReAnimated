@@ -263,6 +263,8 @@ FBX stacks/actions are discovered by connection without loading model geometry. 
 
 **Export ANM2 only...** retargets every enabled clip to its selected per-row target and writes only generated `.anm2` files.
 
+Each imported FBX records its declared **Source FPS**. **Sampling FPS** chooses the transforms written into ANM2, while **Playback FPS** controls the animation-script sequence. They default to the declared source cadence for new imports and may be changed independently. Standalone and retained intermediate ANM2 files include a SHA-gated `.anm2.dlrmeta.json` timing sidecar.
+
 For DL2 targets this remains the explicitly labeled format-1 compatibility
 experiment. Native Header_Version2 writing is not implemented; native DL2
 Header_Version2 support is currently read/decode and ANM2-to-FBX only.
@@ -279,10 +281,10 @@ Output preflight resolves every enabled clip's target, mapping, roots, solver, s
 
 ## ANM2 to FBX
 
-The reverse workspace batches ANM2 files into skeleton-and-animation FBXs through Blender. Select the matching CRIG because ANM2 does not contain bone names, hierarchy, or bind transforms. Native mode needs no map; cross-rig mode exposes conservative automatic suggestions and review.
+The reverse workspace batches ANM2 files into skeleton-and-animation FBXs through Blender. Select the matching CRIG because ANM2 does not contain bone names, hierarchy, or bind transforms. Native mode needs no map; cross-rig mode exposes conservative automatic suggestions and review. **ANM2 FPS** describes the existing samples; **FBX FPS** selects the output cadence. A valid timing sidecar fills both automatically, while missing or rejected metadata defaults to 30/30. Changing FBX FPS performs real duration-preserving interpolation rather than relabeling the same keys.
 
-Progress remains nonmodal through reading, cached page/segment decoding, sparse-curve
-construction, Blender startup, armature creation, bulk curve installation, and FBX
+Progress remains nonmodal through reading, cached page/segment decoding, temporal resampling, sparse-curve
+construction, Blender startup, armature creation, bulk curve installation, root-parity audit, and FBX
 write. Each stage shows elapsed/current/total work and can be cancelled during
 decode or Blender execution. Bind-only skeleton rows are expected and do not create
 warning badges.

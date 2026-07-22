@@ -5,6 +5,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,12 @@ from .fbx_pipeline import FbxAnimationClip, build_fbx_rpack
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_smd_template
 from .fbx_core import FbxDocument
+from .model_importer.fbx_model import FBX_TICKS_PER_SECOND
+from .anm2_provenance import (
+    anm2_provenance_path,
+    build_anm2_provenance,
+    write_anm2_provenance,
+)
 
 # Backward-compatible factory seam used by project-builder tests and external
 # integrations.  The implementation itself is the public production class.
@@ -75,6 +82,22 @@ from .target_package import validate_target_package
 
 
 ProgressCallback = Callable[[str], None]
+
+
+def _provenance_root_modes(animation: ProjectAnimation) -> tuple[str, str]:
+    selection = RootMotionSelection.from_animation(animation)
+    return (
+        {
+            "inplace": "in_place",
+            "skeletal_root": "skeletal_root",
+            "motion_accumulator": "motion_accumulator",
+        }[selection.motion_mode],
+        {
+            "lock_initial": "lock_initial_heading",
+            "preserve": "preserve",
+            "to_motion_accumulator": "to_motion_accumulator",
+        }[selection.heading_mode],
+    )
 
 
 def _resolve_bundled_dl2_semantic_map(
@@ -198,11 +221,27 @@ def _resolve_verified_dl2_advanced_map(
     origin = mapping_profile_origin(current)
     stale_verification = None
     if origin == "automatic_verified" and current is not None:
+        role_overrides = None
+        target_bone_overrides = None
+        semantic_profile_id = str(
+            current.extensions.get("semantic_profile_id", "") or ""
+        )
+        semantic_payload = dict(
+            project.mapping_profiles.get(semantic_profile_id, {}) or {}
+        )
+        if semantic_payload.get("format") == "dl-reanimated-retarget-profile":
+            from .semantic_retarget import semantic_role_overrides
+
+            semantic_profile = SourceBoneMappingProfile.from_dict(semantic_payload)
+            role_overrides = semantic_role_overrides(semantic_profile, policy)
+            target_bone_overrides = semantic_profile.target_bone_overrides
         verification = revalidate_verified_dl2_advanced_body_map(
             current,
             document,
             rig,
             policy,
+            role_overrides=role_overrides,
+            target_bone_overrides=target_bone_overrides,
         )
         if verification.ok and verification.live_revalidated:
             animation.extensions.setdefault("retarget_domain", "body")
@@ -449,7 +488,11 @@ class BuiltAnimation:
     target_skeleton_hash: str
     retarget_mode: str
     frame_count: int
-    fps: int
+    fps: float
+    source_fps: float
+    sample_fps: float
+    playback_fps: float
+    source_duration_seconds: float
     page_count: int
     page_frame_spans: list[int]
     anm2_path: str
@@ -609,6 +652,11 @@ def export_project_anm2_files(
             source = Path(animation.anm2_path)
             target = destination / f"{animation.resource_name}.anm2"
             _atomic_write_bytes(target, source.read_bytes())
+            source_sidecar = anm2_provenance_path(source)
+            if source_sidecar.is_file():
+                _atomic_write_bytes(
+                    anm2_provenance_path(target), source_sidecar.read_bytes()
+                )
             exported.append(target)
         log(f"ANM2 export complete: {len(exported)} file(s) written to {destination}")
         return exported
@@ -757,6 +805,7 @@ def _build_body_project(
     solver_by_animation: dict[str, Any] = {}
     humanoid_profile_by_animation: dict[str, SourceBoneMappingProfile] = {}
     expected_frame_count_by_animation: dict[str, int] = {}
+    timing_by_animation: dict[str, dict[str, Any]] = {}
     import_tolerance = str(
         project.extensions.get("import_tolerance", "recommended") or "recommended"
     )
@@ -791,16 +840,7 @@ def _build_body_project(
                 document=document,
                 tolerance=import_tolerance,
             )
-            hard_findings = [
-                row
-                for row in preflight.findings
-                if row.severity == "error" and not row.can_continue
-            ]
-            if hard_findings:
-                raise ValueError(
-                    f"Animation {animation.display_name!r} failed FBX preflight before output:\n"
-                    + preflight.actionable_message(hard_findings)
-                )
+            preflight.require_buildable()
             preflight_by_animation[animation.animation_id] = preflight
         selected_stack = getattr(document, "selected_animation_stack", None)
         selected_stack_name = str(getattr(selected_stack, "name", "") or "")
@@ -810,17 +850,61 @@ def _build_body_project(
         ):
             document.select_animation_stack(animation.source_animation_stack)
         mapping_document_by_animation[animation.animation_id] = document
-        sample_fps = int(animation.fps) if context.execution_mode == "exact" else 30
-        if sample_fps <= 0:
+        sample_fps = float(animation.resolved_sample_fps())
+        playback_fps = float(animation.resolved_playback_fps())
+        declared_timebase = getattr(document, "declared_timebase", None)
+        source_fps = float(
+            getattr(declared_timebase, "declared_fps", 0.0)
+            or animation.resolved_source_fps()
+            or sample_fps
+        )
+        if not all(
+            math.isfinite(value) and value > 0.0
+            for value in (sample_fps, playback_fps, source_fps)
+        ):
             raise ValueError(
-                f"Animation {animation.display_name!r} has invalid FPS {animation.fps}. "
-                "Choose a positive sample rate and rebuild; no ANM2 or RPack output was created."
+                f"Animation {animation.display_name!r} has invalid timing. "
+                "Choose positive source, sample, and playback rates and rebuild; "
+                "no ANM2 or RPack output was created."
             )
+        # The parsed FBX is authoritative. Refresh persisted provenance even
+        # when a row already carried timing from a previous file or stack.
+        animation.source_fps = source_fps
+        if declared_timebase is not None and hasattr(declared_timebase, "to_dict"):
+            extensions = dict(animation.extensions)
+            extensions["timing_origin_v10"] = declared_timebase.to_dict()
+            animation.extensions = extensions
+        has_source_tick_span = hasattr(document, "animation_start_tick") and hasattr(
+            document, "animation_stop_tick"
+        )
+        start_tick = int(getattr(document, "animation_start_tick", 0) or 0)
+        stop_tick = max(
+            start_tick,
+            int(getattr(document, "animation_stop_tick", start_tick) or start_tick),
+        )
         predicted_frame_count: int | None = None
         if hasattr(document, "frame_ticks"):
             predicted_frame_count = len(document.frame_ticks(fps=sample_fps))
         elif hasattr(document, "frame_count"):
             predicted_frame_count = int(document.frame_count(fps=sample_fps))
+        source_duration_seconds = (
+            float(stop_tick - start_tick) / float(FBX_TICKS_PER_SECOND)
+            if has_source_tick_span
+            else float(max(0, (predicted_frame_count or 1) - 1)) / sample_fps
+        )
+        timing_by_animation[animation.animation_id] = {
+            "source_fps": source_fps,
+            "sample_fps": sample_fps,
+            "playback_fps": playback_fps,
+            "source_duration_seconds": source_duration_seconds,
+            "source_fbx_sha256": sha256_bytes(source_path.read_bytes()),
+            "declared_timebase": (
+                declared_timebase.to_dict()
+                if declared_timebase is not None
+                and hasattr(declared_timebase, "to_dict")
+                else None
+            ),
+        }
         if predicted_frame_count is not None:
             if context.execution_mode == "exact":
                 predicted_frame_count = max(2, predicted_frame_count)
@@ -1099,6 +1183,11 @@ def _build_body_project(
         clip_retarget_mode = context.retarget_mode
         clip_execution_mode = context.execution_mode
         clip_target_rig = context.rig
+        timing = timing_by_animation[animation.animation_id]
+        source_fps = float(timing["source_fps"])
+        sample_fps = float(timing["sample_fps"])
+        playback_fps = float(timing["playback_fps"])
+        source_duration_seconds = float(timing["source_duration_seconds"])
         log(f"[{index}/{len(enabled)}] Reading skeleton: {source_path.name}")
         preflight = preflight_by_animation.get(animation.animation_id)
         profile: SourceBoneMappingProfile | None = humanoid_profile_by_animation.get(
@@ -1132,7 +1221,7 @@ def _build_body_project(
                     source_path,
                     clip_target_rig,
                     bone_map,
-                    fps=animation.fps,
+                    fps=sample_fps,
                     animation_stack=animation.source_animation_stack or None,
                     root_mapping=RootMappingSelection.from_animation(animation),
                     transfer_policy=solver_selection.selected_policy,
@@ -1159,7 +1248,7 @@ def _build_body_project(
                 exact_build = build_exact_rig_anm2(
                     source_path,
                     clip_target_rig,
-                    fps=animation.fps,
+                    fps=sample_fps,
                     animation_stack=animation.source_animation_stack or None,
                     root_mapping=RootMappingSelection.from_animation(animation),
                     root_policy=animation.root_policy,
@@ -1234,9 +1323,10 @@ def _build_body_project(
                     if ROOT_MOTION_EXTENSION_KEY in animation.extensions
                     else None
                 ),
+                sample_fps=sample_fps,
             )
             reports = json.loads(
-                (clip_out / "retarget_candidate_summary.json").read_text(encoding="utf-8")
+                (clip_out / "retarget_candidate_summary.json").read_text(encoding="utf-8-sig")
             )
             if len(reports) != 1:
                 raise ValueError(
@@ -1259,12 +1349,115 @@ def _build_body_project(
             ]
         if preflight is not None:
             retarget_report["fbx_preflight"] = preflight.to_dict()
+        retarget_report.setdefault("preflight_policy", "export_first_v1")
+        preflight_inventory = (
+            dict(preflight.inventory or {}) if preflight is not None else {}
+        )
+        transform_contract = dict(
+            preflight_inventory.get("transform_contract", {}) or {}
+        )
+        wrappers = list(transform_contract.get("common_wrapper_models", ()) or ())
+        retarget_report.setdefault(
+            "wrapper_canonicalization",
+            {
+                "applied": bool(
+                    transform_contract.get(
+                        "canonicalized_wrapper_reflection", False
+                    )
+                ),
+                "wrapper": wrappers[0] if len(wrappers) == 1 else wrappers,
+                "matrix": transform_contract.get("common_wrapper_matrix"),
+                "uniform": bool(
+                    transform_contract.get("common_wrapper_is_uniform", False)
+                ),
+                "static": bool(
+                    transform_contract.get("common_wrapper_is_static", False)
+                ),
+                "reflected": bool(
+                    transform_contract.get("common_wrapper_is_reflected", False)
+                ),
+            },
+        )
+        retarget_report.setdefault(
+            "canonical_transform_validation",
+            dict(transform_contract.get("canonical_transform_validation", {}) or {}),
+        )
+        compatibility = dict(
+            preflight_inventory.get("target_compatibility", {}) or {}
+        )
+        certificate = dict(
+            retarget_report.get("automatic_retarget_certificate", {}) or {}
+        )
+        retarget_report.setdefault(
+            "mapping",
+            {
+                "exact_target_subset_rows": int(
+                    certificate.get(
+                        "exact_target_subset_rows",
+                        compatibility.get("exact_target_subset_rows", 0),
+                    )
+                    or 0
+                ),
+                "semantic_rows": int(certificate.get("semantic_rows", 0) or 0),
+                "manual_target_overrides": int(
+                    certificate.get("manual_override_rows", 0) or 0
+                ),
+                "target_bind_rows": int(
+                    certificate.get(
+                        "target_bind_rows",
+                        compatibility.get("target_bind_rows", 0),
+                    )
+                    or 0
+                ),
+                "spatial_only_rows": int(
+                    certificate.get("spatial_only_row_count", 0) or 0
+                ),
+            },
+        )
+        coherence_payload = dict(
+            target_package_coherences.get(context.rig_ref, {}) or {}
+        )
+        raw_hash_mismatches: list[str] = []
+        if coherence_payload and not coherence_payload.get(
+            "source_smd_hash_match", False
+        ):
+            raw_hash_mismatches.append("source_smd")
+        if coherence_payload and not coherence_payload.get(
+            "reference_anm2_hash_match", False
+        ):
+            raw_hash_mismatches.append("reference_anm2")
+        retarget_report["provenance"] = {
+            "raw_hash_mismatches": raw_hash_mismatches,
+            "semantic_hash_matches": bool(
+                coherence_payload.get("source_smd_semantic_hash_match", True)
+                and coherence_payload.get("reference_anm2_format_match", True)
+            ),
+            "smd_raw_sha256": coherence_payload.get("smd_raw_sha256", ""),
+            "smd_semantic_sha256": coherence_payload.get(
+                "smd_semantic_sha256", ""
+            ),
+            "reference_anm2_raw_sha256": coherence_payload.get(
+                "reference_anm2_raw_sha256", ""
+            ),
+            "warnings": list(coherence_payload.get("warnings", ()) or ()),
+        }
         retarget_report["output_anm2_format"] = (
             "format 1 compatibility" if project.game_id == DL2_GAME_ID else "format 1"
         )
         retarget_report["output_validation_status"] = (
             "experimental" if project.game_id == DL2_GAME_ID else "validated"
         )
+        retarget_report["timing"] = {
+            "source_fps": source_fps,
+            "sample_fps": sample_fps,
+            "playback_fps": playback_fps,
+            "source_duration_seconds": source_duration_seconds,
+            "declared_timebase": timing.get("declared_timebase"),
+        }
+        retarget_report["source_fps"] = source_fps
+        retarget_report["sample_fps"] = sample_fps
+        retarget_report["playback_fps"] = playback_fps
+        retarget_report["source_duration_seconds"] = source_duration_seconds
         report_identity = {
             "animation_id": animation.animation_id,
             "animation_name": animation.display_name,
@@ -1293,6 +1486,22 @@ def _build_body_project(
         final_animations[resource_name] = payload
 
         frame_count = int(retarget_report["frame_count"])
+        root_motion_mode, root_heading_mode = _provenance_root_modes(animation)
+        provenance_payload = build_anm2_provenance(
+            payload,
+            source_fbx=source_path.name,
+            source_fbx_sha256=str(timing["source_fbx_sha256"]),
+            source_fbx_fps=source_fps,
+            sample_fps=sample_fps,
+            playback_fps=playback_fps,
+            source_duration_seconds=source_duration_seconds,
+            frame_count=frame_count,
+            root_motion_mode=root_motion_mode,
+            root_heading_mode=root_heading_mode,
+        )
+        candidate_provenance_path = write_anm2_provenance(
+            candidate_path, provenance_payload
+        )
         start_frame = 0 if animation.start_frame is None else int(animation.start_frame)
         end_frame = (
             frame_count - 1 if animation.end_frame is None else int(animation.end_frame)
@@ -1307,7 +1516,7 @@ def _build_body_project(
             anm2_name=f"{resource_name}.anm2",
             start_frame=float(start_frame),
             end_frame=float(end_frame),
-            fps=float(animation.fps),
+            fps=playback_fps,
             enabled=1,
             blend=0.5,
         )
@@ -1320,8 +1529,12 @@ def _build_body_project(
         exported_anm2 = animation_dir / f"{resource_name}.anm2"
         if project.export.write_intermediate_anm2:
             exported_anm2.write_bytes(payload)
+            exported_provenance_path = write_anm2_provenance(
+                exported_anm2, provenance_payload
+            )
             exported_anm2_value = str(exported_anm2)
         else:
+            exported_provenance_path = None
             exported_anm2_value = (
                 f"rpack:{output_pack.name}#_ANIMATION_/{resource_name}"
             )
@@ -1364,6 +1577,12 @@ def _build_body_project(
                 "anm2_page_count": page_layout.page_count,
                 "anm2_page_frame_spans": list(page_layout.page_frame_spans),
                 "output_anm2": exported_anm2_value,
+                "candidate_anm2_provenance": str(candidate_provenance_path),
+                "output_anm2_provenance": (
+                    str(exported_provenance_path)
+                    if exported_provenance_path is not None
+                    else None
+                ),
             }
         )
         # The low-level candidate path lives in the temporary work tree. Do not
@@ -1371,6 +1590,7 @@ def _build_body_project(
         # are intentionally removed.
         if not project.export.write_intermediate_anm2:
             persisted_retarget_report["candidate_path"] = None
+            persisted_retarget_report["candidate_anm2_provenance"] = None
         retarget_report_path = retarget_dir / f"{resource_name}.json"
         retarget_report_path.write_text(
             json.dumps(persisted_retarget_report, indent=2, ensure_ascii=False) + "\n",
@@ -1394,7 +1614,11 @@ def _build_body_project(
             target_skeleton_hash=selected_skeleton_hash,
             retarget_mode=clip_retarget_mode,
             frame_count=frame_count,
-            fps=animation.fps,
+            fps=playback_fps,
+            source_fps=source_fps,
+            sample_fps=sample_fps,
+            playback_fps=playback_fps,
+            source_duration_seconds=source_duration_seconds,
             page_count=page_layout.page_count,
             page_frame_spans=list(page_layout.page_frame_spans),
             anm2_path=exported_anm2_value,
@@ -1409,7 +1633,11 @@ def _build_body_project(
                 source_fbx=str(source_path),
                 root_policy=animation.root_policy,
                 frame_count=frame_count,
-                fps=animation.fps,
+                fps=playback_fps,
+                source_fps=source_fps,
+                sample_fps=sample_fps,
+                playback_fps=playback_fps,
+                source_duration_seconds=source_duration_seconds,
                 sha256=built.sha256,
                 mapping_profile_id=animation.mapping_profile_id,
                 ik_preset=animation.ik_preset,
@@ -1704,7 +1932,7 @@ def _merge_validation_controls(
     candidate_names = {
         row["resource_name"]
         for row in json.loads(
-            (clip_out / "release_candidate_test_manifest.json").read_text(encoding="utf-8")
+            (clip_out / "release_candidate_test_manifest.json").read_text(encoding="utf-8-sig")
         )["resources"]
         if row.get("root_policy")
     }

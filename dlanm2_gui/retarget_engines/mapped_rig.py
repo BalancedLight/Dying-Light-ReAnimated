@@ -953,7 +953,7 @@ def build_mapped_rig_anm2(
     rig: ChromeRig,
     bone_map: GenericBoneMap,
     *,
-    fps: int | None = None,
+    fps: float | None = None,
     animation_stack: str | None = None,
     document_factory: Any = FbxDocument,
     document: Any | None = None,
@@ -969,9 +969,13 @@ def build_mapped_rig_anm2(
     if errors:
         raise ValueError("Invalid mapped-rig profile:\n- " + "\n- ".join(errors))
 
-    sample_fps = int(fps or rig.writer_profile.default_fps)
-    if not 1 <= sample_fps <= 240:
-        raise ValueError("Mapped-rig sample FPS must be between 1 and 240")
+    sample_fps = float(
+        rig.writer_profile.default_fps if fps is None else fps
+    )
+    if not math.isfinite(sample_fps) or sample_fps <= 0.0:
+        raise ValueError("sample FPS must be finite and positive")
+    if sample_fps > 1000.0:
+        raise ValueError("Mapped-rig sample FPS must not exceed 1000")
 
     source = Path(animation_fbx)
     document = document if document is not None else document_factory(source)
@@ -995,16 +999,7 @@ def build_mapped_rig_anm2(
         document_factory=document_factory,
         document=document,
     )
-    hard_findings = [
-        row
-        for row in mapped_preflight.findings
-        if row.severity == "error" and not row.can_continue
-    ]
-    if hard_findings:
-        raise ValueError(
-            "Mapped-rig FBX preflight blocked the build before ANM2 output:\n"
-            + mapped_preflight.actionable_message(hard_findings)
-        )
+    mapped_preflight.require_buildable()
 
     warnings = _validate_mapping_identity(rig, bone_map, document)
     base_rows, mapped, pair_warnings = _mapped_pairs_by_target_rig_bone(
@@ -1910,11 +1905,99 @@ def build_mapped_rig_anm2(
         )
         or 0
     )
+    transform_contract = getattr(document, "transform_contract", None)
+    transform_contract_payload = (
+        transform_contract.to_dict()
+        if transform_contract is not None
+        and hasattr(transform_contract, "to_dict")
+        else {}
+    )
+    wrapper_models = list(
+        transform_contract_payload.get("common_wrapper_models", ()) or ()
+    )
+    wrapper_canonicalization = {
+        "applied": bool(
+            transform_contract_payload.get(
+                "canonicalized_wrapper_reflection", False
+            )
+        ),
+        "wrapper": (
+            wrapper_models[0]
+            if len(wrapper_models) == 1
+            else wrapper_models
+        ),
+        "matrix": transform_contract_payload.get("common_wrapper_matrix"),
+        "uniform": bool(
+            transform_contract_payload.get("common_wrapper_is_uniform", False)
+        ),
+        "static": bool(
+            transform_contract_payload.get("common_wrapper_is_static", False)
+        ),
+        "reflected": bool(
+            transform_contract_payload.get("common_wrapper_is_reflected", False)
+        ),
+    }
+    exact_subset_rows = int(
+        automatic_certificate.get("exact_target_subset_rows", 0) or 0
+    ) if certificate_pass else sum(
+        str(row.method or "").casefold() == "exact_or_subset"
+        or any(
+            str(item.get("kind", ""))
+            in {"exact_identity", "exact_target_subset"}
+            for item in (
+                dict(row.extensions or {})
+                .get("automatic_retarget_decision", {})
+                .get("evidence", ())
+            )
+        )
+        for row in base_rows.values()
+    )
+    manual_target_overrides = int(
+        automatic_certificate.get("manual_override_rows", 0) or 0
+    ) if certificate_pass else sum(
+        str(row.method or "").casefold().startswith("manual:target_override:")
+        for row in base_rows.values()
+    )
+    semantic_rows = int(
+        automatic_certificate.get("semantic_rows", 0) or 0
+    ) if certificate_pass else max(
+        0,
+        len(mapped) - exact_subset_rows - manual_target_overrides,
+    )
+    spatial_only_rows = int(
+        automatic_certificate.get("spatial_only_row_count", 0) or 0
+    ) if certificate_pass else sum(
+        str(row.method or "").casefold().startswith("spatial")
+        for row in base_rows.values()
+    )
+    mapping_summary = {
+        "exact_target_subset_rows": exact_subset_rows,
+        "semantic_rows": semantic_rows,
+        "manual_target_overrides": manual_target_overrides,
+        "target_bind_rows": (
+            certificate_bind_rows if certificate_pass else len(bind_only_targets)
+        ),
+        "spatial_only_rows": spatial_only_rows,
+    }
 
     return MappedRigBuild(
         payload=payload,
         frame_count=len(values),
         report={
+            "preflight_policy": "export_first_v1",
+            "wrapper_canonicalization": wrapper_canonicalization,
+            "canonical_transform_validation": dict(
+                transform_contract_payload.get(
+                    "canonical_transform_validation", {}
+                )
+                or {}
+            ),
+            "mapping": mapping_summary,
+            "provenance": {
+                "raw_hash_mismatches": [],
+                "semantic_hash_matches": None,
+                "scope": "target_package_not_supplied_to_low_level_builder",
+            },
             "retarget_mode": "mapped_crig",
             "root_heading_policy": root_heading_report.to_dict(),
             "fixture_heading_audit": {
