@@ -29,6 +29,15 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
 
+def _normalized_text_sha256(path: Path) -> str:
+    """Hash text provenance independently of BOM and newline serialization."""
+
+    text = path.read_text(encoding="utf-8-sig")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.rstrip("\n") + "\n"
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest().upper()
+
+
 @dataclass(slots=True)
 class TargetPackageCoherence:
     game_id: str
@@ -51,8 +60,15 @@ class TargetPackageCoherence:
     bind_pose_match: bool = False
     source_smd_filename_match: bool = False
     source_smd_hash_match: bool = False
+    source_smd_semantic_hash_match: bool = False
+    smd_raw_sha256: str = ""
+    smd_semantic_sha256: str = ""
+    embedded_source_smd_raw_sha256: str = ""
+    embedded_source_smd_semantic_sha256: str = ""
     reference_anm2_filename_match: bool = False
     reference_anm2_hash_match: bool = False
+    reference_anm2_raw_sha256: str = ""
+    embedded_reference_anm2_raw_sha256: str = ""
     reference_anm2_format_match: bool = False
     game_id_match: bool = False
     rig_id_match: bool = False
@@ -67,6 +83,7 @@ class TargetPackageCoherence:
     maximum_bind_rotation_delta_degrees: float = 0.0
     maximum_bind_scale_delta: float = 0.0
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -95,13 +112,38 @@ class TargetPackageCoherence:
             "maximum_bind_scale_delta": self.maximum_bind_scale_delta,
             "source_smd_filename_match": self.source_smd_filename_match,
             "source_smd_hash_match": self.source_smd_hash_match,
+            "source_smd_semantic_hash_match": self.source_smd_semantic_hash_match,
+            "smd_raw_sha256": self.smd_raw_sha256,
+            "smd_semantic_sha256": self.smd_semantic_sha256,
+            "embedded_source_smd_raw_sha256": self.embedded_source_smd_raw_sha256,
+            "embedded_source_smd_semantic_sha256": self.embedded_source_smd_semantic_sha256,
             "reference_anm2_filename_match": self.reference_anm2_filename_match,
             "reference_anm2_hash_match": self.reference_anm2_hash_match,
+            "reference_anm2_raw_sha256": self.reference_anm2_raw_sha256,
+            "embedded_reference_anm2_raw_sha256": self.embedded_reference_anm2_raw_sha256,
             "reference_anm2_format_match": self.reference_anm2_format_match,
             "game_id_match": self.game_id_match,
             "rig_id_match": self.rig_id_match,
             "primary_root_match": self.primary_root_match,
             "errors": list(self.errors),
+            "warnings": list(self.warnings),
+            "provenance": {
+                "raw_hashes_advisory": True,
+                "smd": {
+                    "raw_sha256": self.smd_raw_sha256,
+                    "embedded_raw_sha256": self.embedded_source_smd_raw_sha256,
+                    "raw_match": self.source_smd_hash_match,
+                    "normalized_text_sha256": self.smd_semantic_sha256,
+                    "embedded_normalized_text_sha256": self.embedded_source_smd_semantic_sha256,
+                    "semantic_match": self.source_smd_semantic_hash_match,
+                },
+                "reference_anm2": {
+                    "raw_sha256": self.reference_anm2_raw_sha256,
+                    "embedded_raw_sha256": self.embedded_reference_anm2_raw_sha256,
+                    "raw_match": self.reference_anm2_hash_match,
+                    "format_match": self.reference_anm2_format_match,
+                },
+            },
         }
 
     def require_valid(self, display_name: str) -> None:
@@ -173,6 +215,14 @@ def validate_target_package(
         if not exists:
             result.errors.append(f"Missing {label}: {path}")
     if result.errors:
+        return result
+
+    try:
+        result.smd_raw_sha256 = _sha256(smd)
+        result.smd_semantic_sha256 = _normalized_text_sha256(smd)
+        result.reference_anm2_raw_sha256 = _sha256(reference)
+    except (OSError, UnicodeError) as exc:
+        result.errors.append(f"Package provenance cannot be read: {exc}")
         return result
 
     try:
@@ -299,6 +349,13 @@ def validate_target_package(
             f"scale {result.maximum_bind_scale_delta:.9g}."
         )
 
+    structural_smd_match = bool(
+        result.bone_names_match
+        and result.parents_match
+        and result.roots_match
+        and result.bind_pose_match
+    )
+
     embedded_smd_names = {
         Path(str(rig.source_model_name or "")).name,
         Path(str(rig.extensions.get("source_smd", "") or "")).name,
@@ -306,30 +363,58 @@ def validate_target_package(
     embedded_smd_names.discard("")
     result.source_smd_filename_match = bool(embedded_smd_names) and embedded_smd_names == {smd.name}
     if not result.source_smd_filename_match:
-        result.errors.append(
+        result.warnings.append(
             f"Embedded source SMD filename(s) {sorted(embedded_smd_names)} do not identify {smd.name!r}."
         )
     embedded_smd_hash = str(rig.extensions.get("source_smd_sha256", "") or "").upper()
-    result.source_smd_hash_match = bool(embedded_smd_hash) and embedded_smd_hash == _sha256(smd)
+    result.embedded_source_smd_raw_sha256 = embedded_smd_hash
+    result.source_smd_hash_match = (
+        bool(embedded_smd_hash)
+        and embedded_smd_hash == result.smd_raw_sha256
+    )
     if not result.source_smd_hash_match:
-        result.errors.append("Embedded source SMD SHA-256 does not match the canonical SMD bytes.")
+        result.warnings.append(
+            "Embedded source SMD raw SHA-256 does not match the canonical SMD bytes; "
+            "parsed skeleton semantics remain authoritative."
+        )
+    embedded_semantic_hash = str(
+        rig.extensions.get("source_smd_semantic_sha256", "")
+        or rig.extensions.get("source_smd_normalized_text_sha256", "")
+        or ""
+    ).upper()
+    result.embedded_source_smd_semantic_sha256 = embedded_semantic_hash
+    result.source_smd_semantic_hash_match = (
+        embedded_semantic_hash == result.smd_semantic_sha256
+        if embedded_semantic_hash
+        else structural_smd_match
+    )
+    if embedded_semantic_hash and not result.source_smd_semantic_hash_match:
+        result.warnings.append(
+            "Embedded source SMD normalized-text SHA-256 is stale; parsed bone, "
+            "parent, root, and bind-local comparisons remain authoritative."
+        )
 
     embedded_reference_name = Path(
         str(rig.extensions.get("source_reference_anm2", "") or "")
     ).name
     result.reference_anm2_filename_match = embedded_reference_name == reference.name
     if not result.reference_anm2_filename_match:
-        result.errors.append(
+        result.warnings.append(
             f"Embedded reference ANM2 filename {embedded_reference_name!r} does not identify {reference.name!r}."
         )
     embedded_reference_hash = str(
         rig.extensions.get("source_reference_anm2_sha256", "") or ""
     ).upper()
+    result.embedded_reference_anm2_raw_sha256 = embedded_reference_hash
     result.reference_anm2_hash_match = (
-        bool(embedded_reference_hash) and embedded_reference_hash == _sha256(reference)
+        bool(embedded_reference_hash)
+        and embedded_reference_hash == result.reference_anm2_raw_sha256
     )
     if not result.reference_anm2_hash_match:
-        result.errors.append("Embedded reference ANM2 SHA-256 does not match the reference file.")
+        result.warnings.append(
+            "Embedded reference ANM2 raw SHA-256 does not match the reference file; "
+            "the parsed ANM2 format identity remains authoritative."
+        )
     try:
         detected_format = detect_anm2_format(reference)
         expected_format = 42 if str(profile.game_id) == "dying_light_2" else 1

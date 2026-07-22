@@ -200,6 +200,8 @@ class CrigMappingWorkspace:
         self.controller = controller
         self.mark_dirty = mark_dirty
         self._refreshing_root = False
+        self._auto_map_busy = False
+        self._fresh_verified_profiles: dict[str, AutomaticRetargetValidation] = {}
         self.widget = qt["QWidget"]()
         layout = qt["QVBoxLayout"](self.widget)
         intro = qt["QLabel"](
@@ -380,7 +382,12 @@ class CrigMappingWorkspace:
         source = Path(animation.source_fbx)
         if not source.is_file():
             raise FileNotFoundError(f"Animation FBX was not found: {source}")
-        document = FbxDocument(source)
+        cached_loader = getattr(self.controller, "_source_document", None)
+        document = (
+            cached_loader(str(source))
+            if callable(cached_loader)
+            else FbxDocument(source)
+        )
         if animation.source_animation_stack:
             document.select_animation_stack(animation.source_animation_stack)
         return document
@@ -410,6 +417,7 @@ class CrigMappingWorkspace:
         return GenericBoneMap.from_dict(payload)
 
     def _store_profile(self, animation, profile: GenericBoneMap) -> None:
+        getattr(self, "_fresh_verified_profiles", {}).pop(profile.profile_id, None)
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
         animation.mapping_profile_id = profile.profile_id
         self.mark_dirty()
@@ -518,6 +526,17 @@ class CrigMappingWorkspace:
         if origin != "automatic_verified":
             return False
 
+        fresh_verification = getattr(self, "_fresh_verified_profiles", {}).get(
+            saved_profile.profile_id
+        )
+        if (
+            fresh_verification is not None
+            and fresh_verification.ok
+            and fresh_verification.live_revalidated
+        ):
+            self.status.setText(format_verified_dl2_body_map_summary(fresh_verification))
+            return True
+
         try:
             policy = self._target_retarget_policy(rig)
             verification, solver = verified_dl2_solver_preview(
@@ -555,6 +574,105 @@ class CrigMappingWorkspace:
         animation = self._selected_animation()
         if animation is None:
             return
+        runner = getattr(self.controller, "background_tasks", None)
+        if runner is None:
+            self._auto_map_sync(animation)
+            return
+        if runner.busy or self._auto_map_busy:
+            self.status.setText(
+                "Wait for the current animation operation to finish before regenerating the map."
+            )
+            return
+        advanced_target = False
+        try:
+            advanced_target = self._is_dl2_advanced_selection(animation)
+            selection = self._target_selection(animation)
+            rig_path = str(selection.rig_path or "")
+            if not rig_path:
+                registry = getattr(self.controller, "rig_registry", None)
+                resolved = registry.resolve(selection.rig_ref) if registry is not None else None
+                rig_path = str(resolved or "")
+            if not rig_path:
+                raise FileNotFoundError("No CRIG path can be resolved for the selected target.")
+            source_path = str(Path(animation.source_fbx).resolve())
+            stack_name = str(animation.source_animation_stack or "")
+            game_id = str(getattr(self.project, "game_id", "") or "")
+            animation_id = str(animation.animation_id)
+        except Exception as exc:
+            self._auto_map_failed(advanced_target, exc)
+            return
+
+        self._set_auto_map_busy(True)
+        self.status.setText("Generating the retarget map in the background…")
+
+        def work(progress):
+            progress("Loading the source animation…")
+            document = FbxDocument(Path(source_path))
+            if stack_name:
+                document.select_animation_stack(stack_name)
+            progress("Loading the target rig…")
+            rig = ChromeRig.load(rig_path)
+            is_advanced = advanced_target or rig.rig_id == DL2_ADVANCED_RIG_ID
+            if is_advanced:
+                progress("Building and verifying the DL2 body map…")
+                policy = build_target_retarget_policy(
+                    rig, game_id=game_id, clip_domain="body"
+                )
+                profile = build_dl2_advanced_body_map_with_local_recipe(
+                    document, rig, policy
+                )
+                verification = revalidate_verified_dl2_advanced_body_map(
+                    profile, document, rig, policy
+                )
+            else:
+                progress("Matching source and target bones…")
+                profile = auto_map_crig_to_fbx(
+                    rig,
+                    document.limb_models.keys(),
+                    document.parent_by_name,
+                    **source_mapping_evidence(document),
+                )
+                verification = None
+            return document, profile, is_advanced, verification
+
+        def succeeded(result) -> None:
+            document, profile, is_advanced, verification = result
+            current = self.project.animation_by_id(animation_id)
+            if current is None:
+                return
+            source_cache = getattr(self.controller, "_source_cache", None)
+            if isinstance(source_cache, dict):
+                source_cache[str(Path(current.source_fbx).resolve())] = document
+            self._store_profile(current, profile)
+            if verification is not None:
+                cache = getattr(self, "_fresh_verified_profiles", None)
+                if cache is None:
+                    cache = {}
+                    self._fresh_verified_profiles = cache
+                cache[profile.profile_id] = verification
+            self.refresh()
+            self.status.setText(
+                "Verified DL2 body map regenerated."
+                if is_advanced
+                else "Automatic .crig mapping completed."
+            )
+
+        def failed(failure) -> None:
+            self._auto_map_failed(advanced_target, failure)
+
+        if not runner.start(
+            work,
+            progress=self.status.setText,
+            succeeded=succeeded,
+            failed=failed,
+            finished=lambda: self._set_auto_map_busy(False),
+        ):
+            self._set_auto_map_busy(False)
+            self.status.setText("Another animation operation is already running.")
+
+    def _auto_map_sync(self, animation: Any) -> None:
+        """Fallback for non-Qt test hosts that do not expose a task runner."""
+
         advanced_target = False
         try:
             advanced_target = self._is_dl2_advanced_selection(animation)
@@ -562,11 +680,8 @@ class CrigMappingWorkspace:
             document = self._document(animation)
             if advanced_target or rig.rig_id == DL2_ADVANCED_RIG_ID:
                 advanced_target = True
-                policy = self._target_retarget_policy(rig)
                 profile = build_dl2_advanced_body_map_with_local_recipe(
-                    document,
-                    rig,
-                    policy,
+                    document, rig, self._target_retarget_policy(rig)
                 )
             else:
                 profile = auto_map_crig_to_fbx(
@@ -578,17 +693,36 @@ class CrigMappingWorkspace:
             self._store_profile(animation, profile)
             self.refresh()
         except Exception as exc:
-            if advanced_target:
-                self.status.setText(
-                    f"Safe DL2 body map was not generated: {exc}\n"
-                    "Open Root & .crig Mapping for this clip, confirm the selected "
-                    "DL2 advanced target package, then regenerate. The existing mapping "
-                    "was not changed."
-                )
-            else:
-                self.qt["QMessageBox"].critical(
-                    self.controller.window, "Auto-map failed", str(exc)
-                )
+            self._auto_map_failed(advanced_target, exc)
+
+    def _auto_map_failed(self, advanced_target: bool, failure: Any) -> None:
+        message = (
+            failure.display_message(False)
+            if hasattr(failure, "display_message")
+            else str(failure)
+        )
+        if advanced_target:
+            self.status.setText(
+                f"Safe DL2 body map was not generated: {message}\n"
+                "Open Root & .crig Mapping for this clip, confirm the selected "
+                "DL2 advanced target package, then regenerate. The existing mapping "
+                "was not changed."
+            )
+        else:
+            self.qt["QMessageBox"].critical(
+                self.controller.window, "Auto-map failed", message
+            )
+
+    def _set_auto_map_busy(self, busy: bool) -> None:
+        self._auto_map_busy = bool(busy)
+        for widget in (
+            getattr(self, "auto_button", None),
+            getattr(self, "clear_button", None),
+            getattr(self, "load_button", None),
+            getattr(self, "import_recipe_button", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(not busy)
 
     def clear_mapping(self) -> None:
         animation = self._selected_animation()

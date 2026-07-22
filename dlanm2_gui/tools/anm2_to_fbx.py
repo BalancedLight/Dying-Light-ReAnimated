@@ -45,7 +45,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bone-map", type=Path, help="Reviewed .dlrbmap.json for cross-rig export")
     parser.add_argument("--auto-map", action="store_true", help="Use conservative automatic mapping when no map is supplied")
     parser.add_argument("--save-auto-map", type=Path)
-    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--fps",
+        type=float,
+        help="Compatibility alias that sets both ANM2 input and FBX output FPS.",
+    )
+    parser.add_argument(
+        "--anm2-fps", type=float,
+        help="Input cadence of the ANM2 samples (defaults to valid provenance, then 30).",
+    )
+    parser.add_argument(
+        "--fbx-fps", type=float,
+        help="Output FBX cadence (defaults to valid provenance source FPS, then 30).",
+    )
     parser.add_argument("--start-frame", type=int)
     parser.add_argument("--end-frame", type=int)
     parser.add_argument("--translation-scale", default="auto")
@@ -85,13 +97,27 @@ def main(argv: list[str] | None = None) -> int:
     for source in args.anm2:
         result = export_anm2_to_fbx(
             source, source_rig, args.output_directory / f"{source.stem}.fbx",
-            fps=args.fps, start_frame=args.start_frame, end_frame=args.end_frame,
+            fps=args.fps,
+            anm2_input_fps=args.anm2_fps,
+            fbx_output_fps=args.fbx_fps,
+            start_frame=args.start_frame, end_frame=args.end_frame,
             target_fbx=args.target_fbx, bone_map=mapping,
             translation_scale=translation_scale, blender_executable=args.blender,
             unknown_track_policy=args.unknown_track_policy,
             progress=print,
         )
-        print(f"{result.output_path}: {result.frame_count} frames, {result.bone_count} bones")
+        print(
+            f"{result.output_path}: {result.frame_count} frames at "
+            f"{result.fbx_output_fps:g} FPS (ANM2 {result.anm2_input_fps:g} FPS), "
+            f"{result.bone_count} bones"
+        )
+        print(
+            "Root parity: "
+            f"{result.root_parity_max_angular_degrees:.6f} deg angular, "
+            f"{result.root_parity_max_heading_degrees:.6f} deg heading, "
+            f"{result.root_parity_max_translation_m:.3g} m translation; "
+            f"rest basis {result.native_rest_basis_max_rotation_degrees:.6f} deg max"
+        )
         if result.unknown_track_count:
             if result.unknown_tracks_sidecar:
                 print(

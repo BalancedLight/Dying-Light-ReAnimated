@@ -1,8 +1,8 @@
 {
   "format": "dl-reanimated-project",
-  "schema_version": 9,
+  "schema_version": 10,
   "minimum_reader_version": 1,
-  "created_with": "0.6.0a2",
+  "created_with": "0.6.1a0",
   "project_id": "b6f67ed7-5476-4a85-bb7b-27f9914ff31b",
   "name": "DL2 advanced player ANM2 to FBX",
   "created_utc": "2026-07-20T00:00:00+00:00",
@@ -54,6 +54,8 @@
         "source_rig_path": "../reference/dl2/player_skeleton.crig",
         "enabled": true,
         "fps": 30,
+        "anm2_input_fps": 30.0,
+        "fbx_output_fps": 30.0,
         "start_frame": 0,
         "end_frame": 228,
         "extensions": {

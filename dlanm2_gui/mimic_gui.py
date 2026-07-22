@@ -71,7 +71,7 @@ def _scan(controller: Any, animation: Any) -> FbxFacialScan:
     key = (
         str(path.resolve()),
         animation.source_animation_stack,
-        animation.fps,
+        animation.resolved_sample_fps(),
         path.stat().st_mtime_ns,
         path.stat().st_size,
     )
@@ -79,7 +79,7 @@ def _scan(controller: Any, animation: Any) -> FbxFacialScan:
     if cached is None:
         cached = scan_fbx_blendshapes(
             path,
-            fps=animation.fps,
+            fps=animation.resolved_sample_fps(),
             animation_stack=animation.source_animation_stack or None,
         )
         controller._mimic_scan_cache[key] = cached

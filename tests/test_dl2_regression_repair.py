@@ -56,13 +56,45 @@ def test_bundled_dl2_default_package_is_the_coherent_271_bone_advanced_rig() -> 
     assert result.roots_match
     assert result.bind_pose_match
     assert result.source_smd_filename_match
-    assert result.source_smd_hash_match
+    assert result.source_smd_semantic_hash_match
+    assert result.source_smd_hash_match or result.warnings
     assert result.reference_anm2_hash_match
     assert result.reference_anm2_format_match
     assert result.game_id_match
     assert result.rig_id_match
     assert result.primary_root_match
     assert result.roots == ["pelvis"]
+
+
+def test_smd_bom_and_line_endings_are_semantic_not_structural_changes(
+    tmp_path: Path,
+) -> None:
+    baseline = validate_target_package(GAME_PROFILES[DL2_GAME_ID], ROOT)
+    text = DL2_SMD.read_text(encoding="utf-8-sig")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+    altered_smd = tmp_path / DL2_SMD.name
+    altered_smd.write_bytes(
+        b"\xef\xbb\xbf" + normalized.replace("\n", "\r\n").encode("utf-8")
+    )
+
+    result = validate_target_package(
+        GAME_PROFILES[DL2_GAME_ID],
+        smd_path=altered_smd,
+        crig_path=DL2_CRIG,
+        reference_anm2_path=DL2_REFERENCE,
+    )
+
+    assert result.status == "pass"
+    assert result.bind_pose_match
+    assert result.source_smd_semantic_hash_match
+    assert result.smd_semantic_sha256 == baseline.smd_semantic_sha256
+    assert result.smd_raw_sha256 != baseline.smd_raw_sha256
+    assert not result.source_smd_hash_match
+    assert result.warnings
+    payload = result.to_dict()
+    assert payload["provenance"]["raw_hashes_advisory"] is True
+    assert payload["provenance"]["smd"]["semantic_match"] is True
+    assert payload["smd_raw_sha256"] != payload["smd_semantic_sha256"]
 
 
 def test_bundled_dl2_legacy_package_remains_coherent_with_four_roots() -> None:

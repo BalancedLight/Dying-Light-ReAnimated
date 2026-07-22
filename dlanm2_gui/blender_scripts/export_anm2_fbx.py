@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import math
 from pathlib import Path
 import sys
 import traceback
@@ -34,6 +35,42 @@ def trs_values(translation, rotation_wxyz, scale):
 
 def convert(matrix):
     return Y_UP_TO_BLENDER @ matrix @ Y_UP_TO_BLENDER.inverted()
+
+
+def proper_rotation(matrix):
+    quaternion = matrix.to_quaternion()
+    quaternion.normalize()
+    return quaternion.to_matrix()
+
+
+def quaternion_error_degrees(actual, expected):
+    left = [float(value) for value in actual]
+    right = [float(value) for value in expected]
+    left_norm = math.sqrt(sum(value * value for value in left))
+    right_norm = math.sqrt(sum(value * value for value in right))
+    if left_norm <= 1.0e-15 or right_norm <= 1.0e-15:
+        raise ValueError("Cannot compare a singular quaternion")
+    dot = abs(
+        sum(a * b for a, b in zip(left, right)) / (left_norm * right_norm)
+    )
+    dot = min(1.0, max(0.0, dot))
+    return math.degrees(2.0 * math.acos(dot))
+
+
+def heading_error_degrees(actual, expected, axis):
+    left = actual.copy()
+    right = expected.copy()
+    left.normalize()
+    right.normalize()
+    relative = left @ right.inverted()
+    relative.normalize()
+    direction = axis.normalized()
+    vector = Vector((relative.x, relative.y, relative.z))
+    projected = direction * vector.dot(direction)
+    length = projected.length
+    if length <= 1.0e-15:
+        return 0.0
+    return math.degrees(2.0 * math.atan2(length, abs(float(relative.w))))
 
 
 def global_matrices(locals_, bones):
@@ -175,7 +212,7 @@ def main(argv=None):
     parser.add_argument("--job", required=True)
     args = parser.parse_args(argv)
     job_path = Path(args.job)
-    job = json.loads(job_path.read_text(encoding="utf-8"))
+    job = json.loads(job_path.read_text(encoding="utf-8-sig"))
     if (
         job.get("format") != "dl-reanimated-blender-fbx-job"
         or int(job.get("schema_version", 0)) != 2
@@ -196,7 +233,12 @@ def main(argv=None):
     scene.name = job["name"]
     scene.unit_settings.system = "METRIC"
     scene.unit_settings.scale_length = 1.0
-    scene.render.fps = int(job["fps"])
+    output_fps = float(job["fbx_output_fps"] if "fbx_output_fps" in job else job["fps"])
+    if not math.isfinite(output_fps) or output_fps <= 0.0:
+        raise ValueError("FBX output FPS must be finite and positive")
+    fps_numerator = max(1, int(round(output_fps)))
+    scene.render.fps = fps_numerator
+    scene.render.fps_base = fps_numerator / output_fps
     scene.frame_start = int(job["frame_start"])
     scene.frame_end = int(job["frame_end"])
 
@@ -234,31 +276,27 @@ def main(argv=None):
         head = bind_heads[index]
         child_index = display_child(index, bones, bind_heads, children)
         if child_index is not None:
-            tail = bind_heads[child_index].copy()
+            display_length = (bind_heads[child_index] - head).length
         else:
             parent = int(row["parent_index"])
             if parent >= 0:
-                direction = head - bind_heads[parent]
-                if direction.length > 1.0e-5:
-                    tail = head + direction.normalized() * max(
-                        direction.length * 0.4, 0.01
-                    )
-                else:
-                    tail = head + bind_global[index].to_3x3().col[1].normalized() * 0.03
+                parent_distance = (head - bind_heads[parent]).length
+                display_length = max(parent_distance * 0.4, 0.01)
             else:
-                tail = head + bind_global[index].to_3x3().col[1].normalized() * 0.05
-        if (tail - head).length < 0.001:
-            tail = head + Vector((0.0, 0.01, 0.0))
-        bind_tails[index] = tail
+                display_length = 0.05
+        display_length = max(float(display_length), 0.001)
+        native_y = proper_rotation(bind_global[index]).col[1].normalized()
+        bind_tails[index] = head + native_y * display_length
     for completed, index in enumerate(armature_indices, start=1):
         row = bones[index]
         bone = armature_data.edit_bones.new(row["name"])
         bone.head = bind_heads[index]
         bone.tail = bind_tails[index]
-        roll_reference = bind_global[index].to_3x3().col[2].normalized()
+        native_rotation = proper_rotation(bind_global[index])
+        roll_reference = native_rotation.col[2].normalized()
         bone_direction = (bone.tail - bone.head).normalized()
         if abs(roll_reference.dot(bone_direction)) > 0.98:
-            roll_reference = bind_global[index].to_3x3().col[0].normalized()
+            roll_reference = native_rotation.col[0].normalized()
         bone.align_roll(roll_reference)
         bone.use_deform = bool(row.get("deform", True))
         edit_bones[index] = bone
@@ -267,18 +305,9 @@ def main(argv=None):
     for index in armature_indices:
         row = bones[index]
         parent = int(row["parent_index"])
-        name = str(row["name"]).lower()
-        if (
-            parent in edit_bones
-            and "twist" in name
-            and (bind_heads[index] - bind_heads[parent]).length <= 1.0e-5
-        ):
-            grandparent = int(bones[parent]["parent_index"])
-            if grandparent in edit_bones:
-                parent = grandparent
         if parent in edit_bones:
             edit_bones[index].parent = edit_bones[parent]
-            edit_bones[index].use_connect = False
+        edit_bones[index].use_connect = False
     bpy.ops.object.mode_set(mode="POSE")
     for index in armature_indices:
         row = bones[index]
@@ -293,6 +322,8 @@ def main(argv=None):
     display_basis_corrections = {}
     display_rest_globals = {}
     display_parent_indices = {}
+    native_rest_basis_errors = {}
+    edge_case_rest_bones = []
     index_by_name = {row["name"]: index for index, row in enumerate(bones)}
     for index in armature_indices:
         row = bones[index]
@@ -302,11 +333,32 @@ def main(argv=None):
         display_parent_indices[index] = (
             index_by_name[display_parent.name] if display_parent is not None else -1
         )
-        display_basis_corrections[index] = (
-            bind_global[index].inverted_safe() @ display_rest_global
+        rotation_error = quaternion_error_degrees(
+            display_rest_global.to_quaternion(), bind_global[index].to_quaternion()
         )
+        translation_error = (
+            display_rest_global.translation - bind_global[index].translation
+        ).length
+        native_rest_basis_errors[row["name"]] = {
+            "rotation_degrees": float(rotation_error),
+            "translation_m": float(translation_error),
+            "status": "edge" if rotation_error > 0.01 else "normal",
+        }
+        if rotation_error > 0.05:
+            raise ValueError(
+                f"Native rest basis parity failed for {row['name']!r}: "
+                f"{rotation_error:.9f} degrees exceeds 0.05"
+            )
+        if rotation_error > 0.01:
+            edge_case_rest_bones.append(row["name"])
+        # New native-basis exports animate directly in the converted CRIG
+        # global frame.  Identity values preserve the old metadata field's
+        # contract for reverse importers without claiming a correction was
+        # applied to animation.
+        display_basis_corrections[index] = Matrix.Identity(4)
     native_metadata = {
-        "version": 2,
+        "version": 3,
+        "basis_mode": "native_crig_global_v1",
         "sparse_summary": job["sparse_summary"],
         "display_basis_corrections": {
             bones[index]["name"]: [
@@ -316,18 +368,21 @@ def main(argv=None):
             ]
             for index in armature_indices
         },
+        "native_rest_basis_errors": native_rest_basis_errors,
+        "native_rest_basis_max_rotation_degrees": max(
+            (
+                row["rotation_degrees"]
+                for row in native_rest_basis_errors.values()
+            ),
+            default=0.0,
+        ),
+        "native_rest_basis_edge_bones": edge_case_rest_bones,
         "helper_descriptors": [
             f"{int(bones[index]['descriptor']):08X}"
             for index in helper_indices
             if bones[index].get("descriptor") is not None
         ],
     }
-    armature["dlr_native_metadata_zlib_b64"] = base64.b64encode(
-        zlib.compress(
-            json.dumps(native_metadata, separators=(",", ":")).encode("utf-8"), 9
-        )
-    ).decode("ascii")
-
     active_armature = sorted(
         (
             set(maps["location"])
@@ -355,12 +410,26 @@ def main(argv=None):
         if index in edit_bones
     }
     previous_quaternions = {}
+    active_all = set(maps["location"]) | set(maps["rotation"]) | set(maps["scale"])
+    primary_root_index = job.get("primary_root_index")
+    if (
+        primary_root_index is None
+        or int(primary_root_index) not in armature_indices
+    ):
+        armature_set = set(armature_indices)
+        primary_root_index = next(
+            (
+                index
+                for index in armature_indices
+                if int(bones[index]["parent_index"]) not in armature_set
+            ),
+            armature_indices[0],
+        )
+    primary_root_index = int(primary_root_index)
+    expected_root_globals = []
     report("Installing animation curves", 0, frame_count)
     for frame_index in range(frame_count):
         animated_local = list(bind_local)
-        active_all = (
-            set(maps["location"]) | set(maps["rotation"]) | set(maps["scale"])
-        )
         for index in active_all:
             row = bones[index]
             translation = (
@@ -382,10 +451,9 @@ def main(argv=None):
         animated_global = [
             convert(value) for value in global_matrices(animated_local, bones)
         ]
-        scene.frame_set(frame_index)
+        expected_root_globals.append(animated_global[primary_root_index].copy())
         desired_pose_globals = {
-            index: animated_global[index] @ display_basis_corrections[index]
-            for index in armature_indices
+            index: animated_global[index] for index in armature_indices
         }
         sampled_basis = {}
         for index in order:
@@ -408,10 +476,7 @@ def main(argv=None):
                     display_rest_globals[index].inverted_safe()
                     @ desired_pose_globals[index]
                 )
-            pose_bone.matrix_basis = basis
             sampled_basis[index] = basis
-        # One dependency evaluation per frame, never one per bone.
-        bpy.context.view_layer.update()
         for index in active_armature:
             location_value, quaternion, scale_value = sampled_basis[index].decompose()
             if index in sampled_location:
@@ -462,6 +527,67 @@ def main(argv=None):
                     frames,
                     table[:, component],
                 )
+
+    target_up = Vector(job.get("target_up_axis", (0.0, 1.0, 0.0)))
+    blender_up = Y_UP_TO_BLENDER.to_3x3() @ target_up
+    max_angular_error = 0.0
+    max_heading_error = 0.0
+    max_translation_error = 0.0
+    root_pose = armature.pose.bones[bones[primary_root_index]["name"]]
+    report("Auditing root parity", 0, frame_count)
+    for frame_index, expected in enumerate(expected_root_globals):
+        scene.frame_set(int(round(float(frames[frame_index]))))
+        # Exactly one dependency evaluation per frame, never one per bone.
+        bpy.context.view_layer.update()
+        actual = root_pose.matrix.copy()
+        angular_error = quaternion_error_degrees(
+            actual.to_quaternion(), expected.to_quaternion()
+        )
+        heading_error = heading_error_degrees(
+            actual.to_quaternion(), expected.to_quaternion(), blender_up
+        )
+        translation_error = (actual.translation - expected.translation).length
+        max_angular_error = max(max_angular_error, angular_error)
+        max_heading_error = max(max_heading_error, heading_error)
+        max_translation_error = max(max_translation_error, translation_error)
+        if (frame_index + 1) % 32 == 0 or frame_index + 1 == frame_count:
+            report("Auditing root parity", frame_index + 1, frame_count)
+    root_parity = {
+        "root_index": primary_root_index,
+        "root_name": bones[primary_root_index]["name"],
+        "frame_count": frame_count,
+        "max_angular_error_degrees": float(max_angular_error),
+        "max_heading_error_degrees": float(max_heading_error),
+        "max_translation_error_m": float(max_translation_error),
+        "angular_tolerance_degrees": 0.05,
+        "heading_tolerance_degrees": 0.05,
+        "translation_tolerance_m": 1.0e-5,
+        "native_rest_basis_max_rotation_degrees": float(
+            native_metadata["native_rest_basis_max_rotation_degrees"]
+        ),
+        "native_rest_basis_edge_bone_count": len(edge_case_rest_bones),
+    }
+    native_metadata["root_parity"] = root_parity
+    armature["dlr_native_metadata_zlib_b64"] = base64.b64encode(
+        zlib.compress(
+            json.dumps(native_metadata, separators=(",", ":")).encode("utf-8"), 9
+        )
+    ).decode("ascii")
+    print(
+        "DLR_ROOT_PARITY:" + json.dumps(root_parity, separators=(",", ":")),
+        flush=True,
+    )
+    if (
+        max_angular_error > 0.05
+        or max_heading_error > 0.05
+        or max_translation_error > 1.0e-5
+    ):
+        raise ValueError(
+            "Native root parity failed: "
+            f"angular={max_angular_error:.9f} degrees, "
+            f"heading={max_heading_error:.9f} degrees, "
+            f"translation={max_translation_error:.12g} m"
+        )
 
     bpy.ops.object.mode_set(mode="OBJECT")
     helper_objects = []

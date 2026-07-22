@@ -38,6 +38,9 @@ EXPECTED_SURFACE = {
     "reverse_engineering/pseudocode/DLR_RootMotionActorBasisAndLocomotion.c": (
         "source_release_policy_reconstruction"
     ),
+    "reverse_engineering/pseudocode/dlr_anm2_fbx_native_basis_and_timing.c": (
+        "source_release_policy_reconstruction"
+    ),
 }
 
 

@@ -323,7 +323,7 @@ def validate_fbx_intrinsic_euler_against_trusted_rest(
     source_rest_fbx: str | Path,
     trusted_source_rest_json: str | Path,
 ) -> dict[str, Any]:
-    trusted_payload = json.loads(Path(trusted_source_rest_json).read_text(encoding="utf-8"))
+    trusted_payload = json.loads(Path(trusted_source_rest_json).read_text(encoding="utf-8-sig"))
     trusted = {
         str(row["name"]): np.asarray(row["rest_matrix"], dtype=float)
         for row in trusted_payload["bones"]

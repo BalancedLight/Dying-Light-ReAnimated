@@ -47,7 +47,7 @@ Advanced target files, diagnostic controls, intermediate reports, and developer 
 
 For a custom object, animal, or model that already exists in a mod, Advanced mode can create a shareable `.crig` from one binary model FBX. Animations using that exact skeleton can then be exported without humanoid roles or additional target files.
 
-The dedicated **ANM2 → FBX** workspace converts extracted animations back into editable skeleton FBXs. Native export supports any matching `.crig`, including doors and props; cross-rig mode provides conservative automatic mapping plus manual review.
+The dedicated **ANM2 → FBX** workspace converts extracted animations back into editable skeleton FBXs. Native export supports any matching `.crig`, including doors and props; cross-rig mode provides conservative automatic mapping plus manual review. FBX-declared source cadence, ANM2 sampling cadence, and playback cadence are tracked separately; reverse export can resample between independent ANM2/FBX rates and consumes hash-validated `.anm2.dlrmeta.json` timing provenance.
 
 ## Workspaces and tabs
 

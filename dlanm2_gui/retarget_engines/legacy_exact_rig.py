@@ -266,15 +266,19 @@ def build_exact_rig_anm2(
     animation_fbx: str | Path,
     rig: ChromeRig,
     *,
-    fps: int | None = None,
+    fps: float | None = None,
     animation_stack: str | None = None,
     document_factory: Any = FbxDocument,
     document: Any | None = None,
 ) -> ExactRigBuild:
     rig.validate().require_valid()
-    sample_fps = int(fps or rig.writer_profile.default_fps)
-    if not 1 <= sample_fps <= 240:
-        raise ValueError("Exact-rig sample FPS must be between 1 and 240")
+    sample_fps = float(
+        rig.writer_profile.default_fps if fps is None else fps
+    )
+    if not math.isfinite(sample_fps) or sample_fps <= 0.0:
+        raise ValueError("sample FPS must be finite and positive")
+    if sample_fps > 1000.0:
+        raise ValueError("Exact-rig sample FPS must not exceed 1000")
     source = Path(animation_fbx)
     document = document if document is not None else document_factory(source)
     selected_stack = getattr(document, "selected_animation_stack", None)

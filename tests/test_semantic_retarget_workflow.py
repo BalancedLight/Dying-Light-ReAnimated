@@ -220,6 +220,52 @@ def test_arbitrary_target_override_is_compiled_and_freshly_certified() -> None:
     assert live.certificate["validation_kind"] == "deterministic_semantic_profile_compilation"
 
 
+def test_target_override_clears_matching_unresolved_source_before_validation() -> None:
+    rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
+    policy = build_target_retarget_policy(rig, game_id=DL2_GAME_ID)
+    source = _semantic_analysis(policy, extra_bones=("source_sole",))
+    source.unresolved_animated_chains = ("source_sole",)
+    source.animated_bones = frozenset((*source.animated_bones, "source_sole"))
+    state = prepare_bundled_semantic_state(source, rig, policy)
+    assert not state.validation.ok
+
+    state.profile.set_target_bone_override(
+        "l_sole_helper",
+        mode="direct",
+        source_bone="source_sole",
+    )
+    refreshed = prepare_bundled_semantic_state(
+        source,
+        rig,
+        policy,
+        state.profile,
+    )
+
+    assert refreshed.plan.unresolved_animated_chains == ()
+    assert refreshed.validation.ok
+    decision = next(
+        row
+        for row in refreshed.plan.decisions
+        if row.target_bone == "l_sole_helper"
+    )
+    assert decision.source_bones == ("source_sole",)
+    assert any(
+        evidence.kind == "manual_target_override"
+        for evidence in decision.evidence
+    )
+    compiled, live, _plan = compile_bundled_semantic_profile(
+        source,
+        rig,
+        policy,
+        refreshed.profile,
+    )
+    pair = next(
+        row for row in compiled.pairs if row.target_rig_bone == "l_sole_helper"
+    )
+    assert pair.source_fbx_bone == "source_sole"
+    assert live.ok and live.live_revalidated
+
+
 def test_exact_identity_still_has_semantic_profile_and_exact_execution() -> None:
     rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
     policy = build_target_retarget_policy(rig, game_id=DL2_GAME_ID)

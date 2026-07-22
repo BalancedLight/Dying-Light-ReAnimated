@@ -5,6 +5,8 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QSettings, QThread, QTimer
@@ -16,7 +18,11 @@ from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
 from dlanm2_gui.retarget_profiles import HUMANOID_ROLES, SourceBoneMappingProfile
 from dlanm2_gui.unified_gui import UnifiedMainWindow
-from dlanm2_gui.workspace_project import DlReanimatedProject, ProjectAnimation
+from dlanm2_gui.workspace_project import (
+    Anm2ToFbxItem,
+    DlReanimatedProject,
+    ProjectAnimation,
+)
 
 
 def _application(tmp_path):
@@ -25,6 +31,32 @@ def _application(tmp_path):
     qt = gui._load_qt()
     app = qt["QApplication"].instance() or qt["QApplication"]([])
     return qt, app
+
+
+def test_timing_controls_preserve_fractional_standard_rates(tmp_path) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    input_rate = 24_000.0 / 1_001.0
+    output_rate = 30_000.0 / 1_001.0
+
+    assert controller.fps_spin.decimals() == 9
+    assert controller.sample_fps_spin.decimals() == 9
+    reverse = Anm2ToFbxItem.create(tmp_path / "fractional.anm2")
+    reverse.anm2_input_fps = input_rate
+    reverse.fbx_output_fps = output_rate
+    controller.project.anm2_to_fbx.items.append(reverse)
+    controller._reverse_refresh_table()
+    input_widget = controller.reverse_table.cellWidget(0, 5)
+    output_widget = controller.reverse_table.cellWidget(0, 6)
+
+    assert input_widget.decimals() == 9
+    assert output_widget.decimals() == 9
+    controller._sync_reverse_from_ui()
+    assert reverse.anm2_input_fps == pytest.approx(input_rate, abs=5.0e-10)
+    assert reverse.fbx_output_fps == pytest.approx(output_rate, abs=5.0e-10)
+    controller.dirty = False
+    shell.window.close()
 
 
 def test_advanced_toggle_does_not_retain_deleted_help_buttons(tmp_path) -> None:
@@ -423,12 +455,69 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
     assert "model_geometry_ignored_for_animation" in (
         controller.animation_import_diagnostics.toPlainText()
     )
-    assert len(critical_messages) == 1
-    assert "truncated binary node stream" in critical_messages[0]
+    assert critical_messages == []
+    assert "Cannot read" in controller.status.currentMessage()
     assert warning_messages == []
     assert information_messages == []
     status = controller._animation_target_status(animation)[0]
     assert status.startswith("Ready")
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_static_animation_import_stays_enabled_and_uses_ready_state(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    source = tmp_path / "static_pose.fbx"
+    source.write_bytes(b"fixture")
+    document = SimpleNamespace(
+        animation_stacks=(),
+        animation_stack_names=(),
+        preferred_animation_stack=lambda: None,
+        limb_models={"root": 1},
+        parent_by_name={"root": None},
+    )
+    monkeypatch.setattr(controller, "_source_document", lambda _path: document)
+    monkeypatch.setattr(
+        qt["QFileDialog"],
+        "getOpenFileNames",
+        lambda *_args: ([str(source)], ""),
+    )
+
+    def static_preflight(path, **_kwargs):
+        report = FbxPreflightReport(str(path), "animation")
+        report.add(
+            "informational",
+            "static_bind_pose_clip",
+            "Ready — static/bind-pose clip.",
+            "Two identical finite frames are valid.",
+            "No action is required.",
+            group="ignored",
+        )
+        return report
+
+    monkeypatch.setattr(gui, "preflight_fbx", static_preflight)
+    critical_messages: list[str] = []
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "critical",
+        lambda _parent, _title, message: critical_messages.append(message),
+    )
+
+    controller.add_animations()
+
+    assert len(controller.project.animations) == 1
+    animation = controller.project.animations[0]
+    assert animation.enabled
+    assert animation.extensions["import_state"]["level"] == "ready"
+    assert animation.extensions["import_state"]["label"] == (
+        "Ready — static/bind-pose clip"
+    )
+    assert critical_messages == []
     controller.dirty = False
     shell.window.close()
 

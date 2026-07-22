@@ -8,7 +8,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dlanm2_gui.fbx_core import FbxDocument
+from dlanm2_gui.fbx_core import (
+    FBX_TICKS_PER_SECOND,
+    FbxDocument,
+)
 from dlanm2_gui.fbx_preflight import preflight_fbx
 from dlanm2_gui.chrome_rig_builder import build_chrome_rig_from_fbx
 from dlanm2_gui.model_importer.fbx_model import (
@@ -159,7 +162,10 @@ def test_transform_contract_is_serializable_and_reports_wrapper_normalization(
     document = FbxDocument.from_scene(scene)
     report = document.transform_contract.to_dict()
 
-    assert report["format"] == "dl-reanimated-fbx-transform-contract-v1"
+    assert report["format"] == "dl-reanimated-fbx-transform-contract-v2"
+    assert report["legacy_format_compatibility"] == (
+        "dl-reanimated-fbx-transform-contract-v1"
+    )
     assert report["unit_conversion_count"] == 1
     assert report["axis_conversion_count"] == 0
     assert report["wrapper_models"] == ("Armature",)
@@ -170,6 +176,147 @@ def test_transform_contract_is_serializable_and_reports_wrapper_normalization(
     assert report["roots"] == ("root",)
     assert report["non_bone_ancestors"] == ("Armature",)
     json.dumps(report)
+
+
+def test_reflected_common_wrapper_is_removed_before_bone_classification(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "reflected_wrapper.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(90.0, 0.0, 0.0),
+        scale=(-100.0, 100.0, 100.0),
+    )
+    root = _model_node(2, "root", "LimbNode", translation=(0.0, 2.0, 0.0))
+    child = _model_node(3, "child", "LimbNode", translation=(1.0, 0.0, 0.0))
+    scene = _scene(
+        path,
+        (wrapper, root, child),
+        parents={2: [("OO", 1, [])], 3: [("OO", 2, [])]},
+        children={1: [("OO", 2, [])], 2: [("OO", 3, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+    contract = document.transform_contract
+
+    assert contract.common_wrapper_models == ("Armature",)
+    assert contract.common_wrapper_is_static
+    assert contract.common_wrapper_is_uniform
+    assert contract.common_wrapper_is_reflected
+    assert contract.canonicalized_wrapper_reflection
+    assert contract.local_reflected_bones == ()
+    assert contract.singular_or_nonfinite_nodes == ()
+    assert contract.canonical_transform_validation["negative_determinants"] == 0
+
+    raw = scene.model_global_matrices()
+    expected_root = np.linalg.inv(raw[1]) @ raw[2]
+    expected_child = np.linalg.inv(raw[1]) @ raw[3]
+    canonical = document.global_matrices(tick=0)
+    # This focused assertion fixes the repository's column-vector convention:
+    # inverse(wrapper) is left-multiplied, not right-multiplied.
+    np.testing.assert_allclose(canonical["root"], expected_root, atol=1.0e-10)
+    np.testing.assert_allclose(canonical["child"], expected_child, atol=1.0e-10)
+    assert np.linalg.det(canonical["root"][:3, :3]) > 0.0
+    assert np.linalg.det(canonical["child"][:3, :3]) > 0.0
+
+    preflight = preflight_fbx(path, purpose="animation", document=document)
+    assert not preflight.import_blocking
+    finding = next(
+        row
+        for row in preflight.findings
+        if row.code == "common_wrapper_reflection_canonicalized"
+    )
+    assert finding.outcome == "automatically_repaired"
+    assert finding.severity == "informational"
+    assert finding.group == "repaired"
+
+
+def test_true_local_reflection_is_advisory_for_animation_and_strict_for_model(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "local_reflection.fbx"
+    path.write_bytes(b"synthetic")
+    scene = _scene(
+        path,
+        (_model_node(1, "reflected_root", "LimbNode", scale=(-1.0, 1.0, 1.0)),),
+    )
+    animation_document = FbxDocument.from_scene(scene, purpose="animation")
+    model_document = FbxDocument.from_scene(scene, purpose="model")
+
+    assert animation_document.transform_contract.common_wrapper_models == ()
+    assert animation_document.transform_contract.local_reflected_bones == (
+        "reflected_root",
+    )
+    animation = preflight_fbx(
+        path,
+        purpose="animation",
+        document=animation_document,
+    )
+    assert not animation.import_blocking
+    assert animation.readiness_level == "advisory"
+    animation.require_buildable()
+
+    model = preflight_fbx(path, purpose="model", document=model_document)
+    assert model.import_blocking
+    assert any(
+        row.code == "reflected_or_negative_bone_scale"
+        for row in model.findings
+    )
+
+
+def test_animated_determinant_sign_change_without_sampled_zero_is_advisory(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sign_change.fbx"
+    path.write_bytes(b"synthetic")
+    scene = _scene(path, (_model_node(1, "root", "LimbNode"),))
+    step = FBX_TICKS_PER_SECOND // 30
+    curve_node = FbxNode("AnimationCurveNode", [20, "Scale", ""], [], 0, 0)
+    curve = FbxNode(
+        "AnimationCurve",
+        [30, "ScaleX", ""],
+        [
+            FbxNode("KeyTime", [[0, step]], [], 0, 0),
+            FbxNode("KeyValueFloat", [[1.0, -1.0]], [], 0, 0),
+        ],
+        0,
+        0,
+    )
+    stack_properties = FbxNode(
+        "Properties70",
+        [],
+        [_property("LocalStart", 0), _property("LocalStop", step)],
+        0,
+        0,
+    )
+    stack = FbxNode(
+        "AnimationStack", [40, "AnimStack::Take", ""], [stack_properties], 0, 0
+    )
+    layer = FbxNode("AnimationLayer", [100, "AnimLayer::Layer", ""], [], 0, 0)
+    scene.top["Objects"].children.extend((stack, layer, curve_node, curve))
+    scene.object_by_id.update({20: curve_node, 30: curve, 40: stack, 100: layer})
+    scene.children[40] = [("OO", 100, [])]
+    scene.children[100] = [("OO", 20, [])]
+    scene.children[20] = [("OP", 30, ["d|X"])]
+    scene.parents[20] = [("OP", 1, ["Lcl Scaling"])]
+    document = FbxDocument.from_scene(scene, purpose="animation")
+
+    assert document.transform_contract.animated_determinant_sign_change_bones == (
+        "root",
+    )
+    assert document.transform_contract.singular_or_nonfinite_nodes == ()
+    report = preflight_fbx(path, purpose="animation", document=document)
+    finding = next(
+        row
+        for row in report.findings
+        if row.code == "animated_scale_sign_change"
+    )
+    assert finding.severity == "warning"
+    assert finding.can_continue
+    assert report.readiness_level == "advisory"
+    report.require_buildable()
 
 
 def test_non_uniform_armature_wrapper_has_named_actionable_preflight_finding(
@@ -364,6 +511,36 @@ def test_model_preflight_allows_static_prop_but_animation_still_blocks(
     assert any(row.code == "static_model_without_armature" for row in model.findings)
     assert animation.blocking
     assert any(row.code == "no_usable_skeleton" for row in animation.findings)
+
+
+def test_animation_without_skeleton_accepts_supported_scalar_mimic_domain(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mimic_only.fbx"
+    document = SimpleNamespace(
+        limb_models={},
+        animation_stacks=(),
+        meters_per_unit=0.01,
+        normalized_name_collisions=(),
+        bind_global_matrices={},
+        parent_by_name={},
+        scene=SimpleNamespace(
+            geometries=(),
+            limb_ids=(),
+            model_names={},
+            blend_shape_names=("Smile",),
+            blend_shapes=(),
+        ),
+    )
+
+    report = preflight_fbx(source, purpose="animation", document=document)
+
+    assert not report.import_blocking
+    assert report.inventory["supported_scalar_mimic_domain"] is True
+    assert any(
+        row.code == "scalar_mimic_animation_domain"
+        for row in report.findings
+    )
 
 
 def test_crig_builder_uses_resolved_bind_and_bind_changes_rig_identity(

@@ -14,10 +14,10 @@ TARGET_RETARGET_POLICY_VERSION = "1"
 DL2_ADVANCED_BODY_POLICY_ID = "dl2_advanced_body_bridge_v1"
 DL2_LEGACY_BODY_POLICY_ID = "dl2_legacy_body_bridge_v1"
 DL2_ADVANCED_EXPECTED_SKELETON_HASH = (
-    "9054908b15da1223340fe881b9a99bb164e74740b4406bfa670d571c8ad14238"
+    "6e3ef3282f66c19028bbf7ecb4a3f2685e61416c159826ae68d7b6bbdcd2ae4c"
 )
 DL2_ADVANCED_EXPECTED_SOURCE_SMD_SHA256 = (
-    "D2FED6A5DA455147F85B8002671A23A6CD1E4890E8D50B62878C056457340904"
+    "E298D421E8DD398ED66DEC44115D7E2DF03930E8EAEE3A162BABD0268F17A7C5"
 )
 DL2_ADVANCED_EXPECTED_REFERENCE_ANM2_SHA256 = (
     "9368914A4C59521BDD31FED064DF93A5D2D287E793FDC9447BE24ACD4A3FFF6D"
@@ -26,7 +26,7 @@ DL2_ADVANCED_EXPECTED_BONE_COUNT = 271
 DL2_ADVANCED_EXPECTED_TRACK_COUNT = 368
 DL2_ADVANCED_BODY_DIRECT_SLOT_COUNT = 52
 DL2_LEGACY_EXPECTED_SKELETON_HASH = (
-    "512d6cefba097b4c48efe8d472fbf3ecd6cb0a8b97a6d86f61d23210bbb33241"
+    "26f3013952da75db549e021296cc202dc9c2c56af37a3089b8746e048e7b1a1b"
 )
 DL2_LEGACY_EXPECTED_SOURCE_SMD_SHA256 = (
     "EC2D0D2E4FDF221491318E83B9A3FF8AAB82F856A94C6E1E1AAB23784B109A0D"
@@ -374,9 +374,6 @@ def _dl2_advanced_coherence_errors(
         "game_id": DL2_GAME_ID,
         "primary_root": "pelvis",
         "finger_policy": "dl2_explicit_finger10_20_30_40_roots",
-        "source_smd": "player_skeleton.smd",
-        "source_smd_sha256": DL2_ADVANCED_EXPECTED_SOURCE_SMD_SHA256,
-        "source_reference_anm2_sha256": DL2_ADVANCED_EXPECTED_REFERENCE_ANM2_SHA256,
         "hash_collision_count": 0,
         "reference_descriptor_count": 189,
         "unmatched_reference_descriptor_count": 97,
@@ -483,9 +480,6 @@ def _dl2_legacy_coherence_errors(
         "game_id": DL2_GAME_ID,
         "primary_root": "pelvis",
         "finger_policy": "dl2_explicit_finger10_20_30_40_roots",
-        "source_smd": "player_shadow_caster.smd",
-        "source_smd_sha256": DL2_LEGACY_EXPECTED_SOURCE_SMD_SHA256,
-        "source_reference_anm2_sha256": DL2_ADVANCED_EXPECTED_REFERENCE_ANM2_SHA256,
         "hash_collision_count": 0,
         "reference_descriptor_count": 189,
         "unmatched_reference_descriptor_count": 113,

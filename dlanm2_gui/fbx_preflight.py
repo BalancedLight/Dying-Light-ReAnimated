@@ -30,6 +30,16 @@ INFO = "informational"
 PASS = "pass"
 AUTOMATICALLY_REPAIRED = "automatically_repaired"
 BLOCK = "block"
+EXPORT_FIRST_POLICY = "export_first_v1"
+
+_ANIMATION_BUILD_BLOCKING_CODES = frozenset(
+    {
+        "animation_stack_unusable",
+        "requested_animation_stack_missing",
+        "singular_bind_matrix",
+        "singular_or_nonfinite_canonical_transform",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +83,38 @@ class FbxPreflightReport:
         return [
             row for row in self.findings if row.severity == ERROR and row.can_continue
         ]
+
+    @property
+    def readiness_level(self) -> str:
+        if self.import_blocking:
+            return "cannot_export"
+        if any(
+            row.severity == ERROR
+            or row.code == "multiple_animation_stacks"
+            for row in self.findings
+        ):
+            return "needs_attention"
+        if any(row.severity == WARNING for row in self.findings):
+            return "advisory"
+        return "ready"
+
+    @property
+    def readiness_label(self) -> str:
+        level = self.readiness_level
+        codes = {row.code for row in self.findings}
+        if level == "cannot_export":
+            return "Cannot export — invalid or unsampleable FBX data"
+        if level == "needs_attention":
+            return "Needs attention — review the selected animation or mapping"
+        if level == "advisory":
+            return "Advisory — export remains available"
+        if "common_wrapper_reflection_canonicalized" in codes:
+            return "Ready — automatically repaired wrapper transform"
+        if "target_only_bones_held_at_bind" in codes:
+            return "Ready — partial skeleton; target-only bones held at bind"
+        if codes.intersection({"static_bind_pose_clip", "static_rest_pose_stack"}):
+            return "Ready — static/bind-pose clip"
+        return "Ready"
 
     def add(
         self,
@@ -124,7 +166,16 @@ class FbxPreflightReport:
         )
 
     def require_buildable(self) -> None:
-        rows = [row for row in self.findings if row.severity == ERROR]
+        rows = [
+            row
+            for row in self.findings
+            if row.severity == ERROR
+            and (
+                self.purpose != "animation"
+                or not row.can_continue
+                or row.code in _ANIMATION_BUILD_BLOCKING_CODES
+            )
+        ]
         if rows:
             raise ValueError(
                 "FBX preflight blocked the build:\n- "
@@ -134,11 +185,14 @@ class FbxPreflightReport:
     def to_dict(self) -> dict[str, Any]:
         return {
             "format": "dl-reanimated-fbx-preflight-v1",
+            "preflight_policy": EXPORT_FIRST_POLICY,
             "path": self.path,
             "purpose": self.purpose,
             "blocking": self.blocking,
             "import_blocking": self.import_blocking,
             "repairable": bool(self.repairable_findings),
+            "readiness_level": self.readiness_level,
+            "readiness_label": self.readiness_label,
             "findings": [asdict(row) for row in self.findings],
             "inventory": self.inventory,
         }
@@ -165,22 +219,87 @@ def _nearest_selected_ancestor(name: str, parents: dict[str, str | None], select
 
 
 def classify_target_compatibility(document: Any, rig: ChromeRig) -> dict[str, Any]:
-    source_names = set(document.limb_models)
-    target_names = {bone.name for bone in rig.bones}
+    source_names = set(str(name) for name in document.limb_models)
+    target_names = {str(bone.name) for bone in rig.bones}
     required = {bone.name for bone in rig.bones if bone.deform and not bone.helper}
     optional = target_names - required
-    missing_required = sorted(required - source_names, key=str.casefold)
-    missing_optional = sorted(optional - source_names, key=str.casefold)
-    extra = sorted(source_names - target_names, key=str.casefold)
-    mismatches: list[dict[str, str | None]] = []
+    source_by_normalized: dict[str, list[str]] = {}
+    target_by_normalized: dict[str, list[str]] = {}
+    for name in source_names:
+        source_by_normalized.setdefault(normalized_bone_name(name), []).append(name)
+    for name in target_names:
+        target_by_normalized.setdefault(normalized_bone_name(name), []).append(name)
+    matched: dict[str, str] = {}
+    for key in sorted(set(source_by_normalized).intersection(target_by_normalized)):
+        sources = source_by_normalized[key]
+        targets = target_by_normalized[key]
+        if len(sources) == len(targets) == 1:
+            matched[targets[0]] = sources[0]
+
     by_name = {bone.name: bone for bone in rig.bones}
-    for name in sorted(target_names & source_names, key=str.casefold):
-        bone = by_name[name]
-        expected = rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
-        actual = _nearest_selected_ancestor(name, document.parent_by_name, target_names)
-        if actual != expected:
-            mismatches.append({"bone": name, "expected_target_parent": expected, "source_target_ancestor": actual})
-    if missing_required or mismatches:
+
+    def hierarchy_mismatches(rows: dict[str, str]) -> list[dict[str, str | None]]:
+        selected_targets = set(rows)
+        selected_sources = set(rows.values())
+        source_target_by_normalized = {
+            normalized_bone_name(source_name): target_name
+            for target_name, source_name in rows.items()
+        }
+        mismatches: list[dict[str, str | None]] = []
+        for name in sorted(selected_targets, key=str.casefold):
+            bone = by_name[name]
+            expected_index = bone.parent_index
+            expected = None
+            while expected_index >= 0:
+                candidate = rig.bones[expected_index].name
+                if candidate in selected_targets:
+                    expected = candidate
+                    break
+                expected_index = rig.bones[expected_index].parent_index
+            source_name = rows[name]
+            actual_source = _nearest_selected_ancestor(
+                source_name,
+                document.parent_by_name,
+                selected_sources,
+            )
+            actual = (
+                source_target_by_normalized.get(normalized_bone_name(actual_source))
+                if actual_source
+                else None
+            )
+            if actual != expected:
+                mismatches.append(
+                    {
+                        "bone": name,
+                        "expected_target_parent": expected,
+                        "source_target_ancestor": actual,
+                    }
+                )
+        return mismatches
+
+    # A disconnected optional/helper endpoint is safer at target bind than as
+    # a direct row in the wrong parent basis.  It should not turn an otherwise
+    # usable animation into a mapping error: its mapped parent will carry the
+    # bind-held target row naturally.  Required/deform ancestry mismatches
+    # remain action-required.
+    initial_mismatches = hierarchy_mismatches(matched)
+    optional_mismatches = [
+        row for row in initial_mismatches if str(row["bone"]) in optional
+    ]
+    for row in optional_mismatches:
+        matched.pop(str(row["bone"]), None)
+
+    matched_targets = set(matched)
+    matched_sources = set(matched.values())
+    missing_required = sorted(required - matched_targets, key=str.casefold)
+    missing_optional = sorted(optional - matched_targets, key=str.casefold)
+    extra = sorted(source_names - matched_sources, key=str.casefold)
+    mismatches = hierarchy_mismatches(matched)
+    if mismatches:
+        classification = "incompatible"
+    elif matched_sources == source_names and len(matched_targets) < len(target_names):
+        classification = "exact_target_subset"
+    elif missing_required:
         classification = "incompatible"
     elif extra or missing_optional:
         classification = "target_compatible_source_superset"
@@ -188,11 +307,19 @@ def classify_target_compatibility(document: Any, rig: ChromeRig) -> dict[str, An
         classification = "exact_identity"
     return {
         "classification": classification,
-        "matched_target_bones": sorted(target_names & source_names, key=str.casefold),
+        "matched_target_bones": sorted(matched_targets, key=str.casefold),
+        "exact_target_subset_mapping": {
+            target: matched[target]
+            for target in sorted(matched, key=str.casefold)
+        },
+        "exact_target_subset_rows": len(matched),
+        "target_bind_bones": sorted(target_names - matched_targets, key=str.casefold),
+        "target_bind_rows": len(target_names - matched_targets),
         "required_missing_bones": missing_required,
         "optional_helper_missing_bones": missing_optional,
         "extra_source_bones": extra,
         "hierarchy_mismatches": mismatches,
+        "optional_hierarchy_mismatches_held_at_bind": optional_mismatches,
     }
 
 
@@ -266,6 +393,11 @@ def preflight_fbx(
                 for row in stack_activity
             ],
             "meters_per_unit": float(getattr(document, "meters_per_unit", 0.01)),
+            "declared_timebase": (
+                document.declared_timebase.to_dict()
+                if hasattr(getattr(document, "declared_timebase", None), "to_dict")
+                else None
+            ),
             "game_id": game_id,
             "requested_purpose": purpose,
             "import_tolerance": FbxImportTolerance.coerce(tolerance).value,
@@ -351,6 +483,11 @@ def preflight_fbx(
                 outcome=AUTOMATICALLY_REPAIRED,
                 group="repaired",
             )
+    scalar_mimic_domain = bool(
+        tuple(getattr(scene, "blend_shapes", ()) or ())
+        or tuple(getattr(scene, "blend_shape_names", ()) or ())
+    )
+    report.inventory["supported_scalar_mimic_domain"] = scalar_mimic_domain
     if not document.limb_models:
         if purpose == "model":
             report.add(
@@ -359,6 +496,16 @@ def preflight_fbx(
                 "No FBX LimbNode skeleton was found; this model is a static prop.",
                 "Static model geometry does not require an armature or skin clusters.",
                 "Continue in Auto or Static prop mode. Choose Exact Rig only after adding and skinning an armature.",
+            )
+        elif scalar_mimic_domain:
+            report.add(
+                INFO,
+                "scalar_mimic_animation_domain",
+                "No LimbNode skeleton was found, but a supported scalar/mimic animation domain is available.",
+                "BlendShapeChannel animation can be exported without a body skeleton.",
+                "Continue with the facial/mimic content mode.",
+                outcome=PASS,
+                group="ignored",
             )
         else:
             report.add(ERROR, "no_usable_skeleton", "No FBX LimbNode skeleton was found.", "Animation builds require a skeleton.", "Export bones as an FBX armature/LimbNode hierarchy.")
@@ -370,10 +517,19 @@ def preflight_fbx(
         for error in contract_payload.get("errors", ()):
             report.add(
                 ERROR,
-                "unsupported_fbx_transform",
+                (
+                    "singular_or_nonfinite_canonical_transform"
+                    if purpose == "animation"
+                    else "unsupported_fbx_transform"
+                ),
                 str(error),
-                "The shared FBX transform contract cannot evaluate this node safely for model or animation output.",
-                "Remove shear, singular transforms, or invalid scale from the named node and re-export the FBX.",
+                (
+                    "A required canonical skeletal sample cannot be represented as finite ANM2 data."
+                    if purpose == "animation"
+                    else "The shared FBX transform contract cannot evaluate this node safely for model output."
+                ),
+                "Repair the singular/non-finite source transform and retry the build.",
+                can_continue=(purpose == "animation"),
             )
         wrapper_rows = dict(
             contract_payload.get("wrapper_scale_normalization", {}) or {}
@@ -389,56 +545,113 @@ def preflight_fbx(
                 for name, scale in non_uniform_wrappers[:12]
             )
             report.add(
-                WARNING,
+                INFO if purpose == "animation" else WARNING,
                 "non_uniform_scene_wrapper",
                 "Non-uniform armature wrapper scale was found: " + detected,
-                "Only uniform scene/unit wrapper scale can be factored out without "
-                "changing joint directions. Any resulting joint shear is a build-blocking "
-                "unsupported_fbx_transform finding.",
-                "Apply/freeze the named wrapper scale in the DCC, preserve the authored "
-                "joint bind, and re-export; review this warning before using the generated CRIG.",
+                (
+                    "Animation sampling removes the evaluated common wrapper before deriving "
+                    "bind-relative motion; finite residual shear is projected to a proper rotation."
+                    if purpose == "animation"
+                    else "Target model/CRIG authoring must retain structurally coherent bind and skin data."
+                ),
+                (
+                    "No action is required for animation export unless canonical sampling reports a singular value."
+                    if purpose == "animation"
+                    else "Apply/freeze the named wrapper scale before creating a target CRIG."
+                ),
+                outcome=(AUTOMATICALLY_REPAIRED if purpose == "animation" else WARNING),
+                group=("repaired" if purpose == "animation" else "needs_review"),
             )
-        reflected = list(
-            contract_payload.get("reflected_or_negative_scale_nodes", ())
+        contract_v2 = str(contract_payload.get("format", "")).endswith("-v2")
+        local_reflected = list(contract_payload.get("local_reflected_bones", ()))
+        sign_changes = list(
+            contract_payload.get("animated_determinant_sign_change_bones", ())
         )
-        if reflected:
+        if bool(contract_payload.get("canonicalized_wrapper_reflection", False)):
+            wrappers = list(contract_payload.get("common_wrapper_models", ()))
+            report.add(
+                INFO,
+                "common_wrapper_reflection_canonicalized",
+                "Automatically removed a common reflected animation wrapper"
+                + (f": {', '.join(str(value) for value in wrappers)}" if wrappers else "."),
+                "The reflected determinant belonged to the shared scene/armature wrapper, not to descendant bone-local motion.",
+                "No action is required. Advanced diagnostics retain the wrapper matrix and canonical sample audit.",
+                outcome=AUTOMATICALLY_REPAIRED,
+                group="repaired",
+            )
+        if local_reflected:
+            if purpose == "animation":
+                report.add(
+                    WARNING,
+                    "local_bone_reflection_projected",
+                    "A local reflected animation basis remains after wrapper removal: "
+                    + ", ".join(str(value) for value in local_reflected[:12]),
+                    "Bind-relative motion will be projected to the nearest proper rotation while preserving target bind scale.",
+                    "Review the exported motion if the reflection was intentionally animated; export remains available.",
+                    can_continue=True,
+                    group="needs_review",
+                )
+            else:
+                report.add(
+                    ERROR,
+                    "reflected_or_negative_bone_scale",
+                    "Irreducibly reflected target bind bones affect: "
+                    + ", ".join(str(value) for value in local_reflected[:12]),
+                    "A target CRIG and its skin bind data must remain structurally self-consistent.",
+                    "Apply/freeze the named target-bone scale before creating the model/CRIG.",
+                )
+        if sign_changes:
+            report.add(
+                WARNING,
+                "animated_scale_sign_change",
+                "Animated determinant sign changes affect: "
+                + ", ".join(str(value) for value in sign_changes[:12]),
+                "The discontinuous scale sign cannot be encoded directly in ANM2.",
+                "The exporter will use the nearest proper rotation and target bind scale; review the result.",
+                can_continue=True,
+                group="needs_review",
+            )
+        if not contract_v2:
+            reflected = list(
+                contract_payload.get("reflected_or_negative_scale_nodes", ())
+            )
             reflected_bones = [
                 str(value) for value in reflected if str(value) in document.limb_models
-            ]
-            reflected_non_bones = [
-                str(value) for value in reflected if str(value) not in document.limb_models
             ]
             if reflected_bones:
                 report.add(
                     ERROR,
                     "reflected_or_negative_bone_scale",
-                    "Reflected or negative-scale bone transforms affect: "
+                    "Legacy transform diagnostics found reflected bones: "
                     + ", ".join(reflected_bones[:12]),
-                    "Chrome rig TRS and inverse-global bind matrices cannot represent an "
-                    "irreducibly reflected joint basis safely.",
-                    "Apply/freeze the named armature scale in the DCC and re-export. Exact Rig "
-                    "is viable only after the bone bases are non-reflected.",
-                )
-            if reflected_non_bones:
-                report.add(
-                    WARNING,
-                    "reflected_mesh_or_wrapper_scale",
-                    "Reflected non-bone Model transforms affect: "
-                    + ", ".join(reflected_non_bones[:12]),
-                    "The model importer will reverse emitted winding, but the reflection must "
-                    "not enter an authored animation-bone basis.",
-                    "Apply transforms in the DCC if the reflected surface or normals are not "
-                    "intentional; review the model build report before compiling.",
+                    "Contract v1 cannot distinguish inherited wrapper reflection from a local bone reflection.",
+                    "Reload through the production FBX evaluator to generate transform contract v2.",
+                    can_continue=(purpose == "animation"),
                 )
     collisions = list(getattr(document, "normalized_name_collisions", ()))
     if collisions:
-        report.add(ERROR, "duplicate_normalized_bone_names", f"Bone names collide after Unicode NFKC/casefold normalization: {collisions}", "Normalized lookup would be ambiguous.", "Rename the colliding bones so their normalized names are unique.")
+        report.add(
+            WARNING if purpose == "animation" else ERROR,
+            "duplicate_normalized_bone_names",
+            f"Bone names collide after Unicode NFKC/casefold normalization: {collisions}",
+            "Automatic normalized-name mapping is ambiguous, but FBX object IDs and curve ownership remain distinct.",
+            "Resolve the affected mapping row manually; import and sampling remain available.",
+            can_continue=(purpose == "animation"),
+        )
     non_ascii = sorted(name for name in document.limb_models if not name.isascii())
     if non_ascii:
         report.add(WARNING, "non_ascii_bone_names", f"Non-ASCII bone names were found: {', '.join(non_ascii[:12])}", "Chrome's implicit descriptor hash is ASCII-oriented.", "Use a .crig with explicit descriptors for every non-ASCII target bone.")
     if purpose == "animation":
         if has_stack_inventory and not stacks:
-            report.add(ERROR, "no_animation_stacks", "The FBX contains no animation stack.", "There is no clip to sample.", "Bake the desired action into an FBX animation stack.")
+            report.add(
+                INFO,
+                "static_bind_pose_clip",
+                "The FBX contains no animation stack; it will export as a two-frame static bind-pose clip.",
+                "A static skeletal pose is mathematically sampleable and does not need changing channels.",
+                "No action is required unless moving animation was expected.",
+                outcome=PASS,
+                group="ignored",
+            )
         try:
             if stacks:
                 selected_stack = getattr(document, "selected_animation_stack", None)
@@ -450,7 +663,21 @@ def preflight_fbx(
                 ):
                     document.select_preferred_animation_stack()
         except ValueError as exc:
-            report.add(ERROR, "animation_stack_unusable", str(exc), "Sampling an absent, malformed, or layered stack would produce the wrong clip.", "Choose an available single-layer stack or bake/flatten it.")
+            missing_requested = bool(
+                animation_stack and "was not found" in str(exc)
+            )
+            report.add(
+                ERROR,
+                (
+                    "requested_animation_stack_missing"
+                    if missing_requested
+                    else "animation_stack_unusable"
+                ),
+                str(exc),
+                "The selected stack cannot currently be sampled.",
+                "Choose an available stack or bake/flatten the intended animation before building.",
+                can_continue=not missing_requested,
+            )
         selected_stack = getattr(document, "selected_animation_stack", None)
         selected_name = str(getattr(selected_stack, "name", "") or "")
         if len(stacks) > 1 and selected_name:
@@ -487,6 +714,7 @@ def preflight_fbx(
                 "There is no stack that can be sampled safely for skeletal output.",
                 "Bake or repair at least one named stack, ensuring finite ordered keys and "
                 "one animation layer, then re-export.",
+                can_continue=True,
             )
         selected_unusable = [
             row
@@ -500,6 +728,7 @@ def preflight_fbx(
                 f"Animation stack {row.name!r} is unusable: {row.reason}",
                 "Malformed curve data or layered animation cannot be sampled reliably.",
                 "Bake/repair the named stack or choose another usable stack.",
+                can_continue=True,
             )
         curves = dict(getattr(document, "curves", {}) or {})
         changing = []
@@ -535,7 +764,15 @@ def preflight_fbx(
                     group="ignored",
                 )
             else:
-                report.add(WARNING, "no_changing_skeletal_channels", "The selected stack has no changing skeletal TRS channels.", "The output would remain at bind pose.", "Select the intended body animation stack or keep it only when a bind-pose clip is intentional.")
+                report.add(
+                    INFO,
+                    "static_bind_pose_clip",
+                    "Ready — static/bind-pose clip; the selected stack has no changing skeletal TRS channels.",
+                    "Two identical finite frames are a valid ANM2 animation.",
+                    "No action is required unless moving animation was expected.",
+                    outcome=PASS,
+                    group="ignored",
+                )
         elif changing and set(facial) == {row[0] for row in changing}:
             report.add(WARNING, "facial_only_curves", "Only facial-like bones have changing curves.", "A body ANM2 export may be static.", "Use the facial/mimic workflow or select a body animation stack.")
     diagnostics = document.bind_diagnostics() if hasattr(document, "bind_diagnostics") else {}
@@ -554,7 +791,14 @@ def preflight_fbx(
         if not np.isfinite(matrix).all() or abs(float(np.linalg.det(matrix[:3, :3]))) <= 1.0e-12:
             singular.append(name)
     if singular:
-        report.add(ERROR, "singular_bind_matrix", f"Non-finite or singular bind matrices affect: {', '.join(singular[:12])}", "The bind basis cannot be inverted safely.", "Remove zero scale/non-finite transforms and re-export.")
+        report.add(
+            ERROR,
+            "singular_bind_matrix",
+            f"Non-finite or singular bind matrices affect: {', '.join(singular[:12])}",
+            "The bind basis cannot be inverted safely at build time.",
+            "Remove zero scale/non-finite transforms and re-export.",
+            can_continue=(purpose == "animation"),
+        )
     roots = [name for name in document.limb_models if document.parent_by_name.get(name) is None]
     report.inventory["skeletal_roots"] = roots
     if len(roots) > 1:
@@ -729,17 +973,37 @@ def preflight_fbx(
         report.inventory["target_compatibility"] = compatibility
         if compatibility["required_missing_bones"]:
             report.add(
-                ERROR,
-                "required_target_bones_missing",
-                f"Required target bones are missing: {', '.join(compatibility['required_missing_bones'][:20])}",
-                "The FBX is not the same skeleton as the selected target .crig, so strict exact-rig export cannot reconstruct those tracks by name.",
-                "Add the clip, then review the generated map in Root & .crig Mapping. Unmapped helpers can stay at bind pose; map every body bone that must animate.",
-                can_continue=True,
+                INFO,
+                "target_only_bones_held_at_bind",
+                f"The source is partial relative to the target; {compatibility['target_bind_rows']} target-only bones will remain at bind.",
+                "Target-only face, secondary, twist, helper, IK, and deform rows do not make finite source animation unsampleable.",
+                "No action is required unless one of those target rows must be animated for this clip.",
+                outcome=PASS,
+                group="ignored",
             )
         if compatibility["optional_helper_missing_bones"]:
-            report.add(WARNING, "optional_target_bones_missing", f"Optional/helper target bones are missing: {', '.join(compatibility['optional_helper_missing_bones'][:20])}", "Those helpers will remain at target bind pose.", "Continue if they are intentionally absent; otherwise export them from the source rig.")
+            report.add(
+                INFO,
+                "optional_target_bones_missing",
+                f"Optional/helper target bones are absent and will remain at bind: {', '.join(compatibility['optional_helper_missing_bones'][:20])}",
+                "Optional target rows inherit or hold the target bind safely.",
+                "No action is required unless an optional helper must animate.",
+                outcome=PASS,
+                group="ignored",
+            )
         if compatibility["extra_source_bones"]:
             report.add(INFO, "source_has_extra_bones", f"The source contains {len(compatibility['extra_source_bones'])} extra bones.", "Facial, cloth, weapon and secondary chains are safe in a target-compatible superset.", "No change is required unless a required target bone is missing.")
+        if compatibility.get("optional_hierarchy_mismatches_held_at_bind"):
+            rows = compatibility["optional_hierarchy_mismatches_held_at_bind"]
+            report.add(
+                INFO,
+                "optional_hierarchy_mismatch_held_at_bind",
+                f"{len(rows)} optional/helper exact-name row(s) used a different parent basis and will remain at target bind.",
+                "An optional endpoint or helper does not need a direct source row to follow its mapped target parent.",
+                "No action is required unless that helper must animate independently.",
+                outcome=PASS,
+                group="ignored",
+            )
         if compatibility["hierarchy_mismatches"]:
             report.add(
                 ERROR,

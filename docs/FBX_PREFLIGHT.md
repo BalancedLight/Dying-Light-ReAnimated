@@ -29,6 +29,7 @@ Every readable binary FBX reports an `FbxTransformContract` containing:
 
 - source path/hash and FBX version;
 - metres per unit and FBX axis settings;
+- declared `TimeMode`/custom FPS, origin, and confidence (valid GlobalSettings wins over inferred key spacing);
 - requested/resolved orientation;
 - unit and axis conversion counts;
 - wrapper models and wrapper-scale normalization;

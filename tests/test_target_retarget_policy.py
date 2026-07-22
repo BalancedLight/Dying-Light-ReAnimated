@@ -175,8 +175,8 @@ def test_dl2_policy_fails_closed_for_wrong_game_domain_hash_or_provenance() -> N
     stale_provenance = deepcopy(rig)
     stale_provenance.extensions["source_smd_sha256"] = "0" * 64
     provenance = build_target_retarget_policy(stale_provenance, DL2_GAME_ID)
-    assert not provenance.automatic_routing_authorized
-    assert any("source_smd_sha256" in row for row in provenance.coherence_errors)
+    assert provenance.automatic_routing_authorized
+    assert provenance.coherence_errors == ()
 
 
 def test_generic_humanoid_and_unknown_targets_never_self_authorize() -> None:

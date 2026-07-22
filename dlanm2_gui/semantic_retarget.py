@@ -317,6 +317,7 @@ def prepare_bundled_semantic_state(
         policy,
         clip_domain="body",
         role_overrides=overrides,
+        target_bone_overrides=profile.target_bone_overrides,
     )
     validation = validate_automatic_retarget_plan(
         plan, source, target_rig, policy
@@ -348,6 +349,7 @@ def compile_bundled_semantic_profile(
         policy,
         clip_domain="body",
         role_overrides=overrides,
+        target_bone_overrides=profile.target_bone_overrides,
     )
     validation = validate_automatic_retarget_plan(plan, source, target_rig, policy)
     validation.require_valid()
@@ -356,6 +358,7 @@ def compile_bundled_semantic_profile(
         target_rig,
         policy,
         role_overrides=overrides,
+        target_bone_overrides=profile.target_bone_overrides,
     )
     live = revalidate_verified_dl2_advanced_body_map(
         compiled,
@@ -363,121 +366,9 @@ def compile_bundled_semantic_profile(
         target_rig,
         policy,
         role_overrides=overrides,
+        target_bone_overrides=profile.target_bone_overrides,
     )
     live.require_valid()
-    target_overrides = {
-        str(name): dict(row)
-        for name, row in profile.target_bone_overrides.items()
-        if str(row.get("mode", "auto") or "auto") != "auto"
-    }
-    if target_overrides:
-        source_names = set(str(name) for name in source.limb_models)
-        target_by_name = {str(bone.name): bone for bone in target_rig.bones}
-        pair_by_target = {
-            str(pair.target_rig_bone): pair for pair in compiled.pairs
-        }
-        errors: list[str] = []
-        for target_name in sorted(target_overrides, key=str.casefold):
-            row = target_overrides[target_name]
-            target_bone = target_by_name.get(target_name)
-            pair = pair_by_target.get(target_name)
-            if target_bone is None or pair is None:
-                errors.append(f"Target override refers to unknown target bone {target_name!r}")
-                continue
-            mode = str(row.get("mode", "auto") or "auto")
-            source_name = str(row.get("source_bone", "") or "")
-            transfer = str(row.get("transfer_policy", "default") or "default")
-            component = str(row.get("component_policy", "rotation") or "rotation")
-            if mode == "direct" and source_name not in source_names:
-                errors.append(
-                    f"Target override {target_name!r} references missing source bone {source_name!r}"
-                )
-                continue
-            prior_extensions = dict(pair.extensions or {})
-            pair.extensions = {
-                "target_bone_override": {
-                    "mode": mode,
-                    "source_bone": source_name,
-                    "transfer_policy": transfer,
-                    "component_policy": component,
-                },
-                "replaced_automatic_retarget_decision": prior_extensions.get(
-                    "automatic_retarget_decision", {}
-                ),
-                "mapping_mode": mode,
-                "execution_mapping_mode": mode,
-                "source_bones": [source_name] if source_name else [],
-            }
-            pair.method = f"manual:target_override:{mode}"
-            pair.confidence = 1.0
-            if mode == "direct":
-                pair.source_fbx_bone = source_name
-                pair.transfer_policy = (
-                    "rotation_delta" if transfer == "default" else transfer
-                )
-                pair.component_policy = component
-                pair.review_state = "manually_reviewed"
-            elif mode in {"inherit_bind", "static_bind"}:
-                pair.source_fbx_bone = ""
-                pair.transfer_policy = "bind"
-                pair.component_policy = component
-                pair.review_state = "intentionally_unmapped"
-            else:
-                errors.append(
-                    f"Target override {target_name!r} has unsupported mode {mode!r}"
-                )
-        errors.extend(compiled.validate())
-        if errors:
-            raise ValueError(
-                "Target-bone override compilation failed:\n- "
-                + "\n- ".join(dict.fromkeys(errors))
-            )
-
-        pair_payload = [
-            {
-                "target": pair.target_rig_bone,
-                "descriptor": pair.target_rig_descriptor,
-                "source": pair.source_fbx_bone,
-                "mode": dict(pair.extensions or {}).get("execution_mapping_mode", ""),
-                "transfer": pair.transfer_policy,
-                "component": pair.component_policy,
-                "review": pair.review_state,
-            }
-            for pair in sorted(compiled.pairs, key=lambda value: value.target_rig_bone.casefold())
-        ]
-        pair_fingerprint = hashlib.sha256(
-            json.dumps(
-                pair_payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-        ).hexdigest()
-        override_fingerprint = hashlib.sha256(
-            json.dumps(
-                target_overrides, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-            ).encode("utf-8")
-        ).hexdigest()
-        certificate = dict(live.certificate)
-        certificate.update(
-            {
-                "status": "pass",
-                "certificate_status": "pass",
-                "live_revalidated": True,
-                "semantic_target_override_count": len(target_overrides),
-                "semantic_target_override_fingerprint": override_fingerprint,
-                "compiled_pair_fingerprint": pair_fingerprint,
-                "validation_kind": "deterministic_semantic_profile_compilation",
-            }
-        )
-        live = AutomaticRetargetValidation(
-            "pass",
-            (),
-            tuple(live.warnings),
-            certificate,
-            plan.plan_hash,
-            True,
-        )
-        compiled.extensions["automatic_retarget_certificate"] = dict(certificate)
-        compiled.extensions["verified_mapping_certificate"] = dict(certificate)
-        compiled.extensions["semantic_target_bone_overrides"] = target_overrides
     compiled.extensions["semantic_profile_id"] = profile.profile_id
     compiled.extensions["semantic_manual_override_count"] = (
         profile.manual_override_count

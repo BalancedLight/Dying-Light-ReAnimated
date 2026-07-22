@@ -121,7 +121,7 @@ def validate_smd_depth_first_order(smd: SmdFile) -> None:
 def parse_noesis_ascii_skeleton(path: str | Path) -> dict[str, dict[str, Any]]:
     """Read only the skeleton prefix from a Noesis .ascii model export."""
 
-    lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = Path(path).read_text(encoding="utf-8-sig", errors="replace").splitlines()
     if not lines:
         raise ValueError("ASCII model file is empty")
     try:

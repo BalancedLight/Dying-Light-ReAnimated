@@ -468,7 +468,7 @@ class SourceMsh:
 
     @classmethod
     def from_json(cls, path: str | Path) -> "SourceMsh":
-        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
+        return cls.from_dict(json.loads(Path(path).read_text(encoding="utf-8-sig")))
 
     def _descendant_counts(self) -> list[int]:
         count = len(self.nodes)

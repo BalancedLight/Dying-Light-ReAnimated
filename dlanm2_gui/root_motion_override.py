@@ -30,7 +30,7 @@ except ImportError:
 MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
 
 
-def _frame_ticks(document: FbxDocument, fps: int, frame_count: int) -> list[int]:
+def _frame_ticks(document: FbxDocument, fps: float, frame_count: int) -> list[int]:
     if hasattr(document, "frame_ticks"):
         ticks = list(document.frame_ticks(fps=fps))
     else:
@@ -71,7 +71,7 @@ def apply_root_motion_source_override(
     canonical_smd: str | Path,
     source_bone: str,
     root_policy: str,
-    fps: int,
+    fps: float,
     animation_stack: str | None = None,
     source_bone_aliases: Mapping[str, str] | None = None,
     target_root_bone: str = "bip01",

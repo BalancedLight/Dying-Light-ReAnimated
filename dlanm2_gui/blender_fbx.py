@@ -25,11 +25,13 @@ from .anm2_fbx import (
     decode_anm2_animation,
     normalize_unknown_track_policy,
     reconstruct_native_scene,
+    resample_animation_scene,
     retarget_decoded_animation,
     unknown_track_indices,
     write_sparse_fbx_job,
     write_unknown_track_sidecar,
 )
+from .anm2_provenance import load_anm2_provenance
 from .bone_maps import GenericBoneMap
 from .chrome_rig import ChromeRig
 from .runtime_paths import resource_root
@@ -38,7 +40,7 @@ from .runtime_paths import resource_root
 class FbxExportResult:
     output_path: str
     frame_count: int
-    fps: int
+    fps: float
     bone_count: int
     warnings: tuple[str, ...]
     blender_log: str
@@ -51,6 +53,14 @@ class FbxExportResult:
     job_metadata_bytes: int = 0
     job_array_bytes: int = 0
     elapsed_seconds: float = 0.0
+    anm2_input_fps: float = 0.0
+    fbx_output_fps: float = 0.0
+    timing_metadata_status: str = ""
+    timing_metadata_path: str = ""
+    root_parity_max_angular_degrees: float = 0.0
+    root_parity_max_heading_degrees: float = 0.0
+    root_parity_max_translation_m: float = 0.0
+    native_rest_basis_max_rotation_degrees: float = 0.0
 
 
 class _StageProgress:
@@ -155,7 +165,14 @@ def run_blender_export(
             "--", "--job", str(job_path),
         ]
         stages("Starting Blender", 0, 1)
-        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
         started = time.monotonic()
         assert process.stdout is not None and process.stderr is not None
         lines: queue.Queue[str] = queue.Queue()
@@ -215,6 +232,22 @@ def run_blender_export(
                 "Blender exited without confirming the DL ReAnimated FBX export."
                 + (f"\n\nBlender log:\n{tail}" if tail else "")
             )
+        parity_payload = None
+        for line in log.splitlines():
+            if line.startswith("DLR_ROOT_PARITY:"):
+                try:
+                    parity_payload = json.loads(
+                        line[len("DLR_ROOT_PARITY:") :].strip()
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    parity_payload = None
+        if not isinstance(parity_payload, dict):
+            Path(temporary_output_name).unlink(missing_ok=True)
+            tail = "\n".join(log.splitlines()[-30:])
+            raise RuntimeError(
+                "Blender exited without confirming native root parity."
+                + (f"\n\nBlender log:\n{tail}" if tail else "")
+            )
         temporary_output = Path(temporary_output_name)
         if not temporary_output.is_file() or temporary_output.stat().st_size == 0:
             tail = "\n".join(log.splitlines()[-40:])
@@ -233,6 +266,18 @@ def run_blender_export(
         job_metadata_bytes=metadata_bytes,
         job_array_bytes=array_bytes,
         elapsed_seconds=time.monotonic() - operation_started,
+        root_parity_max_angular_degrees=float(
+            parity_payload["max_angular_error_degrees"]
+        ),
+        root_parity_max_heading_degrees=float(
+            parity_payload["max_heading_error_degrees"]
+        ),
+        root_parity_max_translation_m=float(
+            parity_payload["max_translation_error_m"]
+        ),
+        native_rest_basis_max_rotation_degrees=float(
+            parity_payload["native_rest_basis_max_rotation_degrees"]
+        ),
     )
 
 
@@ -291,7 +336,9 @@ def export_anm2_to_fbx(
     source_rig: ChromeRig,
     output_path: str | Path,
     *,
-    fps: int = 30,
+    fps: float | None = None,
+    anm2_input_fps: float | None = None,
+    fbx_output_fps: float | None = None,
     start_frame: int | None = None,
     end_frame: int | None = None,
     target_fbx: str | Path | None = None,
@@ -306,16 +353,48 @@ def export_anm2_to_fbx(
     if cancel_check is not None and cancel_check():
         raise RuntimeError("ANM2 to FBX export was cancelled.")
     stages("Reading ANM2", 0, 1)
+    provenance = load_anm2_provenance(anm2_path)
+    provenance_payload = provenance.payload if provenance.valid else {}
+
+    def resolve_rate(explicit: float | None, metadata_field: str) -> float:
+        candidate = (
+            explicit
+            if explicit is not None
+            else fps
+            if fps is not None
+            else provenance_payload.get(metadata_field, 30.0)
+        )
+        value = float(candidate)
+        if not np.isfinite(value) or value <= 0.0:
+            raise ValueError(f"{metadata_field} must be finite and positive.")
+        return value
+
+    input_rate = resolve_rate(anm2_input_fps, "sample_fps")
+    output_rate = resolve_rate(fbx_output_fps, "source_fbx_fps")
     source_bone_descriptors = tuple(int(bone.descriptor) for bone in source_rig.bones)
     animation: DecodedAnm2Animation = decode_anm2_animation(
         anm2_path,
-        fps=fps,
+        fps=input_rate,
         start_frame=start_frame,
         end_frame=end_frame,
         selected_descriptors=source_bone_descriptors,
         progress=stages,
         cancel_check=cancel_check,
     )
+    provenance_warnings = list(provenance.warnings)
+    provenance_status = provenance.status
+    if provenance.valid and int(provenance_payload["frame_count"]) != int(
+        animation.container_frame_count
+    ):
+        provenance_status = "frame_count_mismatch"
+        provenance_payload = {}
+        provenance_warnings = [
+            "ANM2 timing metadata was ignored because its frame count does not "
+            "match the selected ANM2."
+        ]
+        input_rate = resolve_rate(anm2_input_fps, "sample_fps")
+        output_rate = resolve_rate(fbx_output_fps, "source_fbx_fps")
+        animation = replace(animation, fps=input_rate)
     resolved_unknown_policy = normalize_unknown_track_policy(animation, unknown_track_policy)
     rig_descriptors = set(source_bone_descriptors)
     container_descriptors = (
@@ -332,7 +411,7 @@ def export_anm2_to_fbx(
         # pass. They never inflate the main 271-bone skeleton decode/job.
         unknown_animation = decode_anm2_animation(
             anm2_path,
-            fps=fps,
+            fps=input_rate,
             start_frame=start_frame,
             end_frame=end_frame,
             selected_descriptors=unresolved_descriptors,
@@ -376,6 +455,14 @@ def export_anm2_to_fbx(
                 f"{unresolved_count} unresolved ANM2 track(s) were explicitly dropped; "
                 "their transform curves are not present in the FBX or a sidecar."
             )
+    scene.warnings[:] = list(dict.fromkeys([*provenance_warnings, *scene.warnings]))
+    stages("Resampling animation", 0, scene.frame_count)
+    scene = resample_animation_scene(
+        scene,
+        input_fps=input_rate,
+        output_fps=output_rate,
+    )
+    stages("Resampling animation", scene.frame_count, scene.frame_count)
     result = run_blender_export(
         scene,
         output_path,
@@ -397,6 +484,10 @@ def export_anm2_to_fbx(
         unknown_track_policy=resolved_unknown_policy,
         unknown_track_count=unresolved_count,
         unknown_tracks_sidecar=str(sidecar or ""),
+        anm2_input_fps=input_rate,
+        fbx_output_fps=output_rate,
+        timing_metadata_status=provenance_status,
+        timing_metadata_path=provenance.path,
     )
 
 __all__ = [

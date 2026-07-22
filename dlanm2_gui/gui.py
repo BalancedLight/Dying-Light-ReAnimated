@@ -8,6 +8,7 @@ GUI replaceable and makes later versions able to migrate old projects.
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass, field
 import json
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ import shutil
 import struct
 import sys
 import threading
-from typing import Any
+from typing import Any, Callable
 
 from . import __version__
 from .chrome_rig import ChromeRig
@@ -24,6 +25,7 @@ from .chrome_rig_registry import BUILTIN_MALE_RIG_REF, ChromeRigRegistry
 from .anm2 import Anm2Header, HEADER_LENGTH
 from .dl2_anm2 import detect_anm2_format, parse_dl2_header42
 from .anm2_fbx import chrome_rig_from_fbx_skeleton
+from .anm2_provenance import load_anm2_provenance
 from .blender_fbx import discover_blender, export_anm2_to_fbx
 from .background_tasks import BackgroundTaskRunner, TaskFailure
 from .animation_targets import RetargetUiKind, resolve_animation_target, retarget_ui_kind
@@ -47,7 +49,7 @@ from .helper_retarget import (
     helper_rules_from_dicts,
     helper_rules_to_dicts,
 )
-from .fbx_core import FbxDocument
+from .fbx_core import FbxDocument, resolve_fbx_declared_timebase
 from .project_builder import build_project, export_project_anm2_files
 from .fbx_preflight import classify_target_compatibility, preflight_fbx
 from .model_importer.fbx_model import FbxImportTolerance
@@ -115,6 +117,535 @@ _RECENT_PROJECTS_SETTING = "recent_projects"
 _MAX_RECENT_PROJECTS = 10
 
 
+@dataclass(slots=True)
+class _AnimationImportRequest:
+    """Immutable inputs captured before an FBX import leaves the UI thread."""
+
+    paths: tuple[str, ...]
+    existing: set[tuple[Path, str]]
+    game_id: str
+    retarget_mode: str
+    target_rig_path: str
+    resource_root: Path
+    resource_prefix: str
+    tolerance: FbxImportTolerance
+
+
+@dataclass(slots=True)
+class _AnimationImportResult:
+    """Pure-Python import result applied by the Qt thread on completion."""
+
+    rows: list[ProjectAnimation] = field(default_factory=list)
+    mapping_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    documents: dict[str, FbxDocument] = field(default_factory=dict)
+    semantic_states: dict[str, BundledSemanticState] = field(default_factory=dict)
+    repair_messages: list[str] = field(default_factory=list)
+    blocked_messages: list[str] = field(default_factory=list)
+
+
+def _apply_declared_animation_timing(
+    row: ProjectAnimation,
+    document: FbxDocument,
+) -> None:
+    # Adjacent-version integrations and lightweight test doubles may not yet
+    # expose the v10 timing contract. Use the same explicit low-confidence
+    # fallback as a parsed FBX with no usable timing declaration.
+    timebase = getattr(document, "declared_timebase", None)
+    if timebase is None:
+        timebase = resolve_fbx_declared_timebase(None)
+    rate = float(timebase.declared_fps)
+    row.source_fps = rate
+    row.sample_fps = rate
+    row.playback_fps = rate
+    row.fps = rate
+    extensions = dict(row.extensions)
+    extensions["timing_origin_v10"] = timebase.to_dict()
+    row.extensions = extensions
+
+
+def _exact_import_mapping_profile_for_request(
+    document: FbxDocument,
+    target_rig: ChromeRig,
+    *,
+    game_id: str,
+    retarget_mode: str,
+) -> tuple[GenericBoneMap, str]:
+    """Build an import-time mapping without reaching back into a Qt controller."""
+
+    compatibility = classify_target_compatibility(document, target_rig)
+    verified_error = ""
+    if (
+        target_rig.rig_id == DL2_ADVANCED_RIG_ID
+        and compatibility.get("classification") != "exact_identity"
+    ):
+        try:
+            policy = build_target_retarget_policy(
+                target_rig,
+                game_id=game_id,
+                clip_domain="body",
+            )
+            if not policy.automatic_routing_authorized:
+                raise ValueError(
+                    "the selected DL2 advanced target package did not pass coherence checks"
+                )
+            profile = build_dl2_advanced_body_map_with_local_recipe(
+                document,
+                target_rig,
+                policy,
+            )
+            if mapping_profile_origin(profile) == "manually_reviewed":
+                return profile, "Applied a matching live-validated local retarget recipe."
+            certificate = dict(
+                profile.extensions.get("automatic_retarget_certificate", {})
+                or profile.extensions.get("verified_mapping_certificate", {})
+                or {}
+            )
+            exact_rows = int(
+                certificate.get(
+                    "exact_target_subset_rows",
+                    compatibility.get("exact_target_subset_rows", 0),
+                )
+                or 0
+            )
+            semantic_rows = int(certificate.get("semantic_rows", 0) or 0)
+            bind_rows = int(
+                certificate.get(
+                    "target_bind_rows",
+                    compatibility.get("target_bind_rows", 0),
+                )
+                or 0
+            )
+            return (
+                profile,
+                "Created a complete verified DL2 map: "
+                f"{exact_rows} exact target-subset row(s), "
+                f"{semantic_rows} semantic row(s), and "
+                f"{bind_rows} target row(s) held at bind.",
+            )
+        except Exception as exc:
+            # A failed certificate never authorizes routing. Preserve the
+            # established editable automatic_repair/manual-review fallback.
+            verified_error = str(exc)
+
+    try:
+        policy = build_target_retarget_policy(
+            target_rig,
+            game_id=game_id,
+            clip_domain="body",
+        )
+        fresh = build_automatic_retarget_plan(
+            document,
+            target_rig,
+            policy,
+            clip_domain="body",
+        )
+        local = resolve_local_retarget_recipe(
+            fresh,
+            document,
+            target_rig,
+            policy,
+        )
+        if local.applied:
+            assert local.recipe is not None
+            profile = materialize_reviewed_retarget_recipe(
+                local.recipe,
+                document,
+                target_rig,
+                policy,
+                clip_domain="body",
+                profile_name="Reviewed local retarget recipe",
+            )
+            return profile, "Applied a matching live-validated local retarget recipe."
+    except (TypeError, ValueError):
+        # Generic/custom targets retain the established editable mapping
+        # fallback when no safe reviewed recipe can be constructed.
+        pass
+
+    profile = auto_map_crig_to_fbx(
+        target_rig,
+        document.limb_models.keys(),
+        document.parent_by_name,
+        **source_mapping_evidence(document),
+    )
+    note = (
+        f"Created an editable .crig map with {len(profile.pairs)} suggestion(s) "
+        f"for {len(target_rig.bones)} target bones."
+    )
+    if verified_error:
+        failure_action = (
+            "Open Root & .crig Mapping"
+            if retarget_mode == "exact"
+            else "Open Retargeting and review the diagnostic"
+        )
+        profile.extensions["automatic_retarget_generation_failure"] = {
+            "status": "needs_attention",
+            "reason": "The safe DL2 body-map verification did not pass.",
+            "action": failure_action,
+            "diagnostic": verified_error,
+        }
+        note = (
+            "The safe DL2 body map could not be verified. "
+            + note
+            + f" {failure_action}."
+        )
+    return profile, note
+
+
+def _prepare_animation_import(
+    request: _AnimationImportRequest,
+    progress: Callable[[str], None],
+) -> _AnimationImportResult:
+    """Parse and map FBX files off the Qt event thread."""
+
+    result = _AnimationImportResult()
+    existing = set(request.existing)
+    target_rig: ChromeRig | None = None
+    target_rig_error = ""
+    automatic_dl2 = (
+        request.retarget_mode == "auto" and request.game_id == DL2_GAME_ID
+    )
+    try:
+        if request.retarget_mode == "exact" or automatic_dl2:
+            if not request.target_rig_path:
+                raise FileNotFoundError(
+                    "No target .crig is selected. Choose or import one on the Project tab."
+                )
+            target_rig = ChromeRig.load(request.target_rig_path)
+        elif request.game_id == DL1_GAME_ID:
+            target_rig = ChromeRig.load(
+                request.resource_root / "reference" / "male_npc_infected.crig"
+            )
+    except (OSError, ValueError) as exc:
+        target_rig_error = str(exc)
+
+    total = len(request.paths)
+    for index, raw in enumerate(request.paths, start=1):
+        path = Path(raw).resolve()
+        progress(f"Importing animation {index}/{total}: {path.name}")
+        try:
+            document = FbxDocument(
+                path,
+                purpose="animation",
+                tolerance=request.tolerance,
+            )
+        except Exception:
+            preflight = preflight_fbx(
+                path,
+                purpose="animation",
+                game_id=request.game_id,
+                tolerance=request.tolerance,
+            )
+            result.blocked_messages.append(
+                f"{path.name}\n{preflight.actionable_message()}"
+            )
+            continue
+
+        result.documents[str(path)] = document
+        stacks = list(document.animation_stacks)
+        preferred_stack = (
+            document.preferred_animation_stack()
+            if hasattr(document, "preferred_animation_stack")
+            else None
+        )
+        if preferred_stack is not None:
+            selections = [preferred_stack.name]
+        elif len(stacks) == 1:
+            selections = [stacks[0].name]
+        else:
+            # Preserve every manual stack choice on one editable row when
+            # curve activity has no unique winner.
+            selections = [""]
+
+        for stack_name in selections:
+            key = (path, stack_name)
+            if key in existing:
+                continue
+            multi = len(selections) > 1
+            resource_seed = f"{path.stem}_{stack_name}" if multi else path.stem
+            row = ProjectAnimation.create(
+                str(path),
+                resource_name=resource_seed,
+                animation_stack=stack_name,
+            )
+            _apply_declared_animation_timing(row, document)
+            if multi:
+                row.display_name = f"{path.stem}: {stack_name}"
+            if request.resource_prefix:
+                row.resource_name = f"{request.resource_prefix}_{row.resource_name}"
+            preflight = preflight_fbx(
+                path,
+                purpose="animation",
+                animation_stack=stack_name or None,
+                target_rig=target_rig,
+                game_id=request.game_id,
+                document=document,
+                tolerance=request.tolerance,
+            )
+            row.extensions["fbx_preflight"] = preflight.to_dict()
+            if preflight.import_blocking:
+                result.blocked_messages.append(
+                    f"{row.display_name}\n"
+                    + preflight.actionable_message(
+                        finding
+                        for finding in preflight.findings
+                        if finding.severity == "error" and not finding.can_continue
+                    )
+                )
+                continue
+
+            attention_findings = [
+                finding
+                for finding in preflight.findings
+                if finding.severity == "warning"
+                and finding.code != "multiple_animation_stacks"
+            ]
+            mapping_note = ""
+            verified_mapping_ready = False
+            try:
+                if (
+                    request.retarget_mode == "exact" or automatic_dl2
+                ) and target_rig is not None:
+                    compatibility = dict(
+                        preflight.inventory.get("target_compatibility", {}) or {}
+                    )
+                    needs_target_map = (
+                        compatibility.get("classification") != "exact_identity"
+                    )
+                    if preflight.repairable_findings or needs_target_map:
+                        if stack_name and hasattr(document, "select_animation_stack"):
+                            document.select_animation_stack(stack_name)
+                        profile, mapping_note = _exact_import_mapping_profile_for_request(
+                            document,
+                            target_rig,
+                            game_id=request.game_id,
+                            retarget_mode=request.retarget_mode,
+                        )
+                        result.mapping_profiles[profile.profile_id] = profile.to_dict()
+                        row.mapping_profile_id = profile.profile_id
+                        if mapping_profile_origin(profile) == "automatic_verified":
+                            row.extensions["retarget_domain"] = "body"
+                            verified_mapping_ready = True
+                        if automatic_dl2 and isinstance(profile, GenericBoneMap):
+                            policy = build_target_retarget_policy(
+                                target_rig,
+                                game_id=request.game_id,
+                                clip_domain="body",
+                            )
+                            semantic_profile = migrate_generic_map_to_semantic_profile(
+                                profile,
+                                document.limb_models,
+                                document.parent_by_name,
+                                policy,
+                                name=f"Bundled humanoid mapping: {row.display_name}",
+                            )
+                            semantic_state = prepare_bundled_semantic_state(
+                                document,
+                                target_rig,
+                                policy,
+                                semantic_profile,
+                                profile_name=f"Bundled humanoid mapping: {row.display_name}",
+                            )
+                            result.mapping_profiles[semantic_profile.profile_id] = (
+                                semantic_profile.to_dict()
+                            )
+                            row.mapping_profile_id = semantic_profile.profile_id
+                            row.extensions["legacy_target_map_profile_id"] = profile.profile_id
+                            row.extensions["semantic_profile_migration"] = dict(
+                                semantic_profile.extensions.get("migration_audit", {}) or {}
+                            )
+                            result.semantic_states[row.animation_id] = semantic_state
+                elif request.retarget_mode in {"auto", "humanoid"}:
+                    profile = auto_map_source_bones(
+                        document.limb_models,
+                        parents=document.parent_by_name,
+                        profile_name=f"Humanoid mapping: {row.display_name}",
+                    )
+                    result.mapping_profiles[profile.profile_id] = profile.to_dict()
+                    row.mapping_profile_id = profile.profile_id
+            except Exception as exc:
+                if (
+                    target_rig is not None
+                    and target_rig.rig_id == DL2_ADVANCED_RIG_ID
+                ):
+                    row.extensions["automatic_retarget_generation_failure"] = {
+                        "status": "needs_attention",
+                        "reason": "The safe DL2 body-map verification did not pass.",
+                        "action": "Open Retargeting and review the diagnostic",
+                        "diagnostic": str(exc),
+                    }
+                    mapping_note = (
+                        "The safe DL2 body map could not be generated. "
+                        "Open Retargeting and review the diagnostic."
+                    )
+                else:
+                    mapping_note = (
+                        f"The clip was added, but automatic mapping failed: {exc}. "
+                        "Open its mapping editor and assign bones manually."
+                    )
+
+            repairable = preflight.repairable_findings
+            grouped_findings: dict[str, list[dict[str, Any]]] = {}
+            for finding in preflight.findings:
+                grouped_findings.setdefault(finding.group, []).append(
+                    {
+                        "code": finding.code,
+                        "outcome": finding.outcome,
+                        "detected": finding.detected,
+                        "action": finding.action,
+                    }
+                )
+            if (
+                preflight.findings
+                or repairable
+                or attention_findings
+                or target_rig_error
+                or mapping_note
+            ):
+                mapping_failure = bool(
+                    row.extensions.get("automatic_retarget_generation_failure")
+                )
+                if mapping_failure or target_rig_error or (
+                    repairable and not verified_mapping_ready
+                ):
+                    readiness_level = "needs_attention"
+                    readiness_label = "Needs attention — review the selected target mapping"
+                elif repairable:
+                    readiness_level = "advisory"
+                    readiness_label = "Advisory — mapping repair applied; export remains available"
+                elif attention_findings:
+                    readiness_level = "advisory"
+                    readiness_label = preflight.readiness_label
+                else:
+                    readiness_level = preflight.readiness_level
+                    readiness_label = preflight.readiness_label
+                row.extensions["import_state"] = {
+                    "status": readiness_level,
+                    "level": readiness_level,
+                    "label": readiness_label,
+                    "requested_purpose": "animation",
+                    "finding_groups": grouped_findings,
+                    "repairable_codes": [finding.code for finding in repairable],
+                    "warning_codes": [finding.code for finding in attention_findings],
+                    "mapping_note": mapping_note,
+                    "target_rig_error": target_rig_error,
+                }
+            row.extensions.setdefault(
+                "import_state",
+                {
+                    "status": preflight.readiness_level,
+                    "level": preflight.readiness_level,
+                    "label": preflight.readiness_label,
+                    "requested_purpose": "animation",
+                    "finding_groups": grouped_findings,
+                    "repairable_codes": [],
+                    "warning_codes": [],
+                    "mapping_note": "",
+                    "target_rig_error": "",
+                },
+            )
+            if repairable or attention_findings:
+                explanation = preflight.actionable_message(
+                    [*repairable, *attention_findings]
+                )
+                result.repair_messages.append(
+                    f"{row.display_name}\n{mapping_note}\n\n{explanation}"
+                )
+            elif target_rig_error:
+                result.repair_messages.append(
+                    f"{row.display_name}\nThe clip was added, but the selected target .crig "
+                    f"could not be loaded: {target_rig_error}\nChoose a valid target rig, then open mapping."
+                )
+            result.rows.append(row)
+            existing.add(key)
+    return result
+
+
+@dataclass(slots=True)
+class _AutoRetargetRequest:
+    source_fbx: str
+    animation_stack: str
+    display_name: str
+    existing_profile_id: str
+    game_id: str
+    target_rig_path: str
+    existing_profile: dict[str, Any]
+    tolerance: FbxImportTolerance
+
+
+@dataclass(slots=True)
+class _AutoRetargetResult:
+    document: FbxDocument
+    profile: SourceBoneMappingProfile
+    compiled_profile: GenericBoneMap | None = None
+    semantic_state: BundledSemanticState | None = None
+    migrated_from_profile_id: str = ""
+
+
+def _prepare_auto_retarget(
+    request: _AutoRetargetRequest,
+    progress: Callable[[str], None],
+) -> _AutoRetargetResult:
+    """Rebuild an editable humanoid map (and DL2 certificate) in a worker."""
+
+    path = Path(request.source_fbx).resolve()
+    progress(f"Analyzing {path.name} for automatic retargeting…")
+    document = FbxDocument(path, purpose="animation", tolerance=request.tolerance)
+    if request.animation_stack and hasattr(document, "select_animation_stack"):
+        document.select_animation_stack(request.animation_stack)
+
+    if request.game_id != DL2_GAME_ID:
+        profile = auto_map_source_bones(
+            document.limb_models,
+            parents=document.parent_by_name,
+            profile_name=f"Humanoid mapping: {request.display_name}",
+        )
+        return _AutoRetargetResult(document, profile)
+
+    if not request.target_rig_path:
+        raise FileNotFoundError("The selected bundled target rig is unavailable")
+    rig = ChromeRig.load(request.target_rig_path)
+    policy = build_target_retarget_policy(rig, game_id=request.game_id, clip_domain="body")
+    payload = dict(request.existing_profile)
+    profile: SourceBoneMappingProfile | None = None
+    migrated_from = ""
+    if payload.get("format") == "dl-reanimated-retarget-profile":
+        profile = SourceBoneMappingProfile.from_dict(payload)
+    elif payload.get("format") == "dl-reanimated-bone-map":
+        old_map = GenericBoneMap.from_dict(payload)
+        profile = migrate_generic_map_to_semantic_profile(
+            old_map,
+            document.limb_models,
+            document.parent_by_name,
+            policy,
+            name=f"Bundled humanoid mapping: {request.display_name}",
+        )
+        migrated_from = old_map.profile_id
+    if profile is not None:
+        profile.role_modes = {role_id: "auto" for role_id in profile.role_modes}
+        profile.cleared_roles = []
+        profile.clear_compiled_cache()
+
+    progress("Building the automatic retarget plan…")
+    state = prepare_bundled_semantic_state(
+        document,
+        rig,
+        policy,
+        profile,
+        profile_name=f"Bundled humanoid mapping: {request.display_name}",
+    )
+    progress("Verifying the DL2 retarget map…")
+    compiled, _verification, _plan = compile_bundled_semantic_profile(
+        document, rig, policy, state.profile
+    )
+    return _AutoRetargetResult(
+        document,
+        state.profile,
+        compiled_profile=compiled,
+        semantic_state=state,
+        migrated_from_profile_id=migrated_from,
+    )
+
+
 def _default_unknown_track_policy(game_id: str) -> str:
     return "sidecar" if game_id == DL2_GAME_ID else "helpers"
 
@@ -131,6 +662,7 @@ def _load_qt() -> dict[str, Any]:
             QComboBox,
             QDialog,
             QDialogButtonBox,
+            QDoubleSpinBox,
             QFileDialog,
             QFormLayout,
             QGroupBox,
@@ -180,7 +712,7 @@ def main() -> int:
         QGroupBox { margin-top: 10px; padding-top: 10px; }
         QGroupBox::title { font-weight: 600; subcontrol-origin: margin; left: 10px; padding: 0 4px; }
         QPushButton { min-height: 26px; padding: 4px 10px; }
-        QLineEdit, QComboBox, QSpinBox { min-height: 28px; }
+        QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox { min-height: 28px; }
         QTableWidget {
             gridline-color: palette(mid);
             alternate-background-color: palette(alternate-base);
@@ -493,20 +1025,21 @@ class MainWindow:
 
         row = qt["QHBoxLayout"]()
         add_button = qt["QPushButton"]("Add FBX animations…")
-        add_button.setToolTip("Import one or more FBX animation files into this project.")
-        add_button.clicked.connect(self.add_animations)
-        remove_button = qt["QPushButton"]("Remove selected")
-        remove_button.setToolTip("Remove the selected animation from the project only.")
-        remove_button.clicked.connect(self.remove_selected_animation)
-        duplicate_button = qt["QPushButton"]("Duplicate selected")
-        duplicate_button.setToolTip(
+        self.add_animations_button = add_button
+        self.add_animations_button.setToolTip("Import one or more FBX animation files into this project.")
+        self.add_animations_button.clicked.connect(self.add_animations)
+        self.remove_animation_button = qt["QPushButton"]("Remove selected")
+        self.remove_animation_button.setToolTip("Remove the selected animation from the project only.")
+        self.remove_animation_button.clicked.connect(self.remove_selected_animation)
+        self.duplicate_animation_button = qt["QPushButton"]("Duplicate selected")
+        self.duplicate_animation_button.setToolTip(
             "Create another project entry for the same FBX, useful for alternate root-motion "
             "or script-target versions."
         )
-        duplicate_button.clicked.connect(self.duplicate_selected_animation)
-        row.addWidget(add_button)
-        row.addWidget(remove_button)
-        row.addWidget(duplicate_button)
+        self.duplicate_animation_button.clicked.connect(self.duplicate_selected_animation)
+        row.addWidget(self.add_animations_button)
+        row.addWidget(self.remove_animation_button)
+        row.addWidget(self.duplicate_animation_button)
         row.addStretch(1)
         layout.addLayout(row)
 
@@ -595,10 +1128,20 @@ class MainWindow:
         self.end_frame_spin.setSpecialValueText("Last")
         self.end_frame_spin.setToolTip("Last source frame to expose, or Last for the full clip.")
         self.end_frame_spin.valueChanged.connect(self._selected_range_changed)
-        self.fps_spin = qt["QSpinBox"]()
-        self.fps_spin.setRange(1, 240)
+        self.fps_spin = qt["QDoubleSpinBox"]()
+        self.fps_spin.setRange(0.001, 1000.0)
+        self.fps_spin.setDecimals(9)
         self.fps_spin.setToolTip("Playback speed written to the animation-script sequence.")
         self.fps_spin.valueChanged.connect(self._selected_range_changed)
+        self.sample_fps_spin = qt["QDoubleSpinBox"]()
+        self.sample_fps_spin.setRange(0.001, 1000.0)
+        self.sample_fps_spin.setDecimals(9)
+        self.sample_fps_spin.setToolTip(
+            "Cadence used to sample FBX transforms into ANM2. Defaults to the FBX-declared rate."
+        )
+        self.sample_fps_spin.valueChanged.connect(self._selected_range_changed)
+        self.source_fps_label = qt["QLabel"]("—")
+        self.source_fps_label.setToolTip("Timebase declared by the imported FBX.")
         range_row.addWidget(qt["QLabel"]("Start"))
         range_row.addWidget(self.start_frame_spin)
         range_row.addSpacing(14)
@@ -607,11 +1150,17 @@ class MainWindow:
         range_row.addSpacing(14)
         range_row.addWidget(qt["QLabel"]("Playback FPS"))
         range_row.addWidget(self.fps_spin)
+        range_row.addSpacing(14)
+        range_row.addWidget(qt["QLabel"]("Sampling FPS"))
+        range_row.addWidget(self.sample_fps_spin)
+        range_row.addSpacing(14)
+        range_row.addWidget(qt["QLabel"]("Source FPS"))
+        range_row.addWidget(self.source_fps_label)
         range_row.addStretch(1)
         detail_form.addRow(range_row)
         self.range_note = qt["QLabel"](
-            "First/Last uses the complete FBX range. Playback FPS changes sequence speed; "
-            "the current FBX sampler remains 30 FPS."
+            "First/Last uses the complete sampled range. Sampling FPS controls FBX-to-ANM2 "
+            "keys; Playback FPS controls the animation-script cadence."
         )
         self.range_note.setWordWrap(True)
         detail_form.addRow(self.range_note)
@@ -981,16 +1530,19 @@ class MainWindow:
         toolbar.addStretch(1)
         layout.addLayout(toolbar)
 
-        self.reverse_table = qt["QTableWidget"](0, 8)
+        self.reverse_table = qt["QTableWidget"](0, 9)
         self.reverse_table.setHorizontalHeaderLabels(
-            ["Use", "ANM2", "Output action", "Frames", "Tracks", "FPS", "Start", "End"]
+            [
+                "Use", "ANM2", "Output action", "Frames", "Tracks",
+                "ANM2 FPS", "FBX FPS", "Start", "End",
+            ]
         )
         self.reverse_table.setSelectionBehavior(qt["QAbstractItemView"].SelectRows)
         self.reverse_table.setAlternatingRowColors(True)
         header = self.reverse_table.horizontalHeader()
         header.setSectionResizeMode(1, qt["QHeaderView"].Stretch)
         header.setSectionResizeMode(2, qt["QHeaderView"].Stretch)
-        for column in (0, 3, 4, 5, 6, 7):
+        for column in (0, 3, 4, 5, 6, 7, 8):
             header.setSectionResizeMode(column, qt["QHeaderView"].ResizeToContents)
         layout.addWidget(self.reverse_table, 2)
 
@@ -1337,7 +1889,7 @@ class MainWindow:
         verified_error = ""
         if (
             target_rig.rig_id == DL2_ADVANCED_RIG_ID
-            and compatibility.get("classification") == "incompatible"
+            and compatibility.get("classification") != "exact_identity"
         ):
             try:
                 policy = build_target_retarget_policy(
@@ -1359,10 +1911,32 @@ class MainWindow:
                         profile,
                         "Applied a matching live-validated local retarget recipe.",
                     )
+                certificate = dict(
+                    profile.extensions.get("automatic_retarget_certificate", {})
+                    or profile.extensions.get("verified_mapping_certificate", {})
+                    or {}
+                )
+                exact_rows = int(
+                    certificate.get(
+                        "exact_target_subset_rows",
+                        compatibility.get("exact_target_subset_rows", 0),
+                    )
+                    or 0
+                )
+                semantic_rows = int(certificate.get("semantic_rows", 0) or 0)
+                bind_rows = int(
+                    certificate.get(
+                        "target_bind_rows",
+                        compatibility.get("target_bind_rows", 0),
+                    )
+                    or 0
+                )
                 return (
                     profile,
-                    "Created a complete verified DL2 body map: 52 body rows mapped, "
-                    "219 target rows held at bind.",
+                    "Created a complete verified DL2 map: "
+                    f"{exact_rows} exact target-subset row(s), "
+                    f"{semantic_rows} semantic row(s), and "
+                    f"{bind_rows} target row(s) held at bind.",
                 )
             except Exception as exc:
                 # A failed certificate never authorizes routing. Preserve the
@@ -1441,6 +2015,70 @@ class MainWindow:
 
     # --------------------------------------------------------------- animation
     def add_animations(self) -> None:
+        """Choose FBXs, then parse and map them without blocking Qt's event loop."""
+
+        # A hidden controller has no usable event loop for queued worker
+        # callbacks (for example, automation and headless integration hosts).
+        # Preserve the established synchronous behavior there; every visible
+        # application window uses the responsive worker path below.
+        if not self.window.isVisible():
+            self._add_animations_sync_legacy()
+            return
+        if self.background_tasks.busy:
+            self.status.showMessage(
+                "Wait for the current animation operation to finish before importing more FBX files.",
+                5000,
+            )
+            return
+        paths, _ = self.qt["QFileDialog"].getOpenFileNames(
+            self.window,
+            "Add binary FBX animations",
+            str(
+                Path(self.project.rig.source_rest_fbx).parent
+                if self.project.rig.source_rest_fbx
+                else self.root
+            ),
+            "FBX animations (*.fbx)",
+        )
+        if not paths:
+            return
+
+        request = _AnimationImportRequest(
+            paths=tuple(paths),
+            existing={
+                (Path(row.source_fbx).resolve(), row.source_animation_stack)
+                for row in self.project.animations
+            },
+            game_id=self.project.game_id,
+            retarget_mode=self.project.rig.retarget_mode,
+            target_rig_path=self.project.rig.target_rig_path,
+            resource_root=self.resource_root,
+            resource_prefix=self.project.export.resource_prefix.strip(),
+            tolerance=self._current_import_tolerance(),
+        )
+        self._set_animation_operation_busy(
+            True,
+            f"Importing {len(request.paths)} animation FBX file(s) in the background…",
+        )
+
+        def succeeded(result: _AnimationImportResult) -> None:
+            self._apply_animation_import_result(result)
+
+        if not self.background_tasks.start(
+            lambda progress: _prepare_animation_import(request, progress),
+            progress=lambda message: self.status.showMessage(message),
+            succeeded=succeeded,
+            failed=lambda failure: self._background_animation_error(
+                "Animation import failed", failure
+            ),
+            finished=lambda: self._set_animation_operation_busy(False),
+        ):
+            self._set_animation_operation_busy(False)
+            self.status.showMessage(
+                "Another animation operation is already running.", 5000
+            )
+
+    def _add_animations_sync_legacy(self) -> None:
         paths, _ = self.qt["QFileDialog"].getOpenFileNames(
             self.window,
             "Add binary FBX animations",
@@ -1515,6 +2153,7 @@ class MainWindow:
                     resource_name=resource_seed,
                     animation_stack=stack_name,
                 )
+                _apply_declared_animation_timing(row, document)
                 if multi:
                     row.display_name = f"{path.stem}: {stack_name}"
                 prefix = self.project.export.resource_prefix.strip()
@@ -1544,11 +2183,6 @@ class MainWindow:
                     if finding.severity == "warning"
                     and finding.code != "multiple_animation_stacks"
                 ]
-                if any(
-                    finding.code == "no_changing_skeletal_channels"
-                    for finding in attention_findings
-                ):
-                    row.enabled = False
 
                 mapping_note = ""
                 verified_mapping_ready = False
@@ -1556,7 +2190,13 @@ class MainWindow:
                     if (
                         self.project.rig.retarget_mode == "exact" or automatic_dl2
                     ) and target_rig is not None:
-                        if preflight.repairable_findings:
+                        compatibility = dict(
+                            preflight.inventory.get("target_compatibility", {}) or {}
+                        )
+                        needs_target_map = (
+                            compatibility.get("classification") != "exact_identity"
+                        )
+                        if preflight.repairable_findings or needs_target_map:
                             if stack_name and hasattr(
                                 document, "select_animation_stack"
                             ):
@@ -1617,21 +2257,31 @@ class MainWindow:
                     or target_rig_error
                     or mapping_note
                 ):
-                    mapping_review = bool(
-                        not verified_mapping_ready
-                        and (
-                            repairable
-                            or attention_findings
-                            or target_rig_error
-                            or mapping_note
-                        )
+                    mapping_failure = bool(
+                        row.extensions.get("automatic_retarget_generation_failure")
                     )
+                    if mapping_failure or target_rig_error or (
+                        repairable and not verified_mapping_ready
+                    ):
+                        readiness_level = "needs_attention"
+                        readiness_label = (
+                            "Needs attention — review the selected target mapping"
+                        )
+                    elif repairable:
+                        readiness_level = "advisory"
+                        readiness_label = (
+                            "Advisory — mapping repair applied; export remains available"
+                        )
+                    elif attention_findings:
+                        readiness_level = "advisory"
+                        readiness_label = preflight.readiness_label
+                    else:
+                        readiness_level = preflight.readiness_level
+                        readiness_label = preflight.readiness_label
                     row.extensions["import_state"] = {
-                        "status": (
-                            "mapping_review"
-                            if mapping_review
-                            else "ready"
-                        ),
+                        "status": readiness_level,
+                        "level": readiness_level,
+                        "label": readiness_label,
                         "requested_purpose": "animation",
                         "finding_groups": grouped_findings,
                         "repairable_codes": [finding.code for finding in repairable],
@@ -1639,18 +2289,26 @@ class MainWindow:
                         "mapping_note": mapping_note,
                         "target_rig_error": target_rig_error,
                     }
+                row.extensions.setdefault(
+                    "import_state",
+                    {
+                        "status": preflight.readiness_level,
+                        "level": preflight.readiness_level,
+                        "label": preflight.readiness_label,
+                        "requested_purpose": "animation",
+                        "finding_groups": grouped_findings,
+                        "repairable_codes": [],
+                        "warning_codes": [],
+                        "mapping_note": "",
+                        "target_rig_error": "",
+                    },
+                )
                 if repairable or attention_findings:
                     explanation = preflight.actionable_message(
                         [*repairable, *attention_findings]
                     )
-                    disabled_note = (
-                        " This stack was disabled automatically because it has no changing "
-                        "skeletal channels; enable it only if a bind-pose clip is intentional."
-                        if not row.enabled
-                        else ""
-                    )
                     repair_messages.append(
-                        f"{row.display_name}\n{mapping_note}{disabled_note}\n\n{explanation}"
+                        f"{row.display_name}\n{mapping_note}\n\n{explanation}"
                     )
                 elif target_rig_error:
                     repair_messages.append(
@@ -1667,16 +2325,88 @@ class MainWindow:
         if self.project.animations:
             self.animation_table.selectRow(len(self.project.animations) - 1)
         if blocked_messages:
-            self.qt["QMessageBox"].critical(
-                self.window,
-                "Some FBX clips could not be added",
-                "These files have source-data problems that cannot be repaired in the mapping editor:\n\n"
-                + "\n\n---\n\n".join(blocked_messages),
+            self._last_import_errors = tuple(blocked_messages)
+            self.status.showMessage(
+                "Cannot read — one or more FBX files were invalid or had no usable "
+                "animation domain. No project row was added for those files.",
+                12000,
             )
         # Repairable mapping/adaptation findings stay on the row and in its
         # details panel. Import uses a modal only for unreadable/no-skeleton/
         # no-requested-animation blockers, so recognized partial rigs do not
         # produce one popup per normal accommodation.
+
+    def _apply_animation_import_result(self, result: _AnimationImportResult) -> None:
+        """Apply a completed import result on the Qt thread."""
+
+        self._source_cache.update(result.documents)
+        self.project.mapping_profiles.update(result.mapping_profiles)
+        self.project.animations.extend(result.rows)
+        if result.semantic_states:
+            cache = getattr(self, "_semantic_state_cache", None)
+            if cache is None:
+                cache = {}
+                self._semantic_state_cache = cache
+            for animation_id, state in result.semantic_states.items():
+                animation = self.project.animation_by_id(animation_id)
+                if animation is None:
+                    continue
+                payload = self.project.mapping_profiles.get(
+                    state.profile.profile_id, state.profile.to_dict()
+                )
+                fingerprint = json.dumps(
+                    payload,
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+                cache[animation_id] = (
+                    (
+                        animation_id,
+                        animation.source_animation_stack,
+                        state.profile.target_skeleton_hash,
+                        fingerprint,
+                    ),
+                    state,
+                )
+        if result.rows:
+            self._mark_dirty()
+        self._refresh_animation_table()
+        self._refresh_retarget_clip_combo()
+        if self.project.animations:
+            self.animation_table.selectRow(len(self.project.animations) - 1)
+        if result.blocked_messages:
+            self._last_import_errors = tuple(result.blocked_messages)
+            self.status.showMessage(
+                "Cannot read — one or more FBX files were invalid or had no usable "
+                "animation domain. No project row was added for those files.",
+                12000,
+            )
+        elif result.rows:
+            self.status.showMessage(
+                f"Imported {len(result.rows)} animation clip(s).", 6000
+            )
+
+    def _set_animation_operation_busy(
+        self, busy: bool, message: str = ""
+    ) -> None:
+        """Prevent overlapping import/retarget operations while keeping Qt responsive."""
+
+        for widget in (
+            getattr(self, "add_animations_button", None),
+            getattr(self, "remove_animation_button", None),
+            getattr(self, "duplicate_animation_button", None),
+            getattr(self, "retarget_auto_map_button", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(not busy)
+        if message:
+            self.status.showMessage(message)
+        elif not busy:
+            self.status.showMessage("Ready", 3000)
+
+    def _background_animation_error(self, title: str, failure: TaskFailure) -> None:
+        self._show_error(title, RuntimeError(failure.display_message(False)))
 
     def remove_selected_animation(self) -> None:
         animation = self._selected_animation()
@@ -1705,6 +2435,9 @@ class MainWindow:
         row.source_root_bone = source.source_root_bone
         row.target_root_bone = source.target_root_bone
         row.fps = source.fps
+        row.source_fps = source.source_fps
+        row.sample_fps = source.sample_fps
+        row.playback_fps = source.playback_fps
         row.start_frame = source.start_frame
         row.end_frame = source.end_frame
         self.project.animations.append(row)
@@ -2124,6 +2857,15 @@ class MainWindow:
     ) -> tuple[str, str]:
         status, tooltip = self._animation_target_status_core(animation)
         import_state = dict(animation.extensions.get("import_state", {}) or {})
+        import_level = str(
+            import_state.get("level", import_state.get("status", "")) or ""
+        )
+        import_label = str(import_state.get("label", "") or "")
+        if import_label and (
+            import_level != "ready"
+            or (status.startswith("Ready") and import_label != "Ready")
+        ):
+            status = import_label
         groups = dict(import_state.get("finding_groups", {}) or {})
         nonfatal_count = sum(
             len(rows)
@@ -2350,12 +3092,19 @@ class MainWindow:
         self._refreshing = True
         try:
             enabled = animation is not None
-            for widget in (self.start_frame_spin, self.end_frame_spin, self.fps_spin):
+            for widget in (
+                self.start_frame_spin,
+                self.end_frame_spin,
+                self.fps_spin,
+                self.sample_fps_spin,
+            ):
                 widget.setEnabled(enabled)
             if animation is None:
                 self.start_frame_spin.setValue(-1)
                 self.end_frame_spin.setValue(-1)
                 self.fps_spin.setValue(30)
+                self.sample_fps_spin.setValue(30)
+                self.source_fps_label.setText("—")
             else:
                 self.start_frame_spin.setValue(
                     -1 if animation.start_frame is None else animation.start_frame
@@ -2363,7 +3112,13 @@ class MainWindow:
                 self.end_frame_spin.setValue(
                     -1 if animation.end_frame is None else animation.end_frame
                 )
-                self.fps_spin.setValue(animation.fps)
+                self.fps_spin.setValue(animation.resolved_playback_fps())
+                self.sample_fps_spin.setValue(animation.resolved_sample_fps())
+                self.source_fps_label.setText(
+                    f"{animation.source_fps:g}"
+                    if animation.source_fps is not None
+                    else "Unknown"
+                )
             if hasattr(self, "animation_import_diagnostics"):
                 self.animation_import_diagnostics.setPlainText(
                     self._format_animation_import_diagnostics(animation)
@@ -2422,7 +3177,9 @@ class MainWindow:
             return
         animation.start_frame = None if self.start_frame_spin.value() < 0 else self.start_frame_spin.value()
         animation.end_frame = None if self.end_frame_spin.value() < 0 else self.end_frame_spin.value()
-        animation.fps = self.fps_spin.value()
+        animation.playback_fps = float(self.fps_spin.value())
+        animation.sample_fps = float(self.sample_fps_spin.value())
+        animation.fps = animation.playback_fps
         self._mark_dirty()
 
     # --------------------------------------------------------------- retarget
@@ -2748,7 +3505,7 @@ class MainWindow:
                 for column, value in (
                     (0, row.group),
                     (1, f"{row.label}  [{row.target_bone}]"),
-                    (6, f"{row.requirement} â€” {row.result}"),
+                    (6, f"{row.requirement} - {row.result}"),
                 ):
                     item = qt["QTableWidgetItem"](value)
                     item.setData(qt["Qt"].UserRole, role_payload)
@@ -2762,7 +3519,7 @@ class MainWindow:
                 combo.setMinimumHeight(30)
                 automatic_source = " + ".join(row.source_bones)
                 combo.addItem(
-                    f"(Auto) — {automatic_source}" if automatic_source else "(Auto)",
+                    f"(Auto) - {automatic_source}" if automatic_source else "(Auto)",
                     "__auto__",
                 )
                 combo.addItem("(Inherit parent / target bind)", "__inherit_bind__")
@@ -2914,7 +3671,13 @@ class MainWindow:
             self._refreshing = False
 
         readiness = readiness_for_state(state)
-        color = "#2e7d32" if readiness.state == "ready" else "#b71c1c"
+        color = (
+            "#2e7d32"
+            if readiness.state == "ready"
+            else "#b26a00"
+            if readiness.state == "advisory"
+            else "#b71c1c"
+        )
         self.mapping_status.setText(
             f"<b style='color:{color}'>{readiness.label}</b> — "
             f"{len(state.rows)} editable semantic roles; "
@@ -3480,67 +4243,107 @@ class MainWindow:
         ui_kind = self._retarget_ui_kind(animation)
         if ui_kind == RetargetUiKind.CUSTOM_CRIG:
             return
-        try:
-            if self.project.game_id == DL2_GAME_ID:
-                state = self._bundled_semantic_state(animation)
-                profile = state.profile
-                profile.role_modes = {
-                    role_id: "auto" for role_id in profile.role_modes
-                }
-                profile.cleared_roles = []
-                profile.clear_compiled_cache()
-                self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
-                animation.extensions.pop("compiled_target_map_profile_id", None)
-                animation.extensions.pop("compiled_target_map_hash", None)
-                getattr(self, "_semantic_state_cache", {}).pop(
-                    animation.animation_id, None
+        if self.background_tasks.busy:
+            self.status.showMessage(
+                "Wait for the current animation operation to finish before running auto-retarget.",
+                5000,
+            )
+            return
+        selection = resolve_animation_target(
+            self.project,
+            animation,
+            rig_paths=getattr(self, "_rig_paths_by_ref", {}),
+        )
+        request = _AutoRetargetRequest(
+            source_fbx=animation.source_fbx,
+            animation_stack=animation.source_animation_stack,
+            display_name=animation.display_name,
+            existing_profile_id=animation.mapping_profile_id,
+            game_id=self.project.game_id,
+            target_rig_path=selection.rig_path,
+            existing_profile=deepcopy(
+                self.project.mapping_profiles.get(animation.mapping_profile_id, {}) or {}
+            ),
+            tolerance=self._current_import_tolerance(),
+        )
+        animation_id = animation.animation_id
+        self._set_animation_operation_busy(
+            True, "Rebuilding the automatic retarget map in the background…"
+        )
+
+        def succeeded(result: _AutoRetargetResult) -> None:
+            current = self.project.animation_by_id(animation_id)
+            if current is None:
+                return
+            self._source_cache[str(Path(current.source_fbx).resolve())] = result.document
+            if request.game_id == DL2_GAME_ID:
+                assert result.compiled_profile is not None
+                assert result.semantic_state is not None
+                current.mapping_profile_id = result.profile.profile_id
+                self.project.mapping_profiles[result.profile.profile_id] = (
+                    result.profile.to_dict()
                 )
-                state = self._bundled_semantic_state(animation, force=True)
-                rig = self._target_rig_for_status(animation)
-                assert rig is not None
-                policy = build_target_retarget_policy(
-                    rig, game_id=self.project.game_id, clip_domain="body"
+                self.project.mapping_profiles[result.compiled_profile.profile_id] = (
+                    result.compiled_profile.to_dict()
                 )
-                document = self._source_document(animation.source_fbx)
-                compiled, verification, _plan = compile_bundled_semantic_profile(
-                    document, rig, policy, state.profile
+                if result.migrated_from_profile_id:
+                    current.extensions["legacy_target_map_profile_id"] = (
+                        result.migrated_from_profile_id
+                    )
+                    current.extensions["semantic_profile_migration"] = dict(
+                        result.profile.extensions.get("migration_audit", {}) or {}
+                    )
+                current.extensions["compiled_target_map_profile_id"] = (
+                    result.compiled_profile.profile_id
                 )
-                self.project.mapping_profiles[compiled.profile_id] = compiled.to_dict()
-                self.project.mapping_profiles[state.profile.profile_id] = (
-                    state.profile.to_dict()
+                current.extensions["compiled_target_map_hash"] = str(
+                    result.profile.extensions.get("compiled_map_hash", "")
                 )
-                animation.extensions["compiled_target_map_profile_id"] = (
-                    compiled.profile_id
+                current.extensions["compiled_target_map_live_validation"] = dict(
+                    result.profile.extensions.get("compiled_validation", {}) or {}
                 )
-                animation.extensions["compiled_target_map_hash"] = str(
-                    state.profile.extensions.get("compiled_map_hash", "")
+                fingerprint = json.dumps(
+                    result.profile.to_dict(),
+                    sort_keys=True,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
                 )
-                animation.extensions["compiled_target_map_live_validation"] = (
-                    verification.to_dict()
+                cache_key = (
+                    current.animation_id,
+                    current.source_animation_stack,
+                    result.profile.target_skeleton_hash,
+                    fingerprint,
                 )
+                cache = getattr(self, "_semantic_state_cache", None)
+                if cache is None:
+                    cache = {}
+                    self._semantic_state_cache = cache
+                cache[current.animation_id] = (cache_key, result.semantic_state)
                 self._mark_dirty()
-                getattr(self, "_semantic_state_cache", {}).pop(
-                    animation.animation_id, None
-                )
-                state = self._bundled_semantic_state(animation, force=True)
-                self._refresh_bundled_semantic_table(animation, state)
+                self._refresh_bundled_semantic_table(current, result.semantic_state)
                 self._refresh_animation_table()
                 return
-            document = self._source_document(animation.source_fbx)
-            profile = auto_map_source_bones(
-                document.limb_models,
-                parents=document.parent_by_name,
-                profile_name=f"Humanoid mapping: {animation.display_name}",
-            )
-            if animation.mapping_profile_id:
-                profile.profile_id = animation.mapping_profile_id
-            animation.mapping_profile_id = profile.profile_id
+
+            profile = result.profile
+            if request.existing_profile_id:
+                profile.profile_id = request.existing_profile_id
+            current.mapping_profile_id = profile.profile_id
             self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
             self._mark_dirty()
-            self._refresh_mapping_table(animation, document, profile)
+            self._refresh_mapping_table(current, result.document, profile)
             self._refresh_animation_table()
-        except Exception as exc:
-            self._show_error("Auto-map failed", exc)
+
+        if not self.background_tasks.start(
+            lambda progress: _prepare_auto_retarget(request, progress),
+            progress=lambda message: self.status.showMessage(message),
+            succeeded=succeeded,
+            failed=lambda failure: self._background_animation_error(
+                "Auto-retarget failed", failure
+            ),
+            finished=lambda: self._set_animation_operation_busy(False),
+        ):
+            self._set_animation_operation_busy(False)
+            self.status.showMessage("Another animation operation is already running.", 5000)
 
     def clear_mapping(self) -> None:
         animation = self._retarget_animation()
@@ -4026,6 +4829,31 @@ class MainWindow:
                     frame_count = Anm2Header.parse(data).frame_count
                 rig_ref, rig_path = self._reverse_detect_rig(path)
                 item = Anm2ToFbxItem.create(path)
+                timing = load_anm2_provenance(path)
+                if timing.valid and int(timing.payload["frame_count"]) == int(frame_count):
+                    item.anm2_input_fps = float(timing.payload["sample_fps"])
+                    item.fbx_output_fps = float(timing.payload["source_fbx_fps"])
+                    item.fps = item.fbx_output_fps
+                    item.extensions["timing_metadata_status"] = "valid"
+                    item.extensions["timing_metadata_path"] = timing.path
+                    item.extensions["timing_provenance"] = dict(timing.payload)
+                else:
+                    item.anm2_input_fps = 30.0
+                    item.fbx_output_fps = 30.0
+                    item.fps = 30.0
+                    if timing.valid:
+                        advisory = (
+                            "ANM2 timing metadata was ignored because its frame count does not "
+                            "match the selected ANM2."
+                        )
+                        item.extensions["timing_metadata_status"] = "frame_count_mismatch"
+                        item.extensions["timing_metadata_warnings"] = [advisory]
+                    else:
+                        item.extensions["timing_metadata_status"] = timing.status
+                        if timing.warnings:
+                            item.extensions["timing_metadata_warnings"] = list(
+                                dict.fromkeys(timing.warnings)
+                            )[:1]
                 item.source_rig_ref = rig_ref
                 item.source_rig_path = rig_path
                 item.end_frame = frame_count - 1
@@ -4076,6 +4904,11 @@ class MainWindow:
             self.reverse_table.setCellWidget(row_index, 0, enabled)
             source_item = qt["QTableWidgetItem"](item.source_anm2)
             source_item.setFlags(source_item.flags() & ~qt["Qt"].ItemIsEditable)
+            timing_warnings = list(
+                item.extensions.get("timing_metadata_warnings", ()) or ()
+            )
+            if timing_warnings:
+                source_item.setToolTip(str(timing_warnings[0]))
             self.reverse_table.setItem(row_index, 1, source_item)
             output_item = qt["QTableWidgetItem"](item.output_name)
             self.reverse_table.setItem(row_index, 2, output_item)
@@ -4099,16 +4932,24 @@ class MainWindow:
             track_item = qt["QTableWidgetItem"](tracks)
             track_item.setFlags(track_item.flags() & ~qt["Qt"].ItemIsEditable)
             self.reverse_table.setItem(row_index, 4, track_item)
-            fps = qt["QSpinBox"](); fps.setRange(1, 240); fps.setValue(item.fps)
+            input_fps = qt["QDoubleSpinBox"]()
+            input_fps.setRange(0.001, 1000.0)
+            input_fps.setDecimals(9)
+            input_fps.setValue(item.resolved_input_fps())
+            output_fps = qt["QDoubleSpinBox"]()
+            output_fps.setRange(0.001, 1000.0)
+            output_fps.setDecimals(9)
+            output_fps.setValue(item.resolved_output_fps())
             start = qt["QSpinBox"](); start.setRange(-1, 65534); start.setSpecialValueText("First")
             end = qt["QSpinBox"](); end.setRange(-1, 65534); end.setSpecialValueText("Last")
             start.setValue(-1 if item.start_frame is None else item.start_frame)
             end.setValue(-1 if item.end_frame is None else item.end_frame)
-            for widget in (fps, start, end):
+            for widget in (input_fps, output_fps, start, end):
                 widget.valueChanged.connect(self._mark_dirty)
-            self.reverse_table.setCellWidget(row_index, 5, fps)
-            self.reverse_table.setCellWidget(row_index, 6, start)
-            self.reverse_table.setCellWidget(row_index, 7, end)
+            self.reverse_table.setCellWidget(row_index, 5, input_fps)
+            self.reverse_table.setCellWidget(row_index, 6, output_fps)
+            self.reverse_table.setCellWidget(row_index, 7, start)
+            self.reverse_table.setCellWidget(row_index, 8, end)
             self.reverse_table.setRowHeight(row_index, 38)
 
     def _sync_reverse_from_ui(self) -> None:
@@ -4129,9 +4970,15 @@ class MainWindow:
         for row_index, item in enumerate(settings.items):
             item.enabled = self.reverse_table.cellWidget(row_index, 0).isChecked()
             item.output_name = self.reverse_table.item(row_index, 2).text().strip() or Path(item.source_anm2).stem
-            item.fps = self.reverse_table.cellWidget(row_index, 5).value()
-            start = self.reverse_table.cellWidget(row_index, 6).value()
-            end = self.reverse_table.cellWidget(row_index, 7).value()
+            item.anm2_input_fps = float(
+                self.reverse_table.cellWidget(row_index, 5).value()
+            )
+            item.fbx_output_fps = float(
+                self.reverse_table.cellWidget(row_index, 6).value()
+            )
+            item.fps = item.fbx_output_fps
+            start = self.reverse_table.cellWidget(row_index, 7).value()
+            end = self.reverse_table.cellWidget(row_index, 8).value()
             item.start_frame = None if start < 0 else start
             item.end_frame = None if end < 0 else end
             item.source_rig_ref = rig_ref
@@ -4352,7 +5199,9 @@ class MainWindow:
                 if scale != "auto": scale = float(scale)
                 result = export_anm2_to_fbx(
                     item.source_anm2, rig, output / f"{item.output_name}.fbx",
-                    fps=item.fps, start_frame=item.start_frame, end_frame=item.end_frame,
+                    anm2_input_fps=item.resolved_input_fps(),
+                    fbx_output_fps=item.resolved_output_fps(),
+                    start_frame=item.start_frame, end_frame=item.end_frame,
                     target_fbx=target_fbx if mode == "retarget" else None,
                     bone_map=mapping, translation_scale=scale, blender_executable=blender,
                     unknown_track_policy=unknown_track_policy,
@@ -4360,6 +5209,12 @@ class MainWindow:
                     cancel_check=self._reverse_cancel_event.is_set,
                 )
                 warnings.extend(result.warnings)
+                progress(
+                    f"Root parity {item.output_name}: "
+                    f"{result.root_parity_max_angular_degrees:.6f}° angular, "
+                    f"{result.root_parity_max_heading_degrees:.6f}° heading, "
+                    f"{result.root_parity_max_translation_m:.3g} m translation"
+                )
                 exported += 1
             return exported, warnings, self._reverse_cancel_event.is_set()
 

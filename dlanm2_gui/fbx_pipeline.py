@@ -40,6 +40,7 @@ def build_fbx_rpack(
     source_root_bone: str = "mixamorig:Hips",
     target_root_bone: str = "bip01",
     root_heading_modes: Mapping[str, str] | None = None,
+    sample_fps: float = 30.0,
 ) -> dict[str, Any]:
     """Build custom ANM2 resources and one editor-loadable RPack.
 
@@ -81,6 +82,7 @@ def build_fbx_rpack(
         source_root_bone=source_root_bone,
         target_root_bone=target_root_bone,
         root_heading_modes=root_heading_modes,
+        sample_fps=sample_fps,
     )
 
 

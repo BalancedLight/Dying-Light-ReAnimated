@@ -28,7 +28,7 @@ def test_native_dl_finger_segments_are_classified_consistently() -> None:
     assert scan["l_finger13"].role == "l_index_3"
 
 
-def test_mapping_repair_error_blocks_build_but_not_project_import() -> None:
+def test_mapping_repair_error_is_nonblocking_for_import_and_export() -> None:
     report = FbxPreflightReport("different.fbx", "animation")
     report.add(
         ERROR,
@@ -42,8 +42,7 @@ def test_mapping_repair_error_blocks_build_but_not_project_import() -> None:
     assert report.blocking
     assert not report.import_blocking
     assert report.to_dict()["repairable"] is True
-    with pytest.raises(ValueError, match="blocked the build"):
-        report.require_buildable()
+    report.require_buildable()
 
 
 def test_model_import_uses_shared_scan_and_ignores_cc_helpers() -> None:
