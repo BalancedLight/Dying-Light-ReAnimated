@@ -320,6 +320,7 @@ def prepare_bundled_semantic_state(
     policy: Any,
     profile: SourceBoneMappingProfile | None = None,
     *,
+    bilateral_semantic_policy: str = "preserve_source_names",
     profile_name: str = "Automatic humanoid mapping",
     planning_context: Mapping[str, Any] | None = None,
 ) -> BundledSemanticState:
@@ -349,6 +350,8 @@ def prepare_bundled_semantic_state(
         == str(getattr(target_rig, "skeleton_hash", "") or "")
         and context_plan.target_policy_id
         == str(getattr(policy, "policy_id", "") or "")
+        and context_plan.bilateral_semantic_policy
+        == str(bilateral_semantic_policy)
         and context_plan.role_overrides
         == tuple(row.to_dict() for row in overrides)
         and not profile.target_bone_overrides
@@ -359,10 +362,11 @@ def prepare_bundled_semantic_state(
         validation = context_validation
     else:
         plan = build_automatic_retarget_plan(
-            analysis,
+            source,
             target_rig,
             policy,
             clip_domain="body",
+            bilateral_semantic_policy=bilateral_semantic_policy,
             role_overrides=overrides,
             target_bone_overrides=profile.target_bone_overrides,
         )
@@ -386,6 +390,7 @@ def compile_bundled_semantic_profile(
     policy: Any,
     profile: SourceBoneMappingProfile,
     *,
+    bilateral_semantic_policy: str = "preserve_source_names",
     state: BundledSemanticState | None = None,
 ) -> tuple[GenericBoneMap, AutomaticRetargetValidation, AutomaticRetargetPlan]:
     profile_diagnostics = profile.validate(source.limb_models)
@@ -401,16 +406,19 @@ def compile_bundled_semantic_profile(
         == str(getattr(target_rig, "skeleton_hash", "") or "")
         and state.plan.target_policy_id
         == str(getattr(policy, "policy_id", "") or "")
+        and state.plan.bilateral_semantic_policy
+        == str(bilateral_semantic_policy)
     )
     if state_is_current:
         plan = state.plan
         validation = state.validation
     else:
         plan = build_automatic_retarget_plan(
-            analysis,
+            source,
             target_rig,
             policy,
             clip_domain="body",
+            bilateral_semantic_policy=bilateral_semantic_policy,
             role_overrides=overrides,
             target_bone_overrides=profile.target_bone_overrides,
         )
@@ -419,9 +427,10 @@ def compile_bundled_semantic_profile(
         )
     validation.require_valid()
     compiled = build_verified_dl2_advanced_body_map(
-        analysis,
+        source,
         target_rig,
         policy,
+        bilateral_semantic_policy=bilateral_semantic_policy,
         role_overrides=overrides,
         target_bone_overrides=profile.target_bone_overrides,
         plan=plan,
@@ -430,9 +439,10 @@ def compile_bundled_semantic_profile(
     )
     live = revalidate_verified_dl2_advanced_body_map(
         compiled,
-        analysis,
+        source,
         target_rig,
         policy,
+        bilateral_semantic_policy=bilateral_semantic_policy,
         role_overrides=overrides,
         target_bone_overrides=profile.target_bone_overrides,
         plan=plan,

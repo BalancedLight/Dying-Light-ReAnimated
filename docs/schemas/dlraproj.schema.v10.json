@@ -43,6 +43,10 @@
         "retarget_mode": {"enum": ["auto", "humanoid", "exact"]},
         "target_rig_ref": {"type": "string"},
         "target_rig_path": {"type": "string"},
+        "fbx_anm2_export_behavior": {"enum": ["current", "legacy_5_0"]},
+        "bilateral_semantic_policy": {
+          "enum": ["auto", "preserve_source_names", "swap_bilateral_explicit"]
+        },
         "default_target_rig_ref": {"type": "string"},
         "default_target_rig_path": {"type": "string"}
       },

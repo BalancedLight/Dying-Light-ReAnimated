@@ -34,6 +34,7 @@ ExactRigBuild = RetargetBuild
 
 _SYNTHETIC_TRACK = re.compile(r"^DLR_(?:OffsetHelper_|Track_)([0-9A-Fa-f]{8})$")
 _MOTION_HELPER_DESCRIPTOR = 0xCCC3CDDF
+_NATIVE_FBX_COMPONENT_NOISE_TOLERANCE = 1.0e-7
 _Y_UP_TO_BLENDER = np.asarray(
     ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)),
     dtype=float,
@@ -448,12 +449,20 @@ def build_exact_rig_anm2(
             for descriptor in rig.descriptors
         ]
         values.append(frame)
+    # Blender's FBX curve evaluation introduces sub-micro component noise in
+    # otherwise static native-export channels. Treating it as authored motion
+    # makes a one-slot packed stream exceed ANM2's 64 KiB page limit for dense
+    # DL2 rigs. Native export metadata is the narrow contract that authorizes
+    # this tolerance; ordinary FBX imports retain the existing sensitivity.
+    packed_variation_threshold = (
+        _NATIVE_FBX_COMPONENT_NOISE_TOLERANCE if native_dlr_export else 1.0e-8
+    )
     packed_flags: list[list[bool]] = []
     for track_index in range(len(rig.descriptors)):
         flags = []
         for component_index in range(9):
             curve = [frame[track_index][component_index] for frame in values]
-            flags.append(max(curve) - min(curve) > 1.0e-8)
+            flags.append(max(curve) - min(curve) > packed_variation_threshold)
         if any(flags[6:9]):
             flags[6:9] = [True, True, True]
         packed_flags.append(flags)
@@ -483,6 +492,7 @@ def build_exact_rig_anm2(
             "target_rig_id": rig.rig_id,
             "target_rig_name": rig.name,
             "target_skeleton_hash": rig.skeleton_hash,
+            "packed_variation_threshold": packed_variation_threshold,
             "frame_count": frame_count,
             "fps": sample_fps,
             "track_count": len(rig.descriptors),

@@ -28,6 +28,12 @@ import numpy as np
 from ..anm2_components import decode_samples
 from ..anm2_writer import build_payload_from_values
 from ..bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
+from ..blender_mirror_wrapper import (
+    BilateralSemanticPolicy,
+    BlenderLateralMirrorContext,
+    coerce_bilateral_semantic_policy,
+    resolve_blender_lateral_mirror,
+)
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import decompose_local_matrix
 from ..helper_retarget import (
@@ -44,6 +50,10 @@ from ..fbx_core import (
     FBX_TICKS_PER_SECOND,
     FbxDocument,
     normalize_matrix_to_target_space,
+)
+from ..fbx_anm2_export_behavior import (
+    CURRENT,
+    coerce_fbx_anm2_export_behavior,
 )
 from ..fbx_preflight import FbxPreflightReport, preflight_fbx
 from ..oracle.smd_bind_pose import (
@@ -209,6 +219,10 @@ class SourceGlobalNormalization:
     unit_conversion_count: int = 1
     axis_conversion_count: int = -1
     wrapper_policy: str = "retained_and_scale_normalized"
+    mirror_basis_matrix: Any | None = None
+    mirror_wrapper_name: str = ""
+    wrapper_canonicalized_before_sampling: bool = False
+    explicit_post_canonicalization_mirror_conjugation: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.meters_per_unit) or self.meters_per_unit <= 0.0:
@@ -234,6 +248,35 @@ class SourceGlobalNormalization:
         except np.linalg.LinAlgError as exc:
             raise ValueError("Source global basis matrix is singular") from exc
         object.__setattr__(self, "basis_matrix", basis)
+        mirror = (
+            np.eye(4, dtype=float)
+            if self.mirror_basis_matrix is None
+            else np.asarray(self.mirror_basis_matrix, dtype=float).copy()
+        )
+        if mirror.shape != (4, 4) or not np.isfinite(mirror).all():
+            raise ValueError("Source mirror basis must be a finite 4x4 matrix")
+        try:
+            np.linalg.inv(mirror)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("Source mirror basis is singular") from exc
+        if not np.allclose(mirror[:3, 3], 0.0, atol=1.0e-8, rtol=0.0):
+            raise ValueError("Source mirror basis must be origin-centred")
+        mirror_applied = not np.allclose(
+            mirror,
+            np.eye(4, dtype=float),
+            rtol=0.0,
+            atol=1.0e-12,
+        )
+        if (
+            mirror_applied
+            and self.wrapper_canonicalized_before_sampling
+            and not self.explicit_post_canonicalization_mirror_conjugation
+        ):
+            raise ValueError(
+                "Invariant violation: a wrapper canonicalized before sampling "
+                "cannot implicitly apply post-canonicalization mirror conjugation"
+            )
+        object.__setattr__(self, "mirror_basis_matrix", mirror)
         explicit_axis_conversion = not np.allclose(
             basis,
             np.eye(4, dtype=float),
@@ -251,18 +294,34 @@ class SourceGlobalNormalization:
             raise ValueError("Source global axis conversion must be applied exactly once")
 
     def apply(self, matrix: np.ndarray) -> np.ndarray:
-        return normalize_matrix_to_target_space(
+        normalized = normalize_matrix_to_target_space(
             matrix,
             meters_per_unit=(
                 self.meters_per_unit / self.wrapper_scale_normalization_factor
             ),
             basis_matrix=np.asarray(self.basis_matrix, dtype=float),
         )
+        mirror = np.asarray(self.mirror_basis_matrix, dtype=float)
+        return mirror @ normalized @ np.linalg.inv(mirror)
 
     def apply_local(self, matrix: np.ndarray) -> np.ndarray:
         return self.apply(matrix)
 
+    def apply_target_vector(self, vector: np.ndarray) -> np.ndarray:
+        """Reflect a target-space vector after actor-frame displacement mapping."""
+
+        value = np.asarray(vector, dtype=float)
+        if value.shape != (3,) or not np.isfinite(value).all():
+            raise ValueError("Source displacement vector must be finite length three")
+        return np.asarray(self.mirror_basis_matrix, dtype=float)[:3, :3] @ value
+
     def to_report(self) -> dict[str, Any]:
+        mirror_applied = not np.allclose(
+            np.asarray(self.mirror_basis_matrix, dtype=float),
+            np.eye(4, dtype=float),
+            rtol=0.0,
+            atol=1.0e-12,
+        )
         return {
             "meters_per_unit": self.meters_per_unit,
             "unit_conversion_count": self.unit_conversion_count,
@@ -291,6 +350,18 @@ class SourceGlobalNormalization:
                 else "none"
             ),
             "wrapper_policy": self.wrapper_policy,
+            "mirrored_wrapper": {
+                "applied": mirror_applied,
+                "wrapper": self.mirror_wrapper_name,
+                "application": "conjugate" if mirror_applied else "diagnostic_only",
+                "basis_matrix": np.asarray(
+                    self.mirror_basis_matrix, dtype=float
+                ).tolist(),
+            },
+            "wrapper_canonicalized_before_sampling": bool(
+                self.wrapper_canonicalized_before_sampling
+            ),
+            "post_canonicalization_mirror_conjugation_applied": mirror_applied,
             "bind_and_animation_share_normalizer": True,
             "target_crig_bind_conversion_count": 0,
         }
@@ -1016,12 +1087,29 @@ def build_mapped_rig_anm2(
     transfer_policy: str = "mapped_local_rest_delta",
     root_policy: str = "bip01",
     root_motion: RootMotionSelection | Mapping[str, Any] | None = None,
+    fbx_anm2_export_behavior: str = "current",
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
+    diagnostic_post_canonicalization_mirror_conjugation: bool = False,
     preflight: FbxPreflightReport | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> MappedRigBuild:
     """Retarget an arbitrary mapped FBX skeleton onto a Chrome Rig."""
 
     operation_started = time.perf_counter()
+    fbx_anm2_export_behavior = coerce_fbx_anm2_export_behavior(
+        fbx_anm2_export_behavior
+    )
+    bilateral_semantic_policy = coerce_bilateral_semantic_policy(
+        bilateral_semantic_policy
+    ).value
+    if fbx_anm2_export_behavior != CURRENT:
+        raise ValueError(
+            "Legacy 5.0 FBX-to-ANM2 export cannot be applied through a mapped "
+            "or semantic retarget profile. Choose Current normalized sampling, "
+            "or use a target-compatible direct-name skeleton."
+        )
     rig.validate().require_valid()
     track_index_by_descriptor = {
         descriptor: index for index, descriptor in enumerate(rig.descriptors)
@@ -1310,6 +1398,16 @@ def build_mapped_rig_anm2(
             else "none"
         )
 
+    # Reflected wrappers remain canonicalized out of FBX sampling.  Detect the
+    # removed geometry for diagnostics and Auto bind-pose observation only.
+    # It does not authorize a second target-space conjugation.
+    mirror_context: BlenderLateralMirrorContext | None = None
+    if target_requires_dying_light_basis and not uses_canonical_document_basis:
+        mirror_context = resolve_blender_lateral_mirror(
+            document,
+            source_basis_matrix=source_basis_matrix,
+        )
+
     source_normalizers: dict[str, SourceGlobalNormalization] = {}
 
     def source_normalizer(source_name: str) -> SourceGlobalNormalization:
@@ -1328,6 +1426,29 @@ def build_mapped_rig_anm2(
             wrapper_axis_conversion=wrapper_axis_conversion,
             basis_matrix=source_basis_matrix,
             basis_label=source_basis_label,
+            wrapper_policy=(
+                "canonicalized_reflection_diagnostic_conjugation"
+                if mirror_context is not None
+                and diagnostic_post_canonicalization_mirror_conjugation
+                else "canonicalized_reflection_no_post_conjugation"
+                if mirror_context is not None
+                else "retained_and_scale_normalized"
+            ),
+            mirror_basis_matrix=(
+                mirror_context.matrix()
+                if mirror_context is not None
+                and diagnostic_post_canonicalization_mirror_conjugation
+                else None
+            ),
+            mirror_wrapper_name=(
+                mirror_context.wrapper_name if mirror_context is not None else ""
+            ),
+            wrapper_canonicalized_before_sampling=bool(
+                mirror_context is not None
+            ),
+            explicit_post_canonicalization_mirror_conjugation=bool(
+                diagnostic_post_canonicalization_mirror_conjugation
+            ),
         )
         source_normalizers[source_name] = normalizer
         return normalizer
@@ -1627,6 +1748,9 @@ def build_mapped_rig_anm2(
             root_displacement_source_m,
             source_actor_frame,
             target_actor_frame,
+        )
+        root_displacement_global = global_normalization.apply_target_vector(
+            root_displacement_global
         )
         source_root_raw_displacements_m.append(root_displacement_source_m)
         source_root_animated_globals.append(root_animated_global.copy())
@@ -1998,6 +2122,31 @@ def build_mapped_rig_anm2(
     automatic_plan = dict(
         bone_map.extensions.get("automatic_retarget_plan", {}) or {}
     )
+    mirror_repair = dict(
+        bone_map.extensions.get("source_wrapper_mirror", {}) or {}
+    )
+    bilateral_semantic_decision = dict(
+        bone_map.extensions.get("bilateral_semantic_decision", {}) or {}
+    )
+    bilateral_warning = str(
+        bilateral_semantic_decision.get("warning", "") or ""
+    )
+    if bilateral_warning:
+        warnings.append(bilateral_warning)
+    if mirror_context is not None:
+        # Mapping provenance carries any semantic swap count independently.
+        # The removed wrapper is diagnostic unless a low-level ablation
+        # explicitly requests post-canonicalization conjugation.
+        mirror_repair = {
+            **mirror_context.to_dict(),
+            **mirror_repair,
+        }
+        mirror_repair.setdefault("swapped_row_count", 0)
+        mirror_repair["application"] = (
+            "diagnostic_conjugate"
+            if diagnostic_post_canonicalization_mirror_conjugation
+            else "diagnostic_only"
+        )
     certificate_pass = bool(
         automatic_certificate.get("status") == "pass"
         and automatic_certificate.get("live_revalidated") is True
@@ -2054,6 +2203,7 @@ def build_mapped_rig_anm2(
         "reflected": bool(
             transform_contract_payload.get("common_wrapper_is_reflected", False)
         ),
+        "mirror_diagnostics": mirror_repair if mirror_context is not None else None,
     }
     exact_subset_rows = int(
         automatic_certificate.get("exact_target_subset_rows", 0) or 0
@@ -2124,7 +2274,52 @@ def build_mapped_rig_anm2(
                 "sample_storage_limit_bytes": sample_storage_limit_bytes,
             },
             "preflight_policy": "export_first_v1",
+            "fbx_anm2_export_behavior": fbx_anm2_export_behavior,
+            "sampler_contract": "dlr_current_normalized_global_v2",
+            "bilateral_semantic_policy": bilateral_semantic_policy,
+            "bilateral_swap_applied": bool(
+                bilateral_semantic_decision.get(
+                    "bilateral_swap_applied", False
+                )
+            ),
+            "bilateral_swapped_row_count": int(
+                bilateral_semantic_decision.get(
+                    "bilateral_swapped_row_count",
+                    mirror_repair.get("swapped_row_count", 0),
+                )
+                or 0
+            ),
+            "bilateral_semantic_decision": bilateral_semantic_decision,
+            "post_canonicalization_mirror_conjugation_applied": bool(
+                diagnostic_post_canonicalization_mirror_conjugation
+                and mirror_context is not None
+            ),
+            "source_target_classification": str(
+                dict(
+                    mapped_preflight.inventory.get(
+                        "target_compatibility", {}
+                    )
+                    or {}
+                ).get("classification", "semantic_or_cross_rig")
+            ),
+            "bind_retained_bones": sorted(
+                bind_only_targets, key=str.casefold
+            ),
             "wrapper_canonicalization": wrapper_canonicalization,
+            "wrapper_reflection_detected": bool(
+                transform_contract_payload.get(
+                    "common_wrapper_is_reflected", False
+                )
+            ),
+            "wrapper_canonicalized": bool(
+                transform_contract_payload.get(
+                    "canonicalized_wrapper_reflection", False
+                )
+            ),
+            "wrapper_matrix": transform_contract_payload.get(
+                "common_wrapper_matrix"
+            ),
+            "wrapper_reflection_diagnostics": mirror_repair or None,
             "canonical_transform_validation": dict(
                 transform_contract_payload.get(
                     "canonical_transform_validation", {}

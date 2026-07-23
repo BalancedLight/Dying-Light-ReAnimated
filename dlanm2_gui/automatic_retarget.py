@@ -28,6 +28,17 @@ from .bone_maps import (
     TRANSFER_POLICIES,
     skeleton_signature,
 )
+from .blender_mirror_wrapper import (
+    BilateralSemanticDecision,
+    BilateralSemanticPolicy,
+    BlenderLateralMirrorContext,
+    coerce_bilateral_semantic_policy,
+    resolve_bilateral_semantic_decision,
+    resolve_blender_lateral_mirror,
+    should_swap_bilateral_rows,
+    swapped_bilateral_source_name,
+)
+from .model_importer.fbx_model import FBX_Y_UP_TO_DYING_LIGHT
 
 
 AUTOMATIC_RETARGET_PLAN_FORMAT = "dl-reanimated-automatic-retarget-plan-v1"
@@ -276,6 +287,11 @@ class AutomaticRetargetPlan:
     manual_override_count: int = 0
     role_overrides: tuple[dict[str, Any], ...] = ()
     target_bone_overrides: tuple[dict[str, Any], ...] = ()
+    source_wrapper_mirror: Mapping[str, Any] = field(default_factory=dict)
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    )
+    bilateral_semantic_decision: Mapping[str, Any] = field(default_factory=dict)
     format: str = AUTOMATIC_RETARGET_PLAN_FORMAT
 
     @property
@@ -450,6 +466,105 @@ def resolve_source_analysis(source: Any) -> Any:
     """Return one request-scoped immutable analysis for a source/stack pair."""
 
     return _coerce_analysis(source)
+
+
+def _blender_lateral_mirror_context(
+    source: Any,
+    target_rig: Any,
+) -> BlenderLateralMirrorContext | None:
+    """Resolve only the DL2-safe Blender mirror from a live source document."""
+
+    if _looks_like_analysis(source):
+        return None
+    if str(_value(target_rig, "rig_id", "") or "") != DL2_ADVANCED_RIG_ID:
+        return None
+    return resolve_blender_lateral_mirror(
+        source,
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+    )
+
+
+def _mirror_automatic_decisions(
+    decisions: Iterable[MappingDecision],
+    *,
+    source_names: Iterable[str],
+    animated_bones: set[str],
+    context: BlenderLateralMirrorContext | None,
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
+    semantic_decision: BilateralSemanticDecision | None = None,
+) -> tuple[tuple[MappingDecision, ...], dict[str, Any]]:
+    """Apply a resolved semantic policy to automatic direct rows only."""
+
+    selected = coerce_bilateral_semantic_policy(bilateral_semantic_policy)
+    if not should_swap_bilateral_rows(selected, semantic_decision):
+        payload = (
+            semantic_decision.to_dict()
+            if semantic_decision is not None
+            else {
+                "requested_policy": selected.value,
+                "effective_policy": (
+                    BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+                ),
+                "bilateral_swap_applied": False,
+            }
+        )
+        payload["bilateral_swapped_row_count"] = 0
+        return tuple(decisions), payload
+    available = tuple(str(name) for name in source_names)
+    swapped_rows = 0
+    result: list[MappingDecision] = []
+    for row in decisions:
+        manual = any(
+            evidence.kind == "manual_target_override" for evidence in row.evidence
+        )
+        if manual or row.mode != "direct" or len(row.source_bones) != 1:
+            result.append(row)
+            continue
+        source_name = row.source_bones[0]
+        paired = swapped_bilateral_source_name(source_name, available)
+        if paired == source_name:
+            result.append(row)
+            continue
+        swapped_rows += 1
+        result.append(
+            replace(
+                row,
+                source_bones=(paired,),
+                animated=paired in animated_bones,
+                evidence=(
+                    *row.evidence,
+                    MappingEvidence(
+                        "bilateral_semantic_swap",
+                        1.0,
+                        (
+                            semantic_decision.reason
+                            if semantic_decision is not None
+                            else "explicit bilateral semantic policy"
+                        ),
+                        "bilateral_semantic_policy",
+                    ),
+                ),
+                reason=(
+                    f"{row.reason}; source bilateral pair swapped for the "
+                    "resolved bilateral semantic policy"
+                ),
+            )
+        )
+    payload = (
+        semantic_decision.to_dict()
+        if semantic_decision is not None
+        else {
+            "requested_policy": selected.value,
+            "effective_policy": (
+                BilateralSemanticPolicy.SWAP_BILATERAL_EXPLICIT.value
+            ),
+            "bilateral_swap_applied": True,
+        }
+    )
+    payload["bilateral_swapped_row_count"] = swapped_rows
+    return tuple(result), payload
 
 
 def _coerce_policy(target_rig: Any, target_policy: Any, clip_domain: str) -> Any:
@@ -649,6 +764,10 @@ def _require_current_planning_context(
     target_rig: Any,
     policy: Any,
     *,
+    source: Any | None = None,
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None,
     target_bone_overrides: (
         Mapping[str, Any] | Iterable[TargetBoneOverride] | None
@@ -689,6 +808,35 @@ def _require_current_planning_context(
         mismatches.append("role mapping")
     if plan.target_bone_overrides != expected_targets:
         mismatches.append("target-bone mapping")
+    current_mirror = _blender_lateral_mirror_context(
+        source if source is not None else analysis,
+        target_rig,
+    )
+    expected_mirror = current_mirror.to_dict() if current_mirror is not None else {}
+    actual_mirror = dict(plan.source_wrapper_mirror or {})
+    if actual_mirror != expected_mirror:
+        mismatches.append("Blender wrapper mirror context")
+    selected_bilateral_policy = coerce_bilateral_semantic_policy(
+        bilateral_semantic_policy
+    )
+    expected_semantic_decision = resolve_bilateral_semantic_decision(
+        source if source is not None else analysis,
+        target_rig,
+        selected_bilateral_policy,
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        wrapper_context=current_mirror,
+    ).to_dict()
+    expected_semantic_decision["bilateral_swapped_row_count"] = int(
+        dict(plan.bilateral_semantic_decision or {}).get(
+            "bilateral_swapped_row_count", 0
+        )
+        or 0
+    )
+    if plan.bilateral_semantic_policy != selected_bilateral_policy.value:
+        mismatches.append("bilateral semantic policy")
+    actual_semantic_decision = dict(plan.bilateral_semantic_decision or {})
+    if actual_semantic_decision != expected_semantic_decision:
+        mismatches.append("bilateral semantic decision")
     if validation is not None and validation.plan_hash not in {"", plan.plan_hash}:
         mismatches.append("plan validation")
     if mismatches:
@@ -1610,6 +1758,9 @@ def build_automatic_retarget_plan(
     target_policy: Any,
     clip_domain: str = "body",
     *,
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None = None,
     target_bone_overrides: (
         Mapping[str, Any] | Iterable[TargetBoneOverride] | None
@@ -1617,6 +1768,17 @@ def build_automatic_retarget_plan(
 ) -> AutomaticRetargetPlan:
     """Build a complete target-row plan from generic analyzer evidence."""
 
+    selected_bilateral_policy = coerce_bilateral_semantic_policy(
+        bilateral_semantic_policy
+    )
+    mirror_context = _blender_lateral_mirror_context(source, target_rig)
+    semantic_decision = resolve_bilateral_semantic_decision(
+        source,
+        target_rig,
+        selected_bilateral_policy,
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        wrapper_context=mirror_context,
+    )
     analysis = _coerce_analysis(source)
     policy = _coerce_policy(target_rig, target_policy, clip_domain)
     policy_id, policy_version, target_archetype, minimum, minimum_margin = (
@@ -2074,6 +2236,19 @@ def build_automatic_retarget_plan(
             )
         )
     )
+    decisions, bilateral_semantic_decision = _mirror_automatic_decisions(
+        decisions,
+        source_names=nodes,
+        animated_bones=animated_bones,
+        context=mirror_context,
+        bilateral_semantic_policy=selected_bilateral_policy.value,
+        semantic_decision=semantic_decision,
+    )
+    source_wrapper_mirror = (
+        mirror_context.to_dict() if mirror_context is not None else {}
+    )
+    if semantic_decision.warning:
+        planner_warnings.append(semantic_decision.warning)
     consumed_animated_sources = {
         source_name
         for row in decisions
@@ -2094,7 +2269,7 @@ def build_automatic_retarget_plan(
         clip_domain=str(clip_domain),
         source_archetype=source_archetype,
         source_archetype_confidence=archetype_confidence,
-        decisions=tuple(decisions),
+        decisions=decisions,
         analyzer_version=analyzer_version,
         semantic_policy_version=policy_version,
         lexicon_version=lexicon_version,
@@ -2137,6 +2312,9 @@ def build_automatic_retarget_plan(
             target_overrides[name].to_dict()
             for name in sorted(target_overrides, key=str.casefold)
         ),
+        source_wrapper_mirror=source_wrapper_mirror,
+        bilateral_semantic_policy=selected_bilateral_policy.value,
+        bilateral_semantic_decision=bilateral_semantic_decision,
     )
 
 
@@ -2218,6 +2396,11 @@ def _certificate_for_plan(
         "source_family_hints": list(plan.source_family_hints),
         "source_name_languages_or_scripts": list(
             plan.source_name_languages_or_scripts
+        ),
+        "source_wrapper_mirror": dict(plan.source_wrapper_mirror or {}),
+        "bilateral_semantic_policy": plan.bilateral_semantic_policy,
+        "bilateral_semantic_decision": dict(
+            plan.bilateral_semantic_decision or {}
         ),
         "clip_domain": plan.clip_domain,
         "target_row_count": len(plan.decisions),
@@ -2661,6 +2844,16 @@ def _materialize_verified_map(
             )
         )
     profile.extensions["automatic_retarget_plan"] = plan.to_dict()
+    if plan.source_wrapper_mirror:
+        profile.extensions["source_wrapper_mirror"] = dict(
+            plan.source_wrapper_mirror
+        )
+    profile.extensions["bilateral_semantic_policy"] = (
+        plan.bilateral_semantic_policy
+    )
+    profile.extensions["bilateral_semantic_decision"] = dict(
+        plan.bilateral_semantic_decision or {}
+    )
     profile.extensions["automatic_retarget_certificate"] = dict(
         validation.certificate
     )
@@ -2759,6 +2952,9 @@ def build_verified_dl2_advanced_body_map(
     target_rig: Any,
     target_policy: Any = None,
     *,
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None = None,
     target_bone_overrides: (
         Mapping[str, Any] | Iterable[TargetBoneOverride] | None
@@ -2785,10 +2981,11 @@ def build_verified_dl2_advanced_body_map(
     _require_coherent_dl2_advanced_target(target_rig, policy)
     if plan is None:
         plan = build_automatic_retarget_plan(
-            analysis,
+            document_or_analysis,
             target_rig,
             policy,
             clip_domain="body",
+            bilateral_semantic_policy=bilateral_semantic_policy,
             role_overrides=role_overrides,
             target_bone_overrides=target_bone_overrides,
         )
@@ -2798,6 +2995,8 @@ def build_verified_dl2_advanced_body_map(
             analysis,
             target_rig,
             policy,
+            source=document_or_analysis,
+            bilateral_semantic_policy=bilateral_semantic_policy,
             role_overrides=role_overrides,
             target_bone_overrides=target_bone_overrides,
             validation=validation,
@@ -2813,9 +3012,10 @@ def build_verified_dl2_advanced_body_map(
     # routing before returning a newly generated profile.
     live = revalidate_verified_dl2_advanced_body_map(
         profile,
-        analysis,
+        document_or_analysis,
         target_rig,
         policy,
+        bilateral_semantic_policy=bilateral_semantic_policy,
         role_overrides=role_overrides,
         target_bone_overrides=target_bone_overrides,
         plan=plan,
@@ -2836,6 +3036,9 @@ def build_dl2_advanced_body_map_with_local_recipe(
     target_rig: Any,
     target_policy: Any = None,
     *,
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
     recipe_store: Any = None,
     planning_context_out: dict[str, Any] | None = None,
 ) -> GenericBoneMap:
@@ -2862,7 +3065,11 @@ def build_dl2_advanced_body_map_with_local_recipe(
     policy = _coerce_policy(target_rig, target_policy, "body")
     _require_coherent_dl2_advanced_target(target_rig, policy)
     fresh = build_automatic_retarget_plan(
-        analysis, target_rig, policy, clip_domain="body"
+        document_or_analysis,
+        target_rig,
+        policy,
+        clip_domain="body",
+        bilateral_semantic_policy=bilateral_semantic_policy,
     )
     from .retarget_recipes import (
         materialize_reviewed_retarget_recipe,
@@ -2889,9 +3096,10 @@ def build_dl2_advanced_body_map_with_local_recipe(
                 }
             )
         return build_verified_dl2_advanced_body_map(
-            analysis,
+            document_or_analysis,
             target_rig,
             policy,
+            bilateral_semantic_policy=bilateral_semantic_policy,
             plan=fresh,
             validation=validation,
         )
@@ -2931,6 +3139,9 @@ def revalidate_verified_dl2_advanced_body_map(
     target_rig: Any,
     target_policy: Any = None,
     *,
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
     role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None = None,
     target_bone_overrides: (
         Mapping[str, Any] | Iterable[TargetBoneOverride] | None
@@ -2949,10 +3160,11 @@ def revalidate_verified_dl2_advanced_body_map(
         errors.append(str(exc))
     if plan is None:
         plan = build_automatic_retarget_plan(
-            analysis,
+            document_or_analysis,
             target_rig,
             policy,
             clip_domain="body",
+            bilateral_semantic_policy=bilateral_semantic_policy,
             role_overrides=role_overrides,
             target_bone_overrides=target_bone_overrides,
         )
@@ -2962,6 +3174,8 @@ def revalidate_verified_dl2_advanced_body_map(
             analysis,
             target_rig,
             policy,
+            source=document_or_analysis,
+            bilateral_semantic_policy=bilateral_semantic_policy,
             role_overrides=role_overrides,
             target_bone_overrides=target_bone_overrides,
             validation=validation,

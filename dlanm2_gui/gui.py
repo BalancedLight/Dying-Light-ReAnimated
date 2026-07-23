@@ -129,6 +129,7 @@ class _AnimationImportRequest:
     resource_root: Path
     resource_prefix: str
     tolerance: FbxImportTolerance
+    bilateral_semantic_policy: str = "preserve_source_names"
 
 
 @dataclass(slots=True)
@@ -169,6 +170,7 @@ def _exact_import_mapping_profile_for_request(
     *,
     game_id: str,
     retarget_mode: str,
+    bilateral_semantic_policy: str = "preserve_source_names",
     planning_context_out: dict[str, Any] | None = None,
 ) -> tuple[GenericBoneMap, str]:
     """Build an import-time mapping without reaching back into a Qt controller."""
@@ -193,6 +195,7 @@ def _exact_import_mapping_profile_for_request(
                 document,
                 target_rig,
                 policy,
+                bilateral_semantic_policy=bilateral_semantic_policy,
                 planning_context_out=planning_context_out,
             )
             if mapping_profile_origin(profile) == "manually_reviewed":
@@ -240,6 +243,7 @@ def _exact_import_mapping_profile_for_request(
             target_rig,
             policy,
             clip_domain="body",
+            bilateral_semantic_policy=bilateral_semantic_policy,
         )
         local = resolve_local_retarget_recipe(
             fresh,
@@ -457,6 +461,9 @@ def _prepare_animation_import(
                             target_rig,
                             game_id=request.game_id,
                             retarget_mode=request.retarget_mode,
+                            bilateral_semantic_policy=(
+                                request.bilateral_semantic_policy
+                            ),
                             planning_context_out=import_planning_context,
                         )
                         result.mapping_profiles[profile.profile_id] = profile.to_dict()
@@ -482,6 +489,9 @@ def _prepare_animation_import(
                                 target_rig,
                                 policy,
                                 semantic_profile,
+                                bilateral_semantic_policy=(
+                                    request.bilateral_semantic_policy
+                                ),
                                 profile_name=f"Bundled humanoid mapping: {row.display_name}",
                                 planning_context=import_planning_context,
                             )
@@ -609,6 +619,7 @@ class _AutoRetargetRequest:
     display_name: str
     existing_profile_id: str
     game_id: str
+    bilateral_semantic_policy: str
     target_rig_path: str
     existing_profile: dict[str, Any]
     tolerance: FbxImportTolerance
@@ -673,11 +684,16 @@ def _prepare_auto_retarget(
         rig,
         policy,
         profile,
+        bilateral_semantic_policy=request.bilateral_semantic_policy,
         profile_name=f"Bundled humanoid mapping: {request.display_name}",
     )
     progress("Verifying the DL2 retarget map…")
     compiled, _verification, _plan = compile_bundled_semantic_profile(
-        document, rig, policy, state.profile
+        document,
+        rig,
+        policy,
+        state.profile,
+        bilateral_semantic_policy=request.bilateral_semantic_policy,
     )
     return _AutoRetargetResult(
         document,
@@ -970,6 +986,21 @@ class MainWindow:
         self.target_rig_combo.currentIndexChanged.connect(self._target_rig_changed)
         rig_form.addRow("Default target rig", self.target_rig_combo)
 
+        self.fbx_anm2_export_behavior = self._combo_box()
+        self.fbx_anm2_export_behavior.addItem(
+            "Current normalized sampling", "current"
+        )
+        self.fbx_anm2_export_behavior.addItem(
+            "Legacy 5.0 global bind-basis compatibility", "legacy_5_0"
+        )
+        self.fbx_anm2_export_behavior.setToolTip(
+            "Controls FBX → ANM2 transform sampling. Current uses the modern "
+            "wrapper-normalized exporter. Legacy 5.0 samples matching FBX bone "
+            "locals directly and is available only for target-compatible skeletons."
+        )
+        self.fbx_anm2_export_behavior.currentIndexChanged.connect(self._mark_dirty)
+        rig_form.addRow("FBX → ANM2 export behavior", self.fbx_anm2_export_behavior)
+
         self.custom_rig_actions = qt["QWidget"]()
         custom_rig_row = qt["QHBoxLayout"](self.custom_rig_actions)
         custom_rig_row.setContentsMargins(0, 0, 0, 0)
@@ -1011,6 +1042,27 @@ class MainWindow:
 
         self.advanced_rig_group = qt["QGroupBox"]("Advanced target-rig files")
         advanced_form = qt["QFormLayout"](self.advanced_rig_group)
+        self.bilateral_semantic_policy = self._combo_box()
+        self.bilateral_semantic_policy.addItem("Auto (recommended)", "auto")
+        self.bilateral_semantic_policy.addItem(
+            "Preserve source left/right names", "preserve_source_names"
+        )
+        self.bilateral_semantic_policy.addItem(
+            "Swap left/right source bone semantics",
+            "swap_bilateral_explicit",
+        )
+        self.bilateral_semantic_policy.setToolTip(
+            "Advanced semantic mapping policy. Auto compares several trusted "
+            "bilateral bind-pose pairs after geometric wrapper canonicalization. "
+            "Swap is an explicit source-bone ownership override; it is not normal "
+            "FBX axis conversion."
+        )
+        self.bilateral_semantic_policy.currentIndexChanged.connect(
+            self._mark_dirty
+        )
+        advanced_form.addRow(
+            "Bilateral mapping", self.bilateral_semantic_policy
+        )
         self.trusted_rest_path = self._path_row(
             advanced_form,
             "Trusted source-rest JSON",
@@ -1988,6 +2040,9 @@ class MainWindow:
                     document,
                     target_rig,
                     policy,
+                    bilateral_semantic_policy=(
+                        self.project.rig.bilateral_semantic_policy
+                    ),
                 )
                 if mapping_profile_origin(profile) == "manually_reviewed":
                     return (
@@ -2037,6 +2092,9 @@ class MainWindow:
                 target_rig,
                 policy,
                 clip_domain="body",
+                bilateral_semantic_policy=(
+                    self.project.rig.bilateral_semantic_policy
+                ),
             )
             local = resolve_local_retarget_recipe(
                 fresh,
@@ -2134,6 +2192,9 @@ class MainWindow:
             },
             game_id=self.project.game_id,
             retarget_mode=self.project.rig.retarget_mode,
+            bilateral_semantic_policy=(
+                self.project.rig.bilateral_semantic_policy
+            ),
             target_rig_path=self.project.rig.target_rig_path,
             resource_root=self.resource_root,
             resource_prefix=self.project.export.resource_prefix.strip(),
@@ -2316,6 +2377,37 @@ class MainWindow:
                             if mapping_profile_origin(profile) == "automatic_verified":
                                 row.extensions["retarget_domain"] = "body"
                                 verified_mapping_ready = True
+                            if automatic_dl2 and isinstance(profile, GenericBoneMap):
+                                policy = build_target_retarget_policy(
+                                    target_rig,
+                                    game_id=self.project.game_id,
+                                    clip_domain="body",
+                                )
+                                semantic_profile = (
+                                    migrate_generic_map_to_semantic_profile(
+                                        profile,
+                                        document.limb_models,
+                                        document.parent_by_name,
+                                        policy,
+                                        name=(
+                                            "Bundled humanoid mapping: "
+                                            f"{row.display_name}"
+                                        ),
+                                    )
+                                )
+                                self.project.mapping_profiles[
+                                    semantic_profile.profile_id
+                                ] = semantic_profile.to_dict()
+                                row.mapping_profile_id = semantic_profile.profile_id
+                                row.extensions[
+                                    "legacy_target_map_profile_id"
+                                ] = profile.profile_id
+                                row.extensions["semantic_profile_migration"] = dict(
+                                    semantic_profile.extensions.get(
+                                        "migration_audit", {}
+                                    )
+                                    or {}
+                                )
                     elif self.project.rig.retarget_mode in {"auto", "humanoid"}:
                         profile = auto_map_source_bones(
                             document.limb_models,
@@ -2427,7 +2519,7 @@ class MainWindow:
         if added_rows:
             self._mark_dirty()
         self._refresh_animation_table()
-        self._refresh_retarget_clip_combo(analyze=False)
+        self._refresh_retarget_clip_combo(analyze=automatic_dl2)
         if self.project.animations:
             self.animation_table.selectRow(len(self.project.animations) - 1)
         if blocked_messages:
@@ -3637,6 +3729,9 @@ class MainWindow:
             rig,
             policy,
             profile,
+            bilateral_semantic_policy=(
+                self.project.rig.bilateral_semantic_policy
+            ),
             profile_name=f"Bundled humanoid mapping: {animation.display_name}",
         )
         self.project.mapping_profiles[state.profile.profile_id] = state.profile.to_dict()
@@ -4485,6 +4580,9 @@ class MainWindow:
             display_name=animation.display_name,
             existing_profile_id=animation.mapping_profile_id,
             game_id=self.project.game_id,
+            bilateral_semantic_policy=(
+                self.project.rig.bilateral_semantic_policy
+            ),
             target_rig_path=selection.rig_path,
             existing_profile=deepcopy(
                 self.project.mapping_profiles.get(animation.mapping_profile_id, {}) or {}
@@ -4649,7 +4747,12 @@ class MainWindow:
                         rig, game_id=self.project.game_id, clip_domain="body"
                     )
                     candidate = prepare_bundled_semantic_state(
-                        document, rig, policy
+                        document,
+                        rig,
+                        policy,
+                        bilateral_semantic_policy=(
+                            self.project.rig.bilateral_semantic_policy
+                        ),
                     ).profile
                     compatible = bool(
                         candidate.source_name_parent_hash
@@ -4742,7 +4845,12 @@ class MainWindow:
                     )
                 if profile.target_policy_id:
                     current_hash = prepare_bundled_semantic_state(
-                        document, rig, policy
+                        document,
+                        rig,
+                        policy,
+                        bilateral_semantic_policy=(
+                            self.project.rig.bilateral_semantic_policy
+                        ),
                     ).profile.source_name_parent_hash
                     profile_source_hash = profile.source_name_parent_hash
                 else:
@@ -5516,6 +5624,14 @@ class MainWindow:
             self.project_notes.setPlainText(self.project.notes)
             self._reload_target_rig_combo()
             self._set_combo_data(self.target_rig_combo, self.project.rig.target_rig_ref)
+            self._set_combo_data(
+                self.fbx_anm2_export_behavior,
+                self.project.rig.fbx_anm2_export_behavior,
+            )
+            self._set_combo_data(
+                self.bilateral_semantic_policy,
+                self.project.rig.bilateral_semantic_policy,
+            )
             self.use_imported_bind_pose.setChecked(
                 self.project.rig.use_imported_animation_bind_pose
             )
@@ -5624,6 +5740,12 @@ class MainWindow:
             self.use_imported_bind_pose.isChecked()
         )
         self.project.rig.source_rest_fbx = self.source_rest_path.text().strip()
+        self.project.rig.fbx_anm2_export_behavior = str(
+            self.fbx_anm2_export_behavior.currentData() or "current"
+        )
+        self.project.rig.bilateral_semantic_policy = str(
+            self.bilateral_semantic_policy.currentData() or "auto"
+        )
         trusted = self.trusted_rest_path.text().strip()
         self.project.rig.trusted_source_rest_json = trusted if Path(trusted).is_file() else ""
         if selected_builtin:

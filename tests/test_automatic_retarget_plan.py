@@ -8,11 +8,13 @@ import pytest
 from dlanm2_gui.automatic_retarget import (
     MappingDecision,
     MappingEvidence,
+    _mirror_automatic_decisions,
     build_automatic_retarget_plan,
     classify_retarget_readiness,
     resolve_source_analysis,
     validate_automatic_retarget_plan,
 )
+from dlanm2_gui.blender_mirror_wrapper import BlenderLateralMirrorContext
 import dlanm2_gui.skeleton_analysis as skeleton_analysis
 from dlanm2_gui.bone_maps import mapping_profile_origin
 from dlanm2_gui.chrome_rig import ChromeRig, ChromeRigBone
@@ -185,6 +187,42 @@ def _analysis_for_roles(
         archetype=archetype,
         animation_domain=animation_domain,
     )
+
+
+def test_plan_hash_tracks_semantic_policy_independently_of_wrapper_context() -> None:
+    rig = _rig(("pelvis", "l_upperarm", "r_upperarm"), (-1, 0, 0))
+    roles = {
+        "pelvis": "pelvis",
+        "l_upperarm": "left_upper_arm",
+        "r_upperarm": "right_upper_arm",
+    }
+    policy = _policy(rig, roles)
+    analysis = _analysis_for_roles(roles)
+
+    preserved = build_automatic_retarget_plan(
+        analysis,
+        rig,
+        policy,
+        bilateral_semantic_policy="preserve_source_names",
+    )
+    automatic = build_automatic_retarget_plan(
+        analysis,
+        rig,
+        policy,
+        bilateral_semantic_policy="auto",
+    )
+    explicit = build_automatic_retarget_plan(
+        analysis,
+        rig,
+        policy,
+        bilateral_semantic_policy="swap_bilateral_explicit",
+    )
+
+    assert preserved.source_wrapper_mirror == automatic.source_wrapper_mirror == {}
+    assert len({preserved.plan_hash, automatic.plan_hash, explicit.plan_hash}) == 3
+    assert preserved.bilateral_semantic_policy == "preserve_source_names"
+    assert automatic.bilateral_semantic_policy == "auto"
+    assert explicit.bilateral_semantic_policy == "swap_bilateral_explicit"
 
 
 def test_exact_name_and_ancestry_identity_maps_every_target() -> None:
@@ -860,3 +898,124 @@ def test_recipe_accepts_ambiguous_rows_as_bind_fallbacks() -> None:
     assert next(
         row for row in recipe.decisions if row.target_bone == "upperarm"
     ).mode == "inherit_bind"
+
+
+def test_reflected_wrapper_preserves_automatic_bilateral_rows_by_default() -> None:
+    context = BlenderLateralMirrorContext(
+        "Armature",
+        ((-1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+    )
+    automatic = MappingDecision(
+        "l_upperarm", 1, "body", "direct", ("l_upperarm",), animated=False
+    )
+    suffix_pair = MappingDecision(
+        "player_collar_bn_l", 2, "collar", "direct", ("player_collar_bn_l",)
+    )
+    manual = MappingDecision(
+        "r_upperarm",
+        3,
+        "body",
+        "direct",
+        ("r_upperarm",),
+        evidence=(MappingEvidence("manual_target_override", 1.0),),
+    )
+
+    rows, provenance = _mirror_automatic_decisions(
+        (automatic, suffix_pair, manual),
+        source_names=(
+            "l_upperarm", "r_upperarm", "player_collar_bn_l", "player_collar_bn_r"
+        ),
+        animated_bones={"r_upperarm"},
+        context=context,
+    )
+
+    assert rows[0].source_bones == ("l_upperarm",)
+    assert not rows[0].animated
+    assert rows[1].source_bones == ("player_collar_bn_l",)
+    assert rows[2].source_bones == ("r_upperarm",)
+    assert provenance["bilateral_swapped_row_count"] == 0
+    assert not provenance["bilateral_swap_applied"]
+
+
+def test_explicit_bilateral_swap_changes_only_automatic_bilateral_rows() -> None:
+    context = BlenderLateralMirrorContext(
+        "Armature",
+        ((-1.0, 0.0, 0.0, 0.0), (0.0, 1.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, 0.0, 0.0, 1.0)),
+    )
+    automatic = MappingDecision(
+        "l_upperarm", 1, "body", "direct", ("l_upperarm",), animated=False
+    )
+    suffix_pair = MappingDecision(
+        "player_collar_bn_l", 2, "collar", "direct", ("player_collar_bn_l",)
+    )
+    manual = MappingDecision(
+        "r_upperarm",
+        3,
+        "body",
+        "direct",
+        ("r_upperarm",),
+        evidence=(MappingEvidence("manual_target_override", 1.0),),
+    )
+
+    rows, provenance = _mirror_automatic_decisions(
+        (automatic, suffix_pair, manual),
+        source_names=(
+            "l_upperarm", "r_upperarm", "player_collar_bn_l", "player_collar_bn_r"
+        ),
+        animated_bones={"r_upperarm"},
+        context=context,
+        bilateral_semantic_policy="swap_bilateral_explicit",
+    )
+
+    assert rows[0].source_bones == ("r_upperarm",)
+    assert rows[0].animated
+    assert rows[1].source_bones == ("player_collar_bn_r",)
+    assert rows[2].source_bones == ("r_upperarm",)
+    assert provenance["bilateral_swapped_row_count"] == 2
+    assert provenance["bilateral_swap_applied"]
+
+
+def test_asymmetric_motion_stays_named_by_default_and_crosses_only_explicitly() -> None:
+    rows = (
+        MappingDecision(
+            "l_upperarm",
+            1,
+            "body",
+            "direct",
+            ("l_upperarm",),
+            animated=True,
+        ),
+        MappingDecision(
+            "r_upperarm",
+            2,
+            "body",
+            "direct",
+            ("r_upperarm",),
+            animated=False,
+        ),
+    )
+    preserved, preserve_report = _mirror_automatic_decisions(
+        rows,
+        source_names=("l_upperarm", "r_upperarm"),
+        animated_bones={"l_upperarm"},
+        context=None,
+    )
+    assert preserved[0].source_bones == ("l_upperarm",)
+    assert preserved[0].animated
+    assert preserved[1].source_bones == ("r_upperarm",)
+    assert not preserved[1].animated
+    assert not preserve_report["bilateral_swap_applied"]
+
+    swapped, swap_report = _mirror_automatic_decisions(
+        rows,
+        source_names=("l_upperarm", "r_upperarm"),
+        animated_bones={"l_upperarm"},
+        context=None,
+        bilateral_semantic_policy="swap_bilateral_explicit",
+    )
+    assert swapped[0].source_bones == ("r_upperarm",)
+    assert not swapped[0].animated
+    assert swapped[1].source_bones == ("l_upperarm",)
+    assert swapped[1].animated
+    assert swap_report["bilateral_swap_applied"]
+    assert swap_report["bilateral_swapped_row_count"] == 2

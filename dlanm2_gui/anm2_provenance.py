@@ -75,6 +75,17 @@ def build_anm2_provenance(
     root_motion_mode: str,
     root_heading_mode: str,
     source_animation_stack: str = "",
+    fbx_anm2_export_behavior: str = "",
+    sampler_contract: str = "",
+    source_target_compatibility_class: str = "",
+    bind_retained_bones: list[str] | tuple[str, ...] = (),
+    wrapper_reflection_detected: bool | None = None,
+    wrapper_canonicalized: bool | None = None,
+    wrapper_matrix: Any | None = None,
+    bilateral_semantic_policy: str = "",
+    bilateral_swap_applied: bool | None = None,
+    bilateral_swapped_row_count: int | None = None,
+    post_canonicalization_mirror_conjugation_applied: bool | None = None,
 ) -> dict[str, Any]:
     duration = _nonnegative_duration(source_duration_seconds)
     count = _positive_frame_count(frame_count)
@@ -95,6 +106,49 @@ def build_anm2_provenance(
     selected_stack = str(source_animation_stack or "")
     if selected_stack:
         payload["source_animation_stack"] = selected_stack
+    export_behavior = str(fbx_anm2_export_behavior or "")
+    if export_behavior:
+        if export_behavior not in {"current", "legacy_5_0"}:
+            raise ValueError(
+                "fbx_anm2_export_behavior must be current or legacy_5_0"
+            )
+        payload["fbx_anm2_export_behavior"] = export_behavior
+    selected_contract = str(sampler_contract or "")
+    if selected_contract:
+        payload["sampler_contract"] = selected_contract
+    compatibility_class = str(source_target_compatibility_class or "")
+    if compatibility_class:
+        payload["source_target_compatibility_class"] = compatibility_class
+    retained = [str(value) for value in bind_retained_bones]
+    if retained:
+        payload["bind_retained_bones"] = retained
+    for field, value in (
+        ("wrapper_reflection_detected", wrapper_reflection_detected),
+        ("wrapper_canonicalized", wrapper_canonicalized),
+        ("bilateral_swap_applied", bilateral_swap_applied),
+        (
+            "post_canonicalization_mirror_conjugation_applied",
+            post_canonicalization_mirror_conjugation_applied,
+        ),
+    ):
+        if value is not None:
+            payload[field] = bool(value)
+    if wrapper_matrix is not None:
+        payload["wrapper_matrix"] = wrapper_matrix
+    selected_bilateral_policy = str(bilateral_semantic_policy or "")
+    if selected_bilateral_policy:
+        if selected_bilateral_policy not in {
+            "auto",
+            "preserve_source_names",
+            "swap_bilateral_explicit",
+        }:
+            raise ValueError("invalid bilateral_semantic_policy")
+        payload["bilateral_semantic_policy"] = selected_bilateral_policy
+    if bilateral_swapped_row_count is not None:
+        count = int(bilateral_swapped_row_count)
+        if count < 0:
+            raise ValueError("bilateral_swapped_row_count must be nonnegative")
+        payload["bilateral_swapped_row_count"] = count
     return payload
 
 
@@ -172,6 +226,49 @@ def load_anm2_provenance(path: str | Path) -> Anm2ProvenanceLoad:
             payload["source_animation_stack"], str
         ):
             raise ValueError("source_animation_stack must be a string")
+        if "fbx_anm2_export_behavior" in payload and payload[
+            "fbx_anm2_export_behavior"
+        ] not in {"current", "legacy_5_0"}:
+            raise ValueError(
+                "fbx_anm2_export_behavior must be current or legacy_5_0"
+            )
+        for field in ("sampler_contract", "source_target_compatibility_class"):
+            if field in payload and not isinstance(payload[field], str):
+                raise ValueError(f"{field} must be a string")
+        if "bilateral_semantic_policy" in payload and payload[
+            "bilateral_semantic_policy"
+        ] not in {
+            "auto",
+            "preserve_source_names",
+            "swap_bilateral_explicit",
+        }:
+            raise ValueError("invalid bilateral_semantic_policy")
+        for field in (
+            "wrapper_reflection_detected",
+            "wrapper_canonicalized",
+            "bilateral_swap_applied",
+            "post_canonicalization_mirror_conjugation_applied",
+        ):
+            if field in payload and not isinstance(payload[field], bool):
+                raise ValueError(f"{field} must be a boolean")
+        if (
+            "bilateral_swapped_row_count" in payload
+            and (
+                not isinstance(payload["bilateral_swapped_row_count"], int)
+                or payload["bilateral_swapped_row_count"] < 0
+            )
+        ):
+            raise ValueError(
+                "bilateral_swapped_row_count must be a nonnegative integer"
+            )
+        if "bind_retained_bones" in payload and (
+            not isinstance(payload["bind_retained_bones"], list)
+            or any(
+                not isinstance(value, str)
+                for value in payload["bind_retained_bones"]
+            )
+        ):
+            raise ValueError("bind_retained_bones must be a list of strings")
         expected = str(payload.get("anm2_sha256", "")).upper()
         if len(expected) != 64 or any(character not in "0123456789ABCDEF" for character in expected):
             raise ValueError("anm2_sha256 must be a SHA-256 digest")
