@@ -83,6 +83,26 @@ def test_arbitrary_layer_names_and_stack_selection_isolate_curves() -> None:
     assert document.curves[(10, "Lcl Rotation", "X")][1] == [1.0, 2.0]
 
 
+def test_reselecting_a_stack_reuses_its_transform_contract() -> None:
+    document = _selectable_document()
+    document.transform_contract = object()
+    document._transform_contract_cache = {}
+    builds: list[str] = []
+
+    def build_contract() -> object:
+        builds.append(str(document.selected_animation_stack.name))
+        return object()
+
+    document._build_transform_contract = build_contract  # type: ignore[method-assign]
+
+    document.select_animation_stack("Walk")
+    document.select_animation_stack("Walk")
+    document.select_animation_stack("Run")
+    document.select_animation_stack("Walk")
+
+    assert builds == ["Walk", "Run"]
+
+
 def test_stack_timing_starts_at_selected_nonzero_tick() -> None:
     document = _selectable_document()
     document.animation_stacks = (

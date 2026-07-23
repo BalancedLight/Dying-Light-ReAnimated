@@ -10,8 +10,10 @@ from dlanm2_gui.automatic_retarget import (
     MappingEvidence,
     build_automatic_retarget_plan,
     classify_retarget_readiness,
+    resolve_source_analysis,
     validate_automatic_retarget_plan,
 )
+import dlanm2_gui.skeleton_analysis as skeleton_analysis
 from dlanm2_gui.bone_maps import mapping_profile_origin
 from dlanm2_gui.chrome_rig import ChromeRig, ChromeRigBone
 from dlanm2_gui.retarget_recipes import (
@@ -70,6 +72,35 @@ class Analysis:
 
     def to_dict(self) -> dict[str, object]:
         return {"semantic_lexicon_version": self.semantic_lexicon_version}
+
+
+def test_source_analysis_is_scoped_to_document_and_selected_stack(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def analyze(source, *, animation_stack=None):
+        calls.append(str(animation_stack or ""))
+        return object()
+
+    monkeypatch.setattr(skeleton_analysis, "analyze_source_skeleton", analyze)
+    source = SimpleNamespace(
+        selected_animation_stack=SimpleNamespace(name="Walk"),
+    )
+
+    walk_first = resolve_source_analysis(source)
+    walk_second = resolve_source_analysis(source)
+    source.selected_animation_stack = SimpleNamespace(name="Run")
+    run = resolve_source_analysis(source)
+    other_document = SimpleNamespace(
+        selected_animation_stack=SimpleNamespace(name="Run"),
+    )
+    other = resolve_source_analysis(other_document)
+
+    assert walk_first is walk_second
+    assert run is not walk_first
+    assert other is not run
+    assert calls == ["Walk", "Run", "Run"]
 
 
 def _rig(names: tuple[str, ...], parents: tuple[int, ...] | None = None) -> ChromeRig:

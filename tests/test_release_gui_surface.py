@@ -10,7 +10,7 @@ from dlanm2_gui.workspace_project import DlReanimatedProject
 
 def test_gui_module_is_importable_without_loading_qt() -> None:
     assert callable(gui.main)
-    assert __version__ == "0.6.2"
+    assert __version__ == "0.6.3"
 
 
 def test_release_docs_launchers_and_examples_exist() -> None:

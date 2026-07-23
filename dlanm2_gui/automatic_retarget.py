@@ -427,10 +427,29 @@ def _coerce_analysis(source: Any) -> Any:
     stack = _first_value(
         _value(source, "selected_animation_stack", None), ("name",), ""
     )
+    cache_key = ("automatic_retarget_analysis_v1", str(stack or ""))
+    cache = getattr(source, "_automatic_retarget_analysis_cache", None)
+    if isinstance(cache, dict) and cache_key in cache:
+        return cache[cache_key]
     try:
-        return analyze_source_skeleton(source, animation_stack=stack or None)
+        analysis = analyze_source_skeleton(source, animation_stack=stack or None)
     except TypeError:
-        return analyze_source_skeleton(source)
+        analysis = analyze_source_skeleton(source)
+    if not isinstance(cache, dict):
+        try:
+            cache = {}
+            setattr(source, "_automatic_retarget_analysis_cache", cache)
+        except (AttributeError, TypeError):
+            cache = None
+    if isinstance(cache, dict):
+        cache[cache_key] = analysis
+    return analysis
+
+
+def resolve_source_analysis(source: Any) -> Any:
+    """Return one request-scoped immutable analysis for a source/stack pair."""
+
+    return _coerce_analysis(source)
 
 
 def _coerce_policy(target_rig: Any, target_policy: Any, clip_domain: str) -> Any:
@@ -622,6 +641,62 @@ def _analysis_hashes(analysis: Any) -> tuple[str, str, str, str]:
             }
         )
     return skeleton_hash, name_parent_hash, bind_hash, animation_hash
+
+
+def _require_current_planning_context(
+    plan: AutomaticRetargetPlan,
+    analysis: Any,
+    target_rig: Any,
+    policy: Any,
+    *,
+    role_overrides: Mapping[str, Any] | Iterable[RoleMappingOverride] | None,
+    target_bone_overrides: (
+        Mapping[str, Any] | Iterable[TargetBoneOverride] | None
+    ),
+    validation: AutomaticRetargetValidation | None = None,
+) -> None:
+    """Reject optional request-local state if any planner input changed."""
+
+    source_hashes = _analysis_hashes(analysis)
+    expected_roles = tuple(
+        row.to_dict()
+        for row in dict.fromkeys(_coerce_role_overrides(role_overrides).values())
+    )
+    expected_targets_by_name = _coerce_target_bone_overrides(target_bone_overrides)
+    expected_targets = tuple(
+        expected_targets_by_name[name].to_dict()
+        for name in sorted(expected_targets_by_name, key=str.casefold)
+    )
+    mismatches: list[str] = []
+    if (
+        plan.source_skeleton_hash,
+        plan.source_name_parent_hash,
+        plan.source_bind_hash,
+        plan.source_animation_hash,
+    ) != source_hashes:
+        mismatches.append("source skeleton, bind pose, animation, or selected stack")
+    if plan.target_rig_id != str(_value(target_rig, "rig_id", "") or ""):
+        mismatches.append("target rig")
+    if plan.target_skeleton_hash != str(
+        _value(target_rig, "skeleton_hash", "") or ""
+    ):
+        mismatches.append("target skeleton")
+    if plan.target_policy_id != str(_value(policy, "policy_id", "") or ""):
+        mismatches.append("target policy")
+    if plan.clip_domain != "body":
+        mismatches.append("clip domain")
+    if plan.role_overrides != expected_roles:
+        mismatches.append("role mapping")
+    if plan.target_bone_overrides != expected_targets:
+        mismatches.append("target-bone mapping")
+    if validation is not None and validation.plan_hash not in {"", plan.plan_hash}:
+        mismatches.append("plan validation")
+    if mismatches:
+        raise ValueError(
+            "The supplied retarget planning context is stale for the current "
+            + ", ".join(mismatches)
+            + ". Re-plan before building."
+        )
 
 
 def _evidence_rows(value: Any, role: str) -> tuple[MappingEvidence, ...]:
@@ -2688,6 +2763,9 @@ def build_verified_dl2_advanced_body_map(
     target_bone_overrides: (
         Mapping[str, Any] | Iterable[TargetBoneOverride] | None
     ) = None,
+    plan: AutomaticRetargetPlan | None = None,
+    validation: AutomaticRetargetValidation | None = None,
+    perform_live_revalidation: bool = True,
 ) -> GenericBoneMap:
     """Build the certified bridge; accept both source-first and rig-first order."""
 
@@ -2705,19 +2783,32 @@ def build_verified_dl2_advanced_body_map(
     analysis = _coerce_analysis(document_or_analysis)
     policy = _coerce_policy(target_rig, target_policy, "body")
     _require_coherent_dl2_advanced_target(target_rig, policy)
-    plan = build_automatic_retarget_plan(
-        analysis,
-        target_rig,
-        policy,
-        clip_domain="body",
-        role_overrides=role_overrides,
-        target_bone_overrides=target_bone_overrides,
-    )
-    verification = validate_automatic_retarget_plan(
+    if plan is None:
+        plan = build_automatic_retarget_plan(
+            analysis,
+            target_rig,
+            policy,
+            clip_domain="body",
+            role_overrides=role_overrides,
+            target_bone_overrides=target_bone_overrides,
+        )
+    else:
+        _require_current_planning_context(
+            plan,
+            analysis,
+            target_rig,
+            policy,
+            role_overrides=role_overrides,
+            target_bone_overrides=target_bone_overrides,
+            validation=validation,
+        )
+    verification = validation or validate_automatic_retarget_plan(
         plan, analysis, target_rig, policy
     )
     verification.require_valid()
     profile = _materialize_verified_map(plan, verification, target_rig, analysis)
+    if not perform_live_revalidation:
+        return profile
     # Exercise the same serialized-row/live-identity check used by build
     # routing before returning a newly generated profile.
     live = revalidate_verified_dl2_advanced_body_map(
@@ -2727,6 +2818,8 @@ def build_verified_dl2_advanced_body_map(
         policy,
         role_overrides=role_overrides,
         target_bone_overrides=target_bone_overrides,
+        plan=plan,
+        validation=verification,
     )
     live.require_valid()
     profile.extensions["automatic_retarget_certificate"] = dict(
@@ -2744,6 +2837,7 @@ def build_dl2_advanced_body_map_with_local_recipe(
     target_policy: Any = None,
     *,
     recipe_store: Any = None,
+    planning_context_out: dict[str, Any] | None = None,
 ) -> GenericBoneMap:
     """Build the verified bridge or a live-reviewed local recipe override.
 
@@ -2783,8 +2877,23 @@ def build_dl2_advanced_body_map_with_local_recipe(
         store=recipe_store,
     )
     if not resolution.applied:
+        validation = validate_automatic_retarget_plan(
+            fresh, analysis, target_rig, policy
+        )
+        if planning_context_out is not None:
+            planning_context_out.update(
+                {
+                    "analysis": analysis,
+                    "plan": fresh,
+                    "validation": validation,
+                }
+            )
         return build_verified_dl2_advanced_body_map(
-            analysis, target_rig, policy
+            analysis,
+            target_rig,
+            policy,
+            plan=fresh,
+            validation=validation,
         )
     assert resolution.recipe is not None
     return materialize_reviewed_retarget_recipe(
@@ -2826,6 +2935,8 @@ def revalidate_verified_dl2_advanced_body_map(
     target_bone_overrides: (
         Mapping[str, Any] | Iterable[TargetBoneOverride] | None
     ) = None,
+    plan: AutomaticRetargetPlan | None = None,
+    validation: AutomaticRetargetValidation | None = None,
 ) -> AutomaticRetargetValidation:
     """Rebuild the expected plan and compare every live row/certificate field."""
 
@@ -2836,15 +2947,28 @@ def revalidate_verified_dl2_advanced_body_map(
         _require_coherent_dl2_advanced_target(target_rig, policy)
     except ValueError as exc:
         errors.append(str(exc))
-    plan = build_automatic_retarget_plan(
-        analysis,
-        target_rig,
-        policy,
-        clip_domain="body",
-        role_overrides=role_overrides,
-        target_bone_overrides=target_bone_overrides,
+    if plan is None:
+        plan = build_automatic_retarget_plan(
+            analysis,
+            target_rig,
+            policy,
+            clip_domain="body",
+            role_overrides=role_overrides,
+            target_bone_overrides=target_bone_overrides,
+        )
+    else:
+        _require_current_planning_context(
+            plan,
+            analysis,
+            target_rig,
+            policy,
+            role_overrides=role_overrides,
+            target_bone_overrides=target_bone_overrides,
+            validation=validation,
+        )
+    base = validation or validate_automatic_retarget_plan(
+        plan, analysis, target_rig, policy
     )
-    base = validate_automatic_retarget_plan(plan, analysis, target_rig, policy)
     errors.extend(base.errors)
     expected = {
         row.target_bone: row for row in plan.decisions
@@ -3156,6 +3280,7 @@ __all__ = [
     "format_retarget_readiness",
     "materialize_automatic_retarget_plan",
     "revalidate_verified_dl2_advanced_body_map",
+    "resolve_source_analysis",
     "validate_automatic_retarget_plan",
     "validate_verified_mapping_certificate",
 ]

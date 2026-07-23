@@ -35,6 +35,7 @@ from dlanm2_gui.root_heading import (
     quaternion_multiply,
 )
 from dlanm2_gui.root_motion import RootMotionSelection
+from dlanm2_gui.retarget_engines.mapped_rig import _inplace_root_policy_warning
 from dlanm2_gui.workspace_project import (
     CURRENT_PROJECT_SCHEMA_VERSION,
     DlReanimatedProject,
@@ -154,6 +155,20 @@ def test_two_turn_root_policies_remove_or_transfer_heading_and_preserve_tilt() -
     inplace = values.copy()
     inplace_report = apply_target_root_policy(inplace, rig, "pelvis", "inplace")
     assert inplace_report.source_heading_degrees == pytest.approx(720.0, abs=0.05)
+    assert inplace_report.maximum_source_heading_offset_degrees == pytest.approx(
+        720.0, abs=0.05
+    )
+    assert inplace_report.maximum_source_planar_displacement_meters == pytest.approx(
+        math.sqrt(13.0), abs=1.0e-9
+    )
+    warning = _inplace_root_policy_warning(
+        "pelvis",
+        RootMotionSelection(target_root_bone="pelvis"),
+        inplace_report,
+    )
+    assert "720.00" in warning
+    assert "3.606 m" in warning
+    assert "Skeletal root with Preserve heading" in warning
     assert abs(inplace_report.skeletal_root_heading_degrees) <= 0.1
     assert np.max(
         np.abs(inplace[:, root_track, 3:6] - np.asarray(root.bind_translation))
@@ -166,6 +181,15 @@ def test_two_turn_root_policies_remove_or_transfer_heading_and_preserve_tilt() -
     skeletal = values.copy()
     skeletal_report = apply_target_root_policy(skeletal, rig, "pelvis", "bip01")
     assert skeletal_report.skeletal_root_heading_degrees == pytest.approx(720.0, abs=0.05)
+    assert not _inplace_root_policy_warning(
+        "pelvis",
+        RootMotionSelection(
+            target_root_bone="pelvis",
+            motion_mode="skeletal_root",
+            heading_mode="preserve",
+        ),
+        skeletal_report,
+    )
     np.testing.assert_allclose(skeletal, values, atol=0.0, rtol=0.0)
 
     locked = values.copy()

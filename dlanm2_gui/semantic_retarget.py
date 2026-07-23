@@ -20,6 +20,7 @@ from .automatic_retarget import (
     build_verified_dl2_advanced_body_map,
     classify_retarget_readiness,
     revalidate_verified_dl2_advanced_body_map,
+    resolve_source_analysis,
     validate_automatic_retarget_plan,
 )
 from .bone_maps import GenericBoneMap, mapping_profile_origin
@@ -83,9 +84,25 @@ class SemanticUiRow:
 @dataclass(frozen=True, slots=True)
 class BundledSemanticState:
     profile: SourceBoneMappingProfile
+    analysis: Any
     plan: AutomaticRetargetPlan
     validation: AutomaticRetargetValidation
     rows: tuple[SemanticUiRow, ...]
+    profile_fingerprint: str
+
+
+def _planning_profile_fingerprint(profile: SourceBoneMappingProfile) -> str:
+    """Hash only profile fields that can change automatic planner decisions."""
+
+    payload = {
+        "role_to_bone": dict(profile.role_to_bone),
+        "role_modes": dict(profile.role_modes),
+        "target_bone_overrides": dict(profile.target_bone_overrides),
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def semantic_role_overrides(
@@ -304,6 +321,7 @@ def prepare_bundled_semantic_state(
     profile: SourceBoneMappingProfile | None = None,
     *,
     profile_name: str = "Automatic humanoid mapping",
+    planning_context: Mapping[str, Any] | None = None,
 ) -> BundledSemanticState:
     source_bones = tuple(str(name) for name in source.limb_models)
     if profile is None:
@@ -312,24 +330,53 @@ def prepare_bundled_semantic_state(
             name=profile_name,
             parents=source.parent_by_name,
         )
+    analysis = resolve_source_analysis(source)
     overrides = semantic_role_overrides(profile, policy)
-    plan = build_automatic_retarget_plan(
-        source,
-        target_rig,
-        policy,
-        clip_domain="body",
-        role_overrides=overrides,
-        target_bone_overrides=profile.target_bone_overrides,
+    context_plan = (
+        planning_context.get("plan") if planning_context is not None else None
     )
-    validation = validate_automatic_retarget_plan(
-        plan, source, target_rig, policy
+    context_validation = (
+        planning_context.get("validation") if planning_context is not None else None
     )
+    context_is_current = (
+        isinstance(context_plan, AutomaticRetargetPlan)
+        and isinstance(context_validation, AutomaticRetargetValidation)
+        and planning_context is not None
+        and planning_context.get("analysis") is analysis
+        and context_plan.target_rig_id
+        == str(getattr(target_rig, "rig_id", "") or "")
+        and context_plan.target_skeleton_hash
+        == str(getattr(target_rig, "skeleton_hash", "") or "")
+        and context_plan.target_policy_id
+        == str(getattr(policy, "policy_id", "") or "")
+        and context_plan.role_overrides
+        == tuple(row.to_dict() for row in overrides)
+        and not profile.target_bone_overrides
+        and context_validation.plan_hash in {"", context_plan.plan_hash}
+    )
+    if context_is_current:
+        plan = context_plan
+        validation = context_validation
+    else:
+        plan = build_automatic_retarget_plan(
+            analysis,
+            target_rig,
+            policy,
+            clip_domain="body",
+            role_overrides=overrides,
+            target_bone_overrides=profile.target_bone_overrides,
+        )
+        validation = validate_automatic_retarget_plan(
+            plan, analysis, target_rig, policy
+        )
     _sync_profile_from_plan(profile, plan, policy, source_bones)
     return BundledSemanticState(
         profile,
+        analysis,
         plan,
         validation,
         semantic_ui_rows(profile, plan, policy),
+        _planning_profile_fingerprint(profile),
     )
 
 
@@ -338,35 +385,62 @@ def compile_bundled_semantic_profile(
     target_rig: Any,
     policy: Any,
     profile: SourceBoneMappingProfile,
+    *,
+    state: BundledSemanticState | None = None,
 ) -> tuple[GenericBoneMap, AutomaticRetargetValidation, AutomaticRetargetPlan]:
     profile_diagnostics = profile.validate(source.limb_models)
     overrides = semantic_role_overrides(profile, policy)
-    plan = build_automatic_retarget_plan(
-        source,
-        target_rig,
-        policy,
-        clip_domain="body",
-        role_overrides=overrides,
-        target_bone_overrides=profile.target_bone_overrides,
+    analysis = resolve_source_analysis(source)
+    state_is_current = (
+        state is not None
+        and state.profile is profile
+        and state.analysis is analysis
+        and state.profile_fingerprint == _planning_profile_fingerprint(profile)
+        and state.plan.target_rig_id == str(getattr(target_rig, "rig_id", "") or "")
+        and state.plan.target_skeleton_hash
+        == str(getattr(target_rig, "skeleton_hash", "") or "")
+        and state.plan.target_policy_id
+        == str(getattr(policy, "policy_id", "") or "")
     )
-    validation = validate_automatic_retarget_plan(plan, source, target_rig, policy)
+    if state_is_current:
+        plan = state.plan
+        validation = state.validation
+    else:
+        plan = build_automatic_retarget_plan(
+            analysis,
+            target_rig,
+            policy,
+            clip_domain="body",
+            role_overrides=overrides,
+            target_bone_overrides=profile.target_bone_overrides,
+        )
+        validation = validate_automatic_retarget_plan(
+            plan, analysis, target_rig, policy
+        )
     validation.require_valid()
     compiled = build_verified_dl2_advanced_body_map(
-        source,
+        analysis,
         target_rig,
         policy,
         role_overrides=overrides,
         target_bone_overrides=profile.target_bone_overrides,
+        plan=plan,
+        validation=validation,
+        perform_live_revalidation=False,
     )
     live = revalidate_verified_dl2_advanced_body_map(
         compiled,
-        source,
+        analysis,
         target_rig,
         policy,
         role_overrides=overrides,
         target_bone_overrides=profile.target_bone_overrides,
+        plan=plan,
+        validation=validation,
     )
     live.require_valid()
+    compiled.extensions["automatic_retarget_certificate"] = dict(live.certificate)
+    compiled.extensions["verified_mapping_certificate"] = dict(live.certificate)
     compiled.extensions["semantic_profile_id"] = profile.profile_id
     compiled.extensions["semantic_manual_override_count"] = (
         profile.manual_override_count

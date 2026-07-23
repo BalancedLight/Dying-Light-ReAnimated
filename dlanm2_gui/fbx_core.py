@@ -505,6 +505,12 @@ class FbxDocument:
         self.animation_start_tick = 0
         self.animation_stop_tick = 0
         self._normalizer_cache: dict[int, np.ndarray] = {}
+        # A parsed document is immutable for the lifetime of an import/build.
+        # Selecting the same stack is common (preflight, source analysis, and
+        # the retarget engine all assert the requested stack), so retain both
+        # the selection identity and its expensive all-frame transform audit.
+        self._selected_stack_key: tuple[object, ...] | None = None
+        self._transform_contract_cache: dict[tuple[object, ...], FbxTransformContract] = {}
         self._build_bind_inventory()
         try:
             if animation_stack:
@@ -518,11 +524,38 @@ class FbxDocument:
         except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
             raise FbxAnimationStackError(str(exc)) from exc
         self.declared_timebase = self._resolve_declared_timebase()
-        self.transform_contract = self._build_transform_contract()
+        self._refresh_transform_contract()
 
     @property
     def contract(self) -> FbxTransformContract:
         return self.transform_contract
+
+    @staticmethod
+    def _stack_cache_key(stack: FbxAnimationStack | None) -> tuple[object, ...]:
+        """Return the immutable state that affects selected-stack evaluation."""
+
+        if stack is None:
+            return (None,)
+        return (
+            stack.name,
+            tuple(stack.layer_ids),
+            int(stack.start_tick),
+            int(stack.stop_tick),
+        )
+
+    def _refresh_transform_contract(self) -> None:
+        """Reuse the canonical audit for an already-evaluated animation stack."""
+
+        key = self._stack_cache_key(self.selected_animation_stack)
+        cache = getattr(self, "_transform_contract_cache", None)
+        if cache is None:
+            cache = {}
+            self._transform_contract_cache = cache
+        contract = cache.get(key)
+        if contract is None:
+            contract = self._build_transform_contract()
+            cache[key] = contract
+        self.transform_contract = contract
 
     def select_animation_stack(
         self, name: str | None = None
@@ -553,6 +586,14 @@ class FbxDocument:
             if len(matches) > 1:
                 raise ValueError(f"FBX contains duplicate animation stack names: {name!r}")
             row = matches[0]
+        key = self._stack_cache_key(row)
+        if (
+            getattr(self, "selected_animation_stack", None) is not None
+            and getattr(self, "_selected_stack_key", None) == key
+        ):
+            # Re-selecting an unchanged parsed stack cannot alter curves,
+            # timebase, bind data, or the canonical transform contract.
+            return row
         if len(row.layer_ids) != 1:
             layers = ", ".join(repr(value) for value in row.layer_names) or "none"
             raise ValueError(
@@ -569,8 +610,9 @@ class FbxDocument:
                 self.animation_start_tick = min(times)
             self.animation_stop_tick = max(self.animation_stop_tick, max(times))
         self.declared_timebase = self._resolve_declared_timebase()
+        self._selected_stack_key = key
         if hasattr(self, "transform_contract"):
-            self.transform_contract = self._build_transform_contract()
+            self._refresh_transform_contract()
         return row
 
     def _resolve_declared_timebase(self) -> FbxDeclaredTimebase:
@@ -835,7 +877,7 @@ class FbxDocument:
     def _animated_properties(self, tick: int) -> dict[int, dict[str, np.ndarray]]:
         result: dict[int, dict[str, np.ndarray]] = {}
         for (object_id, property_name, axis), curve in self.curves.items():
-            props = _properties70(self.object_by_id.get(object_id))
+            props = self.scene.model_properties(object_id)
             default = _vector_property(
                 props,
                 property_name,
@@ -860,8 +902,7 @@ class FbxDocument:
     ) -> np.ndarray:
         overrides: dict[str, np.ndarray] = {}
         if use_animation:
-            node = self.object_by_id[object_id]
-            props = _properties70(node)
+            props = self.scene.model_properties(object_id)
             for property_name, default in (
                 ("Lcl Translation", (0.0, 0.0, 0.0)),
                 ("Lcl Rotation", (0.0, 0.0, 0.0)),

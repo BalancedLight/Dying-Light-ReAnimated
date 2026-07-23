@@ -4,7 +4,12 @@ from pathlib import Path
 
 from .mapped_rig import build_mapped_rig_anm2
 from ..bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
-from ..fbx_preflight import classify_target_compatibility, normalized_bone_name, preflight_fbx
+from ..fbx_preflight import (
+    FbxPreflightReport,
+    classify_target_compatibility,
+    normalized_bone_name,
+    preflight_fbx,
+)
 from ..fbx_core import FbxDocument
 
 
@@ -19,6 +24,8 @@ def build_exact_rig_anm2(
     root_mapping=None,
     root_policy="bip01",
     root_motion=None,
+    preflight: FbxPreflightReport | None = None,
+    progress=None,
 ):
     document = document if document is not None else document_factory(Path(animation_fbx))
     selected_stack = getattr(document, "selected_animation_stack", None)
@@ -32,7 +39,17 @@ def build_exact_rig_anm2(
         and selected_stack is None
     ):
         document.select_animation_stack(animation_stack)
-    report = preflight_fbx(
+    source = Path(animation_fbx)
+    current_stack = getattr(document, "selected_animation_stack", None)
+    current_stack_name = str(getattr(current_stack, "name", "") or "")
+    preflight_matches_document = (
+        preflight is not None
+        and preflight.purpose == "animation"
+        and Path(preflight.path).resolve() == source.resolve()
+        and str(preflight.inventory.get("selected_animation_stack", "") or "")
+        == current_stack_name
+    )
+    report = preflight if preflight_matches_document else preflight_fbx(
         animation_fbx,
         purpose="animation",
         animation_stack=animation_stack,
@@ -172,6 +189,8 @@ def build_exact_rig_anm2(
         root_mapping=exact_root_mapping,
         root_policy=root_policy,
         root_motion=root_motion,
+        preflight=report,
+        progress=progress,
     )
     if automatic_exact_root:
         result.report["root_mapping"].update(

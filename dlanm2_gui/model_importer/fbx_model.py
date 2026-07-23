@@ -619,6 +619,9 @@ class FbxScene:
     load_purpose: str = FbxLoadPurpose.MODEL.value
     import_tolerance: str = FbxImportTolerance.RECOMMENDED.value
     loaded_domains: tuple[str, ...] = ()
+    _properties_by_object_id: dict[int, dict[str, list[Any]]] = field(
+        default_factory=dict, repr=False
+    )
 
     @classmethod
     def from_path(
@@ -902,8 +905,7 @@ class FbxScene:
         property_overrides: Mapping[str, Sequence[float]] | None = None,
         euler_matrix_resolver: Callable[[Sequence[float], str], np.ndarray] | None = None,
     ) -> np.ndarray:
-        node = self.object_by_id[object_id]
-        props = _properties70(node)
+        props = self.model_properties(object_id)
 
         def animated_property(name: str, default: Sequence[float]) -> np.ndarray:
             if property_overrides is not None and name in property_overrides:
@@ -942,13 +944,21 @@ class FbxScene:
         )
 
     def model_geometric_matrix(self, object_id: int) -> np.ndarray:
-        node = self.object_by_id[object_id]
-        props = _properties70(node)
+        props = self.model_properties(object_id)
         translation = _vector_property(props, "GeometricTranslation", (0.0, 0.0, 0.0))
         rotation = _vector_property(props, "GeometricRotation", (0.0, 0.0, 0.0))
         scaling = _vector_property(props, "GeometricScaling", (1.0, 1.0, 1.0))
         order = ROTATION_ORDERS.get(int((props.get("RotationOrder") or [0])[0]), "XYZ")
         return _translation_matrix(translation) @ _euler_matrix(rotation, order) @ _scale_matrix(scaling)
+
+    def model_properties(self, object_id: int) -> dict[str, list[Any]]:
+        """Return cached immutable FBX property rows for one object."""
+
+        cached = self._properties_by_object_id.get(object_id)
+        if cached is None:
+            cached = _properties70(self.object_by_id[object_id])
+            self._properties_by_object_id[object_id] = cached
+        return cached
 
     def model_global_matrices(
         self,

@@ -45,6 +45,8 @@ class RootHeadingReport:
     source_planar_displacement: tuple[float, float, float]
     skeletal_root_planar_displacement: tuple[float, float, float]
     motion_planar_displacement: tuple[float, float, float]
+    maximum_source_heading_offset_degrees: float
+    maximum_source_planar_displacement_meters: float
     legacy_serialized_policy: str = ""
     resolved_motion_mode: str = ""
     resolved_heading_mode: str = ""
@@ -309,6 +311,45 @@ def _planar_displacement(
     return displacement - up_axis * float(np.dot(displacement, up_axis))
 
 
+def _maximum_heading_offset_degrees(
+    globals_: Sequence[np.ndarray], up_axis: np.ndarray
+) -> float:
+    """Return the largest signed-heading departure from the first frame."""
+
+    if not globals_:
+        return 0.0
+    headings = _heading_series(globals_, up_axis)
+    angles = np.asarray(
+        [
+            2.0
+            * math.atan2(
+                float(np.dot(heading[1:4], up_axis)), float(heading[0])
+            )
+            for heading in headings
+        ],
+        dtype=float,
+    )
+    unwrapped = np.unwrap(angles)
+    offsets = unwrapped - float(unwrapped[0])
+    return math.degrees(float(np.max(np.abs(offsets))))
+
+
+def _maximum_planar_displacement(
+    globals_: Sequence[np.ndarray], up_axis: np.ndarray
+) -> float:
+    """Return the farthest planar root departure from the first frame."""
+
+    if not globals_:
+        return 0.0
+    first_position = globals_[0][:3, 3]
+    distances = []
+    for matrix in globals_:
+        displacement = matrix[:3, 3] - first_position
+        planar = displacement - up_axis * float(np.dot(displacement, up_axis))
+        distances.append(float(np.linalg.norm(planar)))
+    return max(distances, default=0.0)
+
+
 def apply_target_root_policy(
     values: list[list[list[float]]],
     rig: Any,
@@ -450,6 +491,12 @@ def apply_target_root_policy(
         source_planar_displacement=tuple(float(v) for v in source_planar),
         skeletal_root_planar_displacement=tuple(float(v) for v in output_planar),
         motion_planar_displacement=tuple(float(v) for v in motion_planar),
+        maximum_source_heading_offset_degrees=_maximum_heading_offset_degrees(
+            original_globals, up
+        ),
+        maximum_source_planar_displacement_meters=_maximum_planar_displacement(
+            original_globals, up
+        ),
         legacy_serialized_policy=legacy_policy,
         resolved_motion_mode=motion_mode.value,
         resolved_heading_mode=resolved_heading.value,

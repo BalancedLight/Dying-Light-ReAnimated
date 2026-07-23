@@ -11,6 +11,7 @@ from dlanm2_gui.anm2_components import decode_samples as real_decode_samples
 from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
 from dlanm2_gui.chrome_rig_builder import build_chrome_rig_from_fbx
 from dlanm2_gui.fbx_core import FBX_TICKS_PER_SECOND
+from dlanm2_gui.fbx_preflight import FbxPreflightReport
 from dlanm2_gui.retarget_engines.exact_rig import build_exact_rig_anm2
 from dlanm2_gui.retarget_engines.mapped_rig import build_mapped_rig_anm2
 from dlanm2_gui.retarget_engines.output_validation import (
@@ -46,6 +47,12 @@ class _AnimationDocument:
             matrix[1, 0] = math.sin(angle)
             matrix[1, 3] = 10.0
         return matrix
+
+
+class _LongAnimationDocument(_AnimationDocument):
+    def frame_count(self, *, fps: int) -> int:
+        assert fps == 30
+        return 260
 
 
 def _rig_and_document(tmp_path: Path):
@@ -204,3 +211,95 @@ def test_successful_legacy_exact_build_reports_decode_tolerance(tmp_path: Path) 
         build.report["decoded_component_error_tolerance"]
         == DECODED_COMPONENT_ERROR_LIMIT
     )
+
+
+def test_mapped_rig_reuses_matching_preflight_without_a_second_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlanm2_gui.retarget_engines.mapped_rig as mapped_rig
+
+    rig, document = _rig_and_document(tmp_path)
+    source = tmp_path / "animation.fbx"
+    preflight = FbxPreflightReport(
+        str(source), "animation", inventory={"selected_animation_stack": ""}
+    )
+
+    def unexpected_preflight(*_args, **_kwargs):
+        raise AssertionError("mapped builder repeated compatible preflight")
+
+    monkeypatch.setattr(mapped_rig, "preflight_fbx", unexpected_preflight)
+    build = build_mapped_rig_anm2(
+        source,
+        rig,
+        _bone_map(rig, document),
+        document=document,
+        transfer_policy="mapped_local_rotation_delta",
+        preflight=preflight,
+    )
+
+    assert build.payload
+
+
+def test_exact_rig_reuses_matching_preflight_without_a_second_pass(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlanm2_gui.retarget_engines.exact_rig as exact_rig
+
+    rig, document = _rig_and_document(tmp_path)
+    source = tmp_path / "animation.fbx"
+    preflight = FbxPreflightReport(
+        str(source), "animation", inventory={"selected_animation_stack": ""}
+    )
+
+    def unexpected_preflight(*_args, **_kwargs):
+        raise AssertionError("exact builder repeated compatible preflight")
+
+    monkeypatch.setattr(exact_rig, "preflight_fbx", unexpected_preflight)
+    build = build_exact_rig_anm2(source, rig, document=document, preflight=preflight)
+
+    assert build.payload
+
+
+def test_long_mapped_sampling_reports_frame_progress_and_spills_to_request_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dlanm2_gui.retarget_engines.mapped_rig as mapped_rig
+
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "model.fbx", document_factory=_AnimationDocument
+    )
+    document = _LongAnimationDocument(tmp_path / "animation.fbx")
+    baseline = build_mapped_rig_anm2(
+        tmp_path / "animation.fbx",
+        rig,
+        _bone_map(rig, document),
+        document=document,
+        transfer_policy="mapped_local_rotation_delta",
+    )
+    updates: list[str] = []
+    monkeypatch.setattr(mapped_rig, "_SAMPLE_STORAGE_LIMIT_BYTES", 1)
+
+    build = build_mapped_rig_anm2(
+        tmp_path / "animation.fbx",
+        rig,
+        _bone_map(rig, document),
+        document=document,
+        transfer_policy="mapped_local_rotation_delta",
+        progress=updates.append,
+    )
+
+    assert build.frame_count == 260
+    assert build.payload == baseline.payload
+    assert build.report["hierarchy_safety"] == baseline.report["hierarchy_safety"]
+    assert updates == [
+        "Sampling retarget frames 1/260",
+        "Sampling retarget frames 128/260",
+        "Sampling retarget frames 256/260",
+        "Sampling retarget frames 260/260",
+    ]
+    performance = build.report["performance"]
+    assert performance["sample_storage"] == "memory_mapped"
+    assert performance["frame_progress_interval"] == 128
