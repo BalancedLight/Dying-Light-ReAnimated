@@ -16,6 +16,7 @@ from typing import Any, Callable
 from .animation_scr import AnimationScrSequence
 from .anm2_provenance import build_anm2_provenance, write_anm2_provenance
 from .fbx_blendshapes import FbxFacialScan, scan_fbx_blendshapes
+from .game_profiles import DL2_GAME_ID
 from .mimic_builder import build_mimic_anm2
 from .mimic_profiles import (
     MimicMappingRow,
@@ -190,6 +191,55 @@ def build_project_with_mimics(
     enabled = [row for row in project.animations if row.enabled]
     if not enabled:
         raise ValueError("Project does not contain any enabled animations")
+
+    if str(project.game_id or "") == DL2_GAME_ID:
+        body_project = deepcopy(project)
+        dl2_warnings: list[str] = []
+        for row in body_project.animations:
+            if not row.enabled:
+                continue
+            raw = row.extensions.get("mimic")
+            requested = (
+                str(raw.get("mode", "auto"))
+                if isinstance(raw, dict)
+                else "auto"
+            )
+            if requested == "mimic_only":
+                row.enabled = False
+                dl2_warnings.append(
+                    f"{row.display_name}: skipped stale mimic-only content because "
+                    "Dying Light 2 facial animation uses skeletal bones, not morph resources."
+                )
+            elif requested == "both":
+                dl2_warnings.append(
+                    f"{row.display_name}: exported the skeletal body only; Dying Light 2 "
+                    "does not emit morph-target mimic resources."
+                )
+        if not any(row.enabled for row in body_project.animations):
+            raise ValueError(
+                "No skeletal body animations remain to build. Dying Light 2 does "
+                "not support morph-only mimic resources in this workspace."
+            )
+        result = body_builder(body_project, progress=progress)
+        _copy_mapping_state(project, body_project)
+        result.warnings = [*result.warnings, *dl2_warnings]
+        report_path = Path(result.report_path)
+        if report_path.is_file():
+            report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+            report["warnings"] = [
+                *list(report.get("warnings", ()) or ()),
+                *dl2_warnings,
+            ]
+            report["mimic_prototype"] = {
+                "enabled": False,
+                "reason": "dl2_uses_skeletal_facial_bones",
+                "resource_count": 0,
+            }
+            report_path.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        return result
 
     profile = resolve_mimic_profile(project)
     scans: dict[str, FbxFacialScan] = {}

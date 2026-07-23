@@ -18,7 +18,19 @@ from dlanm2_gui.trackmap import dl_name_hash
 from dlanm2_gui.workspace_project import Anm2ToFbxItem
 
 
-def _payload(data: bytes, *, source_animation_stack: str = "") -> dict:
+def _payload(
+    data: bytes,
+    *,
+    source_animation_stack: str = "",
+    fbx_anm2_export_behavior: str = "",
+    sampler_contract: str = "",
+    source_target_compatibility_class: str = "",
+    bind_retained_bones: tuple[str, ...] = (),
+    bilateral_semantic_policy: str = "",
+    bilateral_swap_applied: bool | None = None,
+    bilateral_swapped_row_count: int | None = None,
+    post_canonicalization_mirror_conjugation_applied: bool | None = None,
+) -> dict:
     return build_anm2_provenance(
         data,
         source_fbx="source.fbx",
@@ -31,6 +43,16 @@ def _payload(data: bytes, *, source_animation_stack: str = "") -> dict:
         root_motion_mode="in_place",
         root_heading_mode="lock_initial_heading",
         source_animation_stack=source_animation_stack,
+        fbx_anm2_export_behavior=fbx_anm2_export_behavior,
+        sampler_contract=sampler_contract,
+        source_target_compatibility_class=source_target_compatibility_class,
+        bind_retained_bones=bind_retained_bones,
+        bilateral_semantic_policy=bilateral_semantic_policy,
+        bilateral_swap_applied=bilateral_swap_applied,
+        bilateral_swapped_row_count=bilateral_swapped_row_count,
+        post_canonicalization_mirror_conjugation_applied=(
+            post_canonicalization_mirror_conjugation_applied
+        ),
     )
 
 
@@ -89,6 +111,51 @@ def test_optional_source_animation_stack_round_trips_and_old_sidecars_remain_val
     assert "source_animation_stack" not in loaded_old_metadata.payload
 
 
+def test_optional_export_contract_provenance_round_trips(
+    tmp_path: Path,
+) -> None:
+    anm2 = tmp_path / "clip.anm2"
+    anm2.write_bytes(b"animation")
+    metadata = _payload(
+        anm2.read_bytes(),
+        fbx_anm2_export_behavior="legacy_5_0",
+        sampler_contract="dlr_0_5_0_global_bind_basis_v1",
+        source_target_compatibility_class="exact_target_subset",
+        bind_retained_bones=("optional_helper",),
+        bilateral_semantic_policy="preserve_source_names",
+        bilateral_swap_applied=False,
+        bilateral_swapped_row_count=0,
+        post_canonicalization_mirror_conjugation_applied=False,
+    )
+
+    write_anm2_provenance(anm2, metadata)
+    loaded = load_anm2_provenance(anm2)
+
+    assert loaded.valid
+    assert loaded.payload["fbx_anm2_export_behavior"] == "legacy_5_0"
+    assert (
+        loaded.payload["sampler_contract"]
+        == "dlr_0_5_0_global_bind_basis_v1"
+    )
+    assert (
+        loaded.payload["source_target_compatibility_class"]
+        == "exact_target_subset"
+    )
+    assert loaded.payload["bind_retained_bones"] == ["optional_helper"]
+    assert (
+        loaded.payload["bilateral_semantic_policy"]
+        == "preserve_source_names"
+    )
+    assert loaded.payload["bilateral_swap_applied"] is False
+    assert loaded.payload["bilateral_swapped_row_count"] == 0
+    assert (
+        loaded.payload[
+            "post_canonicalization_mirror_conjugation_applied"
+        ]
+        is False
+    )
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -97,6 +164,9 @@ def test_optional_source_animation_stack_round_trips_and_old_sidecars_remain_val
         ("frame_count", True),
         ("schema_version", True),
         ("source_animation_stack", 42),
+        ("sampler_contract", 42),
+        ("source_target_compatibility_class", 42),
+        ("bind_retained_bones", [42]),
         ("playback_fps", 10**400),
         ("source_duration_seconds", 10**400),
     ],

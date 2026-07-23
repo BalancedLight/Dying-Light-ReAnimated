@@ -84,6 +84,10 @@ class UnifiedMainWindow:
         for title in ("Project", "Animations", "Retargeting", "Facial", "Export"):
             if title in pages:
                 self.animation_tabs.addTab(pages[title], title)
+        # Facial callbacks are installed by the standalone controller before
+        # Unified takes ownership of its pages.  Repoint them while the old
+        # QTabWidget is still alive; setCentralWidget below will delete it.
+        self.controller.facial_tab_host = self.animation_tabs
 
         self.crig_mapping = CrigMappingWorkspace(qt, controller=self.controller, mark_dirty=self._mark_dirty)
         self.animation_tabs.addTab(
@@ -162,6 +166,7 @@ class UnifiedMainWindow:
         if hasattr(self.controller, "game_combo"):
             self.controller.game_combo.currentIndexChanged.connect(self._game_profile_changed)
         self._restore_extension_state()
+        self._refresh_facial_visibility()
         self.crig_mapping.reload_clips()
         self.main_tabs.currentChanged.connect(self._workspace_changed)
 
@@ -171,6 +176,7 @@ class UnifiedMainWindow:
     def _game_profile_changed(self, *_args) -> None:
         """Keep model defaults coherent while preserving deliberate custom SMD paths."""
 
+        self._refresh_facial_visibility()
         if not hasattr(self.models, "target_smd"):
             return
         current = self.models.target_smd.text().strip().replace("\\", "/").casefold()
@@ -182,6 +188,14 @@ class UnifiedMainWindow:
         )
         if default_like:
             self.models.target_smd.setText(self.controller.project.rig.canonical_smd)
+
+    def _refresh_facial_visibility(self) -> None:
+        refresh = getattr(
+            self.controller, "_refresh_facial_availability", None
+        )
+        if callable(refresh):
+            refresh()
+        self.controller._refresh_animation_table()
 
     def _build_menu_bar(self) -> None:
         qt = self.qt

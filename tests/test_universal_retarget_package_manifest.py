@@ -15,6 +15,7 @@ EXPECTED_SURFACE = {
     "dlanm2_gui/semantic_chain_alignment.py": "python_package",
     "dlanm2_gui/animation_targets.py": "python_package",
     "dlanm2_gui/automatic_retarget.py": "python_package",
+    "dlanm2_gui/blender_mirror_wrapper.py": "python_package",
     "dlanm2_gui/retarget_profiles.py": "python_package",
     "dlanm2_gui/semantic_retarget.py": "python_package",
     "dlanm2_gui/retarget_recipes.py": "python_package",
@@ -32,6 +33,9 @@ EXPECTED_SURFACE = {
     "docs/ROOT_MOTION_AND_IK.md": "windows_bundle_docs",
     "docs/FBX_PREFLIGHT.md": "windows_bundle_docs",
     "docs/GUI_GUIDE.md": "windows_bundle_docs",
+    "docs/reverse_notes/REFLECTED_FBX_WRAPPER_BILATERAL_SEMANTICS.md": (
+        "windows_bundle_docs"
+    ),
     "reverse_engineering/pseudocode/UniversalAutomaticRetargetPolicy.c": (
         "source_release_policy_reconstruction"
     ),
@@ -39,6 +43,9 @@ EXPECTED_SURFACE = {
         "source_release_policy_reconstruction"
     ),
     "reverse_engineering/pseudocode/dlr_anm2_fbx_native_basis_and_timing.c": (
+        "source_release_policy_reconstruction"
+    ),
+    "reverse_engineering/pseudocode/DLR_ReflectedWrapperWithoutImplicitBilateralSwap.c": (
         "source_release_policy_reconstruction"
     ),
 }

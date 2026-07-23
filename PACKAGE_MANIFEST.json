@@ -1,6 +1,6 @@
 {
   "package": "DL ReAnimated DL1/DL2 Preview",
-  "version": "0.6.3",
+  "version": "0.6.4",
   "source_basis": "BalancedLight/Dying-Light-ReAnimated model-testing branch, modified locally only",
   "git_operations_performed": false,
   "games": {
@@ -55,8 +55,14 @@
     {
       "path": "dlanm2_gui/automatic_retarget.py",
       "install_surface": "python_package",
-      "size": 115979,
-      "sha256": "176E25EF0E6B050DA9FA7EB9FB5329846778CA3B672D1CC2DF1D0E73783CA0E1"
+      "size": 128776,
+      "sha256": "80F1EDE385815394ED456DE1292F8C62C56402D844C243C72C808E9ECDD4D915"
+    },
+    {
+      "path": "dlanm2_gui/blender_mirror_wrapper.py",
+      "install_surface": "python_package",
+      "size": 17448,
+      "sha256": "68377A739EE1625BABFA1492862582B966DC7D2457C10897E69DF2ABC68E3B9E"
     },
     {
       "path": "dlanm2_gui/retarget_profiles.py",
@@ -67,8 +73,8 @@
     {
       "path": "dlanm2_gui/semantic_retarget.py",
       "install_surface": "python_package",
-      "size": 14647,
-      "sha256": "33D28ECBEF005B5EA7E1001658FDEE09C8711DE12FA79D01BC1F228EAED84418"
+      "size": 18185,
+      "sha256": "F577CB1C3F452C20520B2BC24B07F76EBFF42080C3EFEEE937CF5E579A0B5F19"
     },
     {
       "path": "dlanm2_gui/retarget_recipes.py",
@@ -97,8 +103,8 @@
     {
       "path": "dlanm2_gui/root_heading.py",
       "install_surface": "python_package",
-      "size": 19008,
-      "sha256": "7D37A9D3E8049572BB7AD214ED7AE1A2139237A7E0230E42DDD3D897305341C5"
+      "size": 20538,
+      "sha256": "17836A1CA00ED668D38DECCEF9A83578D3D94C455F870FB6C31EBBB8FD63259B"
     },
     {
       "path": "dlanm2_gui/root_motion_basis.py",
@@ -161,6 +167,12 @@
       "sha256": "4640CC11A5E8D32A7EBCC294039936E86C9425BAD165A17BFAC99A767971047C"
     },
     {
+      "path": "docs/reverse_notes/REFLECTED_FBX_WRAPPER_BILATERAL_SEMANTICS.md",
+      "install_surface": "windows_bundle_docs",
+      "size": 1615,
+      "sha256": "7C8DF8994FC222A23CD8FF0E27BA0C015ECBB0666385C224B51C063F8F3AC98E"
+    },
+    {
       "path": "reverse_engineering/pseudocode/UniversalAutomaticRetargetPolicy.c",
       "install_surface": "source_release_policy_reconstruction",
       "size": 20797,
@@ -177,6 +189,12 @@
       "install_surface": "source_release_policy_reconstruction",
       "size": 5863,
       "sha256": "8B8F92A164FE3DA721A7CA676A4C7D49970A877F4ACA68A9A0D3DEF0D03118C9"
+    },
+    {
+      "path": "reverse_engineering/pseudocode/DLR_ReflectedWrapperWithoutImplicitBilateralSwap.c",
+      "install_surface": "source_release_policy_reconstruction",
+      "size": 2579,
+      "sha256": "72D191E254BCD0D4CEE128C5949AECC60BD8AA2EDA8CFC9628318C18D55CB07F"
     }
   ],
   "key_files": [
@@ -207,8 +225,8 @@
     },
     {
       "path": "examples/dl2_player_advanced.example.dlraproj",
-      "size": 2597,
-      "sha256": "33BB30320B7A7B65BC11D0FDA0BCCCBD0C5D936FA432BB6876A994C3447C97AB"
+      "size": 2595,
+      "sha256": "01E56C4F79BF1F8A2C0A65694FFC9C7223C679AF2CBFCD25E58630C99363BC71"
     },
     {
       "path": "examples/dl2_player_shadow_caster.example.dlraproj",

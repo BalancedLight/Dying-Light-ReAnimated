@@ -404,6 +404,9 @@ def resolve_bind_globals(
 class FbxDocument:
     """Public FBX animation document backed by :class:`FbxScene`."""
 
+    CURRENT_WRAPPER_SAMPLING = "current"
+    LEGACY_5_0_WRAPPER_SAMPLING = "legacy_5_0"
+
     def __init__(
         self,
         path: str | Path,
@@ -412,6 +415,7 @@ class FbxDocument:
         orientation_policy: str = "auto",
         purpose: FbxLoadPurpose | str = FbxLoadPurpose.ANIMATION,
         tolerance: FbxImportTolerance | str = FbxImportTolerance.RECOMMENDED,
+        wrapper_sampling_policy: str = CURRENT_WRAPPER_SAMPLING,
     ) -> None:
         self.path = Path(path)
         self.load_purpose = FbxLoadPurpose.coerce(purpose).value
@@ -422,7 +426,11 @@ class FbxDocument:
             tolerance=tolerance,
         )
         try:
-            self._initialize(animation_stack, orientation_policy)
+            self._initialize(
+                animation_stack,
+                orientation_policy,
+                wrapper_sampling_policy,
+            )
         except FbxDomainError:
             raise
         except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
@@ -437,6 +445,7 @@ class FbxDocument:
         orientation_policy: str = "auto",
         purpose: FbxLoadPurpose | str | None = None,
         tolerance: FbxImportTolerance | str | None = None,
+        wrapper_sampling_policy: str = CURRENT_WRAPPER_SAMPLING,
     ) -> "FbxDocument":
         document = cls.__new__(cls)
         document.path = Path(scene.path)
@@ -453,7 +462,11 @@ class FbxDocument:
             )
         ).value
         try:
-            document._initialize(animation_stack, orientation_policy)
+            document._initialize(
+                animation_stack,
+                orientation_policy,
+                wrapper_sampling_policy,
+            )
         except FbxDomainError:
             raise
         except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
@@ -464,6 +477,7 @@ class FbxDocument:
         self,
         animation_stack: str | None,
         orientation_policy: str,
+        wrapper_sampling_policy: str,
     ) -> None:
         self.object_by_id = self.scene.object_by_id
         self.parents = self.scene.parents
@@ -497,6 +511,17 @@ class FbxDocument:
         self.selected_animation_stack: FbxAnimationStack | None = None
         self.meters_per_unit = self.scene.meters_per_unit
         self.requested_orientation_policy = str(orientation_policy or "auto")
+        selected_wrapper_policy = str(
+            wrapper_sampling_policy or self.CURRENT_WRAPPER_SAMPLING
+        )
+        if selected_wrapper_policy not in {
+            self.CURRENT_WRAPPER_SAMPLING,
+            self.LEGACY_5_0_WRAPPER_SAMPLING,
+        }:
+            raise ValueError(
+                "wrapper_sampling_policy must be current or legacy_5_0"
+            )
+        self.wrapper_sampling_policy = selected_wrapper_policy
         self.resolved_orientation_policy = self.scene.resolved_orientation_policy(
             self.requested_orientation_policy
         )
@@ -1042,8 +1067,14 @@ class FbxDocument:
         ):
             return False
         rotation = linear / uniform
+        determinant = float(np.linalg.det(rotation))
         return bool(
-            np.linalg.det(rotation) > 1.0e-12
+            (
+                abs(determinant) > 1.0e-12
+                if self.wrapper_sampling_policy
+                == self.LEGACY_5_0_WRAPPER_SAMPLING
+                else determinant > 1.0e-12
+            )
             and np.allclose(
                 rotation.T @ rotation,
                 np.eye(3, dtype=float),

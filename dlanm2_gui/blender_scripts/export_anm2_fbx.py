@@ -190,6 +190,12 @@ def install_bulk_curve(collection, data_path, array_index, group_name, frames, v
     return curve
 
 
+def update_dependency_graph():
+    """Evaluate the scene from either frame-selection audit site."""
+
+    bpy.context.view_layer.update()
+
+
 def component_maps(arrays):
     return {
         "location": {
@@ -565,7 +571,7 @@ def main(argv=None):
     for frame_index, expected in enumerate(expected_root_globals):
         scene.frame_set(int(round(float(frames[frame_index]))))
         # Exactly one dependency evaluation per frame, never one per bone.
-        bpy.context.view_layer.update()
+        update_dependency_graph()
         actual = root_pose.matrix.copy()
         angular_error = quaternion_error_degrees(
             actual.to_quaternion(), expected.to_quaternion()
@@ -706,6 +712,17 @@ def main(argv=None):
     for helper in helper_objects:
         helper.select_set(True)
     bpy.context.view_layer.objects.active = armature
+
+    # The FBX exporter serializes a LimbNode's static transform from the
+    # currently evaluated pose.  The root-parity audit above necessarily ends
+    # on the last sample, which would otherwise rebase the visible armature at
+    # that final pose.  Anchor the editable FBX rest skeleton at the exact
+    # first sample instead; the baked action remains unchanged.
+    first_sample = float(frames[0])
+    first_frame = math.floor(first_sample)
+    scene.frame_set(first_frame, subframe=first_sample - first_frame)
+    update_dependency_graph()
+
     output = Path(job["output_path"])
     output.parent.mkdir(parents=True, exist_ok=True)
     report("Writing FBX", 0, 1)

@@ -184,6 +184,57 @@ def test_source_global_normalization_applies_units_and_axis_once() -> None:
             axis_conversion_count=2,
         )
 
+    mirror = np.diag((-1.0, 1.0, 1.0, 1.0))
+    canonicalized_default = SourceGlobalNormalization(
+        meters_per_unit=0.01,
+        convert_y_up_to_dying_light=True,
+        mirror_wrapper_name="Armature",
+        wrapper_canonicalized_before_sampling=True,
+        wrapper_policy="canonicalized_reflection_no_post_conjugation",
+    )
+    rotated = np.eye(4)
+    rotated[0, 0] = rotated[2, 2] = 0.0
+    rotated[0, 2] = 1.0
+    rotated[2, 0] = -1.0
+    rotated[:3, 3] = (20.0, 30.0, 40.0)
+    np.testing.assert_allclose(
+        canonicalized_default.apply(rotated),
+        explicit_contract.apply(rotated),
+    )
+    assert canonicalized_default.apply_target_vector(
+        np.asarray((0.5, 0.25, -1.0))
+    ) == pytest.approx((0.5, 0.25, -1.0))
+    assert not canonicalized_default.to_report()[
+        "post_canonicalization_mirror_conjugation_applied"
+    ]
+
+    with pytest.raises(ValueError, match="cannot implicitly apply"):
+        SourceGlobalNormalization(
+            meters_per_unit=0.01,
+            convert_y_up_to_dying_light=True,
+            mirror_basis_matrix=mirror,
+            mirror_wrapper_name="Armature",
+            wrapper_canonicalized_before_sampling=True,
+        )
+
+    diagnostic_contract = SourceGlobalNormalization(
+        meters_per_unit=0.01,
+        convert_y_up_to_dying_light=True,
+        mirror_basis_matrix=mirror,
+        mirror_wrapper_name="Armature",
+        wrapper_canonicalized_before_sampling=True,
+        explicit_post_canonicalization_mirror_conjugation=True,
+        wrapper_policy="canonicalized_reflection_diagnostic_conjugation",
+    )
+    expected = mirror @ explicit_contract.apply(rotated) @ mirror
+    np.testing.assert_allclose(diagnostic_contract.apply(rotated), expected)
+    assert diagnostic_contract.apply_target_vector(
+        np.asarray((0.5, 0.25, -1.0))
+    ) == pytest.approx((-0.5, 0.25, -1.0))
+    mirror_report = diagnostic_contract.to_report()["mirrored_wrapper"]
+    assert mirror_report["applied"]
+    assert mirror_report["wrapper"] == "Armature"
+
 
 def test_automatic_repair_cannot_silently_select_the_mapped_solver() -> None:
     profile = GenericBoneMap.create(

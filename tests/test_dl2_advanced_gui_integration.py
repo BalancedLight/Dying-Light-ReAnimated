@@ -6,12 +6,13 @@ from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QCoreApplication, QEvent, QSettings
 
 from dlanm2_gui import gui
 from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap
 from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
+from dlanm2_gui.fbx_anm2_export_behavior import LEGACY_5_0
 from dlanm2_gui.game_profiles import DL2_ADVANCED_RIG_REF, DL2_GAME_ID
 from dlanm2_gui.retarget_profiles import PROFILE_FORMAT, SourceBoneMappingProfile
 from dlanm2_gui.semantic_retarget import migrate_generic_map_to_semantic_profile
@@ -77,6 +78,42 @@ def _partial_humanoid_document() -> SimpleNamespace:
         findings=(),
         animated_components={},
     )
+
+
+def test_dl2_hides_facial_tab_and_body_face_column(tmp_path: Path) -> None:
+    qt, app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    assert controller.facial_tab_host is shell.animation_tabs
+    # setCentralWidget() queues deletion of the legacy host. Exercise that
+    # deletion before any game-switch or refresh callback runs.
+    QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+    controller._refresh_all()
+    facial_index = shell._animation_tab_index("Facial")
+    assert facial_index >= 0
+    assert shell.animation_tabs.tabBar().isTabVisible(facial_index)
+    assert controller.animation_table.columnCount() == 12
+    controller.fbx_anm2_export_behavior.setCurrentIndex(
+        controller.fbx_anm2_export_behavior.findData(LEGACY_5_0)
+    )
+    controller._sync_project_from_ui()
+    assert controller.project.rig.fbx_anm2_export_behavior == LEGACY_5_0
+    controller._refresh_all()
+    assert controller.fbx_anm2_export_behavior.currentData() == LEGACY_5_0
+
+    shell.animation_tabs.setCurrentWidget(controller.facial_page)
+    controller.game_combo.setCurrentIndex(
+        controller.game_combo.findData(DL2_GAME_ID)
+    )
+
+    facial_index = shell._animation_tab_index("Facial")
+    assert not shell.animation_tabs.tabBar().isTabVisible(facial_index)
+    assert shell.animation_tabs.currentWidget() is not controller.facial_page
+    assert controller.animation_table.columnCount() == 11
+
+    controller.dirty = False
+    shell.window.close()
 
 
 def test_dl2_import_opens_52_editable_semantic_roles_and_manual_edit_clears_cache(

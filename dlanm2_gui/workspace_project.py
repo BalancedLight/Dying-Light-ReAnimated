@@ -19,6 +19,7 @@ from .game_profiles import (
     infer_game_id,
     project_coherence_errors,
 )
+from .blender_mirror_wrapper import BilateralSemanticPolicy
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
@@ -149,6 +150,14 @@ class RigSettings:
     target_template_anm2: str = "reference/infected_turn_90r.template.anm2"
     stock_writer_control_anm2: str = "reference/stock_writer_control.anm2"
     target_rig_name: str = "Dying Light male humanoid"
+    # ``current`` uses the modern canonical FBX sampling contract.  The
+    # explicit 0.5 compatibility setting retains the historical interpretation
+    # for projects authored against it.
+    fbx_anm2_export_behavior: str = "current"
+    # New projects use evidence-based Auto.  Projects loaded without this
+    # field are migrated explicitly to Preserve in ``from_dict`` so the former
+    # wrapper-triggered swap is never silently retained.
+    bilateral_semantic_policy: str = BilateralSemanticPolicy.AUTO.value
     extensions: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -280,6 +289,17 @@ class DlReanimatedProject:
             errors.append(f"Unsupported game identifier {self.game_id!r}.")
         if self.rig.retarget_mode not in {"auto", "humanoid", "exact"}:
             errors.append("Retarget mode must be auto, humanoid, or exact.")
+        if self.rig.fbx_anm2_export_behavior not in {"current", "legacy_5_0"}:
+            errors.append(
+                "FBX-to-ANM2 export behavior must be current or legacy_5_0."
+            )
+        if self.rig.bilateral_semantic_policy not in {
+            item.value for item in BilateralSemanticPolicy
+        }:
+            errors.append(
+                "Bilateral semantic policy must be auto, "
+                "preserve_source_names, or swap_bilateral_explicit."
+            )
         if self.rig.retarget_mode == "exact" and any(
             row.enabled
             and not row.target_rig_ref
@@ -437,6 +457,23 @@ class DlReanimatedProject:
                     for key in (
                         "canonical_smd", "target_template_anm2", "stock_writer_control_anm2"
                     )
+                },
+            )
+            rig_raw["extensions"] = rig_extensions
+        if "bilateral_semantic_policy" not in rig_raw:
+            rig_extensions = dict(rig_raw.get("extensions", {}) or {})
+            rig_raw["bilateral_semantic_policy"] = (
+                BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+            )
+            rig_extensions.setdefault(
+                "bilateral_semantic_policy_migration",
+                {
+                    "from": "implicit_wrapper_coupled_behavior",
+                    "to": BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value,
+                    "reason": (
+                        "scene wrapper reflection is geometric and does not "
+                        "authorize semantic left/right row swapping"
+                    ),
                 },
             )
             rig_raw["extensions"] = rig_extensions

@@ -27,6 +27,10 @@ from .fbx_pipeline import FbxAnimationClip, build_fbx_rpack
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_smd_template
 from .fbx_core import FbxDocument
+from .fbx_anm2_export_behavior import (
+    LEGACY_5_0,
+    coerce_fbx_anm2_export_behavior,
+)
 from .model_importer.fbx_model import FBX_TICKS_PER_SECOND
 from .anm2_provenance import (
     anm2_provenance_path,
@@ -137,6 +141,7 @@ def _resolve_bundled_dl2_semantic_map(
         rig,
         policy,
         profile,
+        bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
         profile_name=f"Bundled humanoid mapping: {animation.display_name}",
     )
     if state.profile.root_motion:
@@ -156,7 +161,12 @@ def _resolve_bundled_dl2_semantic_map(
         )
         animation.extensions["legacy_target_map_profile_id"] = migrated_from
     compiled, live, plan = compile_bundled_semantic_profile(
-        document, rig, policy, state.profile, state=state
+        document,
+        rig,
+        policy,
+        state.profile,
+        bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
+        state=state,
     )
     project.mapping_profiles[compiled.profile_id] = compiled.to_dict()
     project.mapping_profiles[state.profile.profile_id] = state.profile.to_dict()
@@ -241,6 +251,7 @@ def _resolve_verified_dl2_advanced_map(
             document,
             rig,
             policy,
+            bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
             role_overrides=role_overrides,
             target_bone_overrides=target_bone_overrides,
         )
@@ -269,6 +280,7 @@ def _resolve_verified_dl2_advanced_map(
             document,
             rig,
             policy,
+            bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
         )
         replacement_origin = mapping_profile_origin(replacement)
         if replacement_origin == "automatic_verified":
@@ -277,6 +289,7 @@ def _resolve_verified_dl2_advanced_map(
                 document,
                 rig,
                 policy,
+                bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
             )
             verification.require_valid()
         elif (
@@ -400,6 +413,7 @@ def _resolve_local_reviewed_recipe_map(
             rig,
             policy,
             clip_domain="body",
+            bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
         )
         local = resolve_local_retarget_recipe(
             fresh,
@@ -681,6 +695,9 @@ def _build_body_project(
         raise ValueError("Project does not contain any enabled animations")
 
     retarget_mode = project.rig.retarget_mode
+    fbx_anm2_export_behavior = coerce_fbx_anm2_export_behavior(
+        project.rig.fbx_anm2_export_behavior
+    )
     game_profile = get_game_profile(project.game_id)
     rig_cache: dict[str, ChromeRig] = {}
     target_contexts = {
@@ -1249,7 +1266,25 @@ def _build_body_project(
             bone_map = bone_map_by_animation.get(animation.animation_id)
             compatibility = compatibility_by_animation[animation.animation_id]
             solver_selection = solver_by_animation[animation.animation_id]
-            if solver_selection.selected_engine == "MappedRigRetargetEngine":
+            if fbx_anm2_export_behavior == LEGACY_5_0:
+                source_rest_policy = "legacy_5_0_global_bind_basis"
+                exact_build = build_exact_rig_anm2(
+                    source_path,
+                    clip_target_rig,
+                    fps=sample_fps,
+                    animation_stack=animation.source_animation_stack or None,
+                    root_mapping=RootMappingSelection.from_animation(animation),
+                    root_policy=animation.root_policy,
+                    root_motion=RootMotionSelection.from_animation(animation),
+                    fbx_anm2_export_behavior=fbx_anm2_export_behavior,
+                    bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
+                    document=mapping_document_by_animation[animation.animation_id],
+                    preflight=preflight,
+                    progress=lambda update, clip_index=index: log(
+                        f"[{clip_index}/{len(enabled)}] {update}"
+                    ),
+                )
+            elif solver_selection.selected_engine == "MappedRigRetargetEngine":
                 assert bone_map is not None
                 source_rest_policy = "reviewed_mapped_crig"
                 exact_build = build_mapped_rig_anm2(
@@ -1262,6 +1297,8 @@ def _build_body_project(
                     transfer_policy=solver_selection.selected_policy,
                     root_policy=animation.root_policy,
                     root_motion=RootMotionSelection.from_animation(animation),
+                    fbx_anm2_export_behavior=fbx_anm2_export_behavior,
+                    bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
                     document=mapping_document_by_animation[animation.animation_id],
                     preflight=preflight,
                     progress=lambda update, clip_index=index: log(
@@ -1292,13 +1329,26 @@ def _build_body_project(
                     root_mapping=RootMappingSelection.from_animation(animation),
                     root_policy=animation.root_policy,
                     root_motion=RootMotionSelection.from_animation(animation),
+                    fbx_anm2_export_behavior=fbx_anm2_export_behavior,
+                    bilateral_semantic_policy=project.rig.bilateral_semantic_policy,
                     document=mapping_document_by_animation[animation.animation_id],
                     preflight=preflight,
                     progress=lambda update, clip_index=index: log(
                         f"[{clip_index}/{len(enabled)}] {update}"
                     ),
                 )
-            exact_build.report["solver_selection"] = solver_selection.to_dict()
+            exact_build.report["solver_selection"] = (
+                {
+                    "selected_engine": "Legacy50GlobalBindRetargetEngine",
+                    "selected_policy": "legacy_5_0_global_bind_basis",
+                    "selection_reason": (
+                        "Project selected Legacy 5.0 FBX-to-ANM2 export behavior."
+                    ),
+                    "modern_solver_bypassed": solver_selection.to_dict(),
+                }
+                if fbx_anm2_export_behavior == LEGACY_5_0
+                else solver_selection.to_dict()
+            )
             automatic_verification = automatic_verification_by_animation.get(
                 animation.animation_id
             )
@@ -1435,6 +1485,36 @@ def _build_body_project(
         compatibility = dict(
             preflight_inventory.get("target_compatibility", {}) or {}
         )
+        retarget_report.setdefault(
+            "fbx_anm2_export_behavior", fbx_anm2_export_behavior
+        )
+        retarget_report.setdefault(
+            "sampler_contract",
+            (
+                "dlr_0_5_0_global_bind_basis_v1"
+                if fbx_anm2_export_behavior == LEGACY_5_0
+                else "dlr_current_normalized_global_v2"
+            ),
+        )
+        retarget_report.setdefault(
+            "bilateral_semantic_policy",
+            project.rig.bilateral_semantic_policy,
+        )
+        retarget_report.setdefault(
+            "source_target_classification",
+            str(
+                retarget_report.get("skeleton_classification", "")
+                or compatibility.get("classification", "")
+            ),
+        )
+        retarget_report.setdefault(
+            "bind_retained_bones",
+            list(compatibility.get("target_bind_bones", ()) or ()),
+        )
+        retarget_report.setdefault(
+            "source_animation_stack",
+            animation.source_animation_stack,
+        )
         certificate = dict(
             retarget_report.get("automatic_retarget_certificate", {}) or {}
         )
@@ -1563,6 +1643,38 @@ def _build_body_project(
             source_animation_stack=(
                 animation.source_animation_stack
                 or str(retarget_report.get("source_animation_stack", ""))
+            ),
+            fbx_anm2_export_behavior=fbx_anm2_export_behavior,
+            sampler_contract=str(
+                retarget_report.get("sampler_contract", "") or ""
+            ),
+            source_target_compatibility_class=str(
+                retarget_report.get("source_target_classification", "") or ""
+            ),
+            bind_retained_bones=list(
+                retarget_report.get("bind_retained_bones", ()) or ()
+            ),
+            wrapper_reflection_detected=bool(
+                retarget_report.get("wrapper_reflection_detected", False)
+            ),
+            wrapper_canonicalized=bool(
+                retarget_report.get("wrapper_canonicalized", False)
+            ),
+            wrapper_matrix=retarget_report.get("wrapper_matrix"),
+            bilateral_semantic_policy=str(
+                retarget_report.get("bilateral_semantic_policy", "") or ""
+            ),
+            bilateral_swap_applied=bool(
+                retarget_report.get("bilateral_swap_applied", False)
+            ),
+            bilateral_swapped_row_count=int(
+                retarget_report.get("bilateral_swapped_row_count", 0) or 0
+            ),
+            post_canonicalization_mirror_conjugation_applied=bool(
+                retarget_report.get(
+                    "post_canonicalization_mirror_conjugation_applied",
+                    False,
+                )
             ),
         )
         candidate_provenance_path = write_anm2_provenance(
