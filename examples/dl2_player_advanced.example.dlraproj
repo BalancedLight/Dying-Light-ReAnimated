@@ -1,0 +1,79 @@
+{
+  "format": "dl-reanimated-project",
+  "schema_version": 10,
+  "minimum_reader_version": 1,
+  "created_with": "0.6.3",
+  "project_id": "b6f67ed7-5476-4a85-bb7b-27f9914ff31b",
+  "name": "DL2 advanced player ANM2 to FBX",
+  "created_utc": "2026-07-20T00:00:00+00:00",
+  "modified_utc": "2026-07-20T00:00:00+00:00",
+  "game_id": "dying_light_2",
+  "rig": {
+    "target_rig_ref": "builtin:dl2_player_advanced",
+    "target_rig_path": "../reference/dl2/player_skeleton.crig",
+    "default_target_rig_ref": "builtin:dl2_player_advanced",
+    "default_target_rig_path": "../reference/dl2/player_skeleton.crig",
+    "retarget_mode": "auto",
+    "use_imported_animation_bind_pose": true,
+    "source_rest_fbx": "",
+    "trusted_source_rest_json": "",
+    "canonical_smd": "../reference/dl2/player_skeleton.smd",
+    "target_template_anm2": "../reference/dl2/0_m_fpp_farjump.anm2",
+    "stock_writer_control_anm2": "",
+    "target_rig_name": "Dying Light 2 Player — Advanced",
+    "extensions": {}
+  },
+  "export": {
+    "mode": "new",
+    "output_directory": "build/dl2",
+    "pack_filename": "common_anims_sp_pc.rpack",
+    "existing_rpack": "",
+    "collision_policy": "error",
+    "default_script_target": "male_npc_infected_dlc60",
+    "custom_script_resource": "",
+    "resource_prefix": "dl_reanimated",
+    "include_validation_controls": false,
+    "write_intermediate_anm2": false,
+    "extensions": {}
+  },
+  "animations": [],
+  "mapping_profiles": {},
+  "user_script_targets": [],
+  "anm2_to_fbx": {
+    "mode": "native",
+    "target_fbx": "",
+    "output_directory": "build/dl2_fbx",
+    "translation_scale": "auto",
+    "selected_mapping_profile_id": "",
+    "items": [
+      {
+        "conversion_id": "c5c1b1dc-f38f-49a7-9234-0dfd28529e62",
+        "source_anm2": "../reference/dl2/0_m_fpp_farjump.anm2",
+        "output_name": "0_m_fpp_farjump",
+        "source_rig_ref": "builtin:dl2_player_advanced",
+        "source_rig_path": "../reference/dl2/player_skeleton.crig",
+        "enabled": true,
+        "fps": 30,
+        "anm2_input_fps": 30.0,
+        "fbx_output_fps": 30.0,
+        "start_frame": 0,
+        "end_frame": 228,
+        "extensions": {
+          "detected_anm2_format": 42,
+          "conversion_status": "native_curve_decode_ready",
+          "track_count": 189
+        }
+      }
+    ],
+    "bone_mapping_profiles": {},
+    "extensions": {
+      "unknown_track_policy": "sidecar"
+    }
+  },
+  "notes": "Read/export example. Native DL2 Header_Version2 writing is unavailable.",
+  "extensions": {
+    "game_profile_v1": {
+      "game_id": "dying_light_2"
+    }
+  }
+}

@@ -12,7 +12,7 @@ import pytest
 from dlanm2_gui.anm2_components import decode_samples
 from dlanm2_gui.anm2_writer import build_payload_from_values
 from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
-from dlanm2_gui.chrome_rig import ChromeRig
+from dlanm2_gui.chrome_rig import Anm2WriterProfile, ChromeRig, ChromeRigBone
 from dlanm2_gui.chrome_rig_builder import (
     build_chrome_rig_from_fbx,
     build_chrome_rig_from_smd_template,
@@ -23,6 +23,7 @@ from dlanm2_gui.retarget_engines.mapped_rig import build_mapped_rig_anm2
 from dlanm2_gui.retarget_engines.base import RetargetBuild
 from dlanm2_gui.retarget_mapping import auto_map_crig_to_fbx
 from dlanm2_gui.rp6l import extract_animation_library
+from dlanm2_gui.trackmap import dl_name_hash
 from dlanm2_gui.workspace_project import (
     CURRENT_PROJECT_SCHEMA_VERSION,
     DlReanimatedProject,
@@ -49,9 +50,9 @@ class _ObjectFbx:
         }
         self.meters_per_unit = 0.01
 
-    def frame_count(self, *, fps: int) -> int:
-        assert fps == 30
-        return 3
+    def frame_count(self, *, fps: float) -> int:
+        # The synthetic clip spans two source frames at 30 FPS.
+        return round((2.0 / 30.0) * float(fps)) + 1
 
     def _local_matrix(self, object_id: int, *, tick: int, use_animation: bool) -> np.ndarray:
         frame = int(round(tick * 30 / FBX_TICKS_PER_SECOND)) if use_animation else 0
@@ -64,6 +65,45 @@ class _ObjectFbx:
         else:
             matrix[2, 3] = 5.0
         return matrix
+
+
+class _OffAxisSourceFbx:
+    """A source skeleton whose visible root axis disagrees with its child pivot."""
+
+    def __init__(self, _path: Path) -> None:
+        self.names = ("source_root", "source_child")
+        self.limb_models = {name: index + 1 for index, name in enumerate(self.names)}
+        self.parent_by_name = {"source_root": None, "source_child": "source_root"}
+        self.meters_per_unit = 0.01
+        self.bind_local_matrices = {
+            name: self._local_matrix(index + 1, tick=0, use_animation=False)
+            for index, name in enumerate(self.names)
+        }
+        self.bind_global_matrices = self.global_matrices(
+            tick=0, use_animation=False
+        )
+
+    def frame_count(self, *, fps: float) -> int:
+        assert fps == 30.0
+        return 2
+
+    def _local_matrix(
+        self, object_id: int, *, tick: int, use_animation: bool
+    ) -> np.ndarray:
+        frame = int(round(tick * 30 / FBX_TICKS_PER_SECOND)) if use_animation else 0
+        if object_id == 1:
+            # Its local Y points along world -X, while its child is at world +Y.
+            return _rotation_z(90.0)
+        result = _rotation_z(45.0 if frame else 0.0)
+        result[0, 3] = 100.0
+        return result
+
+    def global_matrices(
+        self, *, tick: int, use_animation: bool
+    ) -> dict[str, np.ndarray]:
+        root = self._local_matrix(1, tick=tick, use_animation=use_animation)
+        child = self._local_matrix(2, tick=tick, use_animation=use_animation)
+        return {"source_root": root, "source_child": root @ child}
 
 
 def _factory(names: tuple[str, ...]):
@@ -121,6 +161,84 @@ def test_exact_engine_reuses_one_canonical_document_across_legacy_adapter(
     )
 
     assert len(created) == 1
+
+
+def test_exact_and_mapped_writers_accept_fbx_time_mode_12_rate(
+    tmp_path: Path,
+) -> None:
+    names = ("root",)
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "target.fbx", document_factory=_factory(names)
+    )
+    document = _ObjectFbx(tmp_path / "animated.fbx", names)
+    bone_map = GenericBoneMap.create(
+        "1000 FPS",
+        rig.skeleton_hash,
+        skeleton_signature((("root", None),)),
+        source_rig_ref=rig.rig_id,
+    )
+    bone_map.pairs = [
+        BoneMapPair(rig.bones[0].descriptor, "root", "root", 1.0, "manual")
+    ]
+
+    exact = build_exact_rig_anm2(
+        tmp_path / "animated.fbx",
+        rig,
+        fps=1000.0,
+        document_factory=lambda _path: document,
+    )
+    mapped = build_mapped_rig_anm2(
+        tmp_path / "animated.fbx",
+        rig,
+        bone_map,
+        fps=1000.0,
+        document_factory=lambda _path: document,
+        transfer_policy="mapped_local_rotation_delta",
+        root_policy="bip01",
+    )
+
+    assert exact.frame_count == 68
+    assert mapped.frame_count == 68
+    assert exact.report["fps"] == 1000.0
+    assert mapped.report["fps"] == 1000.0
+
+
+def test_crig_writer_profile_preserves_fractional_default_fps(
+    tmp_path: Path,
+) -> None:
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "target.fbx", document_factory=_factory(("root",))
+    )
+    rate = 24_000.0 / 1_001.0
+    rig.writer_profile = Anm2WriterProfile(default_fps=rate)
+
+    loaded = ChromeRig.from_bytes(rig.to_bytes())
+
+    assert loaded.writer_profile.default_fps == pytest.approx(rate)
+
+
+def test_static_exact_clip_writes_two_identical_frames(tmp_path: Path) -> None:
+    names = ("root",)
+    rig = build_chrome_rig_from_fbx(
+        tmp_path / "static_model.fbx",
+        document_factory=_factory(names),
+    )
+    document = _ObjectFbx(tmp_path / "static_animation.fbx", names)
+    document.frame_count = lambda *, fps: 1  # type: ignore[method-assign]
+
+    build = build_exact_rig_anm2(
+        tmp_path / "static_animation.fbx",
+        rig,
+        document_factory=lambda _path: document,
+    )
+    decoded = decode_samples(build.payload, [0.0, 1.0])
+
+    assert build.frame_count == 2
+    np.testing.assert_allclose(
+        np.asarray(decoded.frames[0].tracks),
+        np.asarray(decoded.frames[1].tracks),
+        atol=1.0e-8,
+    )
 
 
 def test_exact_rig_rejects_parent_mismatch(tmp_path: Path) -> None:
@@ -244,6 +362,70 @@ def test_rotation_delta_manual_root_mapping_keeps_root_displacement(
     assert decoded.frames[1].tracks[root_index][3] == pytest.approx(0.02, abs=1e-5)
 
 
+def test_forward_fbx_to_anm2_uses_rest_relative_transforms_not_visible_bone_axes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The normal writer must not depend on the ANM2->FBX Blender exporter."""
+
+    import dlanm2_gui.blender_fbx as blender_fbx
+
+    def unexpected_blender_export(*_args, **_kwargs):
+        raise AssertionError("FBX -> ANM2 must not invoke Blender")
+
+    monkeypatch.setattr(blender_fbx, "run_blender_export", unexpected_blender_export)
+    source = _OffAxisSourceFbx(tmp_path / "off_axis_source.fbx")
+    root_descriptor = dl_name_hash("target_root")
+    child_descriptor = dl_name_hash("target_child")
+    rig = ChromeRig(
+        "test:forward-off-axis",
+        "Forward off-axis",
+        "Test",
+        (
+            ChromeRigBone(
+                0, "target_root", -1, root_descriptor,
+                (0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0),
+            ),
+            ChromeRigBone(
+                1, "target_child", 0, child_descriptor,
+                (1.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0), (1.0, 1.0, 1.0),
+            ),
+        ),
+        0,
+    )
+    mapping = GenericBoneMap.create(
+        "Reviewed off-axis source",
+        rig.skeleton_hash,
+        skeleton_signature(
+            (name, source.parent_by_name[name]) for name in sorted(source.names)
+        ),
+        source_rig_ref=rig.rig_id,
+        origin="manually_reviewed",
+    )
+    mapping.pairs = [
+        BoneMapPair(root_descriptor, "target_root", "source_root", 1.0, "manual"),
+        BoneMapPair(child_descriptor, "target_child", "source_child", 1.0, "manual"),
+    ]
+
+    build = build_mapped_rig_anm2(
+        tmp_path / "off_axis_source.fbx",
+        rig,
+        mapping,
+        fps=30.0,
+        document_factory=lambda _path: source,
+        transfer_policy="mapped_local_rest_delta",
+        root_policy="inplace",
+    )
+    child_index = rig.descriptors.index(child_descriptor)
+    child_track = decode_samples(build.payload, [1.0]).frames[0].tracks[child_index]
+
+    assert child_track[:3] == pytest.approx(
+        # ANM2 stores the Cayley vector q.xyz / (1 + q.w), i.e. tan(theta / 4).
+        (0.0, 0.0, math.tan(math.radians(45.0) / 4.0)), abs=1.0e-5
+    )
+    assert child_track[3:6] == pytest.approx((1.0, 0.0, 0.0), abs=1.0e-5)
+    assert build.report["engine"] == "MappedRigRetargetEngine"
+
+
 def test_mapped_rig_helper_fanout_is_applied_after_base_solver(tmp_path: Path) -> None:
     names = ("root", "camera_helper")
     rig = build_chrome_rig_from_fbx(
@@ -332,7 +514,7 @@ def test_project_v2_migrates_to_crig_aware_schema_v3() -> None:
     assert CURRENT_PROJECT_SCHEMA_VERSION >= 5
     assert project.schema_version == CURRENT_PROJECT_SCHEMA_VERSION
     assert project.rig.target_rig_ref == "builtin:male_npc_infected"
-    assert project.rig.retarget_mode == "humanoid"
+    assert project.rig.retarget_mode == "auto"
     assert "legacy_target_files" in project.rig.extensions
 
 

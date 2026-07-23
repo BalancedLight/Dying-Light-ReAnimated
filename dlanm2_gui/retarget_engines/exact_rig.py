@@ -3,9 +3,27 @@ from __future__ import annotations
 from pathlib import Path
 
 from .mapped_rig import build_mapped_rig_anm2
+from ..blender_mirror_wrapper import (
+    BilateralSemanticPolicy,
+    coerce_bilateral_semantic_policy,
+    resolve_bilateral_semantic_decision,
+    resolve_blender_lateral_mirror,
+    should_swap_bilateral_rows,
+    swapped_bilateral_source_name,
+)
 from ..bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
-from ..fbx_preflight import classify_target_compatibility, normalized_bone_name, preflight_fbx
+from ..fbx_preflight import (
+    FbxPreflightReport,
+    classify_target_compatibility,
+    normalized_bone_name,
+    preflight_fbx,
+)
 from ..fbx_core import FbxDocument
+from ..fbx_anm2_export_behavior import (
+    LEGACY_5_0,
+    coerce_fbx_anm2_export_behavior,
+)
+from ..model_importer.fbx_model import FBX_Y_UP_TO_DYING_LIGHT
 
 
 def build_exact_rig_anm2(
@@ -18,7 +36,21 @@ def build_exact_rig_anm2(
     document=None,
     root_mapping=None,
     root_policy="bip01",
+    root_motion=None,
+    fbx_anm2_export_behavior: str = "current",
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
+    diagnostic_post_canonicalization_mirror_conjugation: bool = False,
+    preflight: FbxPreflightReport | None = None,
+    progress=None,
 ):
+    fbx_anm2_export_behavior = coerce_fbx_anm2_export_behavior(
+        fbx_anm2_export_behavior
+    )
+    bilateral_semantic_policy = coerce_bilateral_semantic_policy(
+        bilateral_semantic_policy
+    )
     document = document if document is not None else document_factory(Path(animation_fbx))
     selected_stack = getattr(document, "selected_animation_stack", None)
     selected_stack_name = str(getattr(selected_stack, "name", "") or "")
@@ -31,7 +63,17 @@ def build_exact_rig_anm2(
         and selected_stack is None
     ):
         document.select_animation_stack(animation_stack)
-    report = preflight_fbx(
+    source = Path(animation_fbx)
+    current_stack = getattr(document, "selected_animation_stack", None)
+    current_stack_name = str(getattr(current_stack, "name", "") or "")
+    preflight_matches_document = (
+        preflight is not None
+        and preflight.purpose == "animation"
+        and Path(preflight.path).resolve() == source.resolve()
+        and str(preflight.inventory.get("selected_animation_stack", "") or "")
+        == current_stack_name
+    )
+    report = preflight if preflight_matches_document else preflight_fbx(
         animation_fbx,
         purpose="animation",
         animation_stack=animation_stack,
@@ -40,23 +82,32 @@ def build_exact_rig_anm2(
         document_factory=document_factory,
         document=document,
     )
-    hard_findings = [
-        row
-        for row in report.findings
-        if row.severity == "error" and not row.can_continue
-    ]
-    if hard_findings:
-        raise ValueError(
-            "Exact-rig FBX preflight blocked the build before ANM2 output:\n"
-            + report.actionable_message(hard_findings)
+    report.require_buildable()
+    compatibility = classify_target_compatibility(document, rig)
+    if fbx_anm2_export_behavior == LEGACY_5_0:
+        from .legacy_5_0 import build_legacy_5_0_anm2
+
+        return build_legacy_5_0_anm2(
+            animation_fbx,
+            rig,
+            fps=fps,
+            animation_stack=animation_stack,
+            document_factory=document_factory,
+            document=document,
+            preflight=report,
+            root_mapping=root_mapping,
+            requested_root_policy=root_policy,
+            requested_root_motion=root_motion,
+            progress=progress,
         )
     from .legacy_exact_rig import _is_dlr_native_export
     if _is_dlr_native_export(document):
-        # Native ANM2->FBX round trips deliberately use display-only parents for
-        # zero-length twist bones. Their export marker selects the established
-        # helper/display-basis solver after hard transform preflight.
+        # Native ANM2->FBX exports carry an explicit basis/helper contract. Its
+        # marker selects the metadata-aware inverse after hard transform
+        # preflight. Current exports intentionally use child-facing Blender
+        # display axes; the stored correction restores Chrome game-space axes.
         from .legacy_exact_rig import build_exact_rig_anm2 as build_legacy_exact
-        return build_legacy_exact(
+        result = build_legacy_exact(
             animation_fbx,
             rig,
             fps=fps,
@@ -64,8 +115,23 @@ def build_exact_rig_anm2(
             document_factory=document_factory,
             document=document,
         )
-    compatibility = classify_target_compatibility(document, rig)
-    if compatibility["required_missing_bones"] or compatibility["hierarchy_mismatches"]:
+        result.report.update(
+            {
+                "fbx_anm2_export_behavior": fbx_anm2_export_behavior,
+                "sampler_contract": "dlr_current_native_metadata_inverse_v1",
+                "source_target_classification": compatibility["classification"],
+                "bind_retained_bones": list(
+                    compatibility.get("target_bind_bones", ()) or ()
+                ),
+            }
+        )
+        return result
+    exact_target_subset = (
+        compatibility.get("classification") == "exact_target_subset"
+    )
+    if compatibility["hierarchy_mismatches"] or (
+        compatibility["required_missing_bones"] and not exact_target_subset
+    ):
         rows = []
         if compatibility["required_missing_bones"]:
             rows.append("required target bones missing: " + ", ".join(compatibility["required_missing_bones"][:20]))
@@ -82,16 +148,44 @@ def build_exact_rig_anm2(
         # Synthetic fixtures, legacy custom-rig FBXs, and native ANM2->FBX
         # round trips retain the previously validated helper/display-basis path.
         from .legacy_exact_rig import build_exact_rig_anm2 as build_legacy_exact
-        return build_legacy_exact(
+        result = build_legacy_exact(
             animation_fbx, rig, fps=fps, animation_stack=animation_stack,
             document_factory=document_factory, document=document,
         )
+        result.report.update(
+            {
+                "fbx_anm2_export_behavior": fbx_anm2_export_behavior,
+                "sampler_contract": "dlr_current_direct_local_fallback_v1",
+                "source_target_classification": compatibility["classification"],
+                "bind_retained_bones": list(
+                    compatibility.get("target_bind_bones", ()) or ()
+                ),
+            }
+        )
+        return result
     source_hash = skeleton_signature(
         (name, document.parent_by_name.get(name)) for name in sorted(document.limb_models)
     )
     bone_map = GenericBoneMap.create(
         "Exact/subset global bind-basis map", rig.skeleton_hash, source_hash,
         source_rig_ref=rig.rig_id,
+    )
+    mirror_context = None
+    if str(getattr(rig, "rig_id", "") or "") == "builtin:dl2_player_advanced":
+        mirror_context = resolve_blender_lateral_mirror(
+            document,
+            source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        )
+    semantic_decision = resolve_bilateral_semantic_decision(
+        document,
+        rig,
+        bilateral_semantic_policy,
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        wrapper_context=mirror_context,
+    )
+    swap_bilateral = should_swap_bilateral_rows(
+        bilateral_semantic_policy,
+        semantic_decision,
     )
     by_normal = {normalized_bone_name(name): name for name in document.limb_models}
     bone_map.pairs = []
@@ -107,6 +201,10 @@ def build_exact_rig_anm2(
     )
     for bone in rig.bones:
         source_name = by_normal.get(normalized_bone_name(bone.name))
+        if source_name is not None and swap_bilateral:
+            source_name = swapped_bilateral_source_name(
+                source_name, document.limb_models
+            )
         if source_name is not None:
             bone_map.pairs.append(
                 BoneMapPair(
@@ -118,6 +216,40 @@ def build_exact_rig_anm2(
                     component_policy=automatic_components,
                 )
             )
+        else:
+            bind_mode = "inherit_bind" if bone.parent_index >= 0 else "static_bind"
+            bone_map.pairs.append(
+                BoneMapPair(
+                    bone.descriptor,
+                    bone.name,
+                    "",
+                    1.0,
+                    "exact_subset_target_bind",
+                    transfer_policy="bind",
+                    component_policy="rotation",
+                    review_state="intentionally_unmapped",
+                    notes="target-only row retains target bind-local transform",
+                    extensions={
+                        "mapping_mode": bind_mode,
+                        "execution_mapping_mode": bind_mode,
+                        "source_bones": [],
+                    },
+                )
+            )
+    swapped_row_count = sum(
+        row.source_fbx_bone
+        != by_normal.get(normalized_bone_name(row.target_rig_bone))
+        for row in bone_map.pairs
+        if row.source_fbx_bone
+    )
+    semantic_payload = semantic_decision.to_dict()
+    semantic_payload["bilateral_swapped_row_count"] = swapped_row_count
+    bone_map.extensions["bilateral_semantic_decision"] = semantic_payload
+    if mirror_context is not None:
+        mirror_payload = mirror_context.to_dict()
+        mirror_payload["application"] = "diagnostic_only"
+        mirror_payload["swapped_row_count"] = swapped_row_count
+        bone_map.extensions["source_wrapper_mirror"] = mirror_payload
     transfer_policy = (
         "global_bind_basis_correction"
         if getattr(document, "bind_global_matrices", None) and hasattr(document, "global_matrices")
@@ -153,6 +285,14 @@ def build_exact_rig_anm2(
         transfer_policy=transfer_policy,
         root_mapping=exact_root_mapping,
         root_policy=root_policy,
+        root_motion=root_motion,
+        fbx_anm2_export_behavior=fbx_anm2_export_behavior,
+        bilateral_semantic_policy=bilateral_semantic_policy.value,
+        diagnostic_post_canonicalization_mirror_conjugation=(
+            diagnostic_post_canonicalization_mirror_conjugation
+        ),
+        preflight=report,
+        progress=progress,
     )
     if automatic_exact_root:
         result.report["root_mapping"].update(
@@ -163,7 +303,27 @@ def build_exact_rig_anm2(
         )
     result.report.update(
         {
-            "retarget_mode": "exact" if compatibility["classification"] == "exact_identity" else "target_compatible_source_superset",
+            "fbx_anm2_export_behavior": fbx_anm2_export_behavior,
+            "sampler_contract": "dlr_current_normalized_global_v2",
+            "bilateral_semantic_policy": bilateral_semantic_policy.value,
+            "bilateral_semantic_decision": semantic_payload,
+            "bilateral_swap_applied": semantic_decision.swap_applied,
+            "bilateral_swapped_row_count": swapped_row_count,
+            "post_canonicalization_mirror_conjugation_applied": bool(
+                diagnostic_post_canonicalization_mirror_conjugation
+                and mirror_context is not None
+            ),
+            "source_target_classification": compatibility["classification"],
+            "bind_retained_bones": list(
+                compatibility.get("target_bind_bones", ()) or ()
+            ),
+            "retarget_mode": (
+                "exact"
+                if compatibility["classification"] == "exact_identity"
+                else "exact_target_subset"
+                if compatibility["classification"] == "exact_target_subset"
+                else "target_compatible_source_superset"
+            ),
             "engine": "ExactRigRetargetEngine",
             "skeleton_classification": compatibility["classification"],
             **compatibility,
@@ -172,6 +332,26 @@ def build_exact_rig_anm2(
             "fbx_preflight": report.to_dict(),
         }
     )
+    if mirror_context is not None:
+        result.report["wrapper_reflection"] = dict(
+            bone_map.extensions["source_wrapper_mirror"]
+        )
+    if semantic_decision.warning:
+        warnings = result.report.setdefault("warnings", [])
+        if semantic_decision.warning not in warnings:
+            warnings.append(semantic_decision.warning)
+    result.report["mapping"] = {
+        "exact_target_subset_rows": int(
+            compatibility.get("exact_target_subset_rows", len(bone_map.pairs))
+            or 0
+        ),
+        "semantic_rows": 0,
+        "manual_target_overrides": 0,
+        "target_bind_rows": int(
+            compatibility.get("target_bind_rows", 0) or 0
+        ),
+        "spatial_only_rows": 0,
+    }
     return result
 
 

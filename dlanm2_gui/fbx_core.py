@@ -8,6 +8,7 @@ implementation used by the model importer.  The old oracle module re-exports
 this API for compatibility; production code should import from here.
 """
 
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
@@ -65,6 +66,99 @@ class FbxAnimationStackActivity:
         return asdict(self)
 
 
+FBX_TIME_MODE_FPS: dict[int, float] = {
+    0: 30.0,
+    1: 120.0,
+    2: 100.0,
+    3: 60.0,
+    4: 50.0,
+    5: 48.0,
+    6: 30.0,
+    7: 30.0,
+    8: 30_000.0 / 1_001.0,
+    9: 30_000.0 / 1_001.0,
+    10: 25.0,
+    11: 24.0,
+    12: 1_000.0,
+    13: 24_000.0 / 1_001.0,
+    15: 96.0,
+    16: 72.0,
+    17: 60_000.0 / 1_001.0,
+    18: 120_000.0 / 1_001.0,
+}
+
+
+@dataclass(frozen=True, slots=True)
+class FbxDeclaredTimebase:
+    """Declared or explicitly identified fallback timebase for one FBX."""
+
+    time_mode: int | None
+    declared_fps: float
+    custom_frame_rate: float | None
+    source: str
+    confidence: str = "declared"
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def resolve_fbx_declared_timebase(
+    properties: Mapping[str, Sequence[Any]] | None,
+    *,
+    key_time_deltas: Iterable[int] = (),
+) -> FbxDeclaredTimebase:
+    """Resolve ``TimeMode`` before considering low-confidence key spacing."""
+
+    rows = dict(properties or {})
+    raw_mode = (rows.get("TimeMode") or [None])[0]
+    try:
+        time_mode = int(raw_mode) if raw_mode is not None else None
+    except (TypeError, ValueError):
+        time_mode = None
+    raw_custom = (rows.get("CustomFrameRate") or [None])[0]
+    try:
+        custom = float(raw_custom) if raw_custom is not None else None
+    except (TypeError, ValueError):
+        custom = None
+    if custom is not None and (not math.isfinite(custom) or custom <= 0.0):
+        custom = None
+
+    if time_mode == 14 and custom is not None:
+        return FbxDeclaredTimebase(
+            time_mode,
+            custom,
+            custom,
+            "GlobalSettings.TimeMode",
+        )
+    if time_mode in FBX_TIME_MODE_FPS:
+        return FbxDeclaredTimebase(
+            time_mode,
+            FBX_TIME_MODE_FPS[time_mode],
+            custom,
+            "GlobalSettings.TimeMode",
+        )
+
+    positive = [int(value) for value in key_time_deltas if int(value) > 0]
+    if positive:
+        interval = Counter(positive).most_common(1)[0][0]
+        inferred = float(FBX_TICKS_PER_SECOND) / float(interval)
+        if math.isfinite(inferred) and 1.0 <= inferred <= 240.0:
+            return FbxDeclaredTimebase(
+                time_mode,
+                inferred,
+                custom,
+                "AnimationCurve.KeyTime",
+                "inferred_low",
+            )
+    return FbxDeclaredTimebase(
+        time_mode,
+        30.0,
+        custom,
+        "fallback_default_30_fps",
+        "fallback_low",
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class FbxBindResolution:
     globals_by_id: dict[int, np.ndarray]
@@ -94,6 +188,16 @@ class FbxTransformContract:
     normalized_name_collisions: tuple[tuple[str, str], ...]
     roots: tuple[str, ...]
     non_bone_ancestors: tuple[str, ...]
+    common_wrapper_models: tuple[str, ...]
+    common_wrapper_matrix: tuple[tuple[float, ...], ...] | None
+    common_wrapper_is_static: bool
+    common_wrapper_is_uniform: bool
+    common_wrapper_is_reflected: bool
+    canonicalized_wrapper_reflection: bool
+    local_reflected_bones: tuple[str, ...]
+    animated_determinant_sign_change_bones: tuple[str, ...]
+    singular_or_nonfinite_nodes: tuple[str, ...]
+    canonical_transform_validation: dict[str, Any]
     reflected_or_negative_scale_nodes: tuple[str, ...]
     warnings: tuple[str, ...]
     errors: tuple[str, ...]
@@ -102,7 +206,10 @@ class FbxTransformContract:
         """Return a deterministic JSON-native diagnostic payload."""
 
         payload = asdict(self)
-        payload["format"] = "dl-reanimated-fbx-transform-contract-v1"
+        payload["format"] = "dl-reanimated-fbx-transform-contract-v2"
+        payload["legacy_format_compatibility"] = (
+            "dl-reanimated-fbx-transform-contract-v1"
+        )
         return payload
 
     def to_report(self) -> dict[str, Any]:
@@ -297,6 +404,9 @@ def resolve_bind_globals(
 class FbxDocument:
     """Public FBX animation document backed by :class:`FbxScene`."""
 
+    CURRENT_WRAPPER_SAMPLING = "current"
+    LEGACY_5_0_WRAPPER_SAMPLING = "legacy_5_0"
+
     def __init__(
         self,
         path: str | Path,
@@ -305,6 +415,7 @@ class FbxDocument:
         orientation_policy: str = "auto",
         purpose: FbxLoadPurpose | str = FbxLoadPurpose.ANIMATION,
         tolerance: FbxImportTolerance | str = FbxImportTolerance.RECOMMENDED,
+        wrapper_sampling_policy: str = CURRENT_WRAPPER_SAMPLING,
     ) -> None:
         self.path = Path(path)
         self.load_purpose = FbxLoadPurpose.coerce(purpose).value
@@ -315,7 +426,11 @@ class FbxDocument:
             tolerance=tolerance,
         )
         try:
-            self._initialize(animation_stack, orientation_policy)
+            self._initialize(
+                animation_stack,
+                orientation_policy,
+                wrapper_sampling_policy,
+            )
         except FbxDomainError:
             raise
         except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
@@ -330,6 +445,7 @@ class FbxDocument:
         orientation_policy: str = "auto",
         purpose: FbxLoadPurpose | str | None = None,
         tolerance: FbxImportTolerance | str | None = None,
+        wrapper_sampling_policy: str = CURRENT_WRAPPER_SAMPLING,
     ) -> "FbxDocument":
         document = cls.__new__(cls)
         document.path = Path(scene.path)
@@ -346,7 +462,11 @@ class FbxDocument:
             )
         ).value
         try:
-            document._initialize(animation_stack, orientation_policy)
+            document._initialize(
+                animation_stack,
+                orientation_policy,
+                wrapper_sampling_policy,
+            )
         except FbxDomainError:
             raise
         except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
@@ -357,6 +477,7 @@ class FbxDocument:
         self,
         animation_stack: str | None,
         orientation_policy: str,
+        wrapper_sampling_policy: str,
     ) -> None:
         self.object_by_id = self.scene.object_by_id
         self.parents = self.scene.parents
@@ -390,6 +511,17 @@ class FbxDocument:
         self.selected_animation_stack: FbxAnimationStack | None = None
         self.meters_per_unit = self.scene.meters_per_unit
         self.requested_orientation_policy = str(orientation_policy or "auto")
+        selected_wrapper_policy = str(
+            wrapper_sampling_policy or self.CURRENT_WRAPPER_SAMPLING
+        )
+        if selected_wrapper_policy not in {
+            self.CURRENT_WRAPPER_SAMPLING,
+            self.LEGACY_5_0_WRAPPER_SAMPLING,
+        }:
+            raise ValueError(
+                "wrapper_sampling_policy must be current or legacy_5_0"
+            )
+        self.wrapper_sampling_policy = selected_wrapper_policy
         self.resolved_orientation_policy = self.scene.resolved_orientation_policy(
             self.requested_orientation_policy
         )
@@ -398,8 +530,13 @@ class FbxDocument:
         self.animation_start_tick = 0
         self.animation_stop_tick = 0
         self._normalizer_cache: dict[int, np.ndarray] = {}
+        # A parsed document is immutable for the lifetime of an import/build.
+        # Selecting the same stack is common (preflight, source analysis, and
+        # the retarget engine all assert the requested stack), so retain both
+        # the selection identity and its expensive all-frame transform audit.
+        self._selected_stack_key: tuple[object, ...] | None = None
+        self._transform_contract_cache: dict[tuple[object, ...], FbxTransformContract] = {}
         self._build_bind_inventory()
-        self.transform_contract = self._build_transform_contract()
         try:
             if animation_stack:
                 self.select_animation_stack(animation_stack)
@@ -411,10 +548,39 @@ class FbxDocument:
             raise
         except (ValueError, IndexError, np.linalg.LinAlgError) as exc:
             raise FbxAnimationStackError(str(exc)) from exc
+        self.declared_timebase = self._resolve_declared_timebase()
+        self._refresh_transform_contract()
 
     @property
     def contract(self) -> FbxTransformContract:
         return self.transform_contract
+
+    @staticmethod
+    def _stack_cache_key(stack: FbxAnimationStack | None) -> tuple[object, ...]:
+        """Return the immutable state that affects selected-stack evaluation."""
+
+        if stack is None:
+            return (None,)
+        return (
+            stack.name,
+            tuple(stack.layer_ids),
+            int(stack.start_tick),
+            int(stack.stop_tick),
+        )
+
+    def _refresh_transform_contract(self) -> None:
+        """Reuse the canonical audit for an already-evaluated animation stack."""
+
+        key = self._stack_cache_key(self.selected_animation_stack)
+        cache = getattr(self, "_transform_contract_cache", None)
+        if cache is None:
+            cache = {}
+            self._transform_contract_cache = cache
+        contract = cache.get(key)
+        if contract is None:
+            contract = self._build_transform_contract()
+            cache[key] = contract
+        self.transform_contract = contract
 
     def select_animation_stack(
         self, name: str | None = None
@@ -445,6 +611,14 @@ class FbxDocument:
             if len(matches) > 1:
                 raise ValueError(f"FBX contains duplicate animation stack names: {name!r}")
             row = matches[0]
+        key = self._stack_cache_key(row)
+        if (
+            getattr(self, "selected_animation_stack", None) is not None
+            and getattr(self, "_selected_stack_key", None) == key
+        ):
+            # Re-selecting an unchanged parsed stack cannot alter curves,
+            # timebase, bind data, or the canonical transform contract.
+            return row
         if len(row.layer_ids) != 1:
             layers = ", ".join(repr(value) for value in row.layer_names) or "none"
             raise ValueError(
@@ -460,7 +634,30 @@ class FbxDocument:
             if self.animation_start_tick == self.animation_stop_tick == 0:
                 self.animation_start_tick = min(times)
             self.animation_stop_tick = max(self.animation_stop_tick, max(times))
+        self.declared_timebase = self._resolve_declared_timebase()
+        self._selected_stack_key = key
+        if hasattr(self, "transform_contract"):
+            self._refresh_transform_contract()
         return row
+
+    def _resolve_declared_timebase(self) -> FbxDeclaredTimebase:
+        top = getattr(self, "top", None) or {}
+        global_settings = top.get("GlobalSettings")
+        properties = _properties70(global_settings)
+        deltas = (
+            right - left
+            for times, _values in (getattr(self, "curves", None) or {}).values()
+            for left, right in zip(times, times[1:])
+            if right > left
+        )
+        return resolve_fbx_declared_timebase(
+            properties,
+            key_time_deltas=deltas,
+        )
+
+    @property
+    def declared_fps(self) -> float:
+        return float(self.declared_timebase.declared_fps)
 
     def animation_stack_activity(self) -> tuple[FbxAnimationStackActivity, ...]:
         rows: list[FbxAnimationStackActivity] = []
@@ -557,7 +754,10 @@ class FbxDocument:
         row = self.preferred_animation_stack()
         return self.select_animation_stack(row.name) if row is not None else None
 
-    def frame_ticks(self, fps: int = 30) -> list[int]:
+    def frame_ticks(self, fps: float = 30) -> list[int]:
+        fps = float(fps)
+        if not math.isfinite(fps) or fps <= 0.0:
+            raise ValueError("FBX sampling FPS must be finite and positive")
         if len(self.animation_stacks) > 1 and self.selected_animation_stack is None:
             self.select_animation_stack(None)
         start = int(self.animation_start_tick)
@@ -568,7 +768,7 @@ class FbxDocument:
             for index in range(max(1, count))
         ]
 
-    def frame_count(self, fps: int = 30) -> int:
+    def frame_count(self, fps: float = 30) -> int:
         return len(self.frame_ticks(fps))
 
     def _linked(self, object_id: int, name: str | None = None):
@@ -702,7 +902,7 @@ class FbxDocument:
     def _animated_properties(self, tick: int) -> dict[int, dict[str, np.ndarray]]:
         result: dict[int, dict[str, np.ndarray]] = {}
         for (object_id, property_name, axis), curve in self.curves.items():
-            props = _properties70(self.object_by_id.get(object_id))
+            props = self.scene.model_properties(object_id)
             default = _vector_property(
                 props,
                 property_name,
@@ -727,8 +927,7 @@ class FbxDocument:
     ) -> np.ndarray:
         overrides: dict[str, np.ndarray] = {}
         if use_animation:
-            node = self.object_by_id[object_id]
-            props = _properties70(node)
+            props = self.scene.model_properties(object_id)
             for property_name, default in (
                 ("Lcl Translation", (0.0, 0.0, 0.0)),
                 ("Lcl Rotation", (0.0, 0.0, 0.0)),
@@ -771,6 +970,14 @@ class FbxDocument:
         for name, object_id in {**self.null_models, **self.limb_models}.items():
             value = globals_by_id[object_id]
             if object_id in limb_ids:
+                # Bind resolution and animated samples must use the same
+                # wrapper policy.  In particular, a proper Blender Armature
+                # wrapper carries the Y-up -> game-axis conversion in its
+                # rotation; stripping that rotation from animated samples but
+                # retaining the old mapper assumption loses the animation
+                # basis.  ``_scene_scale_normalizer`` retains that proper
+                # rotation while cancelling only its uniform scale, and still
+                # removes unsupported/reflected wrappers for animation.
                 value = self._scene_scale_normalizer(object_id) @ value
             result[name] = value.copy()
         return result
@@ -833,6 +1040,59 @@ class FbxDocument:
             parent = self.scene.model_parent_id(parent)
         return wrapper_id
 
+    def _animation_wrapper_rotation_is_retained(self, wrapper_id: int) -> bool:
+        """Whether animation sampling keeps this wrapper's proper rotation.
+
+        Blender commonly serializes an Armature as a static, uniform-scale
+        Null whose rotation is the coordinate-basis conversion.  The animation
+        path removes its scale, but deliberately retains that proper rotation.
+        Reflected, non-uniform, singular, and native-DLR wrappers instead use
+        full removal so their basis cannot leak into skeletal animation.
+        """
+
+        if self.load_purpose != FbxLoadPurpose.ANIMATION.value:
+            return False
+        props = _properties70(self.object_by_id[wrapper_id])
+        if bool((props.get("dlr_native_anm2_export") or [0])[0]):
+            return False
+        wrapper = np.asarray(self.scene.model_global_matrix(wrapper_id), dtype=float)
+        linear = wrapper[:3, :3]
+        scales = np.linalg.norm(linear, axis=0)
+        uniform = float(np.mean(scales))
+        if (
+            not np.isfinite(wrapper).all()
+            or not np.isfinite(scales).all()
+            or uniform <= 1.0e-12
+            or max(abs(scales - uniform)) > max(1.0e-5, uniform * 1.0e-5)
+        ):
+            return False
+        rotation = linear / uniform
+        determinant = float(np.linalg.det(rotation))
+        return bool(
+            (
+                abs(determinant) > 1.0e-12
+                if self.wrapper_sampling_policy
+                == self.LEGACY_5_0_WRAPPER_SAMPLING
+                else determinant > 1.0e-12
+            )
+            and np.allclose(
+                rotation.T @ rotation,
+                np.eye(3, dtype=float),
+                rtol=1.0e-5,
+                atol=1.0e-5,
+            )
+        )
+
+    def wrapper_axis_conversion_is_retained(self, bone: int | str) -> bool:
+        """Return whether ``bone`` is sampled with its wrapper rotation intact."""
+
+        bone_id = int(bone) if not isinstance(bone, str) else int(self.limb_models[bone])
+        wrapper_id = self._wrapper_id_for_bone(bone_id)
+        return bool(
+            wrapper_id is not None
+            and self._animation_wrapper_rotation_is_retained(wrapper_id)
+        )
+
     def _scene_scale_normalizer(self, bone_id: int) -> np.ndarray:
         cached = self._normalizer_cache.get(bone_id)
         if cached is not None:
@@ -842,6 +1102,18 @@ class FbxDocument:
             result = np.eye(4, dtype=float)
         else:
             wrapper = self.scene.model_global_matrix(wrapper_id)
+            if (
+                self.load_purpose == FbxLoadPurpose.ANIMATION.value
+                and not self._animation_wrapper_rotation_is_retained(wrapper_id)
+            ):
+                # Reflected, singular, non-uniform, and native-DLR wrappers
+                # are canonicalized out of animation sampling entirely.
+                try:
+                    result = np.linalg.inv(wrapper)
+                except np.linalg.LinAlgError:
+                    result = np.full((4, 4), np.nan, dtype=float)
+                self._normalizer_cache[bone_id] = result.copy()
+                return result
             linear = wrapper[:3, :3]
             scales = np.linalg.norm(linear, axis=0)
             uniform = float(np.mean(scales))
@@ -1030,31 +1302,262 @@ class FbxDocument:
     def _build_transform_contract(self) -> FbxTransformContract:
         errors: list[str] = []
         warnings = [*self.scene.warnings, *self.bind_warnings]
-        reflected: list[str] = []
-        for object_id in self.scene.model_ids:
-            name = self.scene.model_names.get(object_id, str(object_id))
+        wrappers, wrapper_scale = self._wrapper_report()
+        wrapper_ids = tuple(
+            dict.fromkeys(
+                wrapper
+                for bone_id in self.scene.limb_ids
+                if (wrapper := self._wrapper_id_for_bone(bone_id)) is not None
+            )
+        )
+        wrapper_bind_matrices = {
+            wrapper_id: np.asarray(
+                self.scene.model_global_matrix(wrapper_id), dtype=float
+            )
+            for wrapper_id in wrapper_ids
+        }
+        sampling_fps = float(
+            getattr(
+                getattr(self, "declared_timebase", None),
+                "declared_fps",
+                30.0,
+            )
+        )
+        ticks = (
+            tuple(dict.fromkeys(self.frame_ticks(fps=sampling_fps)))
+            if self.selected_animation_stack is not None
+            else (0,)
+        )
+        if not ticks:
+            ticks = (0,)
+
+        wrapper_static = True
+        wrapper_sample_reference: dict[int, np.ndarray] = {
+            wrapper_id: matrix.copy()
+            for wrapper_id, matrix in wrapper_bind_matrices.items()
+        }
+        wrapper_uniform = bool(wrapper_ids)
+        wrapper_reflected = False
+        singular_nodes: set[str] = set()
+        local_signs: dict[str, set[int]] = {
+            name: set() for name in self.limb_models
+        }
+        local_reflected: set[str] = set()
+        negative_canonical = 0
+        singular_canonical = 0
+        nonfinite_canonical = 0
+        minimum_determinant = float("inf")
+        maximum_determinant = float("-inf")
+        maximum_shear = 0.0
+        sample_count = 0
+
+        # Bind-local handedness is authoritative even for static clips. Pose
+        # matrices have already passed through the animation-domain wrapper
+        # canonicalizer in _build_bind_inventory().
+        for name, matrix in self.bind_local_matrices.items():
+            linear = np.asarray(matrix, dtype=float)[:3, :3]
+            if not np.isfinite(linear).all():
+                singular_nodes.add(name)
+                continue
+            determinant = float(np.linalg.det(linear))
+            if not math.isfinite(determinant) or abs(determinant) <= 1.0e-12:
+                singular_nodes.add(name)
+            elif determinant < 0.0:
+                local_reflected.add(name)
+
+        for tick in ticks:
             try:
-                matrix = self.scene.model_global_matrix(object_id)
-                linear = matrix[:3, :3]
+                raw_by_id = self.scene.model_global_matrices(
+                    self.scene.model_ids,
+                    local_matrix_resolver=lambda object_id, tick=tick: self.local_matrix(
+                        object_id, tick=tick, use_animation=True
+                    ),
+                )
+            except (ValueError, np.linalg.LinAlgError) as exc:
+                errors.append(
+                    f"animation frame at tick {tick}: transform evaluation failed: {exc}"
+                )
+                continue
+
+            inverse_wrappers: dict[int, np.ndarray] = {}
+            for wrapper_id in wrapper_ids:
+                name = self.scene.model_names.get(wrapper_id, str(wrapper_id))
+                wrapper = np.asarray(raw_by_id[wrapper_id], dtype=float)
+                if not np.isfinite(wrapper).all():
+                    singular_nodes.add(name)
+                    wrapper_static = False
+                    wrapper_uniform = False
+                    continue
+                reference = wrapper_sample_reference.setdefault(
+                    wrapper_id, wrapper.copy()
+                )
+                wrapper_static = wrapper_static and bool(
+                    np.allclose(wrapper, reference, rtol=1.0e-7, atol=1.0e-5)
+                )
+                linear = wrapper[:3, :3]
                 determinant = float(np.linalg.det(linear))
                 scales = np.linalg.norm(linear, axis=0)
-                if not math.isfinite(determinant) or abs(determinant) <= 1.0e-12:
-                    errors.append(f"{name}: singular or non-finite evaluated Model transform")
+                wrapper_reflected = wrapper_reflected or determinant < 0.0
+                mean_scale = float(np.mean(scales))
+                wrapper_uniform = wrapper_uniform and bool(
+                    np.isfinite(scales).all()
+                    and mean_scale > 1.0e-12
+                    and max(abs(scales - mean_scale))
+                    <= max(1.0e-5, mean_scale * 1.0e-5)
+                )
+                if (
+                    not math.isfinite(determinant)
+                    or abs(determinant) <= 1.0e-12
+                ):
+                    singular_nodes.add(name)
                     continue
+                inverse_wrappers[wrapper_id] = np.linalg.inv(wrapper)
+
+            canonical_by_name: dict[str, np.ndarray] = {}
+            for name, bone_id in self.limb_models.items():
+                sample_count += 1
+                raw = np.asarray(raw_by_id[bone_id], dtype=float)
+                wrapper_id = self._wrapper_id_for_bone(bone_id)
+                canonical = (
+                    inverse_wrappers[wrapper_id] @ raw
+                    if wrapper_id in inverse_wrappers
+                    else raw.copy()
+                )
+                canonical_by_name[name] = canonical
+                if not np.isfinite(canonical).all():
+                    nonfinite_canonical += 1
+                    singular_nodes.add(name)
+                    continue
+                linear = canonical[:3, :3]
+                determinant = float(np.linalg.det(linear))
+                if not math.isfinite(determinant):
+                    nonfinite_canonical += 1
+                    singular_nodes.add(name)
+                    continue
+                if abs(determinant) <= 1.0e-12:
+                    singular_canonical += 1
+                    singular_nodes.add(name)
+                    continue
+                minimum_determinant = min(minimum_determinant, determinant)
+                maximum_determinant = max(maximum_determinant, determinant)
                 if determinant < 0.0:
-                    reflected.append(name)
-                normalized = linear / scales
-                shear = float(np.max(np.abs(normalized.T @ normalized - np.eye(3))))
-                if shear > 1.0e-4:
-                    errors.append(f"{name}: unsupported evaluated Model shear ({shear:.6g})")
-            except (ValueError, np.linalg.LinAlgError) as exc:
-                errors.append(f"{name}: transform evaluation failed: {exc}")
-        if reflected:
-            warnings.append(
-                "Reflected or negative-scale Model transforms were found: "
-                + ", ".join(reflected[:12])
+                    negative_canonical += 1
+                scales = np.linalg.norm(linear, axis=0)
+                if np.isfinite(scales).all() and min(scales) > 1.0e-12:
+                    normalized = linear / scales
+                    maximum_shear = max(
+                        maximum_shear,
+                        float(
+                            np.max(
+                                np.abs(
+                                    normalized.T @ normalized - np.eye(3)
+                                )
+                            )
+                        ),
+                    )
+
+            for name, canonical in canonical_by_name.items():
+                if not np.isfinite(canonical).all():
+                    continue
+                parent = self.parent_by_name.get(name)
+                try:
+                    local = (
+                        np.linalg.inv(canonical_by_name[str(parent)]) @ canonical
+                        if parent in canonical_by_name
+                        else canonical
+                    )
+                except np.linalg.LinAlgError:
+                    singular_nodes.add(str(parent or name))
+                    continue
+                determinant = float(np.linalg.det(local[:3, :3]))
+                if not math.isfinite(determinant) or abs(determinant) <= 1.0e-12:
+                    singular_nodes.add(name)
+                    continue
+                sign = -1 if determinant < 0.0 else 1
+                local_signs[name].add(sign)
+                if sign < 0:
+                    local_reflected.add(name)
+
+        sign_changes = {
+            name for name, signs in local_signs.items() if len(signs) > 1
+        }
+        if singular_nodes:
+            errors.append(
+                "Canonical skeletal transforms are singular or non-finite at: "
+                + ", ".join(sorted(singular_nodes, key=str.casefold)[:12])
             )
-        wrappers, wrapper_scale = self._wrapper_report()
+        if local_reflected:
+            warnings.append(
+                "Local reflected bone bases will be projected to the nearest proper "
+                "rotation for animation output: "
+                + ", ".join(sorted(local_reflected, key=str.casefold)[:12])
+            )
+        if sign_changes:
+            warnings.append(
+                "Animated determinant sign changes will be projected while retaining "
+                "target bind scale: "
+                + ", ".join(sorted(sign_changes, key=str.casefold)[:12])
+            )
+
+        # Model/CRIG authoring retains its stricter raw-scene contract. Animation
+        # import deliberately ignores reflected mesh globals and inherited
+        # descendant signs after canonicalizing the common wrapper.
+        legacy_reflected: set[str] = set(local_reflected)
+        if self.load_purpose == FbxLoadPurpose.MODEL.value:
+            for object_id in self.scene.model_ids:
+                name = self.scene.model_names.get(object_id, str(object_id))
+                try:
+                    matrix = np.asarray(
+                        self.scene.model_global_matrix(object_id), dtype=float
+                    )
+                    linear = matrix[:3, :3]
+                    determinant = float(np.linalg.det(linear))
+                    scales = np.linalg.norm(linear, axis=0)
+                    if (
+                        not math.isfinite(determinant)
+                        or abs(determinant) <= 1.0e-12
+                    ):
+                        errors.append(
+                            f"{name}: singular or non-finite evaluated Model transform"
+                        )
+                        continue
+                    if determinant < 0.0:
+                        legacy_reflected.add(name)
+                    if np.isfinite(scales).all() and min(scales) > 1.0e-12:
+                        normalized = linear / scales
+                        shear = float(
+                            np.max(
+                                np.abs(normalized.T @ normalized - np.eye(3))
+                            )
+                        )
+                        if shear > 1.0e-4:
+                            errors.append(
+                                f"{name}: unsupported evaluated Model shear ({shear:.6g})"
+                            )
+                except (ValueError, np.linalg.LinAlgError) as exc:
+                    errors.append(f"{name}: transform evaluation failed: {exc}")
+        else:
+            legacy_reflected.update(
+                self.scene.model_names.get(value, str(value))
+                for value in wrapper_ids
+                if float(
+                    np.linalg.det(wrapper_bind_matrices[value][:3, :3])
+                )
+                < 0.0
+            )
+
+        canonicalized_reflection = bool(
+            self.load_purpose == FbxLoadPurpose.ANIMATION.value
+            and wrapper_reflected
+            and not any(
+                self.scene.model_names.get(value, str(value)) in singular_nodes
+                for value in wrapper_ids
+            )
+        )
+        if canonicalized_reflection:
+            warnings.append(
+                "A common reflected wrapper was removed before skeletal sampling."
+            )
         ancestors = self._non_bone_ancestor_ids()
         try:
             source_sha256 = self.scene.sha256
@@ -1088,7 +1591,52 @@ class FbxDocument:
             non_bone_ancestors=tuple(
                 self.scene.model_names.get(value, str(value)) for value in ancestors
             ),
-            reflected_or_negative_scale_nodes=tuple(reflected),
+            common_wrapper_models=wrappers,
+            common_wrapper_matrix=(
+                tuple(
+                    tuple(float(value) for value in row)
+                    for row in wrapper_bind_matrices[wrapper_ids[0]]
+                )
+                if len(wrapper_ids) == 1
+                else None
+            ),
+            common_wrapper_is_static=bool(wrapper_ids) and wrapper_static,
+            common_wrapper_is_uniform=bool(wrapper_ids) and wrapper_uniform,
+            common_wrapper_is_reflected=wrapper_reflected,
+            canonicalized_wrapper_reflection=canonicalized_reflection,
+            local_reflected_bones=tuple(
+                sorted(local_reflected, key=str.casefold)
+            ),
+            animated_determinant_sign_change_bones=tuple(
+                sorted(sign_changes, key=str.casefold)
+            ),
+            singular_or_nonfinite_nodes=tuple(
+                sorted(singular_nodes, key=str.casefold)
+            ),
+            canonical_transform_validation={
+                "sample_count": sample_count,
+                "frame_count": len(ticks),
+                "bone_count": len(self.limb_models),
+                "negative_determinants": negative_canonical,
+                "singular": singular_canonical,
+                "non_finite": nonfinite_canonical,
+                "minimum_determinant": (
+                    minimum_determinant
+                    if math.isfinite(minimum_determinant)
+                    else None
+                ),
+                "maximum_determinant": (
+                    maximum_determinant
+                    if math.isfinite(maximum_determinant)
+                    else None
+                ),
+                "maximum_shear": maximum_shear,
+                "multiplication_order": "inverse_wrapper_global_at_frame @ raw_bone_global_at_frame",
+                "sampling_fps": sampling_fps,
+            },
+            reflected_or_negative_scale_nodes=tuple(
+                sorted(legacy_reflected, key=str.casefold)
+            ),
             warnings=tuple(dict.fromkeys(str(value) for value in warnings)),
             errors=tuple(dict.fromkeys(str(value) for value in errors)),
         )
@@ -1167,12 +1715,16 @@ AnimationStack = FbxAnimationStack
 __all__ = [
     "AnimationStack",
     "FBX_TICKS_PER_SECOND",
+    "FBX_TIME_MODE_FPS",
     "FbxAnimationStack",
+    "FbxAnimationStackActivity",
     "FbxBindResolution",
+    "FbxDeclaredTimebase",
     "FbxDocument",
     "FbxNode",
     "FbxTransformContract",
     "normalize_matrix_to_target_space",
+    "resolve_fbx_declared_timebase",
     "resolve_bind_globals",
     "_axis_rotation",
     "_child_value",

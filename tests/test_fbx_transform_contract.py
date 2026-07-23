@@ -8,10 +8,18 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from dlanm2_gui.fbx_core import FbxDocument
+from dlanm2_gui.fbx_core import (
+    FBX_TICKS_PER_SECOND,
+    FbxDocument,
+)
 from dlanm2_gui.fbx_preflight import preflight_fbx
+from dlanm2_gui.blender_mirror_wrapper import (
+    resolve_bilateral_semantic_decision,
+    resolve_blender_lateral_mirror,
+)
 from dlanm2_gui.chrome_rig_builder import build_chrome_rig_from_fbx
 from dlanm2_gui.model_importer.fbx_model import (
+    FBX_Y_UP_TO_DYING_LIGHT,
     FbxNode,
     FbxScene,
     ROTATION_ORDERS,
@@ -159,7 +167,10 @@ def test_transform_contract_is_serializable_and_reports_wrapper_normalization(
     document = FbxDocument.from_scene(scene)
     report = document.transform_contract.to_dict()
 
-    assert report["format"] == "dl-reanimated-fbx-transform-contract-v1"
+    assert report["format"] == "dl-reanimated-fbx-transform-contract-v2"
+    assert report["legacy_format_compatibility"] == (
+        "dl-reanimated-fbx-transform-contract-v1"
+    )
     assert report["unit_conversion_count"] == 1
     assert report["axis_conversion_count"] == 0
     assert report["wrapper_models"] == ("Armature",)
@@ -170,6 +181,311 @@ def test_transform_contract_is_serializable_and_reports_wrapper_normalization(
     assert report["roots"] == ("root",)
     assert report["non_bone_ancestors"] == ("Armature",)
     json.dumps(report)
+
+
+def test_reflected_common_wrapper_is_removed_before_bone_classification(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "reflected_wrapper.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(90.0, 0.0, 0.0),
+        scale=(-100.0, 100.0, 100.0),
+    )
+    root = _model_node(2, "root", "LimbNode", translation=(0.0, 2.0, 0.0))
+    child = _model_node(3, "child", "LimbNode", translation=(1.0, 0.0, 0.0))
+    scene = _scene(
+        path,
+        (wrapper, root, child),
+        parents={2: [("OO", 1, [])], 3: [("OO", 2, [])]},
+        children={1: [("OO", 2, [])], 2: [("OO", 3, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+    contract = document.transform_contract
+
+    assert contract.common_wrapper_models == ("Armature",)
+    assert contract.common_wrapper_is_static
+    assert contract.common_wrapper_is_uniform
+    assert contract.common_wrapper_is_reflected
+    assert contract.canonicalized_wrapper_reflection
+    assert contract.local_reflected_bones == ()
+    assert contract.singular_or_nonfinite_nodes == ()
+    assert contract.canonical_transform_validation["negative_determinants"] == 0
+
+    raw = scene.model_global_matrices()
+    expected_root = np.linalg.inv(raw[1]) @ raw[2]
+    expected_child = np.linalg.inv(raw[1]) @ raw[3]
+    canonical = document.global_matrices(tick=0)
+    # This focused assertion fixes the repository's column-vector convention:
+    # inverse(wrapper) is left-multiplied, not right-multiplied.
+    np.testing.assert_allclose(canonical["root"], expected_root, atol=1.0e-10)
+    np.testing.assert_allclose(canonical["child"], expected_child, atol=1.0e-10)
+    assert np.linalg.det(canonical["root"][:3, :3]) > 0.0
+    assert np.linalg.det(canonical["child"][:3, :3]) > 0.0
+
+    preflight = preflight_fbx(path, purpose="animation", document=document)
+    assert not preflight.import_blocking
+    finding = next(
+        row
+        for row in preflight.findings
+        if row.code == "common_wrapper_reflection_canonicalized"
+    )
+    assert finding.outcome == "automatically_repaired"
+    assert finding.severity == "informational"
+    assert finding.group == "repaired"
+    # A one-axis reflected wrapper is not Blender's full mirrored Armature
+    # layout. It remains safely canonicalized without a semantic side repair.
+    assert (
+        resolve_blender_lateral_mirror(
+            document,
+            source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        )
+        is None
+    )
+
+
+def test_uniform_negative_blender_wrapper_exposes_lateral_mirror_context(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mirrored_blender_wrapper.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(90.0, 0.0, 0.0),
+        scale=(-100.0, -100.0, -100.0),
+    )
+    root = _model_node(2, "pelvis", "LimbNode", translation=(0.0, 2.0, 0.0))
+    scene = _scene(
+        path,
+        (wrapper, root),
+        parents={2: [("OO", 1, [])]},
+        children={1: [("OO", 2, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+
+    context = resolve_blender_lateral_mirror(
+        document,
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+    )
+
+    assert context is not None
+    assert context.wrapper_name == "Armature"
+    assert context.canonicalized_before_sampling
+    np.testing.assert_allclose(
+        context.matrix(),
+        np.diag((-1.0, 1.0, 1.0, 1.0)),
+        atol=1.0e-5,
+    )
+    # The raw reflected wrapper still never enters the sampled hierarchy.
+    canonical = document.global_matrices(tick=0)
+    assert np.linalg.det(canonical["pelvis"][:3, :3]) > 0.0
+
+
+def test_reflected_wrapper_bind_consensus_is_independent_of_semantic_policy(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "asymmetric_bilateral_wrapper.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(90.0, 0.0, 0.0),
+        scale=(-100.0, -100.0, -100.0),
+    )
+    names = (
+        "pelvis",
+        "l_clavicle",
+        "r_clavicle",
+        "l_upperarm",
+        "r_upperarm",
+        "l_forearm",
+        "r_forearm",
+    )
+    nodes = (wrapper,) + tuple(
+        _model_node(index + 2, name, "LimbNode")
+        for index, name in enumerate(names)
+    )
+    parents = {
+        index + 2: [("OO", 1 if index == 0 else 2, [])]
+        for index in range(len(names))
+    }
+    children = {
+        1: [("OO", 2, [])],
+        2: [
+            ("OO", index + 2, [])
+            for index in range(1, len(names))
+        ],
+    }
+    document = FbxDocument.from_scene(
+        _scene(path, nodes, parents=parents, children=children),
+        purpose="animation",
+    )
+    context = resolve_blender_lateral_mirror(
+        document,
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+    )
+    assert context is not None
+
+    target_positions = {
+        "pelvis": (0.0, 0.0, 0.0),
+        "l_clavicle": (0.25, 1.4, 0.0),
+        "r_clavicle": (-0.25, 1.4, 0.0),
+        "l_upperarm": (0.5, 1.35, 0.0),
+        "r_upperarm": (-0.5, 1.35, 0.0),
+        "l_forearm": (0.8, 1.1, 0.0),
+        "r_forearm": (-0.8, 1.1, 0.0),
+    }
+    target_bones = []
+    for index, name in enumerate(names):
+        target_bones.append(
+            SimpleNamespace(
+                name=name,
+                parent_index=-1 if index == 0 else 0,
+                bind_translation=target_positions[name],
+                bind_rotation_wxyz=(1.0, 0.0, 0.0, 0.0),
+                bind_scale=(1.0, 1.0, 1.0),
+            )
+        )
+    target_rig = SimpleNamespace(bones=target_bones)
+    observation = context.physical_observation_basis(
+        FBX_Y_UP_TO_DYING_LIGHT
+    )
+    inverse_observation = np.linalg.inv(observation)
+    for name, position in target_positions.items():
+        physical = np.eye(4)
+        physical[:3, 3] = position
+        document.bind_global_matrices[name] = inverse_observation @ physical
+
+    preserved = resolve_bilateral_semantic_decision(
+        document,
+        target_rig,
+        "auto",
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        wrapper_context=context,
+    )
+    assert preserved.effective_policy == "preserve_source_names"
+    assert preserved.same_side_votes == 3
+    assert not preserved.swap_applied
+
+    for left, right in (
+        ("l_clavicle", "r_clavicle"),
+        ("l_upperarm", "r_upperarm"),
+        ("l_forearm", "r_forearm"),
+    ):
+        document.bind_global_matrices[left], document.bind_global_matrices[right] = (
+            document.bind_global_matrices[right],
+            document.bind_global_matrices[left],
+        )
+    swapped = resolve_bilateral_semantic_decision(
+        document,
+        target_rig,
+        "auto",
+        source_basis_matrix=FBX_Y_UP_TO_DYING_LIGHT,
+        wrapper_context=context,
+    )
+    assert swapped.effective_policy == "swap_bilateral_explicit"
+    assert swapped.opposite_side_votes == 3
+    assert swapped.swap_applied
+
+    sampled = document.global_matrices(tick=0)
+    assert all(np.isfinite(matrix).all() for matrix in sampled.values())
+    assert all(
+        np.linalg.det(matrix[:3, :3]) > 0.0
+        for name, matrix in sampled.items()
+        if name in document.limb_models
+    )
+
+
+def test_true_local_reflection_is_advisory_for_animation_and_strict_for_model(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "local_reflection.fbx"
+    path.write_bytes(b"synthetic")
+    scene = _scene(
+        path,
+        (_model_node(1, "reflected_root", "LimbNode", scale=(-1.0, 1.0, 1.0)),),
+    )
+    animation_document = FbxDocument.from_scene(scene, purpose="animation")
+    model_document = FbxDocument.from_scene(scene, purpose="model")
+
+    assert animation_document.transform_contract.common_wrapper_models == ()
+    assert animation_document.transform_contract.local_reflected_bones == (
+        "reflected_root",
+    )
+    animation = preflight_fbx(
+        path,
+        purpose="animation",
+        document=animation_document,
+    )
+    assert not animation.import_blocking
+    assert animation.readiness_level == "advisory"
+    animation.require_buildable()
+
+    model = preflight_fbx(path, purpose="model", document=model_document)
+    assert model.import_blocking
+    assert any(
+        row.code == "reflected_or_negative_bone_scale"
+        for row in model.findings
+    )
+
+
+def test_animated_determinant_sign_change_without_sampled_zero_is_advisory(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "sign_change.fbx"
+    path.write_bytes(b"synthetic")
+    scene = _scene(path, (_model_node(1, "root", "LimbNode"),))
+    step = FBX_TICKS_PER_SECOND // 30
+    curve_node = FbxNode("AnimationCurveNode", [20, "Scale", ""], [], 0, 0)
+    curve = FbxNode(
+        "AnimationCurve",
+        [30, "ScaleX", ""],
+        [
+            FbxNode("KeyTime", [[0, step]], [], 0, 0),
+            FbxNode("KeyValueFloat", [[1.0, -1.0]], [], 0, 0),
+        ],
+        0,
+        0,
+    )
+    stack_properties = FbxNode(
+        "Properties70",
+        [],
+        [_property("LocalStart", 0), _property("LocalStop", step)],
+        0,
+        0,
+    )
+    stack = FbxNode(
+        "AnimationStack", [40, "AnimStack::Take", ""], [stack_properties], 0, 0
+    )
+    layer = FbxNode("AnimationLayer", [100, "AnimLayer::Layer", ""], [], 0, 0)
+    scene.top["Objects"].children.extend((stack, layer, curve_node, curve))
+    scene.object_by_id.update({20: curve_node, 30: curve, 40: stack, 100: layer})
+    scene.children[40] = [("OO", 100, [])]
+    scene.children[100] = [("OO", 20, [])]
+    scene.children[20] = [("OP", 30, ["d|X"])]
+    scene.parents[20] = [("OP", 1, ["Lcl Scaling"])]
+    document = FbxDocument.from_scene(scene, purpose="animation")
+
+    assert document.transform_contract.animated_determinant_sign_change_bones == (
+        "root",
+    )
+    assert document.transform_contract.singular_or_nonfinite_nodes == ()
+    report = preflight_fbx(path, purpose="animation", document=document)
+    finding = next(
+        row
+        for row in report.findings
+        if row.code == "animated_scale_sign_change"
+    )
+    assert finding.severity == "warning"
+    assert finding.can_continue
+    assert report.readiness_level == "advisory"
+    report.require_buildable()
 
 
 def test_non_uniform_armature_wrapper_has_named_actionable_preflight_finding(
@@ -290,6 +606,97 @@ def test_model_and_animation_wrapper_scale_axis_normalization_reach_same_bind(
     assert animation_normalizer.to_report()["axis_conversion_count"] == 1
 
 
+def test_animation_sampling_retains_proper_blender_wrapper_axis_basis(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "blender_wrapper_animation.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(-90.0, 0.0, 0.0),
+        scale=(100.0, 100.0, 100.0),
+    )
+    root = _model_node(
+        2,
+        "root",
+        "LimbNode",
+        translation=(0.0, 1.0, 0.0),
+    )
+    scene = _scene(
+        path,
+        (wrapper, root),
+        parents={2: [("OO", 1, [])]},
+        children={1: [("OO", 2, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+
+    raw = scene.model_global_matrices()
+    expected = np.asarray(raw[2], dtype=float).copy()
+    expected[:3, :3] /= 100.0
+    expected[:3, 3] /= 100.0
+
+    assert document.wrapper_axis_conversion_is_retained("root")
+    np.testing.assert_allclose(
+        document.global_matrices(tick=0, use_animation=False)["root"],
+        expected,
+        atol=1.0e-10,
+    )
+
+
+def test_animation_sampling_removes_reflected_wrapper_axis_basis(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "reflected_wrapper_animation.fbx"
+    path.write_bytes(b"synthetic")
+    wrapper = _model_node(
+        1,
+        "Armature",
+        "Null",
+        rotation=(-90.0, 0.0, 0.0),
+        scale=(-100.0, 100.0, 100.0),
+    )
+    root = _model_node(2, "root", "LimbNode", translation=(0.0, 1.0, 0.0))
+    scene = _scene(
+        path,
+        (wrapper, root),
+        parents={2: [("OO", 1, [])]},
+        children={1: [("OO", 2, [])]},
+    )
+    document = FbxDocument.from_scene(scene, purpose="animation")
+    legacy_document = FbxDocument.from_scene(
+        scene,
+        purpose="animation",
+        wrapper_sampling_policy=FbxDocument.LEGACY_5_0_WRAPPER_SAMPLING,
+    )
+
+    raw = scene.model_global_matrices()
+    assert not document.wrapper_axis_conversion_is_retained("root")
+    np.testing.assert_allclose(
+        document.global_matrices(tick=0, use_animation=False)["root"],
+        np.linalg.inv(raw[1]) @ raw[2],
+        atol=1.0e-10,
+    )
+    assert legacy_document.wrapper_axis_conversion_is_retained("root")
+    expected_legacy = np.asarray(raw[2], dtype=float).copy()
+    expected_legacy[:3, :3] /= 100.0
+    expected_legacy[:3, 3] /= 100.0
+    np.testing.assert_allclose(
+        legacy_document.global_matrices(tick=0, use_animation=False)["root"],
+        expected_legacy,
+        atol=1.0e-10,
+    )
+    assert (
+        np.linalg.det(
+            legacy_document.global_matrices(
+                tick=0, use_animation=False
+            )["root"][:3, :3]
+        )
+        < 0.0
+    )
+
+
 def test_auto_axis_policy_accepts_signed_orthonormal_permutations(tmp_path: Path) -> None:
     path = tmp_path / "z_up.fbx"
     path.write_bytes(b"synthetic")
@@ -364,6 +771,36 @@ def test_model_preflight_allows_static_prop_but_animation_still_blocks(
     assert any(row.code == "static_model_without_armature" for row in model.findings)
     assert animation.blocking
     assert any(row.code == "no_usable_skeleton" for row in animation.findings)
+
+
+def test_animation_without_skeleton_accepts_supported_scalar_mimic_domain(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "mimic_only.fbx"
+    document = SimpleNamespace(
+        limb_models={},
+        animation_stacks=(),
+        meters_per_unit=0.01,
+        normalized_name_collisions=(),
+        bind_global_matrices={},
+        parent_by_name={},
+        scene=SimpleNamespace(
+            geometries=(),
+            limb_ids=(),
+            model_names={},
+            blend_shape_names=("Smile",),
+            blend_shapes=(),
+        ),
+    )
+
+    report = preflight_fbx(source, purpose="animation", document=document)
+
+    assert not report.import_blocking
+    assert report.inventory["supported_scalar_mimic_domain"] is True
+    assert any(
+        row.code == "scalar_mimic_animation_domain"
+        for row in report.findings
+    )
 
 
 def test_crig_builder_uses_resolved_bind_and_bind_changes_rig_identity(

@@ -15,7 +15,7 @@ def _resolve(value: str | Path, base: Path) -> Path:
 
 
 def _load_config(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError("configuration root must be a JSON object")
     base = path.parent.resolve()

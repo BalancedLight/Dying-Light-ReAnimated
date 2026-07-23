@@ -21,6 +21,7 @@ from .fbx_core import (
     _clean_name,
     _properties70,
     _sample_curve,
+    resolve_fbx_declared_timebase,
 )
 from .model_importer.fbx_model import (
     FbxFacialShapeGeometryError,
@@ -55,10 +56,12 @@ class FbxBlendShapeCurve:
 class FbxFacialScan:
     source_path: str
     animation_stack: str
-    fps: int
+    fps: float
     frame_count: int
     curves: tuple[FbxBlendShapeCurve, ...]
     warnings: tuple[str, ...] = ()
+    source_fps: float | None = None
+    source_duration_seconds: float | None = None
 
     @property
     def shape_names(self) -> tuple[str, ...]:
@@ -84,6 +87,8 @@ class FbxFacialScan:
             "source_path": self.source_path,
             "animation_stack": self.animation_stack,
             "fps": self.fps,
+            "source_fps": self.source_fps,
+            "source_duration_seconds": self.source_duration_seconds,
             "frame_count": self.frame_count,
             "shape_count": len(self.curves),
             "animated_shape_count": len(self.animated_curves),
@@ -232,11 +237,12 @@ def scan_fbx_blendshapes(
     source: str | Path | None = None,
     *,
     document: FbxDocument | None = None,
-    fps: int = 30,
+    fps: float = 30.0,
     animation_stack: str | None = None,
 ) -> FbxFacialScan:
-    if not 1 <= int(fps) <= 240:
-        raise ValueError("Facial sample FPS must be between 1 and 240")
+    sample_fps = float(fps)
+    if not math.isfinite(sample_fps) or sample_fps <= 0.0:
+        raise ValueError("Facial sample FPS must be finite and positive")
     if document is None:
         if source is None:
             raise ValueError("source or document is required")
@@ -246,15 +252,86 @@ def scan_fbx_blendshapes(
         )
     source_path = str(Path(getattr(document, "path", source or "")).resolve())
     layer_id = _selected_layer_id(document, animation_stack)
+    curves_by_channel = _channel_curves_for_layer(document, layer_id)
+    facial_times = [
+        int(tick)
+        for times, _values in curves_by_channel.values()
+        for tick in times
+    ]
+    if facial_times and hasattr(document, "animation_start_tick") and hasattr(
+        document, "animation_stop_tick"
+    ):
+        start_tick = int(getattr(document, "animation_start_tick"))
+        stop_tick = int(getattr(document, "animation_stop_tick"))
+        if start_tick == stop_tick == 0:
+            start_tick = min(facial_times)
+        stop_tick = max(stop_tick, max(facial_times))
+        document.animation_start_tick = start_tick
+        document.animation_stop_tick = stop_tick
+
+    # A facial-only clip has no skeletal curve rows, so its selected
+    # BlendShapeChannel keys must participate in low-confidence timebase
+    # inference before frame ticks are generated.
+    if facial_times:
+        existing_timebase = getattr(document, "declared_timebase", None)
+        existing_confidence = getattr(existing_timebase, "confidence", None)
+        top = getattr(document, "top", None) or {}
+        if (
+            existing_timebase is None
+            or existing_confidence in {"fallback_low", "inferred_low"}
+            or bool(top)
+        ):
+            global_settings = top.get("GlobalSettings")
+            properties = _properties70(global_settings)
+            key_time_deltas = [
+                right - left
+                for times, _values in (
+                    getattr(document, "curves", None) or {}
+                ).values()
+                for left, right in zip(times, times[1:])
+                if right > left
+            ]
+            key_time_deltas.extend(
+                right - left
+                for times, _values in curves_by_channel.values()
+                for left, right in zip(times, times[1:])
+                if right > left
+            )
+            document.declared_timebase = resolve_fbx_declared_timebase(
+                properties,
+                key_time_deltas=key_time_deltas,
+            )
     if hasattr(document, "frame_ticks"):
-        ticks = list(document.frame_ticks(fps=int(fps)))
+        ticks = list(document.frame_ticks(fps=sample_fps))
     else:  # Adjacent 0.3.x compatibility; those evaluators sampled from tick zero.
-        count = max(1, int(document.frame_count(fps=int(fps))))
-        ticks = [int(round(index * FBX_TICKS_PER_SECOND / int(fps))) for index in range(count)]
+        count = max(1, int(document.frame_count(fps=sample_fps)))
+        ticks = [
+            int(round(index * FBX_TICKS_PER_SECOND / sample_fps))
+            for index in range(count)
+        ]
     if not ticks:
         ticks = [0]
-    curves_by_channel = _channel_curves_for_layer(document, layer_id)
-
+    declared_timebase = getattr(document, "declared_timebase", None)
+    raw_source_fps = getattr(declared_timebase, "declared_fps", None)
+    try:
+        source_fps = (
+            float(raw_source_fps) if raw_source_fps is not None else None
+        )
+    except (OverflowError, TypeError, ValueError):
+        source_fps = None
+    if source_fps is not None and (
+        not math.isfinite(source_fps) or source_fps <= 0.0
+    ):
+        source_fps = None
+    source_duration_seconds: float | None = None
+    if hasattr(document, "animation_start_tick") and hasattr(
+        document, "animation_stop_tick"
+    ):
+        start_tick = int(getattr(document, "animation_start_tick"))
+        stop_tick = max(start_tick, int(getattr(document, "animation_stop_tick")))
+        source_duration_seconds = (
+            float(stop_tick - start_tick) / float(FBX_TICKS_PER_SECOND)
+        )
     channels = [
         node
         for node in document.objects.children
@@ -302,17 +379,19 @@ def scan_fbx_blendshapes(
         animation_stack=(
             str(getattr(getattr(document, "selected_animation_stack", None), "name", ""))
         ),
-        fps=int(fps),
+        fps=sample_fps,
         frame_count=len(ticks),
         curves=tuple(sorted(rows, key=lambda row: row.name.lower())),
         warnings=tuple(warnings),
+        source_fps=source_fps,
+        source_duration_seconds=source_duration_seconds,
     )
 
 
 def detect_facial_animation(
     source: str | Path,
     *,
-    fps: int = 30,
+    fps: float = 30.0,
     animation_stack: str | None = None,
 ) -> bool:
     return scan_fbx_blendshapes(

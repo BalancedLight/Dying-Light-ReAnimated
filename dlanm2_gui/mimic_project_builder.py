@@ -14,7 +14,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .animation_scr import AnimationScrSequence
+from .anm2_provenance import build_anm2_provenance, write_anm2_provenance
 from .fbx_blendshapes import FbxFacialScan, scan_fbx_blendshapes
+from .game_profiles import DL2_GAME_ID
 from .mimic_builder import build_mimic_anm2
 from .mimic_profiles import (
     MimicMappingRow,
@@ -60,7 +62,7 @@ def _animation_stack(animation: Any) -> str:
 def _scan_animation(animation: Any) -> FbxFacialScan:
     return scan_fbx_blendshapes(
         animation.source_fbx,
-        fps=animation.fps,
+        fps=animation.resolved_sample_fps(),
         animation_stack=_animation_stack(animation) or None,
     )
 
@@ -84,11 +86,17 @@ def _effective_mode(
 
 
 def _copy_mapping_state(source_project: Any, body_project: Any) -> None:
-    source_project.mapping_profiles.update(body_project.mapping_profiles)
+    source_project.mapping_profiles = deepcopy(body_project.mapping_profiles)
     for source_row in source_project.animations:
         body_row = body_project.animation_by_id(source_row.animation_id)
-        if body_row is not None and body_row.mapping_profile_id:
-            source_row.mapping_profile_id = body_row.mapping_profile_id
+        if body_row is None:
+            continue
+        source_row.mapping_profile_id = body_row.mapping_profile_id
+        source_row.source_fps = body_row.source_fps
+        source_row.source_root_bone = body_row.source_root_bone
+        source_row.target_root_bone = body_row.target_root_bone
+        source_row.ik_preset = body_row.ik_preset
+        source_row.extensions = deepcopy(body_row.extensions)
 
 
 def _empty_or_append_library(project: Any, pb: Any, log: Callable[[str], None]):
@@ -150,7 +158,7 @@ def _report_root_override(built: Any, root_report: dict[str, Any]) -> None:
     path = Path(built.retarget_report)
     if not path.is_file():
         return
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8-sig"))
     payload["root_motion_source_override"] = root_report
     payload["anm2_sha256"] = built.sha256
     payload["anm2_page_count"] = built.page_count
@@ -184,6 +192,55 @@ def build_project_with_mimics(
     if not enabled:
         raise ValueError("Project does not contain any enabled animations")
 
+    if str(project.game_id or "") == DL2_GAME_ID:
+        body_project = deepcopy(project)
+        dl2_warnings: list[str] = []
+        for row in body_project.animations:
+            if not row.enabled:
+                continue
+            raw = row.extensions.get("mimic")
+            requested = (
+                str(raw.get("mode", "auto"))
+                if isinstance(raw, dict)
+                else "auto"
+            )
+            if requested == "mimic_only":
+                row.enabled = False
+                dl2_warnings.append(
+                    f"{row.display_name}: skipped stale mimic-only content because "
+                    "Dying Light 2 facial animation uses skeletal bones, not morph resources."
+                )
+            elif requested == "both":
+                dl2_warnings.append(
+                    f"{row.display_name}: exported the skeletal body only; Dying Light 2 "
+                    "does not emit morph-target mimic resources."
+                )
+        if not any(row.enabled for row in body_project.animations):
+            raise ValueError(
+                "No skeletal body animations remain to build. Dying Light 2 does "
+                "not support morph-only mimic resources in this workspace."
+            )
+        result = body_builder(body_project, progress=progress)
+        _copy_mapping_state(project, body_project)
+        result.warnings = [*result.warnings, *dl2_warnings]
+        report_path = Path(result.report_path)
+        if report_path.is_file():
+            report = json.loads(report_path.read_text(encoding="utf-8-sig"))
+            report["warnings"] = [
+                *list(report.get("warnings", ()) or ()),
+                *dl2_warnings,
+            ]
+            report["mimic_prototype"] = {
+                "enabled": False,
+                "reason": "dl2_uses_skeletal_facial_bones",
+                "resource_count": 0,
+            }
+            report_path.write_text(
+                json.dumps(report, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        return result
+
     profile = resolve_mimic_profile(project)
     scans: dict[str, FbxFacialScan] = {}
     effective_modes: dict[str, str] = {}
@@ -195,12 +252,14 @@ def build_project_with_mimics(
             scan = FbxFacialScan(
                 source_path=str(animation.source_fbx),
                 animation_stack=_animation_stack(animation),
-                fps=animation.fps,
+                fps=animation.resolved_sample_fps(),
                 frame_count=1,
                 curves=(),
                 warnings=(f"Facial detection failed: {exc}",),
             )
         scans[animation.animation_id] = scan
+        if scan.source_fps is not None:
+            animation.source_fps = float(scan.source_fps)
         mode = _effective_mode(project, animation, scan, profile_available=profile is not None)
         effective_modes[animation.animation_id] = mode
         settings = _mimic_settings(animation)
@@ -232,7 +291,7 @@ def build_project_with_mimics(
         warnings = [*body_result.warnings, *warnings]
         report_path = Path(body_result.report_path)
         if report_path.is_file():
-            report = json.loads(report_path.read_text(encoding="utf-8"))
+            report = json.loads(report_path.read_text(encoding="utf-8-sig"))
         else:
             report = {}
         existing_manifest = manifest
@@ -301,7 +360,7 @@ def build_project_with_mimics(
             canonical_smd=project.rig.canonical_smd,
             source_bone=source_bone,
             root_policy=animation.root_policy,
-            fps=animation.fps,
+            fps=animation.resolved_sample_fps(),
             animation_stack=_animation_stack(animation) or None,
             source_bone_aliases=source_aliases,
         )
@@ -315,6 +374,27 @@ def build_project_with_mimics(
             if project.export.write_intermediate_anm2:
                 intermediate = animation_dir / f"{resource_name}.anm2"
                 intermediate.write_bytes(body_payload)
+                motion_mode, heading_mode = pb._provenance_root_modes(animation)
+                write_anm2_provenance(
+                    intermediate,
+                    build_anm2_provenance(
+                        body_payload,
+                        source_fbx=Path(animation.source_fbx).name,
+                        source_fbx_sha256=sha256_bytes(
+                            Path(animation.source_fbx).read_bytes()
+                        ),
+                        source_fbx_fps=float(built.source_fps),
+                        sample_fps=float(built.sample_fps),
+                        playback_fps=float(built.playback_fps),
+                        source_duration_seconds=float(
+                            built.source_duration_seconds
+                        ),
+                        frame_count=int(built.frame_count),
+                        root_motion_mode=motion_mode,
+                        root_heading_mode=heading_mode,
+                        source_animation_stack=_animation_stack(animation),
+                    ),
+                )
                 built.anm2_path = str(intermediate)
             _report_root_override(built, root_report)
         _update_body_manifest_hash(manifest_rows, resource_name, body_payload, root_report)
@@ -340,6 +420,33 @@ def build_project_with_mimics(
                 mapping=mapping,
                 clamp_mode=str(settings.get("clamp_mode", "none")),
             )
+            sample_fps = float(animation.resolved_sample_fps())
+            playback_fps = float(animation.resolved_playback_fps())
+            body_timing = next(
+                (
+                    row
+                    for row in built_rows
+                    if row.animation_id == animation.animation_id
+                ),
+                None,
+            )
+            source_fps = float(
+                scan.source_fps
+                or getattr(body_timing, "source_fps", None)
+                or animation.source_fps
+                or sample_fps
+            )
+            source_duration_seconds = scan.source_duration_seconds
+            if source_duration_seconds is None and body_timing is not None:
+                source_duration_seconds = float(body_timing.source_duration_seconds)
+            if source_duration_seconds is None:
+                # Compatibility for adjacent-version facial scan providers
+                # that do not expose the exact selected FBX tick span.
+                source_duration_seconds = (
+                    float(max(0, scan.frame_count - 1)) / sample_fps
+                )
+            source_duration_seconds = float(source_duration_seconds)
+            animation.source_fps = source_fps
             resource_name = _mimic_resource_name(project, animation, pb)
             if resource_name in library.animations and project.export.collision_policy == "error":
                 raise ValueError(
@@ -361,10 +468,26 @@ def build_project_with_mimics(
                 anm2_name=f"{resource_name}.anm2",
                 start_frame=float(start_frame),
                 end_frame=float(end_frame),
-                fps=float(animation.fps),
+                fps=float(animation.resolved_playback_fps()),
                 enabled=1,
                 blend=0.5,
             ))
+            intermediate_path = animation_dir / f"{resource_name}.anm2"
+            mimic_provenance = build_anm2_provenance(
+                build.payload,
+                source_fbx=Path(animation.source_fbx).name,
+                source_fbx_sha256=sha256_bytes(
+                    Path(animation.source_fbx).read_bytes()
+                ),
+                source_fbx_fps=source_fps,
+                sample_fps=sample_fps,
+                playback_fps=playback_fps,
+                source_duration_seconds=source_duration_seconds,
+                frame_count=build.frame_count,
+                root_motion_mode="mimic",
+                root_heading_mode="not_applicable",
+                source_animation_stack=_animation_stack(animation),
+            )
             mimic_report = dict(build.report)
             mimic_report.update({
                 "resource_name": resource_name,
@@ -373,8 +496,14 @@ def build_project_with_mimics(
                 "body_resource_name": pb._final_resource_name(project, animation),
                 "content_mode": mode,
                 "anm2_sha256": sha256_bytes(build.payload),
+                "timing": {
+                    "source_fps": source_fps,
+                    "sample_fps": sample_fps,
+                    "playback_fps": playback_fps,
+                    "source_duration_seconds": source_duration_seconds,
+                },
                 "output_anm2": (
-                    str(animation_dir / f"{resource_name}.anm2")
+                    str(intermediate_path)
                     if project.export.write_intermediate_anm2
                     else f"rpack:{output_pack.name}#_ANIMATION_/{resource_name}"
                 ),
@@ -382,7 +511,8 @@ def build_project_with_mimics(
             mimic_report_path = retarget_dir / f"{resource_name}.json"
             mimic_report_path.write_text(json.dumps(mimic_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
             if project.export.write_intermediate_anm2:
-                (animation_dir / f"{resource_name}.anm2").write_bytes(build.payload)
+                intermediate_path.write_bytes(build.payload)
+                write_anm2_provenance(intermediate_path, mimic_provenance)
             layout = pb._validate_generated_anm2_payload(build.payload, resource_name=resource_name)
             built = _make_built_animation(pb,
                 animation_id=animation.animation_id,
@@ -394,7 +524,15 @@ def build_project_with_mimics(
                 ik_preset="facial_morphs",
                 mapping_profile_id=profile.profile_id,
                 frame_count=build.frame_count,
-                fps=animation.fps,
+                fps=playback_fps,
+                source_fps=source_fps,
+                sample_fps=sample_fps,
+                playback_fps=playback_fps,
+                source_duration_seconds=source_duration_seconds,
+                target_rig_ref=str(getattr(project.rig, "target_rig_ref", "")),
+                target_rig_name=str(getattr(project.rig, "target_rig_name", "")),
+                target_skeleton_hash="",
+                retarget_mode="mimic",
                 page_count=layout.page_count,
                 page_frame_spans=list(layout.page_frame_spans),
                 anm2_path=mimic_report["output_anm2"],
@@ -408,7 +546,11 @@ def build_project_with_mimics(
                 source_fbx=animation.source_fbx,
                 root_policy="mimic",
                 frame_count=build.frame_count,
-                fps=animation.fps,
+                fps=playback_fps,
+                source_fps=source_fps,
+                sample_fps=sample_fps,
+                playback_fps=playback_fps,
+                source_duration_seconds=source_duration_seconds,
                 sha256=built.sha256,
                 mapping_profile_id=profile.profile_id,
                 ik_preset="facial_morphs",

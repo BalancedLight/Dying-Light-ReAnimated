@@ -6,20 +6,38 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
 import json
+import math
 import os
 import tempfile
 import uuid
 
 from . import __version__
-from .game_profiles import DL1_GAME_ID, SUPPORTED_GAME_IDS, infer_game_id, project_coherence_errors
+from .game_profiles import (
+    DL1_GAME_ID,
+    SUPPORTED_GAME_IDS,
+    get_game_profile,
+    infer_game_id,
+    project_coherence_errors,
+)
+from .blender_mirror_wrapper import BilateralSemanticPolicy
 
 PROJECT_FORMAT = "dl-reanimated-project"
 PROJECT_EXTENSION = ".dlraproj"
-CURRENT_PROJECT_SCHEMA_VERSION = 8
+CURRENT_PROJECT_SCHEMA_VERSION = 10
 
 
 def now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _is_positive_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return False
+    return math.isfinite(number) and number > 0.0
 
 
 def _field_names(cls: type) -> set[str]:
@@ -89,7 +107,13 @@ class ProjectAnimation:
     target_rig_path: str = ""
     source_root_bone: str = ""
     target_root_bone: str = ""
-    fps: int = 30
+    # ``fps`` is the schema-v9 compatibility alias for playback cadence.  New
+    # code must use the three explicit rates below: the cadence declared by the
+    # source FBX, the cadence sampled into ANM2, and the intended playback rate.
+    fps: float = 30.0
+    source_fps: float | None = None
+    sample_fps: float | None = None
+    playback_fps: float | None = None
     start_frame: int | None = None
     end_frame: int | None = None
     notes: str = ""
@@ -101,12 +125,24 @@ class ProjectAnimation:
         path = Path(source_fbx)
         return cls(str(uuid.uuid4()), str(path), path.stem, resource_name or path.stem, animation_stack)
 
+    def resolved_sample_fps(self) -> float:
+        return float(self.sample_fps if self.sample_fps is not None else self.fps)
+
+    def resolved_playback_fps(self) -> float:
+        return float(self.playback_fps if self.playback_fps is not None else self.fps)
+
+    def resolved_source_fps(self) -> float | None:
+        return None if self.source_fps is None else float(self.source_fps)
+
 
 @dataclass(slots=True)
 class RigSettings:
     target_rig_ref: str = "builtin:male_npc_infected"
     target_rig_path: str = ""
-    retarget_mode: str = "humanoid"
+    # ``auto`` is the normal built-in workflow.  ``humanoid`` and ``exact``
+    # remain readable expert/legacy policies, and custom CRIG selection still
+    # switches to ``exact`` explicitly.
+    retarget_mode: str = "auto"
     use_imported_animation_bind_pose: bool = True
     source_rest_fbx: str = ""
     trusted_source_rest_json: str = ""
@@ -114,6 +150,14 @@ class RigSettings:
     target_template_anm2: str = "reference/infected_turn_90r.template.anm2"
     stock_writer_control_anm2: str = "reference/stock_writer_control.anm2"
     target_rig_name: str = "Dying Light male humanoid"
+    # ``current`` uses the modern canonical FBX sampling contract.  The
+    # explicit 0.5 compatibility setting retains the historical interpretation
+    # for projects authored against it.
+    fbx_anm2_export_behavior: str = "current"
+    # New projects use evidence-based Auto.  Projects loaded without this
+    # field are migrated explicitly to Preserve in ``from_dict`` so the former
+    # wrapper-triggered swap is never silently retained.
+    bilateral_semantic_policy: str = BilateralSemanticPolicy.AUTO.value
     extensions: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -156,7 +200,12 @@ class Anm2ToFbxItem:
     source_rig_ref: str = "builtin:male_npc_infected"
     source_rig_path: str = ""
     enabled: bool = True
-    fps: int = 30
+    # ``fps`` remains readable/writable as the schema-v9 compatibility alias
+    # for the FBX output rate.  Legacy callers that only set ``fps`` continue
+    # to get identical input and output cadences through the resolver methods.
+    fps: float = 30.0
+    anm2_input_fps: float | None = None
+    fbx_output_fps: float | None = None
     start_frame: int | None = None
     end_frame: int | None = None
     extensions: dict[str, Any] = field(default_factory=dict)
@@ -164,7 +213,28 @@ class Anm2ToFbxItem:
     @classmethod
     def create(cls, path: str | Path, output_name: str | None = None) -> "Anm2ToFbxItem":
         source = Path(path)
-        return cls(str(uuid.uuid4()), str(source), output_name or source.stem)
+        row = cls(str(uuid.uuid4()), str(source), output_name or source.stem)
+        from .anm2_provenance import load_anm2_provenance
+
+        timing = load_anm2_provenance(source)
+        row.extensions["timing_metadata_status"] = timing.status
+        row.extensions["timing_metadata_path"] = timing.path
+        if timing.valid:
+            row.anm2_input_fps = float(timing.payload["sample_fps"])
+            row.fbx_output_fps = float(timing.payload["source_fbx_fps"])
+            row.fps = row.fbx_output_fps
+            row.extensions["timing_provenance"] = dict(timing.payload)
+        elif timing.warnings:
+            row.extensions["timing_metadata_warnings"] = list(
+                dict.fromkeys(timing.warnings)
+            )[:1]
+        return row
+
+    def resolved_input_fps(self) -> float:
+        return float(self.anm2_input_fps if self.anm2_input_fps is not None else self.fps)
+
+    def resolved_output_fps(self) -> float:
+        return float(self.fbx_output_fps if self.fbx_output_fps is not None else self.fps)
 
 
 @dataclass(slots=True)
@@ -217,8 +287,19 @@ class DlReanimatedProject:
             errors.append("Project name cannot be empty.")
         if self.game_id not in SUPPORTED_GAME_IDS:
             errors.append(f"Unsupported game identifier {self.game_id!r}.")
-        if self.rig.retarget_mode not in {"humanoid", "exact"}:
-            errors.append("Retarget mode must be humanoid or exact.")
+        if self.rig.retarget_mode not in {"auto", "humanoid", "exact"}:
+            errors.append("Retarget mode must be auto, humanoid, or exact.")
+        if self.rig.fbx_anm2_export_behavior not in {"current", "legacy_5_0"}:
+            errors.append(
+                "FBX-to-ANM2 export behavior must be current or legacy_5_0."
+            )
+        if self.rig.bilateral_semantic_policy not in {
+            item.value for item in BilateralSemanticPolicy
+        }:
+            errors.append(
+                "Bilateral semantic policy must be auto, "
+                "preserve_source_names, or swap_bilateral_explicit."
+            )
         if self.rig.retarget_mode == "exact" and any(
             row.enabled
             and not row.target_rig_ref
@@ -230,7 +311,13 @@ class DlReanimatedProject:
                 "project target; alternatively select a target rig on every enabled animation."
             )
         if (
-            self.rig.retarget_mode == "humanoid"
+            (
+                self.rig.retarget_mode == "humanoid"
+                or (
+                    self.rig.retarget_mode == "auto"
+                    and self.game_id == DL1_GAME_ID
+                )
+            )
             and not self.rig.use_imported_animation_bind_pose
             and not self.rig.source_rest_fbx.strip()
         ):
@@ -243,6 +330,20 @@ class DlReanimatedProject:
             errors.append("Pack filename must end in .rpack.")
         seen_resources: dict[str, str] = {}
         for row in self.animations:
+            timing_values = (
+                ("source FPS", row.source_fps),
+                (
+                    "sample FPS",
+                    row.sample_fps if row.sample_fps is not None else row.fps,
+                ),
+                (
+                    "playback FPS",
+                    row.playback_fps if row.playback_fps is not None else row.fps,
+                ),
+            )
+            for label, value in timing_values:
+                if value is not None and not _is_positive_finite_number(value):
+                    errors.append(f"Animation {row.display_name!r} has an invalid {label}.")
             if not row.enabled:
                 continue
             key = row.resource_name.casefold()
@@ -253,6 +354,23 @@ class DlReanimatedProject:
                 )
             else:
                 seen_resources[key] = row.animation_id
+        for row in self.anm2_to_fbx.items:
+            for label, value in (
+                (
+                    "ANM2 input FPS",
+                    row.anm2_input_fps
+                    if row.anm2_input_fps is not None
+                    else row.fps,
+                ),
+                (
+                    "FBX output FPS",
+                    row.fbx_output_fps
+                    if row.fbx_output_fps is not None
+                    else row.fps,
+                ),
+            ):
+                if not _is_positive_finite_number(value):
+                    errors.append(f"Reverse item {row.output_name!r} has an invalid {label}.")
         errors.extend(project_coherence_errors(self))
         return list(dict.fromkeys(errors))
 
@@ -283,9 +401,21 @@ class DlReanimatedProject:
             row["target_rig_path"] = _portable_path(
                 str(row.get("target_rig_path", "")), destination
             )
+            # Keep the v9 alias deterministic for older readers.  Schema-v10
+            # readers use the explicit field and do not infer sampling from it.
+            row["fps"] = float(
+                row.get("playback_fps")
+                if row.get("playback_fps") is not None
+                else row.get("fps", 30.0)
+            )
         for row in reverse["items"]:
             row["source_anm2"] = _portable_path(str(row.get("source_anm2", "")), destination)
             row["source_rig_path"] = _portable_path(str(row.get("source_rig_path", "")), destination)
+            row["fps"] = float(
+                row.get("fbx_output_fps")
+                if row.get("fbx_output_fps") is not None
+                else row.get("fps", 30.0)
+            )
         _restore_unknown_fields(rig)
         _restore_unknown_fields(export)
         _restore_unknown_fields(reverse)
@@ -330,6 +460,59 @@ class DlReanimatedProject:
                 },
             )
             rig_raw["extensions"] = rig_extensions
+        if "bilateral_semantic_policy" not in rig_raw:
+            rig_extensions = dict(rig_raw.get("extensions", {}) or {})
+            rig_raw["bilateral_semantic_policy"] = (
+                BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+            )
+            rig_extensions.setdefault(
+                "bilateral_semantic_policy_migration",
+                {
+                    "from": "implicit_wrapper_coupled_behavior",
+                    "to": BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value,
+                    "reason": (
+                        "scene wrapper reflection is geometric and does not "
+                        "authorize semantic left/right row swapping"
+                    ),
+                },
+            )
+            rig_raw["extensions"] = rig_extensions
+        if schema_version < 9:
+            rig_extensions = dict(rig_raw.get("extensions", {}) or {})
+            target_ref = str(rig_raw.get("target_rig_ref", "") or "")
+            previous_mode = str(rig_raw.get("retarget_mode", "") or "")
+            override = rig_extensions.get("expert_solver_override")
+            deliberate_exact = (
+                override is True
+                or str(override).casefold() == "exact"
+                or (
+                    isinstance(override, Mapping)
+                    and bool(override.get("deliberate", False))
+                    and str(
+                        override.get("retarget_mode", override.get("mode", ""))
+                    ).casefold()
+                    == "exact"
+                )
+            )
+            builtin_default = target_ref in {
+                "builtin:male_npc_infected",
+                "builtin:dl2_player_advanced",
+            }
+            if builtin_default and not deliberate_exact and previous_mode in {
+                "",
+                "humanoid",
+                "exact",
+            }:
+                rig_extensions.setdefault(
+                    "retarget_mode_migration_v9",
+                    {
+                        "from": previous_mode or "implicit",
+                        "to": "auto",
+                        "reason": "built-in target uses automatic solver routing",
+                    },
+                )
+                rig_raw["retarget_mode"] = "auto"
+                rig_raw["extensions"] = rig_extensions
         export_raw = dict(raw.get("export", {}) or {})
         reverse_raw = dict(raw.get("anm2_to_fbx", {}) or {})
         item_rows = reverse_raw.pop("items", []) or []
@@ -345,15 +528,64 @@ class DlReanimatedProject:
                 animation_raw.setdefault(
                     "target_root_bone", str(legacy_root.get("target_bone", "") or "")
                 )
+            if schema_version < 10:
+                legacy_fps = float(animation_raw.get("fps", 30.0) or 30.0)
+                profile = get_game_profile(game_id)
+                project_mode = str(rig_raw.get("retarget_mode", "auto") or "auto")
+                target_ref = str(
+                    animation_raw.get("target_rig_ref", "")
+                    or rig_raw.get("target_rig_ref", "")
+                )
+                target_path_override = str(animation_raw.get("target_rig_path", "") or "")
+                legacy_humanoid = (
+                    project_mode == "auto"
+                    and target_ref in profile.compatible_builtin_rig_refs
+                    and game_id == DL1_GAME_ID
+                ) or (
+                    project_mode == "humanoid"
+                    and target_ref == profile.default_target_rig_ref
+                    and not target_path_override
+                )
+                sample_fps = 30.0 if legacy_humanoid else legacy_fps
+                animation_raw.setdefault("source_fps", None)
+                animation_raw.setdefault("sample_fps", sample_fps)
+                animation_raw.setdefault("playback_fps", legacy_fps)
+                extensions.setdefault(
+                    "timing_migration_v10",
+                    {
+                        "legacy_fps": legacy_fps,
+                        "source_fps": "unknown",
+                        "sample_fps": sample_fps,
+                        "playback_fps": legacy_fps,
+                        "legacy_execution_mode": "humanoid" if legacy_humanoid else "exact",
+                    },
+                )
+                animation_raw["extensions"] = extensions
             animations.append(
                 ProjectAnimation(
                     **_with_unknown_fields(ProjectAnimation, animation_raw)
                 )
             )
-        reverse_items = [
-            Anm2ToFbxItem(**_with_unknown_fields(Anm2ToFbxItem, dict(row)))
-            for row in item_rows
-        ]
+        reverse_items = []
+        for source_row in item_rows:
+            item_raw = dict(source_row)
+            if schema_version < 10:
+                legacy_fps = float(item_raw.get("fps", 30.0) or 30.0)
+                item_raw.setdefault("anm2_input_fps", legacy_fps)
+                item_raw.setdefault("fbx_output_fps", legacy_fps)
+                extensions = dict(item_raw.get("extensions", {}) or {})
+                extensions.setdefault(
+                    "timing_migration_v10",
+                    {
+                        "legacy_fps": legacy_fps,
+                        "anm2_input_fps": legacy_fps,
+                        "fbx_output_fps": legacy_fps,
+                    },
+                )
+                item_raw["extensions"] = extensions
+            reverse_items.append(
+                Anm2ToFbxItem(**_with_unknown_fields(Anm2ToFbxItem, item_raw))
+            )
         top = _with_unknown_fields(cls, raw)
         top.pop("rig", None)
         top.pop("export", None)

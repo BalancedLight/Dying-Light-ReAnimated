@@ -10,7 +10,7 @@ from ..bone_maps import GenericBoneMap, auto_map_skeletons
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import build_chrome_rig_from_smd_template
 from ..chrome_rig_registry import BUILTIN_MALE_RIG_REF
-from ..game_profiles import DL2_RIG_REF
+from ..game_profiles import DL2_ADVANCED_RIG_REF, DL2_LEGACY_RIG_REF, DL2_RIG_REF
 from ..anm2_fbx import chrome_rig_from_fbx_skeleton
 from ..runtime_paths import resource_root
 
@@ -25,14 +25,19 @@ def load_source_rig(value: str) -> ChromeRig:
             root / "reference" / "player_1_tpp.smd",
             root / "reference" / "infected_turn_90r.template.anm2",
         )
-    if value == DL2_RIG_REF:
+    if value in {DL2_RIG_REF, DL2_ADVANCED_RIG_REF}:
+        return ChromeRig.load(resource_root() / "reference" / "dl2" / "player_skeleton.crig")
+    if value == DL2_LEGACY_RIG_REF:
         return ChromeRig.load(resource_root() / "reference" / "dl2" / "player_shadow_caster.crig")
     return ChromeRig.load(value)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Decode extracted Dying Light ANM2 files and export skeleton animation FBXs through Blender."
+        description=(
+            "Decode extracted Dying Light 1 or validated PC Dying Light 2 Header_Version2 "
+            "ANM2 files and export skeleton animation FBXs through Blender."
+        )
     )
     parser.add_argument("anm2", nargs="+", type=Path)
     parser.add_argument("--source-rig", default=BUILTIN_MALE_RIG_REF, help="Matching .crig or bundled rig ID")
@@ -40,10 +45,41 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bone-map", type=Path, help="Reviewed .dlrbmap.json for cross-rig export")
     parser.add_argument("--auto-map", action="store_true", help="Use conservative automatic mapping when no map is supplied")
     parser.add_argument("--save-auto-map", type=Path)
-    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument(
+        "--fps",
+        type=float,
+        help="Compatibility alias that sets both ANM2 input and FBX output FPS.",
+    )
+    parser.add_argument(
+        "--anm2-fps", type=float,
+        help="Input cadence of the ANM2 samples (defaults to valid provenance, then 30).",
+    )
+    parser.add_argument(
+        "--fbx-fps", type=float,
+        help="Output FBX cadence (defaults to valid provenance source FPS, then 30).",
+    )
     parser.add_argument("--start-frame", type=int)
     parser.add_argument("--end-frame", type=int)
     parser.add_argument("--translation-scale", default="auto")
+    parser.add_argument(
+        "--unknown-track-policy",
+        choices=("sidecar", "helpers", "drop"),
+        help=(
+            "Unresolved descriptor handling: sidecar preserves curves in deterministic JSON "
+            "(DL2 default), helpers places non-deforming roots in the FBX (DL1 default), and "
+            "drop explicitly discards them with a warning."
+        ),
+    )
+    parser.add_argument(
+        "--no-bake-motion-accumulator",
+        action="store_false",
+        dest="bake_motion_accumulator",
+        default=True,
+        help=(
+            "Leave an animated 0xCCC3CDDF offset-helper track separate instead of "
+            "baking it into the exported primary root."
+        ),
+    )
     parser.add_argument("--blender", type=Path)
     parser.add_argument("--output-directory", type=Path, default=Path("build/fbx"))
     args = parser.parse_args(argv)
@@ -71,12 +107,48 @@ def main(argv: list[str] | None = None) -> int:
     for source in args.anm2:
         result = export_anm2_to_fbx(
             source, source_rig, args.output_directory / f"{source.stem}.fbx",
-            fps=args.fps, start_frame=args.start_frame, end_frame=args.end_frame,
+            fps=args.fps,
+            anm2_input_fps=args.anm2_fps,
+            fbx_output_fps=args.fbx_fps,
+            start_frame=args.start_frame, end_frame=args.end_frame,
             target_fbx=args.target_fbx, bone_map=mapping,
             translation_scale=translation_scale, blender_executable=args.blender,
+            unknown_track_policy=args.unknown_track_policy,
+            bake_motion_accumulator=args.bake_motion_accumulator,
             progress=print,
         )
-        print(f"{result.output_path}: {result.frame_count} frames, {result.bone_count} bones")
+        print(
+            f"{result.output_path}: {result.frame_count} frames at "
+            f"{result.fbx_output_fps:g} FPS (ANM2 {result.anm2_input_fps:g} FPS), "
+            f"{result.bone_count} bones"
+        )
+        print(
+            "Root parity: "
+            f"{result.root_parity_max_angular_degrees:.6f} deg angular, "
+            f"{result.root_parity_max_heading_degrees:.6f} deg heading, "
+            f"{result.root_parity_max_translation_m:.3g} m translation; "
+            "display-vs-native rest basis "
+            f"{result.native_rest_basis_max_rotation_degrees:.6f} deg max"
+        )
+        if result.unknown_track_count:
+            if result.unknown_tracks_sidecar:
+                print(
+                    f"Unknown tracks: {result.unknown_track_count} preserved in "
+                    f"{result.unknown_tracks_sidecar}"
+                )
+            elif result.unknown_track_policy == "helpers":
+                print(f"Unknown tracks: {result.unknown_track_count} included as FBX helper roots")
+            else:
+                dropped_count = result.unknown_track_count - int(
+                    result.motion_accumulator_helper_preserved
+                )
+                if dropped_count:
+                    print(f"WARNING: {dropped_count} unknown tracks were explicitly dropped")
+        if result.motion_accumulator_detected:
+            state = "baked" if result.motion_accumulator_baked else "preserved only"
+            active = "active" if result.motion_accumulator_active else "static"
+            root = f" into {result.motion_accumulator_root}" if result.motion_accumulator_root else ""
+            print(f"Motion accumulator: {active}, {state}{root}")
         for warning in result.warnings:
             print(f"WARNING: {warning}")
     return 0

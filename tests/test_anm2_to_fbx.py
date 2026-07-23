@@ -8,12 +8,16 @@ import pytest
 
 from dlanm2_gui.anm2_fbx import (
     MOTION_HELPER_DESCRIPTOR,
+    append_motion_accumulator_helper,
+    bake_motion_accumulator_into_root,
     cayley_to_quaternion_wxyz,
     decode_anm2_animation,
+    inspect_motion_accumulator,
     reconstruct_native_scene,
     retarget_decoded_animation,
 )
 from dlanm2_gui.anm2_writer import build_payload_from_values
+from dlanm2_gui.blender_fbx import FbxExportResult, export_anm2_to_fbx
 from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap, auto_map_skeletons
 from dlanm2_gui.chrome_rig import ChromeRig, ChromeRigBone
 from dlanm2_gui.oracle.smd_bind_pose import anm2_cayley_vector_from_quaternion
@@ -70,13 +74,96 @@ def test_full_clip_decode_and_cayley_continuity(tmp_path: Path) -> None:
     assert np.allclose(cayley_to_quaternion_wxyz((0, 0, 0)), (1, 0, 0, 0))
 
 
-def test_native_scene_preserves_motion_helper(tmp_path: Path) -> None:
+def test_motion_accumulator_bakes_root_and_preserves_helper(tmp_path: Path) -> None:
     rig = _rig(extra=(MOTION_HELPER_DESCRIPTOR,))
     animation = decode_anm2_animation(_payload(tmp_path / "motion.anm2", rig, helper=True))
-    scene = reconstruct_native_scene(animation, rig)
-    assert scene.bones[0].name == "DLR_OffsetHelper_CCC3CDDF"
-    assert scene.bones[1].parent_index == 0
-    assert scene.translations[-1, 0, 0] == pytest.approx(2.0, abs=1e-3)
+    info = inspect_motion_accumulator(animation)
+    assert info.present and info.active
+    scene = reconstruct_native_scene(animation, rig, unknown_track_policy="drop")
+    baked = bake_motion_accumulator_into_root(scene, animation)
+    preserved = append_motion_accumulator_helper(baked, animation)
+    assert baked.translations[-1, rig.root_index, 0] == pytest.approx(2.0, abs=1e-3)
+    helper = preserved.bones[-1]
+    assert helper.name == "DLR_OffsetHelper_CCC3CDDF"
+    assert helper.helper and helper.semantic == "motion_accumulator"
+    assert preserved.translations[-1, -1, 0] == pytest.approx(2.0, abs=1e-3)
+
+
+def test_static_motion_accumulator_does_not_change_root(tmp_path: Path) -> None:
+    rig = _rig(extra=(MOTION_HELPER_DESCRIPTOR,))
+    animation = decode_anm2_animation(_payload(tmp_path / "static-motion.anm2", rig))
+    info = inspect_motion_accumulator(animation)
+    assert info.present and not info.active
+    scene = reconstruct_native_scene(animation, rig, unknown_track_policy="drop")
+    baked = bake_motion_accumulator_into_root(scene, animation)
+    np.testing.assert_allclose(baked.translations, scene.translations)
+    np.testing.assert_allclose(baked.rotations_wxyz, scene.rotations_wxyz)
+
+
+def test_export_service_bakes_by_default_and_toggle_keeps_raw_helper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = _rig(extra=(MOTION_HELPER_DESCRIPTOR,))
+    source = _payload(tmp_path / "motion-service.anm2", rig, helper=True)
+    captured: list[object] = []
+
+    def fake_blender_export(scene, output_path, **_kwargs):
+        captured.append(scene)
+        return FbxExportResult(
+            str(output_path),
+            scene.frame_count,
+            scene.fps,
+            sum(not bone.helper for bone in scene.bones),
+            tuple(scene.warnings),
+            "",
+        )
+
+    monkeypatch.setattr("dlanm2_gui.blender_fbx.run_blender_export", fake_blender_export)
+    baked = export_anm2_to_fbx(
+        source, rig, tmp_path / "baked.fbx", unknown_track_policy="helpers"
+    )
+    baked_scene = captured[-1]
+    assert baked.motion_accumulator_detected
+    assert baked.motion_accumulator_active
+    assert baked.motion_accumulator_baked
+    assert baked.motion_accumulator_helper_preserved
+    assert baked_scene.translations[-1, 0, 0] == pytest.approx(2.0, abs=1e-3)
+
+    raw = export_anm2_to_fbx(
+        source,
+        rig,
+        tmp_path / "raw.fbx",
+        unknown_track_policy="helpers",
+        bake_motion_accumulator=False,
+    )
+    raw_scene = captured[-1]
+    assert raw.motion_accumulator_detected
+    assert raw.motion_accumulator_active
+    assert not raw.motion_accumulator_baked
+    assert not raw.motion_accumulator_helper_preserved
+    assert raw_scene.translations[-1, 0, 0] == pytest.approx(0.0, abs=1e-6)
+    assert any(
+        bone.name == "DLR_OffsetHelper_CCC3CDDF"
+        and bone.semantic == "motion_accumulator"
+        for bone in raw_scene.bones
+    )
+
+
+def test_cross_rig_motion_accumulator_uses_translation_scale(tmp_path: Path) -> None:
+    source = _rig(extra=(MOTION_HELPER_DESCRIPTOR,))
+    target = _rig(renamed=True)
+    mapping = GenericBoneMap.create(
+        "Door map", source.skeleton_hash, target.skeleton_hash, source_rig_ref=source.rig_id
+    )
+    mapping.pairs = [
+        BoneMapPair(source.bones[0].descriptor, "root", "target_root"),
+        BoneMapPair(source.bones[1].descriptor, "bone_door", "target_bone_door"),
+    ]
+    animation = decode_anm2_animation(_payload(tmp_path / "motion-cross-rig.anm2", source, helper=True))
+    scene = retarget_decoded_animation(animation, source, target, mapping, translation_scale=2.0)
+    baked = bake_motion_accumulator_into_root(scene, animation, translation_scale=2.0)
+    assert baked.translations[-1, target.root_index, 0] == pytest.approx(4.0, abs=1e-3)
 
 
 def test_auto_map_then_bind_relative_cross_rig(tmp_path: Path) -> None:

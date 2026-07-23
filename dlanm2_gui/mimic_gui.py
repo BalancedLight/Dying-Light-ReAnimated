@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 )
 
 from .fbx_blendshapes import FbxFacialScan, scan_fbx_blendshapes
+from .game_profiles import DL2_GAME_ID
 from .mimic_profiles import (
     BUILTIN_COMMON46_REF,
     MimicMappingRow,
@@ -44,6 +45,12 @@ _CONTENT_ITEMS = (
     ("Mimic only", "mimic_only"),
     ("Body + mimic", "both"),
 )
+
+
+def morph_facial_ui_available(game_id: str) -> bool:
+    """Return whether the selected game uses the morph-target mimic workflow."""
+
+    return str(game_id or "") != DL2_GAME_ID
 
 
 def _set_combo_data(combo: QComboBox, value: Any) -> None:
@@ -71,7 +78,7 @@ def _scan(controller: Any, animation: Any) -> FbxFacialScan:
     key = (
         str(path.resolve()),
         animation.source_animation_stack,
-        animation.fps,
+        animation.resolved_sample_fps(),
         path.stat().st_mtime_ns,
         path.stat().st_size,
     )
@@ -79,7 +86,7 @@ def _scan(controller: Any, animation: Any) -> FbxFacialScan:
     if cached is None:
         cached = scan_fbx_blendshapes(
             path,
-            fps=animation.fps,
+            fps=animation.resolved_sample_fps(),
             animation_stack=animation.source_animation_stack or None,
         )
         controller._mimic_scan_cache[key] = cached
@@ -236,10 +243,40 @@ def install_mimic_ui(controller: Any) -> None:
     clip_layout.addWidget(controller.mimic_status)
     layout.addWidget(clip_group)
     layout.addStretch(1)
+    # Standalone owns the legacy tab widget for its full lifetime.  Unified
+    # moves these pages into a new host and replaces this reference before the
+    # legacy central widget is destroyed.
+    controller.facial_tab_host = controller.tabs
     help_index = next((i for i in range(controller.tabs.count()) if controller.tabs.tabText(i) == "Help"), controller.tabs.count())
     controller.tabs.insertTab(help_index, controller.facial_page, "Facial")
 
+    def refresh_facial_availability() -> bool:
+        available = morph_facial_ui_available(controller.project.game_id)
+        tab_host = controller.facial_tab_host
+        tab_index = tab_host.indexOf(controller.facial_page)
+        if tab_index >= 0:
+            if not available and tab_host.currentWidget() is controller.facial_page:
+                tab_host.setCurrentIndex(0)
+            if hasattr(tab_host, "setTabVisible"):
+                tab_host.setTabVisible(tab_index, available)
+            else:
+                tab_host.tabBar().setTabVisible(tab_index, available)
+        controller.facial_page.setEnabled(available)
+        return available
+    controller._refresh_facial_availability = refresh_facial_availability
+
     def refresh_facial(preserve: bool = True) -> None:
+        if not refresh_facial_availability():
+            controller.mimic_clip_combo.blockSignals(True)
+            controller.mimic_clip_combo.clear()
+            controller.mimic_clip_combo.blockSignals(False)
+            controller.mimic_scan_button.setEnabled(False)
+            controller.mimic_map_button.setEnabled(False)
+            controller.mimic_status.setText(
+                "Dying Light 2 facial animation uses skeletal bones; morph-target "
+                "mimic controls are unavailable."
+            )
+            return
         current = str(controller.mimic_clip_combo.currentData() or "") if preserve else ""
         controller.mimic_clip_combo.blockSignals(True)
         controller.mimic_clip_combo.clear()
@@ -271,6 +308,8 @@ def install_mimic_ui(controller: Any) -> None:
             controller.mimic_status.setText(f"{animation.display_name}: not scanned yet; mode {settings.get('mode', 'auto')}.")
 
     def scan_selected() -> None:
+        if not morph_facial_ui_available(controller.project.game_id):
+            return
         animation = selected()
         if animation is None:
             return
@@ -284,6 +323,8 @@ def install_mimic_ui(controller: Any) -> None:
             controller._show_error("Facial scan failed", exc)
 
     def map_selected() -> None:
+        if not morph_facial_ui_available(controller.project.game_id):
+            return
         animation = selected()
         if animation is None:
             return
@@ -314,12 +355,20 @@ def install_mimic_ui(controller: Any) -> None:
     original_refresh_table = controller._refresh_animation_table
     def refresh_animation_table(self) -> None:
         table = self.animation_table
-        table.setColumnCount(9)
+        table.setColumnCount(11)
+        if not morph_facial_ui_available(self.project.game_id):
+            original_refresh_table()
+            refresh_facial_availability()
+            refresh_facial()
+            return
+        # Preserve the complete animation target/readiness/action surface, then
+        # insert facial mode immediately before the contextual Retarget action.
         original_refresh_table()
-        table.insertColumn(7)
+        table.insertColumn(10)
         table.setHorizontalHeaderLabels([
             "Use", "Display name", "FBX source", "FBX animation", "Resource name",
-            "Animation SCR", "Root motion", "Body / face", "IK", "Retarget",
+            "Animation SCR", "Target rig", "Compatibility / mapping", "Root motion",
+            "IK", "Body / face", "Retarget",
         ])
         for row_index, animation in enumerate(self.project.animations):
             combo = self._combo_box()
@@ -339,8 +388,8 @@ def install_mimic_ui(controller: Any) -> None:
             button.clicked.connect(lambda _checked=False, aid=animation.animation_id: (_set_combo_data(self.mimic_clip_combo, aid), map_selected()))
             holder_layout.addWidget(combo, 1)
             holder_layout.addWidget(button)
-            table.setCellWidget(row_index, 7, holder)
-        table.setColumnWidth(7, 220)
+            table.setCellWidget(row_index, 10, holder)
+        table.setColumnWidth(10, 220)
         refresh_facial()
     controller._refresh_animation_table = types.MethodType(refresh_animation_table, controller)
 
@@ -350,6 +399,7 @@ def install_mimic_ui(controller: Any) -> None:
         extensions = self.project.rig.extensions or {}
         _set_combo_data(self.facial_policy_combo, extensions.get("facial_animation_policy", "auto"))
         _set_combo_data(self.mimic_profile_combo, extensions.get("mimic_profile_ref", "auto"))
+        refresh_facial_availability()
         refresh_facial(False)
     controller._refresh_all = types.MethodType(refresh_all, controller)
 
@@ -361,4 +411,4 @@ def install_mimic_ui(controller: Any) -> None:
     controller._sync_project_from_ui = types.MethodType(sync_project_from_ui, controller)
     controller._mimic_ui_installed = True
 
-__all__ = ["install_mimic_ui"]
+__all__ = ["install_mimic_ui", "morph_facial_ui_available"]

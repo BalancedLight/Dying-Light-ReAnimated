@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/dl-reanimated/dlrmap.schema.v2.json",
+  "title": "DL ReAnimated Semantic Mapping Profile v2",
+  "type": "object",
+  "required": [
+    "format",
+    "schema_version",
+    "profile_id",
+    "name",
+    "source_skeleton_hash",
+    "role_to_bone",
+    "role_modes"
+  ],
+  "properties": {
+    "format": {"const": "dl-reanimated-retarget-profile"},
+    "schema_version": {"const": 2},
+    "profile_id": {"type": "string", "format": "uuid"},
+    "name": {"type": "string"},
+    "source_skeleton_hash": {"type": "string"},
+    "source_name_parent_hash": {"type": "string"},
+    "source_bind_hash": {"type": "string"},
+    "source_animation_hash": {"type": "string"},
+    "target_policy_id": {"type": "string"},
+    "target_rig_id": {"type": "string"},
+    "target_skeleton_hash": {"type": "string"},
+    "role_to_bone": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "role_modes": {
+      "type": "object",
+      "additionalProperties": {
+        "enum": ["auto", "direct", "inherit_bind", "static_bind"]
+      }
+    },
+    "cleared_roles": {"type": "array", "items": {"type": "string"}},
+    "confidence_by_role": {
+      "type": "object",
+      "additionalProperties": {"type": "number", "minimum": 0, "maximum": 1}
+    },
+    "method_by_role": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "evidence_by_role": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "object"}
+      }
+    },
+    "root_motion": {
+      "type": "object",
+      "properties": {
+        "source_root_bone": {"type": "string"},
+        "target_root_bone": {"type": "string"},
+        "motion_mode": {"enum": ["inplace", "skeletal_root", "motion_accumulator"]},
+        "heading_mode": {"enum": ["lock_initial", "preserve", "to_motion_accumulator"]}
+      },
+      "additionalProperties": true
+    },
+    "locomotion": {"type": "object", "additionalProperties": true},
+    "target_bone_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "mode": {"enum": ["auto", "direct", "inherit_bind", "static_bind"]},
+          "source_bone": {"type": "string"},
+          "transfer_policy": {"enum": ["default", "rest_relative", "rotation_delta", "global_bind_basis", "copy_local", "bind"]},
+          "component_policy": {"enum": ["rotation", "translation", "rotation_translation", "scale", "full_transform"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "compiled_map_cache_id": {"type": "string"},
+    "ignored_bones": {"type": "array", "items": {"type": "string"}},
+    "notes": {"type": "array", "items": {"type": "string"}},
+    "extensions": {"type": "object"}
+  },
+  "additionalProperties": true
+}

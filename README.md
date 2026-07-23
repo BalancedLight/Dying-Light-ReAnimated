@@ -6,7 +6,9 @@
   />
 </p>
 
-DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light, and contains experimental support for Dying Light 2. It provides a desktop GUI for animation authoring, model import, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light, and `.anm2` generation support for Dying Light 2. It provides a desktop GUI for animation authoring, model import, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
+
+Create custom cutscenes, make zombies do the Thriller dance, have Kyle Crane twerk, mocap yourself and import it; Create whatever you want and import it directly into your custom projects!
 
 ## Start
 
@@ -41,16 +43,17 @@ build_exe.bat
 5. Review the automatic or exact/subset mapping report.
 6. Save the `.dlraproj` project.
 7. Build a new RPack or append to a previous DL ReAnimated RPack.
+*Note: Dying Light 2 drop-in RPack appends are not yet supported!*
 
-Advanced target files, diagnostic controls, intermediate reports, developer options, and **Root & .crig Mapping** are hidden unless **Advanced settings** is enabled in the top-right corner or the View menu.
+Advanced target files, diagnostic controls, intermediate reports, and developer options are hidden unless **Advanced settings** is enabled in the top-right corner or the View menu. **Root & .crig Mapping** appears only for a custom/imported target rig or a deliberate expert override; bundled player rigs stay in the semantic **Retargeting** workflow.
 
 For a custom object, animal, or model that already exists in a mod, Advanced mode can create a shareable `.crig` from one binary model FBX. Animations using that exact skeleton can then be exported without humanoid roles or additional target files.
 
-The dedicated **ANM2 → FBX** workspace converts extracted animations back into editable skeleton FBXs. Native export supports any matching `.crig`, including doors and props; cross-rig mode provides conservative automatic mapping plus manual review.
+The dedicated **ANM2 → FBX** workspace converts extracted animations back into editable skeleton FBXs. Native export supports any matching `.crig`, including doors and props; cross-rig mode provides conservative automatic mapping plus manual review. FBX-declared source cadence, ANM2 sampling cadence, and playback cadence are tracked separately; reverse export can resample between independent ANM2/FBX rates and consumes hash-validated `.anm2.dlrmeta.json` timing provenance.
 
 ## Workspaces and tabs
 
-- **Animations:** Project, Animations, Retargeting, Facial, Export, and animation Help. Advanced settings also shows Root & `.crig` Mapping.
+- **Animations:** Project, Animations, Retargeting, Facial, Export, and animation Help. Advanced settings adds Root & `.crig` Mapping when a custom target owns that workflow.
 - **Models:** Models, Bone Mapping, Build & Install, DevTools, and model Help.
 - **ANM2 → FBX:** Convert and conversion Help.
 
@@ -101,7 +104,7 @@ More technical documentation can also be found in the `docs` folder.
 
 ## Current status
 
-DL1 full-body retargeting, mimic, root motion, exact-rig objects, deterministic `.crig` packages, ANM2 decoding, Blender-assisted ANM2-to-FBX export, generic cross-rig mapping, the packed multi-page writer, and RPack packaging remain validated. DL2 FBX import uses authoritative global bind-basis correction and source-superset matching. Native DL2 format-42 curve decoding and writing remain disabled; DL2 FBX export is labeled experimental format-1 compatibility output. Custom models and rigs are currently very experimental.
+DL1 full-body retargeting, mimic, root motion, exact-rig objects, deterministic `.crig` packages, ANM2 decoding, Blender-assisted ANM2-to-FBX export, generic cross-rig mapping, the packed multi-page writer, and RPack packaging remain validated. The validated PC Dying Light 2 Header_Version2 block/sampler layout now supports native ANM2 decoding and Blender-assisted ANM2-to-FBX export with the bundled advanced player skeleton. Native DL2 ANM2 writing remains unavailable. Custom models and rigs are currently very experimental.
 
 ## Disclaimer
 Dying Light ReAnimated was developed with assistance from AI tools.

@@ -72,7 +72,7 @@ class Anm2WriterProfile:
     rotation_encoding: str = "cayley_xyz"
     component_order: tuple[str, ...] = ("rx", "ry", "rz", "tx", "ty", "tz", "sx", "sy", "sz")
     coordinate_convention: str = "fbx_local_column_vectors_translation_meters"
-    default_fps: int = 30
+    default_fps: float = 30.0
     default_root_policy: str = "exact"
 
     @classmethod
@@ -82,7 +82,7 @@ class Anm2WriterProfile:
             unknown06=int(row.get("unknown06", 1)), rotation_encoding=str(row.get("rotation_encoding", "cayley_xyz")),
             component_order=tuple(str(v) for v in row.get("component_order", ())),
             coordinate_convention=str(row.get("coordinate_convention", "")),
-            default_fps=int(row.get("default_fps", 30)), default_root_policy=str(row.get("default_root_policy", "exact")),
+            default_fps=float(row.get("default_fps", 30.0)), default_root_policy=str(row.get("default_root_policy", "exact")),
         )
 
 
@@ -173,7 +173,12 @@ class ChromeRig:
         if profile.format_version != anm2.FORMAT_VERSION: errors.append(f"Unsupported ANM2 format version {profile.format_version}.")
         if profile.rotation_encoding != "cayley_xyz": errors.append(f"Unsupported rotation encoding {profile.rotation_encoding!r}.")
         if profile.component_order != ("rx", "ry", "rz", "tx", "ty", "tz", "sx", "sy", "sz"): errors.append("Unsupported ANM2 component order.")
-        if not 1 <= profile.default_fps <= 240: errors.append("Default FPS must be between 1 and 240.")
+        if (
+            not math.isfinite(profile.default_fps)
+            or profile.default_fps <= 0.0
+            or profile.default_fps > 1000.0
+        ):
+            errors.append("Default FPS must be finite, positive, and no greater than 1000.")
         if test_writer_capacity and not errors:
             try:
                 header = self.make_header(frame_count=2); rows = [self.bind_track_values() for _ in range(2)]
@@ -196,6 +201,11 @@ class ChromeRig:
 
     def to_bytes(self, *, optional_members: Mapping[str, bytes] | None = None) -> bytes:
         validation=self.validate(); validation.require_valid(); skeleton=self._skeleton_payload(); writer=asdict(self.writer_profile)
+        # Preserve byte-for-byte compatibility with existing integral writer
+        # profiles while allowing newly authored fractional default cadences.
+        default_fps = float(writer["default_fps"])
+        if default_fps.is_integer():
+            writer["default_fps"] = int(default_fps)
         manifest={"format":CRIG_FORMAT,"schema_version":CRIG_SCHEMA_VERSION,"rig_id":self.rig_id,"name":self.name,"category":self.category,"description":self.description,"author":self.author,"license":self.license,"source_model_name":self.source_model_name,"bone_count":len(self.bones),"track_count":len(self.descriptors),"skeleton_sha256":hashlib.sha256(_json_bytes(skeleton)).hexdigest(),"writer_profile_sha256":hashlib.sha256(_json_bytes(writer)).hexdigest(),"extensions":self.extensions}
         members={"manifest.json":_json_bytes(manifest),"skeleton.json":_json_bytes(skeleton),"writer_profile.json":_json_bytes(writer),"validation.json":_json_bytes(asdict(validation))}
         for name,value in dict(optional_members or {}).items():

@@ -94,7 +94,7 @@ class SmdFile:
     @classmethod
     def from_path(cls, path: str | Path) -> "SmdFile":
         p = Path(path)
-        return cls.parse(p.read_text(encoding="utf-8", errors="replace"), str(p))
+        return cls.parse(p.read_text(encoding="utf-8-sig", errors="replace"), str(p))
 
     @property
     def root_nodes(self) -> tuple[SmdNode, ...]:
