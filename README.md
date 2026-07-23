@@ -8,6 +8,8 @@
 
 DL ReAnimated is a fully open source, project-based **FBX ↔ ANM2 → RPack** authoring tool for Dying Light, and `.anm2` generation support for Dying Light 2. It provides a desktop GUI for animation authoring, model import, Blender-assisted ANM2-to-FBX export, humanoid and generic bone mapping, shareable `.crig` custom targets, selectable animation-script targets, root-motion policies, reusable projects, and safe new/append RPack export.
 
+Create custom cutscenes, make zombies do the Thriller dance, have Kyle Crane twerk, mocap yourself and import it; Create whatever you want and import it directly into your custom projects!
+
 ## Start
 
 All you need to get started is a recent build of Python installed and a download of the code from this repo.
