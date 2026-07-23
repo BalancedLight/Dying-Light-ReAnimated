@@ -11,6 +11,7 @@ from pathlib import Path
 import re
 import shutil
 import tempfile
+import time
 from typing import Any, Callable
 
 from . import anm2
@@ -155,7 +156,7 @@ def _resolve_bundled_dl2_semantic_map(
         )
         animation.extensions["legacy_target_map_profile_id"] = migrated_from
     compiled, live, plan = compile_bundled_semantic_profile(
-        document, rig, policy, state.profile
+        document, rig, policy, state.profile, state=state
     )
     project.mapping_profiles[compiled.profile_id] = compiled.to_dict()
     project.mapping_profiles[state.profile.profile_id] = state.profile.to_dict()
@@ -669,6 +670,7 @@ def _build_body_project(
 ) -> ProjectBuildResult:
     """Build all enabled project animations and write one tool-owned RPack."""
 
+    build_started = time.perf_counter()
     log = progress or (lambda _message: None)
     errors = project.validate()
     if errors:
@@ -806,10 +808,11 @@ def _build_body_project(
     humanoid_profile_by_animation: dict[str, SourceBoneMappingProfile] = {}
     expected_frame_count_by_animation: dict[str, int] = {}
     timing_by_animation: dict[str, dict[str, Any]] = {}
+    stage_timings_by_animation: dict[str, dict[str, float]] = {}
     import_tolerance = str(
         project.extensions.get("import_tolerance", "recommended") or "recommended"
     )
-    for animation in enabled:
+    for import_index, animation in enumerate(enabled, start=1):
         source_path = Path(animation.source_fbx)
         if not source_path.is_file():
             raise FileNotFoundError(
@@ -820,6 +823,8 @@ def _build_body_project(
                 "RPack output was created."
             )
         context = target_contexts[animation.animation_id]
+        log(f"[{import_index}/{len(enabled)}] Parsing FBX: {source_path.name}")
+        parse_started = time.perf_counter()
         document = (
             _FbxDocument(
                 source_path,
@@ -829,7 +834,15 @@ def _build_body_project(
             if _FbxDocument is FbxDocument
             else _FbxDocument(source_path)
         )
+        stage_timings = {
+            "parse_seconds": time.perf_counter() - parse_started,
+        }
+        transform_validation_started = time.perf_counter()
         preflight = None
+        log(
+            f"[{import_index}/{len(enabled)}] Transform validation: "
+            f"{source_path.name}"
+        )
         if source_path.read_bytes()[:18] == b"Kaydara FBX Binary":
             preflight = preflight_fbx(
                 source_path,
@@ -849,6 +862,9 @@ def _build_body_project(
             and selected_stack_name != animation.source_animation_stack
         ):
             document.select_animation_stack(animation.source_animation_stack)
+        stage_timings["transform_validation_seconds"] = (
+            time.perf_counter() - transform_validation_started
+        )
         mapping_document_by_animation[animation.animation_id] = document
         sample_fps = float(animation.resolved_sample_fps())
         playback_fps = float(animation.resolved_playback_fps())
@@ -941,6 +957,7 @@ def _build_body_project(
                 "clip and retry; Exact Rig does not make an out-of-range selection viable. "
                 "No ANM2 or RPack output was created."
             )
+        planning_started = time.perf_counter()
         if context.execution_mode == "humanoid":
             profile = _mapping_profile_for_animation(project, animation, document)
             mapping_errors = profile.validate(document.limb_models)
@@ -950,6 +967,8 @@ def _build_body_project(
                     + "\n- ".join(mapping_errors)
                 )
             humanoid_profile_by_animation[animation.animation_id] = profile
+            stage_timings["planning_seconds"] = time.perf_counter() - planning_started
+            stage_timings_by_animation[animation.animation_id] = stage_timings
             continue
         assert context.rig is not None
         bundled_dl2_semantic = bool(
@@ -1020,6 +1039,8 @@ def _build_body_project(
             )
             compatibility_by_animation[animation.animation_id] = compatibility
             solver_by_animation[animation.animation_id] = solver
+            stage_timings["planning_seconds"] = time.perf_counter() - planning_started
+            stage_timings_by_animation[animation.animation_id] = stage_timings
             continue
         mapping_payload = project.mapping_profiles.get(
             str(animation.mapping_profile_id or ""), {}
@@ -1107,6 +1128,8 @@ def _build_body_project(
             )
         compatibility_by_animation[animation.animation_id] = compatibility
         solver_by_animation[animation.animation_id] = solver
+        stage_timings["planning_seconds"] = time.perf_counter() - planning_started
+        stage_timings_by_animation[animation.animation_id] = stage_timings
 
     # Resolve naming, script routing, and append-pack provenance while the
     # operation is still read-only. An invalid late clip or stale append pack
@@ -1217,6 +1240,8 @@ def _build_body_project(
             f"[{index}/{len(enabled)}] Retargeting {animation.display_name} "
             f"({animation.root_policy}, {script_resource})"
         )
+        retarget_started = time.perf_counter()
+        candidate_write_seconds = 0.0
         if clip_execution_mode == "exact":
             assert clip_target_rig is not None
             source_rest_for_clip = source_path
@@ -1238,6 +1263,10 @@ def _build_body_project(
                     root_policy=animation.root_policy,
                     root_motion=RootMotionSelection.from_animation(animation),
                     document=mapping_document_by_animation[animation.animation_id],
+                    preflight=preflight,
+                    progress=lambda update, clip_index=index: log(
+                        f"[{clip_index}/{len(enabled)}] {update}"
+                    ),
                 )
                 exact_build.report["mapping_transfer_selection"] = {
                     "policy": solver_selection.selected_policy,
@@ -1264,6 +1293,10 @@ def _build_body_project(
                     root_policy=animation.root_policy,
                     root_motion=RootMotionSelection.from_animation(animation),
                     document=mapping_document_by_animation[animation.animation_id],
+                    preflight=preflight,
+                    progress=lambda update, clip_index=index: log(
+                        f"[{clip_index}/{len(enabled)}] {update}"
+                    ),
                 )
             exact_build.report["solver_selection"] = solver_selection.to_dict()
             automatic_verification = automatic_verification_by_animation.get(
@@ -1277,7 +1310,9 @@ def _build_body_project(
                 )
             payload = exact_build.payload
             candidate_path = clip_out / f"{resource_name}.anm2"
+            candidate_write_started = time.perf_counter()
             candidate_path.write_bytes(payload)
+            candidate_write_seconds = time.perf_counter() - candidate_write_started
             retarget_report = dict(exact_build.report)
             retarget_report["candidate_path"] = str(candidate_path)
             retarget_report["requested_project_root_policy"] = animation.root_policy
@@ -1345,6 +1380,11 @@ def _build_body_project(
             retarget_report = reports[0]
             candidate_path = Path(retarget_report["candidate_path"])
             payload = candidate_path.read_bytes()
+        stage_timings = dict(
+            stage_timings_by_animation.get(animation.animation_id, {})
+        )
+        stage_timings["retarget_seconds"] = time.perf_counter() - retarget_started
+        stage_timings["candidate_write_seconds"] = candidate_write_seconds
         retarget_report["game_id"] = project.game_id
         retarget_report["requested_retarget_mode"] = clip_retarget_mode
         retarget_report["resolved_execution_mode"] = clip_execution_mode
@@ -1489,10 +1529,22 @@ def _build_body_project(
             rendered = f"{animation.display_name}: {message}"
             warnings.append(rendered)
             log(f"WARNING: {rendered}")
+        output_validation_started = time.perf_counter()
         page_layout = _validate_generated_anm2_payload(
             payload,
             resource_name=resource_name,
         )
+        stage_timings["project_output_validation_seconds"] = (
+            time.perf_counter() - output_validation_started
+        )
+        performance = dict(retarget_report.get("performance", {}) or {})
+        performance.update(
+            {
+                name: round(value, 6)
+                for name, value in stage_timings.items()
+            }
+        )
+        retarget_report["performance"] = performance
         final_animations[resource_name] = payload
 
         frame_count = int(retarget_report["frame_count"])
@@ -1508,6 +1560,10 @@ def _build_body_project(
             frame_count=frame_count,
             root_motion_mode=root_motion_mode,
             root_heading_mode=root_heading_mode,
+            source_animation_stack=(
+                animation.source_animation_stack
+                or str(retarget_report.get("source_animation_stack", ""))
+            ),
         )
         candidate_provenance_path = write_anm2_provenance(
             candidate_path, provenance_payload
@@ -1694,11 +1750,13 @@ def _build_body_project(
         f"Writing {len(final_animations)} animations and "
         f"{len(final_scripts)} animation scripts"
     )
+    pack_writing_started = time.perf_counter()
     pack_data = build_animation_library_rpack(
         animation_resources=sorted(final_animations.items()),
         animation_scripts={name: final_scripts[name] for name in sorted(final_scripts)},
     )
     _atomic_write_bytes(output_pack, pack_data)
+    pack_writing_seconds = time.perf_counter() - pack_writing_started
 
     all_manifest_rows: list[PackResourceManifest] = []
     if existing_manifest is not None:
@@ -1797,6 +1855,10 @@ def _build_body_project(
         "pack_sha256": manifest.pack_sha256,
         "animation_count": len(final_animations),
         "script_count": len(final_scripts),
+        "performance": {
+            "pack_writing_seconds": round(pack_writing_seconds, 6),
+            "total_seconds": round(time.perf_counter() - build_started, 6),
+        },
         "animations": [asdict(row) for row in built_rows],
         "animation_scripts": sorted(final_scripts),
         "warnings": warnings,

@@ -169,6 +169,7 @@ def _exact_import_mapping_profile_for_request(
     *,
     game_id: str,
     retarget_mode: str,
+    planning_context_out: dict[str, Any] | None = None,
 ) -> tuple[GenericBoneMap, str]:
     """Build an import-time mapping without reaching back into a Qt controller."""
 
@@ -192,6 +193,7 @@ def _exact_import_mapping_profile_for_request(
                 document,
                 target_rig,
                 policy,
+                planning_context_out=planning_context_out,
             )
             if mapping_profile_origin(profile) == "manually_reviewed":
                 return profile, "Applied a matching live-validated local retarget recipe."
@@ -449,11 +451,13 @@ def _prepare_animation_import(
                     if preflight.repairable_findings or needs_target_map:
                         if stack_name and hasattr(document, "select_animation_stack"):
                             document.select_animation_stack(stack_name)
+                        import_planning_context: dict[str, Any] = {}
                         profile, mapping_note = _exact_import_mapping_profile_for_request(
                             document,
                             target_rig,
                             game_id=request.game_id,
                             retarget_mode=request.retarget_mode,
+                            planning_context_out=import_planning_context,
                         )
                         result.mapping_profiles[profile.profile_id] = profile.to_dict()
                         row.mapping_profile_id = profile.profile_id
@@ -479,6 +483,7 @@ def _prepare_animation_import(
                                 policy,
                                 semantic_profile,
                                 profile_name=f"Bundled humanoid mapping: {row.display_name}",
+                                planning_context=import_planning_context,
                             )
                             result.mapping_profiles[semantic_profile.profile_id] = (
                                 semantic_profile.to_dict()

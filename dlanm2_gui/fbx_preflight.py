@@ -680,6 +680,7 @@ def preflight_fbx(
             )
         selected_stack = getattr(document, "selected_animation_stack", None)
         selected_name = str(getattr(selected_stack, "name", "") or "")
+        report.inventory["selected_animation_stack"] = selected_name
         if len(stacks) > 1 and selected_name:
             report.add(
                 INFO,

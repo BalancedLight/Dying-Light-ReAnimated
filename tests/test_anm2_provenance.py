@@ -18,7 +18,7 @@ from dlanm2_gui.trackmap import dl_name_hash
 from dlanm2_gui.workspace_project import Anm2ToFbxItem
 
 
-def _payload(data: bytes) -> dict:
+def _payload(data: bytes, *, source_animation_stack: str = "") -> dict:
     return build_anm2_provenance(
         data,
         source_fbx="source.fbx",
@@ -30,6 +30,7 @@ def _payload(data: bytes) -> dict:
         frame_count=376,
         root_motion_mode="in_place",
         root_heading_mode="lock_initial_heading",
+        source_animation_stack=source_animation_stack,
     )
 
 
@@ -68,6 +69,26 @@ def test_missing_and_malformed_provenance_are_nonfatal(tmp_path: Path) -> None:
     assert len(invalid.warnings) == 1
 
 
+def test_optional_source_animation_stack_round_trips_and_old_sidecars_remain_valid(
+    tmp_path: Path,
+) -> None:
+    anm2 = tmp_path / "clip.anm2"
+    anm2.write_bytes(b"animation")
+
+    selected_take = "Armature|Layer|Backflip"
+    metadata = _payload(anm2.read_bytes(), source_animation_stack=selected_take)
+    assert metadata["source_animation_stack"] == selected_take
+    write_anm2_provenance(anm2, metadata)
+    assert load_anm2_provenance(anm2).payload["source_animation_stack"] == selected_take
+
+    old_metadata = _payload(anm2.read_bytes())
+    assert "source_animation_stack" not in old_metadata
+    write_anm2_provenance(anm2, old_metadata)
+    loaded_old_metadata = load_anm2_provenance(anm2)
+    assert loaded_old_metadata.valid
+    assert "source_animation_stack" not in loaded_old_metadata.payload
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [
@@ -75,6 +96,7 @@ def test_missing_and_malformed_provenance_are_nonfatal(tmp_path: Path) -> None:
         ("source_duration_seconds", False),
         ("frame_count", True),
         ("schema_version", True),
+        ("source_animation_stack", 42),
         ("playback_fps", 10**400),
         ("source_duration_seconds", 10**400),
     ],

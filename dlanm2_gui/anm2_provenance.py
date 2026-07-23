@@ -74,10 +74,11 @@ def build_anm2_provenance(
     frame_count: int,
     root_motion_mode: str,
     root_heading_mode: str,
+    source_animation_stack: str = "",
 ) -> dict[str, Any]:
     duration = _nonnegative_duration(source_duration_seconds)
     count = _positive_frame_count(frame_count)
-    return {
+    payload = {
         "format": ANM2_PROVENANCE_FORMAT,
         "schema_version": ANM2_PROVENANCE_SCHEMA_VERSION,
         "anm2_sha256": hashlib.sha256(anm2_payload).hexdigest().upper(),
@@ -91,6 +92,10 @@ def build_anm2_provenance(
         "root_motion_mode": str(root_motion_mode),
         "root_heading_mode": str(root_heading_mode),
     }
+    selected_stack = str(source_animation_stack or "")
+    if selected_stack:
+        payload["source_animation_stack"] = selected_stack
+    return payload
 
 
 def write_anm2_provenance(
@@ -163,6 +168,10 @@ def load_anm2_provenance(path: str | Path) -> Anm2ProvenanceLoad:
         for field in ("source_fbx", "source_fbx_sha256", "root_motion_mode", "root_heading_mode"):
             if not isinstance(payload.get(field), str):
                 raise ValueError(f"{field} must be a string")
+        if "source_animation_stack" in payload and not isinstance(
+            payload["source_animation_stack"], str
+        ):
+            raise ValueError("source_animation_stack must be a string")
         expected = str(payload.get("anm2_sha256", "")).upper()
         if len(expected) != 64 or any(character not in "0123456789ABCDEF" for character in expected):
             raise ValueError("anm2_sha256 must be a SHA-256 digest")

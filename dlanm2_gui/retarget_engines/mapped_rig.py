@@ -18,8 +18,10 @@ skeletons are byte-identical.
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import math
+import tempfile
+import time
 
 import numpy as np
 
@@ -43,16 +45,21 @@ from ..fbx_core import (
     FbxDocument,
     normalize_matrix_to_target_space,
 )
-from ..fbx_preflight import preflight_fbx
+from ..fbx_preflight import FbxPreflightReport, preflight_fbx
 from ..oracle.smd_bind_pose import (
     anm2_cayley_vector_from_quaternion,
     quaternion_wxyz_from_anm2_cayley,
 )
 from ..root_mapping import RootMappingSelection, choose_hierarchy_root, resolve_source_root
 from ..root_heading import (
+    RootHeadingReport,
     apply_target_root_policy,
 )
-from ..root_motion import RootMotionSelection, resolve_root_motion_selection
+from ..root_motion import (
+    RootMotionMode,
+    RootMotionSelection,
+    resolve_root_motion_selection,
+)
 from ..root_motion_basis import (
     build_source_actor_frame,
     build_target_actor_frame,
@@ -72,6 +79,36 @@ MappedRigBuild = RetargetBuild
 _DL2_PARITY_FRAMES = frozenset(
     (0, 1, 10, 100, 300, 500, 1000, 1500, 2000, 2200, 2500, 3000, 3342)
 )
+_FRAME_PROGRESS_INTERVAL = 128
+_SAMPLE_STORAGE_LIMIT_BYTES = 64 * 1024 * 1024
+_INPLACE_ROOT_HEADING_WARNING_DEGREES = 10.0
+_INPLACE_ROOT_PLANAR_WARNING_METERS = 0.05
+
+
+def _inplace_root_policy_warning(
+    target_root_name: str,
+    root_motion: RootMotionSelection,
+    report: RootHeadingReport,
+) -> str:
+    """Describe visually significant source root motion discarded in-place."""
+
+    if root_motion.motion_mode != RootMotionMode.IN_PLACE.value:
+        return ""
+    discarded_motion: list[str] = []
+    maximum_heading = report.maximum_source_heading_offset_degrees
+    maximum_planar = report.maximum_source_planar_displacement_meters
+    if maximum_heading >= _INPLACE_ROOT_HEADING_WARNING_DEGREES:
+        discarded_motion.append(f"{maximum_heading:.2f}\N{DEGREE SIGN} of heading")
+    if maximum_planar >= _INPLACE_ROOT_PLANAR_WARNING_METERS:
+        discarded_motion.append(f"{maximum_planar:.3f} m of planar movement")
+    if not discarded_motion:
+        return ""
+    return (
+        f"In-place root policy on {target_root_name!r} discards up to "
+        f"{' and '.join(discarded_motion)} from the source clip. Select "
+        "Skeletal root with Preserve heading to retain source placement and "
+        "orientation in an FBX round trip."
+    )
 
 
 def quaternion_wxyz_to_matrix(value: tuple[float, float, float, float] | list[float]) -> np.ndarray:
@@ -272,11 +309,17 @@ def _joint_pivot_extent(globals_by_name: Mapping[str, np.ndarray]) -> float:
 
 
 def _frame_local_matrices(
-    rig: ChromeRig, frame: list[list[float]]
+    rig: ChromeRig,
+    frame: list[list[float]],
+    *,
+    track_index_by_descriptor: Mapping[int, int] | None = None,
 ) -> dict[str, np.ndarray]:
     result: dict[str, np.ndarray] = {}
+    indexes = track_index_by_descriptor or {
+        descriptor: index for index, descriptor in enumerate(rig.descriptors)
+    }
     for bone in rig.bones:
-        row = np.asarray(frame[rig.descriptors.index(bone.descriptor)], dtype=float)
+        row = np.asarray(frame[indexes[bone.descriptor]], dtype=float)
         if row.shape != (9,) or not np.isfinite(row).all():
             raise ValueError(f"Bone {bone.name!r} has non-finite or malformed track values")
         result[bone.name] = compose_local_matrix(
@@ -316,11 +359,19 @@ def _globals_from_locals(
 
 
 def reconstruct_target_globals(
-    rig: ChromeRig, frame: list[list[float]]
+    rig: ChromeRig,
+    frame: list[list[float]],
+    *,
+    track_index_by_descriptor: Mapping[int, int] | None = None,
 ) -> dict[str, np.ndarray]:
     """Reconstruct target globals from one unpacked ANM2 track frame."""
 
-    return _globals_from_locals(rig, _frame_local_matrices(rig, frame))
+    return _globals_from_locals(
+        rig,
+        _frame_local_matrices(
+            rig, frame, track_index_by_descriptor=track_index_by_descriptor
+        ),
+    )
 
 
 def validate_hierarchy_safety(
@@ -329,10 +380,11 @@ def validate_hierarchy_safety(
     *,
     preserve_non_root_translations: bool,
     allowed_non_root_translation_bones: set[str] | None = None,
+    track_index_by_descriptor: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct output globals and reject detached/stretched hierarchies."""
 
-    if not values:
+    if len(values) == 0:
         raise ValueError("Hierarchy safety validation requires at least one frame")
     rig_validation = rig.validate(test_writer_capacity=False)
     rig_validation.require_valid()
@@ -363,17 +415,20 @@ def validate_hierarchy_safety(
     minimum_scale = float("inf")
     violations: list[str] = []
     allowed_translation_bones = set(allowed_non_root_translation_bones or ())
+    indexes = track_index_by_descriptor or {
+        descriptor: index for index, descriptor in enumerate(rig.descriptors)
+    }
 
     for frame_index, frame in enumerate(values):
-        globals_by_name = reconstruct_target_globals(rig, frame)
+        globals_by_name = reconstruct_target_globals(
+            rig, frame, track_index_by_descriptor=indexes
+        )
         extent = _joint_pivot_extent(globals_by_name)
         if extent > maximum_extent:
             maximum_extent = extent
             maximum_extent_frame = frame_index
         for bone in rig.bones:
-            track = np.asarray(
-                frame[rig.descriptors.index(bone.descriptor)], dtype=float
-            )
+            track = np.asarray(frame[indexes[bone.descriptor]], dtype=float)
             scale = np.abs(track[6:9])
             if not np.isfinite(scale).all() or np.any(scale <= 1.0e-5):
                 violations.append(
@@ -961,10 +1016,19 @@ def build_mapped_rig_anm2(
     transfer_policy: str = "mapped_local_rest_delta",
     root_policy: str = "bip01",
     root_motion: RootMotionSelection | Mapping[str, Any] | None = None,
+    preflight: FbxPreflightReport | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> MappedRigBuild:
     """Retarget an arbitrary mapped FBX skeleton onto a Chrome Rig."""
 
+    operation_started = time.perf_counter()
     rig.validate().require_valid()
+    track_index_by_descriptor = {
+        descriptor: index for index, descriptor in enumerate(rig.descriptors)
+    }
+    track_index_by_bone = {
+        bone.name: track_index_by_descriptor[bone.descriptor] for bone in rig.bones
+    }
     errors = bone_map.validate()
     if errors:
         raise ValueError("Invalid mapped-rig profile:\n- " + "\n- ".join(errors))
@@ -978,7 +1042,10 @@ def build_mapped_rig_anm2(
         raise ValueError("Mapped-rig sample FPS must not exceed 1000")
 
     source = Path(animation_fbx)
+    document_parse_started = time.perf_counter()
     document = document if document is not None else document_factory(source)
+    document_parse_seconds = time.perf_counter() - document_parse_started
+    transform_validation_started = time.perf_counter()
     selected_stack = getattr(document, "selected_animation_stack", None)
     selected_stack_name = str(getattr(selected_stack, "name", "") or "")
     if (
@@ -992,7 +1059,16 @@ def build_mapped_rig_anm2(
         document.select_animation_stack(animation_stack)
     if not document.limb_models:
         raise ValueError("Mapped-rig retarget requires an FBX LimbNode skeleton")
-    mapped_preflight = preflight_fbx(
+    selected_stack = getattr(document, "selected_animation_stack", None)
+    selected_stack_name = str(getattr(selected_stack, "name", "") or "")
+    preflight_matches_document = (
+        preflight is not None
+        and preflight.purpose == "animation"
+        and Path(preflight.path).resolve() == source.resolve()
+        and str(preflight.inventory.get("selected_animation_stack", "") or "")
+        == selected_stack_name
+    )
+    mapped_preflight = preflight if preflight_matches_document else preflight_fbx(
         source,
         purpose="animation",
         animation_stack=animation_stack,
@@ -1000,6 +1076,8 @@ def build_mapped_rig_anm2(
         document=document,
     )
     mapped_preflight.require_buildable()
+    transform_validation_seconds = time.perf_counter() - transform_validation_started
+    planning_started = time.perf_counter()
 
     warnings = _validate_mapping_identity(rig, bone_map, document)
     base_rows, mapped, pair_warnings = _mapped_pairs_by_target_rig_bone(
@@ -1395,7 +1473,30 @@ def build_mapped_rig_anm2(
     if len(ticks) == 1:
         ticks.append(ticks[0])
 
-    values: list[list[list[float]]] = []
+    frame_count = len(ticks)
+    value_shape = (frame_count, len(rig.descriptors), 9)
+    value_bytes = int(np.prod(value_shape, dtype=np.int64)) * np.dtype(float).itemsize
+    # A long clip must not turn per-frame Python lists into an unbounded heap
+    # allocation.  The mapped encoder still needs random access for its
+    # byte-stable packed streams and all-frame safety checks, so spill only the
+    # request-local sample matrix to a temporary memory map once it exceeds a
+    # modest working-set budget.  No sample data survives this build call.
+    sample_storage_limit_bytes = _SAMPLE_STORAGE_LIMIT_BYTES
+    sample_storage_directory: tempfile.TemporaryDirectory[str] | None = None
+    sample_storage_mode = "memory"
+    if value_bytes > sample_storage_limit_bytes:
+        sample_storage_directory = tempfile.TemporaryDirectory(
+            prefix="dl_reanimated_retarget_"
+        )
+        values: np.ndarray = np.memmap(
+            Path(sample_storage_directory.name) / "samples.f64",
+            dtype=float,
+            mode="w+",
+            shape=value_shape,
+        )
+        sample_storage_mode = "memory_mapped"
+    else:
+        values = np.empty(value_shape, dtype=float)
     bind_track_values = rig.bind_track_values()
     bind_row_by_descriptor = {
         descriptor: bind_track_values[index]
@@ -1439,7 +1540,15 @@ def build_mapped_rig_anm2(
             }
         )
 
-    for tick in ticks:
+    retarget_planning_seconds = time.perf_counter() - planning_started
+    retarget_sampling_started = time.perf_counter()
+    for frame_index, tick in enumerate(ticks):
+        if progress is not None and (
+            frame_index == 0
+            or (frame_index + 1) % _FRAME_PROGRESS_INTERVAL == 0
+            or frame_index + 1 == len(ticks)
+        ):
+            progress(f"Sampling retarget frames {frame_index + 1}/{len(ticks)}")
         rows_by_descriptor: dict[int, list[float]] = {}
         target_animated_globals: dict[str, np.ndarray] = {}
         raw_source_animated_globals = (
@@ -1624,11 +1733,6 @@ def build_mapped_rig_anm2(
                 else local.copy()
             )
             rows_by_descriptor[bone.descriptor] = row
-            movement_ranges[bone.name] = max(
-                movement_ranges[bone.name],
-                max(abs(float(a) - float(b)) for a, b in zip(row, bind_row)),
-            )
-        frame_index = len(values)
         if frame_index in _DL2_PARITY_FRAMES:
             maximum_rotation_error = 0.0
             compared_rows = 0
@@ -1660,7 +1764,7 @@ def build_mapped_rig_anm2(
         frame_extent = _joint_pivot_extent(target_animated_globals)
         if frame_extent > maximum_animated_joint_extent:
             maximum_animated_joint_extent = frame_extent
-            maximum_animated_joint_extent_frame = len(values)
+            maximum_animated_joint_extent_frame = frame_index
         frame = [
             rows_by_descriptor.get(
                 descriptor,
@@ -1668,7 +1772,8 @@ def build_mapped_rig_anm2(
             )
             for descriptor in rig.descriptors
         ]
-        values.append(frame)
+        values[frame_index] = frame
+    retarget_sampling_seconds = time.perf_counter() - retarget_sampling_started
 
     root_row = base_rows.get(target_root_name)
     root_row_policy = _resolved_row_transfer_policy(root_row, default_row_policy)
@@ -1678,7 +1783,7 @@ def build_mapped_rig_anm2(
         and _row_can_change_translation(root_row, root_row_policy)
     )
     if not root_mapping_owns_translation:
-        root_track = rig.descriptors.index(target_root_bone.descriptor)
+        root_track = track_index_by_descriptor[target_root_bone.descriptor]
         root_bind_translation = np.asarray(target_root_bone.bind_translation, dtype=float)
         for frame, displacement in zip(values, source_root_displacements):
             frame[root_track][3:6] = [
@@ -1691,6 +1796,11 @@ def build_mapped_rig_anm2(
     root_heading_report = apply_global_root_policy(
         values, rig, target_root_name, resolved_root_motion
     )
+    root_policy_warning = _inplace_root_policy_warning(
+        target_root_name, resolved_root_motion, root_heading_report
+    )
+    if root_policy_warning:
+        warnings.append(root_policy_warning)
     source_root_heading_degrees = root_heading_report.source_heading_degrees
     source_frame_zero_displacement_m = source_root_raw_displacements_m[0]
     source_last_displacement_m = source_root_raw_displacements_m[-1]
@@ -1723,9 +1833,7 @@ def build_mapped_rig_anm2(
             values,
             helper_rules,
             target_bind_local=target_bind,
-            target_track_indices={
-                bone.name: rig.descriptors.index(bone.descriptor) for bone in rig.bones
-            },
+            target_track_indices=track_index_by_bone,
             target_parents=rig_parents,
             source_bind_local={
                 name: source_bind_local[name]
@@ -1770,34 +1878,37 @@ def build_mapped_rig_anm2(
         if _component_owns_translation(rule.component_policy)
         and rule.transfer_policy not in {"bind", "rotation_delta"}
     )
+    hierarchy_validation_started = time.perf_counter()
     hierarchy_safety = validate_hierarchy_safety(
         rig,
         values,
         preserve_non_root_translations=True,
         allowed_non_root_translation_bones=authorized_translation_targets,
+        track_index_by_descriptor=track_index_by_descriptor,
+    )
+    hierarchy_validation_seconds = (
+        time.perf_counter() - hierarchy_validation_started
     )
 
+    output_validation_started = time.perf_counter()
+    value_array = np.asarray(values, dtype=float)
+    bind_track_array = np.asarray(bind_track_values, dtype=float)
+    movement_by_track = np.max(
+        np.abs(value_array - bind_track_array[None, :, :]), axis=(0, 2)
+    )
     for bone in rig.bones:
-        track_index = rig.descriptors.index(bone.descriptor)
-        bind_row = bind_row_by_descriptor[bone.descriptor]
-        movement_ranges[bone.name] = max(
-            max(abs(float(a) - float(b)) for a, b in zip(frame[track_index], bind_row))
-            for frame in values
+        movement_ranges[bone.name] = float(
+            movement_by_track[track_index_by_descriptor[bone.descriptor]]
         )
 
-    packed_flags: list[list[bool]] = []
-    for track_index in range(len(rig.descriptors)):
-        flags: list[bool] = []
-        for component_index in range(9):
-            curve = [frame[track_index][component_index] for frame in values]
-            flags.append(max(curve) - min(curve) > 1.0e-8)
+    packed_flags = (np.ptp(value_array, axis=0) > 1.0e-8).tolist()
+    for flags in packed_flags:
         if any(flags[6:9]):
             flags[6:9] = [True, True, True]
-        packed_flags.append(flags)
 
-    header = rig.make_header(frame_count=len(values))
+    header = rig.make_header(frame_count=frame_count)
     payload = build_payload_from_values(header, rig.descriptors, values, packed_flags)
-    sample_frames = sorted({0, len(values) // 2, len(values) - 1})
+    sample_frames = sorted({0, frame_count // 2, frame_count - 1})
     decoded = decode_samples(payload, [float(value) for value in sample_frames])
     maximum_error = validate_decoded_component_error(
         decoded,
@@ -1805,6 +1916,7 @@ def build_mapped_rig_anm2(
         sample_frames,
         engine_name="MappedRigRetargetEngine",
     )
+    output_validation_seconds = time.perf_counter() - output_validation_started
 
     intentionally_unmapped = {
         target_name
@@ -1986,10 +2098,31 @@ def build_mapped_rig_anm2(
         "spatial_only_rows": spatial_only_rows,
     }
 
-    return MappedRigBuild(
-        payload=payload,
-        frame_count=len(values),
-        report={
+    report = {
+            "performance": {
+                "document_parse_seconds": round(document_parse_seconds, 6),
+                "transform_validation_seconds": round(
+                    transform_validation_seconds, 6
+                ),
+                "retarget_planning_seconds": round(
+                    retarget_planning_seconds, 6
+                ),
+                "retarget_sampling_seconds": round(
+                    retarget_sampling_seconds, 6
+                ),
+                "hierarchy_validation_seconds": round(
+                    hierarchy_validation_seconds, 6
+                ),
+                "output_validation_seconds": round(
+                    output_validation_seconds, 6
+                ),
+                "total_seconds": round(
+                    time.perf_counter() - operation_started, 6
+                ),
+                "frame_progress_interval": _FRAME_PROGRESS_INTERVAL,
+                "sample_storage": sample_storage_mode,
+                "sample_storage_limit_bytes": sample_storage_limit_bytes,
+            },
             "preflight_policy": "export_first_v1",
             "wrapper_canonicalization": wrapper_canonicalization,
             "canonical_transform_validation": dict(
@@ -2150,7 +2283,7 @@ def build_mapped_rig_anm2(
             "maximum_bind_rotation_discrepancy_degrees": max(
                 (float(row["rotation_delta_degrees"]) for row in bind_deltas), default=0.0
             ),
-            "frame_count": len(values),
+            "frame_count": frame_count,
             "fps": sample_fps,
             "track_count": len(rig.descriptors),
             "bone_count": len(rig.bones),
@@ -2217,7 +2350,20 @@ def build_mapped_rig_anm2(
             "root_motion_selection_requested": requested_root_motion.to_dict(),
             "root_motion_selection_applied": resolved_root_motion.to_dict(),
             "candidate_path": None,
-        },
+    }
+    if sample_storage_directory is not None:
+        # Windows cannot remove an open mapping. Close it before releasing the
+        # request-local temporary directory so long clips leave no cache file.
+        value_array = None
+        values.flush()
+        mapping = getattr(values, "_mmap", None)
+        if mapping is not None:
+            mapping.close()
+        sample_storage_directory.cleanup()
+    return MappedRigBuild(
+        payload=payload,
+        frame_count=frame_count,
+        report=report,
     )
 
 

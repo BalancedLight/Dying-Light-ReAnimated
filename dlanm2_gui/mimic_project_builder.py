@@ -342,6 +342,7 @@ def build_project_with_mimics(
                         frame_count=int(built.frame_count),
                         root_motion_mode=motion_mode,
                         root_heading_mode=heading_mode,
+                        source_animation_stack=_animation_stack(animation),
                     ),
                 )
                 built.anm2_path = str(intermediate)
@@ -435,6 +436,7 @@ def build_project_with_mimics(
                 frame_count=build.frame_count,
                 root_motion_mode="mimic",
                 root_heading_mode="not_applicable",
+                source_animation_stack=_animation_stack(animation),
             )
             mimic_report = dict(build.report)
             mimic_report.update({

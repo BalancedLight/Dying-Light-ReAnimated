@@ -21,6 +21,7 @@ from dlanm2_gui.semantic_retarget import (
 )
 from dlanm2_gui.target_retarget_policy import build_target_retarget_policy
 from dlanm2_gui.workspace_project import DlReanimatedProject, ProjectAnimation
+import dlanm2_gui.semantic_retarget as semantic_retarget
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -365,3 +366,38 @@ def test_build_resolution_recompiles_semantic_source_of_truth_and_rejects_stale_
     assert animation.extensions["compiled_target_map_hash"] != stale_hash
     assert first_live.certificate["source_animation_hash"] == "synthetic-animation-v1"
     assert second_live.certificate["source_animation_hash"] == "changed-live-animation"
+
+
+def test_compile_reuses_current_prepared_state_and_invalidates_profile_edits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
+    policy = build_target_retarget_policy(rig, game_id=DL2_GAME_ID)
+    source = _semantic_analysis(policy, extra_bones=("alternate_pelvis",))
+    original = semantic_retarget.build_automatic_retarget_plan
+    calls = 0
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(semantic_retarget, "build_automatic_retarget_plan", counted)
+    state = prepare_bundled_semantic_state(source, rig, policy)
+    assert calls == 1
+
+    compiled, live, plan = compile_bundled_semantic_profile(
+        source, rig, policy, state.profile, state=state
+    )
+    assert calls == 1
+    assert live.ok and live.plan_hash == plan.plan_hash
+    assert len(compiled.pairs) == 271
+
+    state.profile.set_mapping(
+        "hips", "alternate_pelvis", confidence=1.0, method="manual", mode="direct"
+    )
+    _compiled, live, _plan = compile_bundled_semantic_profile(
+        source, rig, policy, state.profile, state=state
+    )
+    assert calls == 2
+    assert live.ok
