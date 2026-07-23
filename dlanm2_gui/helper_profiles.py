@@ -166,11 +166,13 @@ def extend_track_descriptors_for_helpers(
     result = [int(value) for value in base_descriptors]
     names = tuple(str(name) for name in target_names)
     selected = set(str(name) for name in selected_helper_names)
-    recognized = set(recognized_helper_names(names))
-    unknown = sorted(selected - recognized, key=str.casefold)
+    # Every explicitly selected row must belong to the target hierarchy.  The
+    # GUI's helper view is a convenience subset; Show all target bones is
+    # allowed to author any descriptor-backed target row.
+    unknown = sorted(selected - set(names), key=str.casefold)
     if unknown:
         raise ValueError(
-            "Mapped helper target(s) are unavailable in the selected target SMD: "
+            "Mapped target bone(s) are unavailable in the selected target SMD: "
             + ", ".join(unknown)
         )
 

@@ -1,18 +1,17 @@
 # Python environments and caches
 __pycache__/
 *.py[cod]
-*.pyd
 .venv/
 .venv-build/
 venv/
 .pytest_cache/
+.pytest_tmp/
 .mypy_cache/
 .ruff_cache/
 .pyright/
 .coverage
 .coverage.*
 htmlcov/
-.pytest_tmp/
 
 # Packaging and build output
 build/
@@ -61,20 +60,15 @@ outputs/
 dl_reanimated_build/
 
 # Bundled release examples and required references
-!/DL-ReAnimated.spec
 !/common_anims_sp_pc.rpack
 !/common_anims_sp_pc.rpack.dlrmanifest.json
-!/reference/*.anm2
-!/reference/*.smd
-!/reference/*.crig
-!/reference/dl2/
-!/reference/dl2/*.anm2
-!/reference/dl2/*.smd
-!/reference/dl2/*.crig
-!/examples/*.dlraproj
-!/examples/*.dlrmap.json
-!/tests/fixtures/*.smd
-!/tests/fixtures/*.ascii
+!/reference/**/*.anm2
+!/reference/**/*.smd
+!/reference/**/*.crig
+!/examples/**/*.dlraproj
+!/examples/**/*.dlrmap.json
+!/tests/fixtures/**/*.smd
+!/tests/fixtures/**/*.ascii
 
 # Locally extracted game data and large optional dumps
 common_anims_PC/
@@ -85,7 +79,7 @@ map_01_pc/
 test_anm2_PC/
 base assets/
 
-
-#Ignore vscode AI rules
-.github\instructions\codacy.instructions.md
-AGENTS.md
+# Local Codex and editor configuration
+/.codex-remote-attachments/
+/.github/instructions/codacy.instructions.md
+/AGENTS.md

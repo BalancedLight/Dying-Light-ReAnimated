@@ -13,19 +13,38 @@ The **File > Open Recent** menu keeps the ten most recently opened or saved proj
 
 ## Project default and simple animation workflow
 
-The Project page selects the game profile and **project default target rig**. A normal animation workflow is:
+The Project page selects the game profile and **project default target rig**. Both
+bundled DL1 and DL2 targets use **Auto**. A normal animation workflow is:
 
 1. choose the default target CRIG;
 2. add one or more animation FBXs;
 3. leave **Use imported animation FBX bind pose (recommended)** enabled;
-4. review each row's Target rig and Compatibility;
-5. review only rows whose mapping needs attention;
+4. confirm each row is Ready or follow its single focused action;
+5. open Retarget details only when you want the analysis evidence;
 6. select root motion per clip;
 7. build the RPack.
 
 A separate T-pose is required only when an animation FBX has missing/unreliable bind transforms. Disable embedded-bind mode and select a matching neutral/rest FBX in that case.
 
-Advanced mode exposes imported CRIGs, trusted rest matrices, custom target files, mapping profile controls, ignored/helper inventory, collision policy, intermediate output, and diagnostic controls. Advanced mode is a local UI preference; it does not change stored animation data by itself.
+Advanced mode exposes imported CRIGs, trusted rest matrices, custom target files,
+full mapping controls, per-bone evidence, ignored/helper inventory, collision policy,
+intermediate output, and diagnostic controls. For exact/custom CRIG targets,
+**Root & .crig Mapping** also exposes **Import retarget recipe…** and **Export reviewed
+recipe…**. Advanced mode is a local UI preference; it does not change stored animation
+data by itself. A row's **Fix mapping…** action can temporarily open the relevant
+advanced editor without making ordinary supported imports require it.
+
+The bundled DL2 Advanced target stays in the normal **Retargeting** view and never
+opens the full CRIG table as its ordinary action. Auto reports whether the clip
+resolved through ExactRig or the verified automatic body bridge. Selecting a custom
+CRIG switches to the expert Exact/CRIG workflow; custom/manual authorization is
+unchanged.
+
+The same is true for bundled DL1 and DL2 Shadow Caster targets: target ownership
+selects the editor, while solver mode only selects execution. Setting a bundled
+target to Exact does not expose **Root & .crig Mapping**. That page appears for a
+user-created/imported custom rig, or when an expert override explicitly records both
+deliberate intent and permission to expose the CRIG mapping surface.
 
 ## Models workspace
 
@@ -78,17 +97,45 @@ Each row is one output animation. Core columns/controls include:
 - **Display name** and **Resource name**;
 - **FBX source** and selected animation stack;
 - **Target rig**: **Inherit project target** or an explicit CRIG override;
-- **Compatibility**: Exact, Source superset, Mapped reviewed, Needs review, or Incompatible;
-- **Mapping status** and **Edit mapping**;
+- **Compatibility / mapping**: one concise readiness state and reason;
+- **Fix mapping…** when action is required and **Details…** for the full evidence;
 - **Source root** and **Target root**;
 - **Root motion**;
 - **Solver** and build-safety status;
 - **Animation SCR**: project default or clip override;
 - **IK** recommendation.
 
-Usable clips with non-fatal preflight findings show **Imported with warnings**. Select the row to open **Selected clip import diagnostics**, which groups findings for that file and requested purpose under repaired, ignored, needs review, and fatal. Embedded model geometry is normally listed as ignored because skeletal ANM2 creation does not load or triangulate it. During batch import, a genuinely corrupt file is reported without preventing other usable clips from being added.
+The row reports readiness before Export is opened:
 
-The Project tab's **Import tolerance** defaults to **Recommended / forgiving**. **Strict diagnostics** is useful for model audits and may block selected model recovery warnings; it never makes unrequested model geometry block animation import. Normal GUI errors remain actionable and omit Python tracebacks. Advanced developer diagnostics must be enabled explicitly to include tracebacks in developer logs.
+```text
+Ready — exact skeleton match
+Ready — automatically retargeted
+Ready — partial skeleton; 8 target bones inherit parent motion
+Ready — upper-body clip; lower body held at bind
+Needs attention — left arm chain is ambiguous
+Cannot import — FBX has no usable skeleton or animation
+```
+
+Normal accommodations do not create warning badges or popups. Namespace stripping,
+multilingual recognition, extra ignored source bones, missing optional/terminal
+bones, chain-length adaptation, and facial/secondary targets held at bind appear in
+the expandable **Retarget details** panel and build report. Information is grouped by
+category rather than repeated per bone. A yellow **Needs attention** row has one
+**Fix mapping…** action. A red blocker shows one focused modal when the user explicitly
+builds/exports; import interrupts only for an unreadable FBX, a requested stack that
+does not exist, or no usable skeleton. One corrupt file does not prevent valid peers
+in a batch from being added.
+
+The Project tab's parser option is **Recommended / forgiving (FBX parsing)**. Its
+tooltip is:
+
+```text
+Controls recoverable FBX parsing and geometry diagnostics. It does not approve cross-rig bone mappings or bypass skeleton safety checks.
+```
+
+**Strict diagnostics** is useful for parser/model audits, but neither option changes
+mapping authorization. Normal GUI errors omit Python tracebacks; advanced developer
+diagnostics must be enabled explicitly to include them in logs.
 
 An empty per-animation target inherits the Project target. An explicit target affects only that row. Animations for different CRIGs may coexist in one tool-owned RPack when resource names are unique; the build report groups output by target rig.
 
@@ -106,7 +153,17 @@ All required target tracks match, while the source may contain additional face, 
 
 ### Needs review
 
-Names or ancestry differ. The clip remains importable, but build is blocked until required rows are reviewed. Click **Edit mapping** or the mapping-status control.
+An animated critical chain is ambiguous, a confidence margin is too small, or a
+custom map is unreviewed. The clip remains importable without a popup. Click its one
+**Fix mapping…** action; the primary message names the failed invariant while the
+full per-bone list stays in Retarget details.
+
+### Automatically retargeted
+
+A source recognized through Unicode/multilingual names, topology, bind geometry,
+symmetry, skinning, and animation activity is aligned to the target's semantic
+chains. Different chain lengths use direct, composed, distributed, bind-inherited,
+or static-bind rows. Optional missing bones are not failures.
 
 ### Mapped reviewed
 
@@ -129,23 +186,74 @@ Every ordinary row and helper override can select:
 - transfer: Default, Global bind basis, Rotation delta, Rest relative, Copy local, or Bind;
 - components: Rotation, Translation, Rotation + translation, Scale, or Full transform.
 
-The saved map also records automatic/unreviewed, automatic accepted, manually/imported reviewed, or intentionally unmapped state. **Approve mapped solver** records deliberate review of a repair map; clearing a target and selecting Bind records the intention to leave it at authored bind.
+The saved map records automatic/unreviewed, verified automatic, manually/imported
+reviewed, or intentionally unmapped state. **Approve mapped solver** remains a
+deliberate action for unknown/custom maps; it is not offered as a shortcut for a
+failed built-in certificate. Clearing a target and selecting Bind records the
+intention to leave it at authored bind.
 
-Automatic suggestions use one deterministic one-to-one assignment across the whole skeleton. The row status exposes the selected candidate, runner-up, score margin, and available evidence. When the FBX provides bind globals, that evidence includes normalized pivots, parent-child directions, relative extents, and chain depth in addition to names, roles, side, and deform/helper class. Ambiguous or low-margin rows remain unreviewed and cannot build until you approve or replace them.
+Automatic planning works on ordered semantic chains, not a forced one-to-one global
+fill. The details table exposes direct, composed, distributed, `inherit_bind`,
+`static_bind`, and `manual_required` decisions, candidate/runner-up scores, margins,
+and evidence from hierarchy, bind geometry, symmetry, skin regions, motion, names,
+and source-family hints. Pure nearest-position evidence cannot invent an anatomical
+mapping. Ambiguous animated chains remain unreviewed; missing static or optional
+chains do not.
 
 For a differently named character, use rotation-delta transfer with rotation ownership on ordinary deform chains. This preserves target translation/scale and therefore bone lengths. Translation-owning policies are appropriate only for reviewed roots, props, sockets, mechanical parts, or deliberate exceptions.
 
 Intentionally unmapped targets stay at bind. One source bone may drive several distinct helper/socket/camera targets; helper fan-out is applied after the primary body solve.
 
-**Apply to compatible clips** copies a map only to clips with the matching source signature and target skeleton/full-bind fingerprint.
+For either bundled DL2 player target, **Retargeting** shows 52 editable anatomical
+roles rather than the 271- or 81-row CRIG inventory. The source dropdown offers the
+automatic choice and every live source bone, plus explicit **Inherit parent / target
+bind** and **Hold at bind** dispositions. The Required, Confidence, Method, and
+Result columns explain the current plan. **Fix mapping** focuses the first genuinely
+ambiguous animated role instead of opening a raw CRIG table.
+
+For **Dying Light 2 Player — Advanced**, a recognized body source normally shows:
+
+```text
+Verified DL2 body map
+52 body rows mapped
+219 target rows held at bind
+0 spatial-only mappings
+certificate: pass
+```
+
+The semantic profile—not that compiled table—is saved as the animation's editable
+mapping. **Auto-map humanoid** resets explicit role choices and rebuilds from live
+evidence. Loading, clearing, or manually changing a role clears any compiled map ID
+and certificate. Build always recompiles and revalidates; it never trusts cached
+rows. Old target-sized maps are retained for audit while reviewed choices migrate to
+the semantic profile. The four
+index/middle/ring/pinky base rows per side (`finger10/20/30/40`) remain bind-held,
+while segments 1/2/3 map deterministically; thumb `01/02/03` maps directly.
+
+**Apply to compatible clips** copies semantic choices only to clips with the same
+source name/parent signature and the same target policy, rig ID, skeleton, and full
+bind fingerprint. Each recipient compiles its own fresh backend map.
 
 ## Root motion
 
-Root motion is independent of ordinary bone rows. Select the source and target roots from their inventories and choose in-place, raw root, or motion accumulator behavior per clip.
+Root motion is independent of ordinary bone rows. Select the source and target roots
+from their inventories and choose in-place, raw root, or motion accumulator behavior
+per clip. In-place removes planar translation and accumulated target-space heading
+while preserving pelvis tilt/pose. The normal Retargeting tab's **Root & locomotion**
+panel selects the actual source root, actual target root, root-motion owner, heading
+owner, source/target feet, and IK recommendation. Raw skeletal-root motion preserves the complete
+orientation unless **Lock initial heading** is selected. Motion transfers planar displacement and heading to `0xCCC3CDDF` while
+keeping vertical/pose motion on the skeletal root.
 
 A missing `bip01` is not filled silently. For multiple independent/helper roots, keep them independent unless the target CRIG explicitly parents them.
 
 Use motion accumulator for locomotion that should move the object in the consuming graph/movie rather than moving only the mesh.
+
+**Show helper bones** exposes the bundled target's camera, holder, head-end, sole,
+and (legacy only) IK/shadow-caster rows. **Show all target bones** exposes the
+complete target hierarchy once; Advanced DL2 shows exactly 271 unique target rows.
+Every additional row supports Auto, Direct, Inherit bind, or Static bind plus
+transfer/component policy. Unmapped rows remain at bind.
 
 ## Multiple animation stacks
 
@@ -154,6 +262,12 @@ FBX stacks/actions are discovered by connection without loading model geometry. 
 ## Export
 
 **Export ANM2 only...** retargets every enabled clip to its selected per-row target and writes only generated `.anm2` files.
+
+Each imported FBX records its declared **Source FPS**. **Sampling FPS** chooses the transforms written into ANM2, while **Playback FPS** controls the animation-script sequence. They default to the declared source cadence for new imports and may be changed independently. Standalone and retained intermediate ANM2 files include a SHA-gated `.anm2.dlrmeta.json` timing sidecar.
+
+For DL2 targets this remains the explicitly labeled format-1 compatibility
+experiment. Native Header_Version2 writing is not implemented; native DL2
+Header_Version2 support is currently read/decode and ANM2-to-FBX only.
 
 ### Create new
 
@@ -167,7 +281,13 @@ Output preflight resolves every enabled clip's target, mapping, roots, solver, s
 
 ## ANM2 to FBX
 
-The reverse workspace batches ANM2 files into skeleton-and-animation FBXs through Blender. Select the matching CRIG because ANM2 does not contain bone names, hierarchy, or bind transforms. Native mode needs no map; cross-rig mode exposes conservative automatic suggestions and review.
+The reverse workspace batches ANM2 files into skeleton-and-animation FBXs through Blender. Select the matching CRIG because ANM2 does not contain bone names, hierarchy, or bind transforms. Native mode needs no map; cross-rig mode exposes conservative automatic suggestions and review. **ANM2 FPS** describes the existing samples; **FBX FPS** selects the output cadence. A valid timing sidecar fills both automatically, while missing or rejected metadata defaults to 30/30. Changing FBX FPS performs real duration-preserving interpolation rather than relabeling the same keys.
+
+Progress remains nonmodal through reading, cached page/segment decoding, temporal resampling, sparse-curve
+construction, Blender startup, armature creation, bulk curve installation, root-parity audit, and FBX
+write. Each stage shows elapsed/current/total work and can be cancelled during
+decode or Blender execution. Bind-only skeleton rows are expected and do not create
+warning badges.
 
 ## Installation
 

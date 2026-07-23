@@ -9,7 +9,11 @@ from typing import Any
 import uuid
 
 from . import __version__
-from .animation_targets import resolve_animation_target
+from .animation_targets import (
+    RetargetUiKind,
+    resolve_animation_target,
+    retarget_ui_kind,
+)
 from .bone_maps import GenericBoneMap
 from .chrome_rig import ChromeRig
 from .retarget_mapping import canonical_humanoid_role
@@ -80,6 +84,10 @@ class UnifiedMainWindow:
         for title in ("Project", "Animations", "Retargeting", "Facial", "Export"):
             if title in pages:
                 self.animation_tabs.addTab(pages[title], title)
+        # Facial callbacks are installed by the standalone controller before
+        # Unified takes ownership of its pages.  Repoint them while the old
+        # QTabWidget is still alive; setCentralWidget below will delete it.
+        self.controller.facial_tab_host = self.animation_tabs
 
         self.crig_mapping = CrigMappingWorkspace(qt, controller=self.controller, mark_dirty=self._mark_dirty)
         self.animation_tabs.addTab(
@@ -158,6 +166,7 @@ class UnifiedMainWindow:
         if hasattr(self.controller, "game_combo"):
             self.controller.game_combo.currentIndexChanged.connect(self._game_profile_changed)
         self._restore_extension_state()
+        self._refresh_facial_visibility()
         self.crig_mapping.reload_clips()
         self.main_tabs.currentChanged.connect(self._workspace_changed)
 
@@ -167,16 +176,26 @@ class UnifiedMainWindow:
     def _game_profile_changed(self, *_args) -> None:
         """Keep model defaults coherent while preserving deliberate custom SMD paths."""
 
+        self._refresh_facial_visibility()
         if not hasattr(self.models, "target_smd"):
             return
         current = self.models.target_smd.text().strip().replace("\\", "/").casefold()
         default_like = (
             not current
             or current.endswith("reference/player_1_tpp.smd")
+            or current.endswith("reference/dl2/player_skeleton.smd")
             or current.endswith("reference/dl2/player_shadow_caster.smd")
         )
         if default_like:
             self.models.target_smd.setText(self.controller.project.rig.canonical_smd)
+
+    def _refresh_facial_visibility(self) -> None:
+        refresh = getattr(
+            self.controller, "_refresh_facial_availability", None
+        )
+        if callable(refresh):
+            refresh()
+        self.controller._refresh_animation_table()
 
     def _build_menu_bar(self) -> None:
         qt = self.qt
@@ -299,22 +318,29 @@ class UnifiedMainWindow:
         self._set_crig_tab_visible(bool(checked))
 
     def _set_crig_tab_visible(self, visible: bool) -> None:
-        # A custom .crig makes this editor part of the normal recovery path,
-        # not an advanced/developer feature. Keep it visible even when the
-        # global Advanced Settings toggle is off.
-        visible = bool(
-            visible
-            or self.controller.project.rig.retarget_mode == "exact"
-            or any(
-                resolve_animation_target(
+        # The full per-CRIG editor is an advanced/manual surface. A focused
+        # Fix mapping action force-opens it through _open_animation_mapping;
+        # simply importing or selecting an exact target does not keep the
+        # diagnostic table permanently visible.
+        has_expert_target = (
+            retarget_ui_kind(
+                self.controller.project,
+                None,
+                rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
+            )
+            == RetargetUiKind.CUSTOM_CRIG
+        )
+        if not has_expert_target:
+            has_expert_target = any(
+                retarget_ui_kind(
                     self.controller.project,
                     animation,
                     rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
-                ).retarget_mode
-                == "exact"
+                )
+                == RetargetUiKind.CUSTOM_CRIG
                 for animation in self.controller.project.animations
             )
-        )
+        visible = bool(visible and has_expert_target)
         index = self._animation_tab_index("Root & .crig Mapping")
         if visible and index < 0:
             insert_at = self._animation_tab_index("Export")
@@ -365,16 +391,16 @@ class UnifiedMainWindow:
     def _open_animation_mapping(self, animation_id: str) -> None:
         self.main_tabs.setCurrentIndex(0)
         animation = self.controller.project.animation_by_id(animation_id)
-        exact_mode = bool(
+        custom_crig_ui = bool(
             animation is not None
-            and resolve_animation_target(
+            and retarget_ui_kind(
                 self.controller.project,
                 animation,
                 rig_paths=getattr(self.controller, "_rig_paths_by_ref", {}),
-            ).retarget_mode
-            == "exact"
+            )
+            == RetargetUiKind.CUSTOM_CRIG
         )
-        if exact_mode:
+        if custom_crig_ui:
             self._set_crig_tab_visible(True)
             self.crig_mapping.reload_clips()
             index = self.crig_mapping.clip_combo.findData(animation_id)
@@ -397,6 +423,7 @@ class UnifiedMainWindow:
         if retarget_tab >= 0:
             self.animation_tabs.setCurrentIndex(retarget_tab)
         self.controller._retarget_clip_changed()
+        self.controller.focus_first_unresolved_mapping_role()
 
     def _animation_target_changed(self, _animation_id: str = "") -> None:
         self._set_crig_tab_visible(

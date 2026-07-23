@@ -4,12 +4,12 @@ DL ReAnimated projects are UTF-8 JSON files with the extension `.dlraproj`. They
 
 ## Compatibility guarantees
 
-Current projects declare schema 8:
+Current projects declare schema 10:
 
 ```json
 {
   "format": "dl-reanimated-project",
-  "schema_version": 8,
+  "schema_version": 10,
   "minimum_reader_version": 1,
   "created_with": "application version",
   "project_id": "stable UUID",
@@ -106,6 +106,36 @@ Old projects retain the same project-level target and all old animations inherit
 
 In exact mode the project default may be empty only when every enabled animation selects an explicit target. Build resolves each enabled clip independently and groups report output by target rig/skeleton hash. Resource names must remain unique across all groups and script targets.
 
+### Schema 9: automatic built-in routing
+
+Schema 9 adds `retarget_mode: "auto"`. Built-in DL1 clips route to the established humanoid solver, while built-in DL2 clips route to the exact/mapped CRIG solver. Deliberate expert overrides and custom CRIG selections remain explicit.
+
+### Schema 10: explicit timing domains
+
+Schema 10 stops using one `fps` value for three different jobs:
+
+```json
+{
+  "animations": [{
+    "source_fps": 24.0,
+    "sample_fps": 24.0,
+    "playback_fps": 30.0,
+    "fps": 30.0
+  }],
+  "anm2_to_fbx": {
+    "items": [{
+      "anm2_input_fps": 30.0,
+      "fbx_output_fps": 24.0,
+      "fps": 24.0
+    }]
+  }
+}
+```
+
+`source_fps` records the FBX-declared timebase, `sample_fps` selects the transforms written to ANM2, and `playback_fps` is authored into the animation-script sequence. In reverse conversion, `anm2_input_fps` describes the existing sample cadence and `fbx_output_fps` selects the resampled output cadence. The old forward `fps` alias mirrors playback; the old reverse alias mirrors FBX output.
+
+Migration preserves actual schema-9 behavior: exact/custom and DL2 automatic clips sample at their old `fps`; DL1 automatic/humanoid clips retain the old forced 30 FPS sampler; playback stays at the old `fps`. Reverse rows copy the old value to both new rates. Unknown source cadence remains `null` until the source FBX is inspected.
+
 ## Main sections
 
 ### `rig`
@@ -115,7 +145,7 @@ target_rig_ref                 legacy/current storage for the project default
 target_rig_path
 default_target_rig_ref         schema-v8 explicit alias
 default_target_rig_path
-retarget_mode                  humanoid | exact
+retarget_mode                  auto | humanoid | exact
 use_imported_animation_bind_pose
 source_rest_fbx
 trusted_source_rest_json
@@ -160,7 +190,10 @@ target_rig_ref                 empty = inherit project default
 target_rig_path                empty = inherit project default
 source_root_bone
 target_root_bone
-fps
+source_fps                    declared FBX cadence; nullable for migrated projects
+sample_fps                    FBX-to-ANM2 sampling cadence
+playback_fps                  animation-script playback cadence
+fps                           compatibility alias for playback_fps
 start_frame / end_frame
 notes / tags / extensions
 ```
@@ -186,7 +219,7 @@ The optional top-level extension value `import_tolerance` stores `recommended` (
 
 ### `anm2_to_fbx`
 
-Reverse-conversion jobs and `.dlrbmap.json` payloads use the same portable-path rules. Each item selects the CRIG that provides the otherwise absent ANM2 hierarchy/descriptors.
+Reverse-conversion jobs and `.dlrbmap.json` payloads use the same portable-path rules. Each item selects the CRIG that provides the otherwise absent ANM2 hierarchy/descriptors. `anm2_input_fps` and `fbx_output_fps` are independent so reverse export can preserve duration while changing cadence. A valid sibling `.anm2.dlrmeta.json` supplies defaults; missing, malformed, stale-hash, or frame-count-mismatched metadata is ignored with one advisory and falls back to 30/30.
 
 ## Portable paths
 
@@ -216,6 +249,7 @@ docs/schemas/dlraproj.schema.v4.json
 docs/schemas/dlraproj.schema.v5.json
 docs/schemas/dlraproj.schema.v7.json
 docs/schemas/dlraproj.schema.v8.json
+docs/schemas/dlraproj.schema.v10.json
 ```
 
 Runtime validation remains authoritative because file existence, registry resolution, source/target fingerprints, duplicate resources, and cross-references cannot be fully expressed in JSON Schema.

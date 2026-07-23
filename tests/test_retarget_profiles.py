@@ -23,10 +23,17 @@ def test_standard_mixamo_skeleton_maps_exactly() -> None:
 def test_profile_roundtrip(tmp_path: Path) -> None:
     profile = SourceBoneMappingProfile.empty(["Pelvis", "Spine"])
     profile.set_mapping("hips", "Pelvis", method="manual")
+    profile.set_target_bone_override(
+        "spine_helper",
+        mode="direct",
+        source_bone="Spine",
+        transfer_policy="rotation_delta",
+    )
     path = profile.save(tmp_path / "rig.dlrmap.json")
     loaded = SourceBoneMappingProfile.load(path)
     assert loaded.profile_id == profile.profile_id
     assert loaded.mapped_bone("hips") == "Pelvis"
+    assert loaded.target_bone_overrides == profile.target_bone_overrides
 
 
 def test_common_non_mixamo_names_are_recognized() -> None:

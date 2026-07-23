@@ -5,6 +5,8 @@ from pathlib import Path
 import time
 from types import SimpleNamespace
 
+import pytest
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QEventLoop, QSettings, QThread, QTimer
@@ -16,7 +18,11 @@ from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
 from dlanm2_gui.retarget_profiles import HUMANOID_ROLES, SourceBoneMappingProfile
 from dlanm2_gui.unified_gui import UnifiedMainWindow
-from dlanm2_gui.workspace_project import DlReanimatedProject, ProjectAnimation
+from dlanm2_gui.workspace_project import (
+    Anm2ToFbxItem,
+    DlReanimatedProject,
+    ProjectAnimation,
+)
 
 
 def _application(tmp_path):
@@ -27,14 +33,93 @@ def _application(tmp_path):
     return qt, app
 
 
+def test_timing_controls_preserve_fractional_standard_rates(tmp_path) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    input_rate = 24_000.0 / 1_001.0
+    output_rate = 30_000.0 / 1_001.0
+
+    assert controller.fps_spin.decimals() == 9
+    assert controller.sample_fps_spin.decimals() == 9
+    reverse = Anm2ToFbxItem.create(tmp_path / "fractional.anm2")
+    reverse.anm2_input_fps = input_rate
+    reverse.fbx_output_fps = output_rate
+    controller.project.anm2_to_fbx.items.append(reverse)
+    controller._reverse_refresh_table()
+    input_widget = controller.reverse_table.cellWidget(0, 5)
+    output_widget = controller.reverse_table.cellWidget(0, 6)
+
+    assert input_widget.decimals() == 9
+    assert output_widget.decimals() == 9
+    controller._sync_reverse_from_ui()
+    assert reverse.anm2_input_fps == pytest.approx(input_rate, abs=5.0e-10)
+    assert reverse.fbx_output_fps == pytest.approx(output_rate, abs=5.0e-10)
+    controller.dirty = False
+    shell.window.close()
+
 def test_advanced_toggle_does_not_retain_deleted_help_buttons(tmp_path) -> None:
     qt, _app = _application(tmp_path)
     shell = UnifiedMainWindow(qt, gui)
     assert shell.controller.advanced_help_buttons == []
     for checked in (True, False, True, False):
         shell.controller.advanced_mode_toggle.setChecked(checked)
-        assert (shell._animation_tab_index("Root & .crig Mapping") >= 0) is checked
+        assert shell._animation_tab_index("Root & .crig Mapping") < 0
+
+    # Solver mode does not own the editor. A bundled humanoid remains semantic
+    # even when exact execution is selected.
+    shell.controller.project.rig.retarget_mode = "exact"
+    shell.controller.advanced_mode_toggle.setChecked(True)
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+
+    custom, custom_path = _custom_rig(tmp_path, "custom:advanced-tab-test")
+    shell.controller.project.rig.target_rig_ref = custom.rig_id
+    shell.controller.project.rig.target_rig_path = str(custom_path)
+    shell._set_crig_tab_visible(True)
+    assert shell._animation_tab_index("Root & .crig Mapping") >= 0
     shell.controller.dirty = False
+    shell.window.close()
+
+
+def test_dl2_auto_mapping_opens_retargeting_without_crig_tab(tmp_path) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    previous_game = controller.project.game_id
+    controller.project.game_id = "dying_light_2"
+    gui.apply_game_profile_defaults(
+        controller.project,
+        controller.resource_root,
+        previous_game_id=previous_game,
+        force=True,
+    )
+    animation = ProjectAnimation.create(tmp_path / "known_humanoid.fbx")
+    controller.project.animations.append(animation)
+    controller._bundled_semantic_state = lambda _animation: SimpleNamespace(
+        rows=tuple(range(52))
+    )
+    controller._refresh_bundled_semantic_table = (
+        lambda _animation, state: (
+            controller.mapping_table.setRowCount(len(state.rows)),
+            controller.mapping_status.setText(
+                "Ready — automatically retargeted; 52 editable semantic roles"
+            ),
+        )
+    )
+    controller._reload_target_rig_combo()
+    controller._refresh_retarget_clip_combo()
+
+    controller.advanced_mode_toggle.setChecked(True)
+    assert controller.project.rig.retarget_mode == "auto"
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+
+    shell._open_animation_mapping(animation.animation_id)
+
+    assert shell.animation_tabs.tabText(shell.animation_tabs.currentIndex()) == "Retargeting"
+    assert controller.mapping_table.rowCount() == 52
+    assert "editable semantic roles" in controller.mapping_status.text()
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+    controller.dirty = False
     shell.window.close()
 
 
@@ -47,6 +132,7 @@ def test_file_menu_tracks_and_opens_recent_projects(tmp_path) -> None:
 
     shell = UnifiedMainWindow(qt, gui)
     controller = shell.controller
+    controller.clear_recent_projects()
     assert controller._load_project(first_path)
     assert controller._load_project(second_path)
     assert controller._load_project(first_path)
@@ -84,6 +170,69 @@ def test_file_menu_tracks_and_opens_recent_projects(tmp_path) -> None:
     reopened.controller.dirty = False
     reopened.window.close()
 
+
+def test_project_load_with_animations_does_not_parse_fbx_on_gui_thread(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    project = DlReanimatedProject.new("Lazy animation project")
+    for index in range(4):
+        row = ProjectAnimation.create(tmp_path / f"clip_{index}.fbx")
+        row.source_animation_stack = f"Take {index}"
+        project.animations.append(row)
+    project_path = project.save(tmp_path / "lazy.dlraproj")
+
+    parse_attempts: list[str] = []
+
+    def forbidden_parse(path: str):
+        parse_attempts.append(path)
+        raise AssertionError("project loading must not parse animation FBXs")
+
+    monkeypatch.setattr(controller, "_source_document", forbidden_parse)
+
+    assert controller._load_project(project_path)
+    assert controller.animation_table.rowCount() == 4
+    assert controller.retarget_clip_combo.count() == 4
+    assert parse_attempts == []
+    assert "deferred" in controller.mapping_status.text().casefold()
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_import_result_refresh_does_not_rebuild_retarget_editor(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    source = tmp_path / "streamed.fbx"
+    row = ProjectAnimation.create(source)
+    row.source_animation_stack = "Take 001"
+    document = SimpleNamespace(animation_stack_names=("Take 001",))
+
+    analysis_attempts: list[bool] = []
+    monkeypatch.setattr(
+        controller,
+        "_retarget_clip_changed",
+        lambda: analysis_attempts.append(True),
+    )
+
+    controller._apply_animation_import_result(
+        gui._AnimationImportResult(
+            rows=[row],
+            documents={str(source.resolve()): document},
+        )
+    )
+
+    assert controller.animation_table.rowCount() == 1
+    assert controller.retarget_clip_combo.count() == 1
+    assert analysis_attempts == []
+    controller.dirty = False
+    shell.window.close()
 
 def test_combo_popup_is_not_closed_by_delayed_refresh(tmp_path) -> None:
     qt, _app = _application(tmp_path)
@@ -195,6 +344,7 @@ def test_background_runner_keeps_qt_event_loop_responsive(tmp_path) -> None:
     ui_ticks: list[str] = []
     results: list[str] = []
     callback_on_gui_thread: list[bool] = []
+    busy_during_finished: list[bool] = []
     loop = QEventLoop()
 
     assert runner.start(
@@ -203,7 +353,10 @@ def test_background_runner_keeps_qt_event_loop_responsive(tmp_path) -> None:
             results.append(value),
             callback_on_gui_thread.append(QThread.currentThread() is app.thread()),
         ),
-        finished=lambda: QTimer.singleShot(20, loop.quit),
+        finished=lambda: (
+            busy_during_finished.append(runner.busy),
+            QTimer.singleShot(20, loop.quit),
+        ),
     )
     QTimer.singleShot(50, lambda: ui_ticks.append("responsive"))
     QTimer.singleShot(2000, loop.quit)
@@ -212,6 +365,202 @@ def test_background_runner_keeps_qt_event_loop_responsive(tmp_path) -> None:
     assert ui_ticks == ["responsive"]
     assert results == ["done"]
     assert callback_on_gui_thread == [True]
+    assert busy_during_finished == [False]
+
+
+def test_background_runner_failure_clears_busy_before_finished(tmp_path) -> None:
+    _qt, _app = _application(tmp_path)
+    runner = BackgroundTaskRunner()
+    failures = []
+    busy_during_finished: list[bool] = []
+    loop = QEventLoop()
+
+    def fail(_progress):
+        raise RuntimeError("broken import")
+
+    assert runner.start(
+        fail,
+        failed=failures.append,
+        finished=lambda: (
+            busy_during_finished.append(runner.busy),
+            loop.quit(),
+        ),
+    )
+    QTimer.singleShot(2000, loop.quit)
+    loop.exec()
+
+    assert len(failures) == 1
+    assert failures[0].message == "broken import"
+    assert busy_during_finished == [False]
+    assert not runner.busy
+
+
+def test_visible_multifile_import_streams_rows_and_can_be_cancelled(
+    tmp_path, monkeypatch
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    shell.show()
+    controller = shell.controller
+    paths = tuple(tmp_path / f"clip_{index}.fbx" for index in range(4))
+    for path in paths:
+        path.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        qt["QFileDialog"],
+        "getOpenFileNames",
+        lambda *_args: ([str(path) for path in paths], ""),
+    )
+
+    def fake_prepare(request, progress, partial):
+        aggregate = gui._AnimationImportResult()
+        for index, raw in enumerate(request.paths, start=1):
+            progress(f"Importing animation {index}/{len(request.paths)}")
+            row = ProjectAnimation.create(raw)
+            aggregate.rows.append(row)
+            partial(gui._AnimationImportResult(rows=[row]))
+            time.sleep(0.15)
+            progress(f"Finished animation {index}/{len(request.paths)}")
+        return aggregate
+
+    monkeypatch.setattr(gui, "_prepare_animation_import", fake_prepare)
+    controller.add_animations()
+
+    assert controller.background_tasks.busy
+    assert not controller.add_animations_button.isEnabled()
+    assert not controller.cancel_animation_operation_button.isHidden()
+
+    observed_counts: list[int] = []
+    cancelled = False
+    loop = QEventLoop()
+
+    def poll() -> None:
+        nonlocal cancelled
+        count = len(controller.project.animations)
+        observed_counts.append(count)
+        if count == 1 and not cancelled:
+            cancelled = True
+            controller.cancel_animation_operation_button.click()
+        if controller.background_tasks.busy:
+            QTimer.singleShot(20, poll)
+        else:
+            loop.quit()
+
+    QTimer.singleShot(20, poll)
+    QTimer.singleShot(4000, loop.quit)
+    loop.exec()
+
+    assert 1 in observed_counts
+    assert len(controller.project.animations) == 1
+    assert not controller.background_tasks.busy
+    assert controller.add_animations_button.isEnabled()
+    assert controller.cancel_animation_operation_button.isHidden()
+    assert "cancelled" in controller.status.currentMessage().casefold()
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_prepare_multifile_import_publishes_each_completed_file(
+    tmp_path, monkeypatch
+) -> None:
+    paths = tuple(tmp_path / f"streamed_{index}.fbx" for index in range(2))
+    for path in paths:
+        path.write_bytes(b"fixture")
+    stack = SimpleNamespace(name="Take 001")
+    document = SimpleNamespace(
+        animation_stacks=(stack,),
+        preferred_animation_stack=lambda: stack,
+        declared_timebase=None,
+        limb_models={"root": 1},
+        parent_by_name={"root": None},
+    )
+    monkeypatch.setattr(gui, "FbxDocument", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(
+        gui,
+        "preflight_fbx",
+        lambda path, **_kwargs: FbxPreflightReport(str(path), "animation"),
+    )
+    request = gui._AnimationImportRequest(
+        paths=tuple(str(path) for path in paths),
+        existing=set(),
+        game_id="test",
+        retarget_mode="disabled",
+        target_rig_path="",
+        resource_root=tmp_path,
+        resource_prefix="",
+        tolerance=gui.FbxImportTolerance.RECOMMENDED,
+    )
+    partials = []
+
+    result = gui._prepare_animation_import(
+        request,
+        lambda _message: None,
+        partials.append,
+    )
+
+    assert len(result.rows) == 2
+    assert [len(part.rows) for part in partials] == [1, 1]
+    assert [Path(part.rows[0].source_fbx).name for part in partials] == [
+        path.name for path in paths
+    ]
+
+
+def test_close_during_animation_import_cancels_then_closes(
+    tmp_path, monkeypatch
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    shell.show()
+    controller = shell.controller
+    paths = tuple(tmp_path / f"closing_{index}.fbx" for index in range(3))
+    for path in paths:
+        path.write_bytes(b"fixture")
+    monkeypatch.setattr(
+        qt["QFileDialog"],
+        "getOpenFileNames",
+        lambda *_args: ([str(path) for path in paths], ""),
+    )
+
+    def fake_prepare(request, progress, partial):
+        aggregate = gui._AnimationImportResult()
+        for index, raw in enumerate(request.paths, start=1):
+            progress(f"Importing {index}")
+            row = ProjectAnimation.create(raw)
+            aggregate.rows.append(row)
+            partial(gui._AnimationImportResult(rows=[row]))
+            time.sleep(0.15)
+            progress(f"Finished {index}")
+        return aggregate
+
+    monkeypatch.setattr(gui, "_prepare_animation_import", fake_prepare)
+    monkeypatch.setattr(controller, "_confirm_discard_changes", lambda: True)
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "information",
+        lambda _parent, title, message: messages.append((title, message)),
+    )
+    controller.add_animations()
+    loop = QEventLoop()
+    close_requested = False
+
+    def poll() -> None:
+        nonlocal close_requested
+        if len(controller.project.animations) == 1 and not close_requested:
+            close_requested = True
+            shell.window.close()
+        if shell.window.isVisible():
+            QTimer.singleShot(20, poll)
+        else:
+            loop.quit()
+
+    QTimer.singleShot(20, poll)
+    QTimer.singleShot(4000, loop.quit)
+    loop.exec()
+
+    assert close_requested
+    assert not controller.background_tasks.busy
+    assert not shell.window.isVisible()
+    assert messages and messages[0][0] == "Cancelling animation work"
 
 
 def test_cross_rig_animation_is_added_with_editable_map_and_opens_editor(
@@ -275,7 +624,8 @@ def test_cross_rig_animation_is_added_with_editable_map_and_opens_editor(
     assert controller.project.mapping_profiles[animation.mapping_profile_id]["format"] == (
         "dl-reanimated-bone-map"
     )
-    assert shell._animation_tab_index("Root & .crig Mapping") >= 0
+    assert shell._animation_tab_index("Root & .crig Mapping") < 0
+    assert controller.animation_table.cellWidget(0, 11).text() == "Fix mapping…"
 
     controller._open_mapping_for_animation(animation.animation_id)
     assert shell.animation_tabs.tabText(shell.animation_tabs.currentIndex()) == (
@@ -333,6 +683,8 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
         return report
 
     critical_messages: list[str] = []
+    warning_messages: list[str] = []
+    information_messages: list[str] = []
     monkeypatch.setattr(controller, "_source_document", source_document)
     monkeypatch.setattr(gui, "preflight_fbx", preflight)
     monkeypatch.setattr(
@@ -345,7 +697,16 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
         "critical",
         lambda _parent, _title, message: critical_messages.append(message),
     )
-    monkeypatch.setattr(qt["QMessageBox"], "warning", lambda *_args: None)
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "warning",
+        lambda _parent, _title, message: warning_messages.append(message),
+    )
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "information",
+        lambda _parent, _title, message: information_messages.append(message),
+    )
 
     controller.add_animations()
 
@@ -353,14 +714,73 @@ def test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_sta
     animation = controller.project.animations[0]
     assert Path(animation.source_fbx).name == valid.name
     assert animation.source_animation_stack == "mixamo.com"
-    assert animation.extensions["import_state"]["status"] == "imported_with_warnings"
+    assert animation.extensions["import_state"]["status"] == "ready"
     assert "model_geometry_ignored_for_animation" in (
         controller.animation_import_diagnostics.toPlainText()
     )
-    assert len(critical_messages) == 1
-    assert "truncated binary node stream" in critical_messages[0]
+    assert critical_messages == []
+    assert "Cannot read" in controller.status.currentMessage()
+    assert warning_messages == []
+    assert information_messages == []
     status = controller._animation_target_status(animation)[0]
-    assert status.startswith("Imported with warnings")
+    assert status.startswith("Ready")
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_static_animation_import_stays_enabled_and_uses_ready_state(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    source = tmp_path / "static_pose.fbx"
+    source.write_bytes(b"fixture")
+    document = SimpleNamespace(
+        animation_stacks=(),
+        animation_stack_names=(),
+        preferred_animation_stack=lambda: None,
+        limb_models={"root": 1},
+        parent_by_name={"root": None},
+    )
+    monkeypatch.setattr(controller, "_source_document", lambda _path: document)
+    monkeypatch.setattr(
+        qt["QFileDialog"],
+        "getOpenFileNames",
+        lambda *_args: ([str(source)], ""),
+    )
+
+    def static_preflight(path, **_kwargs):
+        report = FbxPreflightReport(str(path), "animation")
+        report.add(
+            "informational",
+            "static_bind_pose_clip",
+            "Ready — static/bind-pose clip.",
+            "Two identical finite frames are valid.",
+            "No action is required.",
+            group="ignored",
+        )
+        return report
+
+    monkeypatch.setattr(gui, "preflight_fbx", static_preflight)
+    critical_messages: list[str] = []
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "critical",
+        lambda _parent, _title, message: critical_messages.append(message),
+    )
+
+    controller.add_animations()
+
+    assert len(controller.project.animations) == 1
+    animation = controller.project.animations[0]
+    assert animation.enabled
+    assert animation.extensions["import_state"]["level"] == "ready"
+    assert animation.extensions["import_state"]["label"] == (
+        "Ready — static/bind-pose clip"
+    )
+    assert critical_messages == []
     controller.dirty = False
     shell.window.close()
 
@@ -439,8 +859,9 @@ def test_animation_target_column_overrides_only_one_clip(tmp_path) -> None:
     assert Path(first.target_rig_path) == rig_path
     assert second.target_rig_ref == ""
     assert second.target_rig_path == ""
-    assert "Override" in controller.animation_table.item(0, 7).text()
-    assert "Exact" in controller.animation_table.item(0, 7).text()
+    assert controller.animation_table.item(0, 7).text().startswith("Ready")
+    assert "Override target" in controller.animation_table.item(0, 7).toolTip()
+    assert "exact skeleton match" in controller.animation_table.item(0, 7).text()
     assert shell.crig_mapping._load_rig(first).skeleton_hash == rig.skeleton_hash
 
     controller.dirty = False

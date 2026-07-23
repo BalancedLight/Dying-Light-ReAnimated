@@ -1371,7 +1371,7 @@ class ModelWorkspace:
                 ) from exc
         paths = result.write(output)
         entry.source_msh = paths["msh"]
-        entry.build_report = json.loads(paths["report"].read_text(encoding="utf-8"))
+        entry.build_report = json.loads(paths["report"].read_text(encoding="utf-8-sig"))
         if crig_payload is not None and crig_report is not None:
             assert result.authored_rig_contract is not None
             entry.crig_path, crig_report = write_prebuilt_crig_payload(

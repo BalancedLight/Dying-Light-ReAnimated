@@ -29,9 +29,19 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest().upper()
 
 
+def _normalized_text_sha256(path: Path) -> str:
+    """Hash text provenance independently of BOM and newline serialization."""
+
+    text = path.read_text(encoding="utf-8-sig")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = normalized.rstrip("\n") + "\n"
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest().upper()
+
+
 @dataclass(slots=True)
 class TargetPackageCoherence:
     game_id: str
+    rig_ref: str = ""
     status: str = "fail"
     smd_path: str = ""
     crig_path: str = ""
@@ -50,10 +60,18 @@ class TargetPackageCoherence:
     bind_pose_match: bool = False
     source_smd_filename_match: bool = False
     source_smd_hash_match: bool = False
+    source_smd_semantic_hash_match: bool = False
+    smd_raw_sha256: str = ""
+    smd_semantic_sha256: str = ""
+    embedded_source_smd_raw_sha256: str = ""
+    embedded_source_smd_semantic_sha256: str = ""
     reference_anm2_filename_match: bool = False
     reference_anm2_hash_match: bool = False
+    reference_anm2_raw_sha256: str = ""
+    embedded_reference_anm2_raw_sha256: str = ""
     reference_anm2_format_match: bool = False
     game_id_match: bool = False
+    rig_id_match: bool = False
     primary_root_match: bool = False
     roots: list[str] = field(default_factory=list)
     bind_tolerance: dict[str, float] = field(default_factory=lambda: {
@@ -65,11 +83,13 @@ class TargetPackageCoherence:
     maximum_bind_rotation_delta_degrees: float = 0.0
     maximum_bind_scale_delta: float = 0.0
     errors: list[str] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status,
             "game_id": self.game_id,
+            "rig_ref": self.rig_ref,
             "smd_path": self.smd_path,
             "crig_path": self.crig_path,
             "reference_anm2_path": self.reference_anm2_path,
@@ -92,12 +112,38 @@ class TargetPackageCoherence:
             "maximum_bind_scale_delta": self.maximum_bind_scale_delta,
             "source_smd_filename_match": self.source_smd_filename_match,
             "source_smd_hash_match": self.source_smd_hash_match,
+            "source_smd_semantic_hash_match": self.source_smd_semantic_hash_match,
+            "smd_raw_sha256": self.smd_raw_sha256,
+            "smd_semantic_sha256": self.smd_semantic_sha256,
+            "embedded_source_smd_raw_sha256": self.embedded_source_smd_raw_sha256,
+            "embedded_source_smd_semantic_sha256": self.embedded_source_smd_semantic_sha256,
             "reference_anm2_filename_match": self.reference_anm2_filename_match,
             "reference_anm2_hash_match": self.reference_anm2_hash_match,
+            "reference_anm2_raw_sha256": self.reference_anm2_raw_sha256,
+            "embedded_reference_anm2_raw_sha256": self.embedded_reference_anm2_raw_sha256,
             "reference_anm2_format_match": self.reference_anm2_format_match,
             "game_id_match": self.game_id_match,
+            "rig_id_match": self.rig_id_match,
             "primary_root_match": self.primary_root_match,
             "errors": list(self.errors),
+            "warnings": list(self.warnings),
+            "provenance": {
+                "raw_hashes_advisory": True,
+                "smd": {
+                    "raw_sha256": self.smd_raw_sha256,
+                    "embedded_raw_sha256": self.embedded_source_smd_raw_sha256,
+                    "raw_match": self.source_smd_hash_match,
+                    "normalized_text_sha256": self.smd_semantic_sha256,
+                    "embedded_normalized_text_sha256": self.embedded_source_smd_semantic_sha256,
+                    "semantic_match": self.source_smd_semantic_hash_match,
+                },
+                "reference_anm2": {
+                    "raw_sha256": self.reference_anm2_raw_sha256,
+                    "embedded_raw_sha256": self.embedded_reference_anm2_raw_sha256,
+                    "raw_match": self.reference_anm2_hash_match,
+                    "format_match": self.reference_anm2_format_match,
+                },
+            },
         }
 
     def require_valid(self, display_name: str) -> None:
@@ -115,22 +161,45 @@ def validate_target_package(
     profile: Any,
     root: str | Path | None = None,
     *,
+    rig_ref: str | None = None,
     smd_path: str | Path | None = None,
     crig_path: str | Path | None = None,
     reference_anm2_path: str | Path | None = None,
 ) -> TargetPackageCoherence:
-    """Validate one profile's immutable target assets and embedded provenance."""
+    """Validate one selected immutable package and its embedded provenance.
+
+    ``rig_ref`` matters for games such as DL2 that retain more than one bundled
+    topology.  Omitting it intentionally selects the profile's current default.
+    """
 
     base = Path(root) if root is not None else Path()
-    smd = Path(smd_path) if smd_path is not None else base / profile.canonical_smd_relative_path
-    crig = Path(crig_path) if crig_path is not None else base / profile.target_rig_relative_path
+    selected_ref = str(
+        rig_ref
+        or getattr(profile, "default_target_rig_ref", "")
+        or getattr(profile, "target_rig_ref", "")
+    )
+    package_for_ref = getattr(profile, "package_for_rig_ref", None)
+    package = package_for_ref(selected_ref) if callable(package_for_ref) else None
+    if package is not None:
+        smd_relative = package.canonical_smd_relative_path
+        crig_relative = package.rig_relative_path
+        reference_relative = package.reference_anm2_relative_path
+        expected_primary_root = package.primary_root
+    else:
+        smd_relative = profile.canonical_smd_relative_path
+        crig_relative = profile.target_rig_relative_path
+        reference_relative = profile.reference_anm2_relative_path
+        expected_primary_root = profile.primary_root
+    smd = Path(smd_path) if smd_path is not None else base / smd_relative
+    crig = Path(crig_path) if crig_path is not None else base / crig_relative
     reference = (
         Path(reference_anm2_path)
         if reference_anm2_path is not None
-        else base / profile.reference_anm2_relative_path
+        else base / reference_relative
     )
     result = TargetPackageCoherence(
         game_id=str(profile.game_id),
+        rig_ref=selected_ref,
         smd_path=str(smd),
         crig_path=str(crig),
         reference_anm2_path=str(reference),
@@ -146,6 +215,14 @@ def validate_target_package(
         if not exists:
             result.errors.append(f"Missing {label}: {path}")
     if result.errors:
+        return result
+
+    try:
+        result.smd_raw_sha256 = _sha256(smd)
+        result.smd_semantic_sha256 = _normalized_text_sha256(smd)
+        result.reference_anm2_raw_sha256 = _sha256(reference)
+    except (OSError, UnicodeError) as exc:
+        result.errors.append(f"Package provenance cannot be read: {exc}")
         return result
 
     try:
@@ -272,6 +349,13 @@ def validate_target_package(
             f"scale {result.maximum_bind_scale_delta:.9g}."
         )
 
+    structural_smd_match = bool(
+        result.bone_names_match
+        and result.parents_match
+        and result.roots_match
+        and result.bind_pose_match
+    )
+
     embedded_smd_names = {
         Path(str(rig.source_model_name or "")).name,
         Path(str(rig.extensions.get("source_smd", "") or "")).name,
@@ -279,30 +363,58 @@ def validate_target_package(
     embedded_smd_names.discard("")
     result.source_smd_filename_match = bool(embedded_smd_names) and embedded_smd_names == {smd.name}
     if not result.source_smd_filename_match:
-        result.errors.append(
+        result.warnings.append(
             f"Embedded source SMD filename(s) {sorted(embedded_smd_names)} do not identify {smd.name!r}."
         )
     embedded_smd_hash = str(rig.extensions.get("source_smd_sha256", "") or "").upper()
-    result.source_smd_hash_match = bool(embedded_smd_hash) and embedded_smd_hash == _sha256(smd)
+    result.embedded_source_smd_raw_sha256 = embedded_smd_hash
+    result.source_smd_hash_match = (
+        bool(embedded_smd_hash)
+        and embedded_smd_hash == result.smd_raw_sha256
+    )
     if not result.source_smd_hash_match:
-        result.errors.append("Embedded source SMD SHA-256 does not match the canonical SMD bytes.")
+        result.warnings.append(
+            "Embedded source SMD raw SHA-256 does not match the canonical SMD bytes; "
+            "parsed skeleton semantics remain authoritative."
+        )
+    embedded_semantic_hash = str(
+        rig.extensions.get("source_smd_semantic_sha256", "")
+        or rig.extensions.get("source_smd_normalized_text_sha256", "")
+        or ""
+    ).upper()
+    result.embedded_source_smd_semantic_sha256 = embedded_semantic_hash
+    result.source_smd_semantic_hash_match = (
+        embedded_semantic_hash == result.smd_semantic_sha256
+        if embedded_semantic_hash
+        else structural_smd_match
+    )
+    if embedded_semantic_hash and not result.source_smd_semantic_hash_match:
+        result.warnings.append(
+            "Embedded source SMD normalized-text SHA-256 is stale; parsed bone, "
+            "parent, root, and bind-local comparisons remain authoritative."
+        )
 
     embedded_reference_name = Path(
         str(rig.extensions.get("source_reference_anm2", "") or "")
     ).name
     result.reference_anm2_filename_match = embedded_reference_name == reference.name
     if not result.reference_anm2_filename_match:
-        result.errors.append(
+        result.warnings.append(
             f"Embedded reference ANM2 filename {embedded_reference_name!r} does not identify {reference.name!r}."
         )
     embedded_reference_hash = str(
         rig.extensions.get("source_reference_anm2_sha256", "") or ""
     ).upper()
+    result.embedded_reference_anm2_raw_sha256 = embedded_reference_hash
     result.reference_anm2_hash_match = (
-        bool(embedded_reference_hash) and embedded_reference_hash == _sha256(reference)
+        bool(embedded_reference_hash)
+        and embedded_reference_hash == result.reference_anm2_raw_sha256
     )
     if not result.reference_anm2_hash_match:
-        result.errors.append("Embedded reference ANM2 SHA-256 does not match the reference file.")
+        result.warnings.append(
+            "Embedded reference ANM2 raw SHA-256 does not match the reference file; "
+            "the parsed ANM2 format identity remains authoritative."
+        )
     try:
         detected_format = detect_anm2_format(reference)
         expected_format = 42 if str(profile.game_id) == "dying_light_2" else 1
@@ -319,17 +431,22 @@ def validate_target_package(
     )
     if not result.game_id_match:
         result.errors.append("CRIG game_id does not match the GameProfile.")
+    result.rig_id_match = not selected_ref or rig.rig_id == selected_ref
+    if not result.rig_id_match:
+        result.errors.append(
+            f"CRIG rig_id {rig.rig_id!r} does not match selected package {selected_ref!r}."
+        )
     declared_primary = str(rig.extensions.get("primary_root", "") or "")
     actual_primary = rig.bones[rig.root_index].name
     result.primary_root_match = (
-        _normalized_name(declared_primary) == _normalized_name(profile.primary_root)
-        and _normalized_name(actual_primary) == _normalized_name(profile.primary_root)
-        and _normalized_name(profile.primary_root)
+        _normalized_name(declared_primary) == _normalized_name(expected_primary_root)
+        and _normalized_name(actual_primary) == _normalized_name(expected_primary_root)
+        and _normalized_name(expected_primary_root)
         in {_normalized_name(name) for name in smd_roots}
     )
     if not result.primary_root_match:
         result.errors.append(
-            f"Primary root mismatch: profile {profile.primary_root!r}, CRIG manifest "
+            f"Primary root mismatch: package {expected_primary_root!r}, CRIG manifest "
             f"{declared_primary!r}, CRIG root_index {actual_primary!r}."
         )
 

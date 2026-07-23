@@ -44,7 +44,7 @@ def parse_smd_bind_pose(path: str | Path) -> SmdBindPose:
     transforms: dict[int, tuple[tuple[float, float, float], tuple[float, float, float]]] = {}
     section = ""
     active_time: int | None = None
-    for raw_line in source.read_text(encoding="utf-8", errors="replace").splitlines():
+    for raw_line in source.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         line = raw_line.strip()
         if line == "nodes":
             section = "nodes"
@@ -91,7 +91,7 @@ def parse_smd_bind_pose(path: str | Path) -> SmdBindPose:
 
 
 def parse_ascii_global_positions(path: str | Path) -> dict[str, tuple[float, float, float]]:
-    lines = [line.strip() for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines()]
+    lines = [line.strip() for line in Path(path).read_text(encoding="utf-8-sig", errors="replace").splitlines()]
     if not lines:
         raise ValueError("ASCII model file is empty")
     try:

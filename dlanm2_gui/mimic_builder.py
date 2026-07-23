@@ -25,7 +25,7 @@ except ImportError:  # 0.3.x compatibility for local regression tests.
 class MimicBuild:
     payload: bytes
     frame_count: int
-    fps: int
+    fps: float
     profile_id: str
     mapping: tuple[MimicMappingRow, ...]
     report: dict[str, Any]

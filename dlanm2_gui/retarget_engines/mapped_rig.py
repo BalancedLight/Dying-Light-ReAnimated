@@ -18,14 +18,22 @@ skeletons are byte-identical.
 
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 import math
+import tempfile
+import time
 
 import numpy as np
 
 from ..anm2_components import decode_samples
 from ..anm2_writer import build_payload_from_values
 from ..bone_maps import BoneMapPair, GenericBoneMap, skeleton_signature
+from ..blender_mirror_wrapper import (
+    BilateralSemanticPolicy,
+    BlenderLateralMirrorContext,
+    coerce_bilateral_semantic_policy,
+    resolve_blender_lateral_mirror,
+)
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import decompose_local_matrix
 from ..helper_retarget import (
@@ -43,12 +51,33 @@ from ..fbx_core import (
     FbxDocument,
     normalize_matrix_to_target_space,
 )
-from ..fbx_preflight import preflight_fbx
+from ..fbx_anm2_export_behavior import (
+    CURRENT,
+    coerce_fbx_anm2_export_behavior,
+)
+from ..fbx_preflight import FbxPreflightReport, preflight_fbx
 from ..oracle.smd_bind_pose import (
     anm2_cayley_vector_from_quaternion,
     quaternion_wxyz_from_anm2_cayley,
 )
 from ..root_mapping import RootMappingSelection, choose_hierarchy_root, resolve_source_root
+from ..root_heading import (
+    RootHeadingReport,
+    apply_target_root_policy,
+)
+from ..root_motion import (
+    RootMotionMode,
+    RootMotionSelection,
+    resolve_root_motion_selection,
+)
+from ..root_motion_basis import (
+    build_source_actor_frame,
+    build_target_actor_frame,
+    map_root_displacement_by_actor_frame,
+    root_motion_basis_report,
+)
+from ..skeleton_analysis import analyze_source_skeleton
+from ..target_retarget_policy import build_target_retarget_policy
 from .base import RetargetBuild
 from .output_validation import (
     DECODED_COMPONENT_ERROR_LIMIT,
@@ -56,6 +85,40 @@ from .output_validation import (
 )
 
 MappedRigBuild = RetargetBuild
+
+_DL2_PARITY_FRAMES = frozenset(
+    (0, 1, 10, 100, 300, 500, 1000, 1500, 2000, 2200, 2500, 3000, 3342)
+)
+_FRAME_PROGRESS_INTERVAL = 128
+_SAMPLE_STORAGE_LIMIT_BYTES = 64 * 1024 * 1024
+_INPLACE_ROOT_HEADING_WARNING_DEGREES = 10.0
+_INPLACE_ROOT_PLANAR_WARNING_METERS = 0.05
+
+
+def _inplace_root_policy_warning(
+    target_root_name: str,
+    root_motion: RootMotionSelection,
+    report: RootHeadingReport,
+) -> str:
+    """Describe visually significant source root motion discarded in-place."""
+
+    if root_motion.motion_mode != RootMotionMode.IN_PLACE.value:
+        return ""
+    discarded_motion: list[str] = []
+    maximum_heading = report.maximum_source_heading_offset_degrees
+    maximum_planar = report.maximum_source_planar_displacement_meters
+    if maximum_heading >= _INPLACE_ROOT_HEADING_WARNING_DEGREES:
+        discarded_motion.append(f"{maximum_heading:.2f}\N{DEGREE SIGN} of heading")
+    if maximum_planar >= _INPLACE_ROOT_PLANAR_WARNING_METERS:
+        discarded_motion.append(f"{maximum_planar:.3f} m of planar movement")
+    if not discarded_motion:
+        return ""
+    return (
+        f"In-place root policy on {target_root_name!r} discards up to "
+        f"{' and '.join(discarded_motion)} from the source clip. Select "
+        "Skeletal root with Preserve heading to retain source placement and "
+        "orientation in an FBX round trip."
+    )
 
 
 def quaternion_wxyz_to_matrix(value: tuple[float, float, float, float] | list[float]) -> np.ndarray:
@@ -156,6 +219,10 @@ class SourceGlobalNormalization:
     unit_conversion_count: int = 1
     axis_conversion_count: int = -1
     wrapper_policy: str = "retained_and_scale_normalized"
+    mirror_basis_matrix: Any | None = None
+    mirror_wrapper_name: str = ""
+    wrapper_canonicalized_before_sampling: bool = False
+    explicit_post_canonicalization_mirror_conjugation: bool = False
 
     def __post_init__(self) -> None:
         if not math.isfinite(self.meters_per_unit) or self.meters_per_unit <= 0.0:
@@ -181,6 +248,35 @@ class SourceGlobalNormalization:
         except np.linalg.LinAlgError as exc:
             raise ValueError("Source global basis matrix is singular") from exc
         object.__setattr__(self, "basis_matrix", basis)
+        mirror = (
+            np.eye(4, dtype=float)
+            if self.mirror_basis_matrix is None
+            else np.asarray(self.mirror_basis_matrix, dtype=float).copy()
+        )
+        if mirror.shape != (4, 4) or not np.isfinite(mirror).all():
+            raise ValueError("Source mirror basis must be a finite 4x4 matrix")
+        try:
+            np.linalg.inv(mirror)
+        except np.linalg.LinAlgError as exc:
+            raise ValueError("Source mirror basis is singular") from exc
+        if not np.allclose(mirror[:3, 3], 0.0, atol=1.0e-8, rtol=0.0):
+            raise ValueError("Source mirror basis must be origin-centred")
+        mirror_applied = not np.allclose(
+            mirror,
+            np.eye(4, dtype=float),
+            rtol=0.0,
+            atol=1.0e-12,
+        )
+        if (
+            mirror_applied
+            and self.wrapper_canonicalized_before_sampling
+            and not self.explicit_post_canonicalization_mirror_conjugation
+        ):
+            raise ValueError(
+                "Invariant violation: a wrapper canonicalized before sampling "
+                "cannot implicitly apply post-canonicalization mirror conjugation"
+            )
+        object.__setattr__(self, "mirror_basis_matrix", mirror)
         explicit_axis_conversion = not np.allclose(
             basis,
             np.eye(4, dtype=float),
@@ -198,18 +294,34 @@ class SourceGlobalNormalization:
             raise ValueError("Source global axis conversion must be applied exactly once")
 
     def apply(self, matrix: np.ndarray) -> np.ndarray:
-        return normalize_matrix_to_target_space(
+        normalized = normalize_matrix_to_target_space(
             matrix,
             meters_per_unit=(
                 self.meters_per_unit / self.wrapper_scale_normalization_factor
             ),
             basis_matrix=np.asarray(self.basis_matrix, dtype=float),
         )
+        mirror = np.asarray(self.mirror_basis_matrix, dtype=float)
+        return mirror @ normalized @ np.linalg.inv(mirror)
 
     def apply_local(self, matrix: np.ndarray) -> np.ndarray:
         return self.apply(matrix)
 
+    def apply_target_vector(self, vector: np.ndarray) -> np.ndarray:
+        """Reflect a target-space vector after actor-frame displacement mapping."""
+
+        value = np.asarray(vector, dtype=float)
+        if value.shape != (3,) or not np.isfinite(value).all():
+            raise ValueError("Source displacement vector must be finite length three")
+        return np.asarray(self.mirror_basis_matrix, dtype=float)[:3, :3] @ value
+
     def to_report(self) -> dict[str, Any]:
+        mirror_applied = not np.allclose(
+            np.asarray(self.mirror_basis_matrix, dtype=float),
+            np.eye(4, dtype=float),
+            rtol=0.0,
+            atol=1.0e-12,
+        )
         return {
             "meters_per_unit": self.meters_per_unit,
             "unit_conversion_count": self.unit_conversion_count,
@@ -238,6 +350,18 @@ class SourceGlobalNormalization:
                 else "none"
             ),
             "wrapper_policy": self.wrapper_policy,
+            "mirrored_wrapper": {
+                "applied": mirror_applied,
+                "wrapper": self.mirror_wrapper_name,
+                "application": "conjugate" if mirror_applied else "diagnostic_only",
+                "basis_matrix": np.asarray(
+                    self.mirror_basis_matrix, dtype=float
+                ).tolist(),
+            },
+            "wrapper_canonicalized_before_sampling": bool(
+                self.wrapper_canonicalized_before_sampling
+            ),
+            "post_canonicalization_mirror_conjugation_applied": mirror_applied,
             "bind_and_animation_share_normalizer": True,
             "target_crig_bind_conversion_count": 0,
         }
@@ -256,11 +380,17 @@ def _joint_pivot_extent(globals_by_name: Mapping[str, np.ndarray]) -> float:
 
 
 def _frame_local_matrices(
-    rig: ChromeRig, frame: list[list[float]]
+    rig: ChromeRig,
+    frame: list[list[float]],
+    *,
+    track_index_by_descriptor: Mapping[int, int] | None = None,
 ) -> dict[str, np.ndarray]:
     result: dict[str, np.ndarray] = {}
+    indexes = track_index_by_descriptor or {
+        descriptor: index for index, descriptor in enumerate(rig.descriptors)
+    }
     for bone in rig.bones:
-        row = np.asarray(frame[rig.descriptors.index(bone.descriptor)], dtype=float)
+        row = np.asarray(frame[indexes[bone.descriptor]], dtype=float)
         if row.shape != (9,) or not np.isfinite(row).all():
             raise ValueError(f"Bone {bone.name!r} has non-finite or malformed track values")
         result[bone.name] = compose_local_matrix(
@@ -300,11 +430,19 @@ def _globals_from_locals(
 
 
 def reconstruct_target_globals(
-    rig: ChromeRig, frame: list[list[float]]
+    rig: ChromeRig,
+    frame: list[list[float]],
+    *,
+    track_index_by_descriptor: Mapping[int, int] | None = None,
 ) -> dict[str, np.ndarray]:
     """Reconstruct target globals from one unpacked ANM2 track frame."""
 
-    return _globals_from_locals(rig, _frame_local_matrices(rig, frame))
+    return _globals_from_locals(
+        rig,
+        _frame_local_matrices(
+            rig, frame, track_index_by_descriptor=track_index_by_descriptor
+        ),
+    )
 
 
 def validate_hierarchy_safety(
@@ -313,10 +451,11 @@ def validate_hierarchy_safety(
     *,
     preserve_non_root_translations: bool,
     allowed_non_root_translation_bones: set[str] | None = None,
+    track_index_by_descriptor: Mapping[int, int] | None = None,
 ) -> dict[str, Any]:
     """Reconstruct output globals and reject detached/stretched hierarchies."""
 
-    if not values:
+    if len(values) == 0:
         raise ValueError("Hierarchy safety validation requires at least one frame")
     rig_validation = rig.validate(test_writer_capacity=False)
     rig_validation.require_valid()
@@ -347,17 +486,20 @@ def validate_hierarchy_safety(
     minimum_scale = float("inf")
     violations: list[str] = []
     allowed_translation_bones = set(allowed_non_root_translation_bones or ())
+    indexes = track_index_by_descriptor or {
+        descriptor: index for index, descriptor in enumerate(rig.descriptors)
+    }
 
     for frame_index, frame in enumerate(values):
-        globals_by_name = reconstruct_target_globals(rig, frame)
+        globals_by_name = reconstruct_target_globals(
+            rig, frame, track_index_by_descriptor=indexes
+        )
         extent = _joint_pivot_extent(globals_by_name)
         if extent > maximum_extent:
             maximum_extent = extent
             maximum_extent_frame = frame_index
         for bone in rig.bones:
-            track = np.asarray(
-                frame[rig.descriptors.index(bone.descriptor)], dtype=float
-            )
+            track = np.asarray(frame[indexes[bone.descriptor]], dtype=float)
             scale = np.abs(track[6:9])
             if not np.isfinite(scale).all() or np.any(scale <= 1.0e-5):
                 violations.append(
@@ -529,6 +671,97 @@ def mapped_local_from_rotation_delta(
     return result
 
 
+def mapped_local_from_composed_rotation_deltas(
+    target_bind_local: np.ndarray,
+    source_bind_locals: tuple[np.ndarray, ...] | list[np.ndarray],
+    source_animated_locals: tuple[np.ndarray, ...] | list[np.ndarray],
+) -> np.ndarray:
+    """Compose ordered source-segment rotation deltas onto one target bone."""
+
+    if not source_bind_locals or len(source_bind_locals) != len(source_animated_locals):
+        raise ValueError(
+            "Composed mapping requires equal non-empty bind and animation source lists"
+        )
+    target = np.asarray(target_bind_local, dtype=float)
+    if target.shape != (4, 4) or not np.isfinite(target).all():
+        raise ValueError("target bind matrix must be finite 4x4")
+    target_rotation = _orthonormal_rotation(target, "target bind")
+    target_scale = np.linalg.norm(target[:3, :3], axis=0)
+    if np.any(target_scale <= 1.0e-12):
+        raise ValueError("target bind matrix has singular scale")
+    composed_delta = np.eye(3, dtype=float)
+    for index, (source_bind, source_animation) in enumerate(
+        zip(source_bind_locals, source_animated_locals)
+    ):
+        bind_rotation = _orthonormal_rotation(
+            np.asarray(source_bind, dtype=float),
+            f"composed source bind {index}",
+        )
+        animated_rotation = _orthonormal_rotation(
+            np.asarray(source_animation, dtype=float),
+            f"composed source animation {index}",
+        )
+        composed_delta = composed_delta @ bind_rotation.T @ animated_rotation
+    result = np.eye(4, dtype=float)
+    result[:3, :3] = target_rotation @ composed_delta @ np.diag(target_scale)
+    result[:3, 3] = target[:3, 3]
+    return result
+
+
+def _fractional_rotation(rotation: np.ndarray, weight: float) -> np.ndarray:
+    if not math.isfinite(weight) or not 0.0 < weight <= 1.0:
+        raise ValueError("Distributed rotation weight must be finite in (0, 1]")
+    payload = np.eye(4, dtype=float)
+    payload[:3, :3] = np.asarray(rotation, dtype=float)
+    _translation, quaternion, _scale = decompose_local_matrix(payload)
+    quaternion = np.asarray(quaternion, dtype=float)
+    if quaternion[0] < 0.0:
+        quaternion *= -1.0
+    half_angle = math.acos(max(-1.0, min(1.0, float(quaternion[0]))))
+    vector = quaternion[1:]
+    vector_norm = float(np.linalg.norm(vector))
+    if vector_norm <= 1.0e-12 or half_angle <= 1.0e-12:
+        return np.eye(3, dtype=float)
+    axis = vector / vector_norm
+    weighted_half_angle = half_angle * weight
+    weighted_quaternion = np.asarray(
+        (
+            math.cos(weighted_half_angle),
+            *(axis * math.sin(weighted_half_angle)),
+        ),
+        dtype=float,
+    )
+    return quaternion_wxyz_to_matrix(weighted_quaternion)
+
+
+def mapped_local_from_distributed_rotation_delta(
+    target_bind_local: np.ndarray,
+    source_bind_local: np.ndarray,
+    source_animated_local: np.ndarray,
+    weight: float,
+) -> np.ndarray:
+    """Apply a fractional source rotation so chained target rows sum to one delta."""
+
+    target = np.asarray(target_bind_local, dtype=float)
+    source_bind = np.asarray(source_bind_local, dtype=float)
+    source_animation = np.asarray(source_animated_local, dtype=float)
+    target_rotation = _orthonormal_rotation(target, "target bind")
+    source_bind_rotation = _orthonormal_rotation(source_bind, "source bind")
+    source_animated_rotation = _orthonormal_rotation(
+        source_animation, "source animation"
+    )
+    target_scale = np.linalg.norm(target[:3, :3], axis=0)
+    if np.any(target_scale <= 1.0e-12):
+        raise ValueError("target bind matrix has singular scale")
+    delta = source_bind_rotation.T @ source_animated_rotation
+    result = np.eye(4, dtype=float)
+    result[:3, :3] = (
+        target_rotation @ _fractional_rotation(delta, float(weight)) @ np.diag(target_scale)
+    )
+    result[:3, 3] = target[:3, 3]
+    return result
+
+
 def global_bind_basis_correction(source_bind_global: np.ndarray, target_bind_global: np.ndarray) -> np.ndarray:
     source = np.asarray(source_bind_global, dtype=float)
     target = np.asarray(target_bind_global, dtype=float)
@@ -548,38 +781,23 @@ def corrected_target_global(source_animated_global: np.ndarray, correction: np.n
     return value
 
 
+def _rotation_error_degrees(left: np.ndarray, right: np.ndarray) -> float:
+    left_rotation = _orthonormal_rotation(left, "parity actual target global")
+    right_rotation = _orthonormal_rotation(right, "parity expected target global")
+    relative = left_rotation.T @ right_rotation
+    cosine = max(-1.0, min(1.0, (float(np.trace(relative)) - 1.0) * 0.5))
+    return math.degrees(math.acos(cosine))
+
+
 def apply_global_root_policy(
     values: list[list[list[float]]],
     rig: ChromeRig,
     target_root_name: str,
-    policy: str,
-) -> None:
-    if policy not in {"inplace", "bip01", "motion"}:
-        raise ValueError(f"Unsupported root-motion policy {policy!r}")
-    root_bone = next(bone for bone in rig.bones if bone.name == target_root_name)
-    root_track = rig.descriptors.index(root_bone.descriptor)
-    first_translation = np.asarray(values[0][root_track][3:6], dtype=float)
-    bind_translation = np.asarray(root_bone.bind_translation, dtype=float)
-    if policy == "inplace":
-        for frame in values:
-            # In-place means the target model root stays at its authored bind
-            # position.  Freezing the first source-animation sample preserves
-            # a source rig offset and can move an otherwise valid custom model.
-            frame[root_track][3:6] = [float(value) for value in bind_translation]
-    elif policy == "motion":
-        motion_descriptor = 0xCCC3CDDF
-        if motion_descriptor not in rig.descriptors:
-            raise ValueError(
-                "Motion-accumulator root policy requires descriptor 0xCCC3CDDF in the target .crig."
-            )
-        motion_track = rig.descriptors.index(motion_descriptor)
-        motion_base = np.asarray(values[0][motion_track][3:6], dtype=float)
-        for frame in values:
-            current = np.asarray(frame[root_track][3:6], dtype=float)
-            horizontal = current - first_translation
-            horizontal[1] = 0.0
-            frame[root_track][3:6] = [float(value) for value in current - horizontal]
-            frame[motion_track][3:6] = [float(value) for value in motion_base + horizontal]
+    policy: RootMotionSelection | Mapping[str, Any] | str,
+) -> Any:
+    """Backward-compatible entry point for the production global policy."""
+
+    return apply_target_root_policy(values, rig, target_root_name, policy)
 
 
 def _target_uses_dying_light_basis(rig: ChromeRig) -> bool:
@@ -595,6 +813,54 @@ def _target_uses_dying_light_basis(rig: ChromeRig) -> bool:
         or orientation in {"auto", "fbx_y_up_to_dying_light"}
         or builder.endswith("binary_fbx_v2")
     )
+
+
+_EXECUTABLE_AUTOMATIC_MAPPING_MODES = frozenset(
+    {"direct", "composed", "distributed", "inherit_bind", "static_bind"}
+)
+
+
+def _row_automatic_mapping_mode(row: BoneMapPair | None) -> str:
+    if row is None:
+        return "static_bind"
+    extensions = dict(row.extensions or {})
+    decision = extensions.get("automatic_retarget_decision", {}) or {}
+    mode = str(
+        extensions.get("execution_mapping_mode")
+        or extensions.get("mapping_mode")
+        or (decision.get("mode", "") if isinstance(decision, Mapping) else "")
+        or ("direct" if row.source_fbx_bone else "inherit_bind")
+    )
+    return mode if mode in _EXECUTABLE_AUTOMATIC_MAPPING_MODES else ""
+
+
+def _row_execution_source_bones(row: BoneMapPair) -> tuple[str, ...]:
+    extensions = dict(row.extensions or {})
+    decision = extensions.get("automatic_retarget_decision", {}) or {}
+    raw = extensions.get("source_bones")
+    if raw is None and isinstance(decision, Mapping):
+        raw = decision.get("source_bones")
+    if raw is None:
+        raw = (row.source_fbx_bone,) if row.source_fbx_bone else ()
+    if isinstance(raw, str):
+        raw = (raw,)
+    return tuple(str(value) for value in raw if str(value))
+
+
+def _row_distribution_weight(row: BoneMapPair) -> float:
+    extensions = dict(row.extensions or {})
+    if "distribution_weight" in extensions:
+        return float(extensions["distribution_weight"] or 0.0)
+    decision = extensions.get("automatic_retarget_decision", {}) or {}
+    if isinstance(decision, Mapping):
+        for evidence in decision.get("evidence", ()) or ():
+            if (
+                isinstance(evidence, Mapping)
+                and str(evidence.get("kind", "")).casefold()
+                == "semantic_chain_distribution"
+            ):
+                return float(evidence.get("score", 0.0) or 0.0)
+    return 0.0
 
 
 def _mapped_pairs_by_target_rig_bone(
@@ -628,6 +894,55 @@ def _mapped_pairs_by_target_rig_bone(
             )
             continue
         rows_by_target[target_rig_bone] = row
+        mapping_mode = _row_automatic_mapping_mode(row)
+        if not mapping_mode:
+            errors.append(
+                f"Mapping row for target {target_rig_bone!r} declares an unsupported "
+                "automatic execution mode. Regenerate or review the map."
+            )
+            continue
+        execution_sources = _row_execution_source_bones(row)
+        if mapping_mode == "composed":
+            if len(execution_sources) < 2:
+                errors.append(
+                    f"Composed mapping for target {target_rig_bone!r} requires at least "
+                    "two ordered source bones."
+                )
+            if row.transfer_policy != "rotation_delta" or row.component_policy != "rotation":
+                errors.append(
+                    f"Composed mapping for target {target_rig_bone!r} must use "
+                    "rotation_delta with rotation-only ownership."
+                )
+        elif mapping_mode == "distributed":
+            weight = _row_distribution_weight(row)
+            if len(execution_sources) != 1:
+                errors.append(
+                    f"Distributed mapping for target {target_rig_bone!r} requires "
+                    "exactly one source bone."
+                )
+            if not math.isfinite(weight) or not 0.0 < weight <= 1.0:
+                errors.append(
+                    f"Distributed mapping for target {target_rig_bone!r} has invalid "
+                    "fractional rotation weight."
+                )
+            if row.transfer_policy != "rotation_delta" or row.component_policy != "rotation":
+                errors.append(
+                    f"Distributed mapping for target {target_rig_bone!r} must use "
+                    "rotation_delta with rotation-only ownership."
+                )
+        if execution_sources and execution_sources[0] != source_fbx_bone:
+            errors.append(
+                f"Mapping row for target {target_rig_bone!r} has a stale primary source "
+                "relative to its executable source inventory."
+            )
+        missing_execution_sources = [
+            name for name in execution_sources if name not in source_names
+        ]
+        if missing_execution_sources:
+            errors.append(
+                f"Mapping row for target {target_rig_bone!r} references missing "
+                "executable source bone(s): " + ", ".join(missing_execution_sources)
+            )
         if row.transfer_policy == "bind" and row.review_state != "intentionally_unmapped":
             errors.append(
                 f"Mapping row for target {target_rig_bone!r} uses bind transfer but is not "
@@ -764,27 +1079,61 @@ def build_mapped_rig_anm2(
     rig: ChromeRig,
     bone_map: GenericBoneMap,
     *,
-    fps: int | None = None,
+    fps: float | None = None,
     animation_stack: str | None = None,
     document_factory: Any = FbxDocument,
     document: Any | None = None,
     root_mapping: RootMappingSelection | Mapping[str, Any] | None = None,
     transfer_policy: str = "mapped_local_rest_delta",
     root_policy: str = "bip01",
+    root_motion: RootMotionSelection | Mapping[str, Any] | None = None,
+    fbx_anm2_export_behavior: str = "current",
+    bilateral_semantic_policy: str = (
+        BilateralSemanticPolicy.PRESERVE_SOURCE_NAMES.value
+    ),
+    diagnostic_post_canonicalization_mirror_conjugation: bool = False,
+    preflight: FbxPreflightReport | None = None,
+    progress: Callable[[str], None] | None = None,
 ) -> MappedRigBuild:
     """Retarget an arbitrary mapped FBX skeleton onto a Chrome Rig."""
 
+    operation_started = time.perf_counter()
+    fbx_anm2_export_behavior = coerce_fbx_anm2_export_behavior(
+        fbx_anm2_export_behavior
+    )
+    bilateral_semantic_policy = coerce_bilateral_semantic_policy(
+        bilateral_semantic_policy
+    ).value
+    if fbx_anm2_export_behavior != CURRENT:
+        raise ValueError(
+            "Legacy 5.0 FBX-to-ANM2 export cannot be applied through a mapped "
+            "or semantic retarget profile. Choose Current normalized sampling, "
+            "or use a target-compatible direct-name skeleton."
+        )
     rig.validate().require_valid()
+    track_index_by_descriptor = {
+        descriptor: index for index, descriptor in enumerate(rig.descriptors)
+    }
+    track_index_by_bone = {
+        bone.name: track_index_by_descriptor[bone.descriptor] for bone in rig.bones
+    }
     errors = bone_map.validate()
     if errors:
         raise ValueError("Invalid mapped-rig profile:\n- " + "\n- ".join(errors))
 
-    sample_fps = int(fps or rig.writer_profile.default_fps)
-    if not 1 <= sample_fps <= 240:
-        raise ValueError("Mapped-rig sample FPS must be between 1 and 240")
+    sample_fps = float(
+        rig.writer_profile.default_fps if fps is None else fps
+    )
+    if not math.isfinite(sample_fps) or sample_fps <= 0.0:
+        raise ValueError("sample FPS must be finite and positive")
+    if sample_fps > 1000.0:
+        raise ValueError("Mapped-rig sample FPS must not exceed 1000")
 
     source = Path(animation_fbx)
+    document_parse_started = time.perf_counter()
     document = document if document is not None else document_factory(source)
+    document_parse_seconds = time.perf_counter() - document_parse_started
+    transform_validation_started = time.perf_counter()
     selected_stack = getattr(document, "selected_animation_stack", None)
     selected_stack_name = str(getattr(selected_stack, "name", "") or "")
     if (
@@ -798,23 +1147,25 @@ def build_mapped_rig_anm2(
         document.select_animation_stack(animation_stack)
     if not document.limb_models:
         raise ValueError("Mapped-rig retarget requires an FBX LimbNode skeleton")
-    mapped_preflight = preflight_fbx(
+    selected_stack = getattr(document, "selected_animation_stack", None)
+    selected_stack_name = str(getattr(selected_stack, "name", "") or "")
+    preflight_matches_document = (
+        preflight is not None
+        and preflight.purpose == "animation"
+        and Path(preflight.path).resolve() == source.resolve()
+        and str(preflight.inventory.get("selected_animation_stack", "") or "")
+        == selected_stack_name
+    )
+    mapped_preflight = preflight if preflight_matches_document else preflight_fbx(
         source,
         purpose="animation",
         animation_stack=animation_stack,
         document_factory=document_factory,
         document=document,
     )
-    hard_findings = [
-        row
-        for row in mapped_preflight.findings
-        if row.severity == "error" and not row.can_continue
-    ]
-    if hard_findings:
-        raise ValueError(
-            "Mapped-rig FBX preflight blocked the build before ANM2 output:\n"
-            + mapped_preflight.actionable_message(hard_findings)
-        )
+    mapped_preflight.require_buildable()
+    transform_validation_seconds = time.perf_counter() - transform_validation_started
+    planning_started = time.perf_counter()
 
     warnings = _validate_mapping_identity(rig, bone_map, document)
     base_rows, mapped, pair_warnings = _mapped_pairs_by_target_rig_bone(
@@ -831,19 +1182,27 @@ def build_mapped_rig_anm2(
             source_bone=str(payload.get("source_bone", "") or ""),
             target_bone=str(payload.get("target_bone", "") or ""),
         )
+    requested_root_motion = resolve_root_motion_selection(
+        root_motion if root_motion is not None else root_policy,
+        source_root_bone=root_selection.source_bone,
+        target_root_bone=root_selection.target_bone,
+    )
 
     rig_names = [bone.name for bone in rig.bones]
     rig_parents = {
         bone.name: (rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None)
         for bone in rig.bones
     }
-    if root_selection.target_bone:
-        if root_selection.target_bone not in set(rig_names):
+    requested_target_root = (
+        requested_root_motion.target_root_bone or root_selection.target_bone
+    )
+    if requested_target_root:
+        if requested_target_root not in set(rig_names):
             raise ValueError(
-                f"Selected Bip01/root target bone {root_selection.target_bone!r} is not present "
+                f"Selected target skeletal root {requested_target_root!r} is not present "
                 f"in .crig target {rig.name!r}."
             )
-        target_root_name = root_selection.target_bone
+        target_root_name = requested_target_root
         target_root_method = "manual"
     else:
         target_root_name = choose_hierarchy_root(rig_names, rig_parents)
@@ -852,7 +1211,15 @@ def build_mapped_rig_anm2(
     source_root_name, source_root_method = resolve_source_root(
         document.limb_models.keys(),
         document.parent_by_name,
-        requested_bone=root_selection.source_bone,
+        requested_bone=(
+            requested_root_motion.source_root_bone or root_selection.source_bone
+        ),
+    )
+    resolved_root_motion = RootMotionSelection(
+        source_root_name,
+        target_root_name,
+        requested_root_motion.motion_mode,
+        requested_root_motion.heading_mode,
     )
     target_root_bone = next(bone for bone in rig.bones if bone.name == target_root_name)
 
@@ -919,8 +1286,6 @@ def build_mapped_rig_anm2(
         )
 
     default_row_policy = _default_row_transfer_policy(transfer_policy)
-    if root_policy not in {"inplace", "bip01", "motion"}:
-        raise ValueError(f"Unsupported root-motion policy {root_policy!r}")
     resolved_policy_by_target = {
         target_name: _resolved_row_transfer_policy(row, default_row_policy)
         for target_name, row in base_rows.items()
@@ -928,7 +1293,10 @@ def build_mapped_rig_anm2(
     global_correction_targets = {
         target_name
         for target_name, policy in resolved_policy_by_target.items()
-        if policy == "global_bind_basis" and target_name in mapped
+        if policy == "global_bind_basis"
+        and target_name in mapped
+        and _row_automatic_mapping_mode(base_rows[target_name])
+        not in {"composed", "distributed"}
     }
     # Unit/axis normalization is one contract shared by model bind and animation.
     # New model-generated CRIGs select the source document's full signed
@@ -965,7 +1333,13 @@ def build_mapped_rig_anm2(
                 )
                 wrapper_linear = wrapper_matrix[:3, :3]
                 wrapper_linear_scales = np.linalg.norm(wrapper_linear, axis=0)
-                if np.all(wrapper_linear_scales > 1.0e-12):
+                rotation_retained = True
+                policy = getattr(
+                    document, "wrapper_axis_conversion_is_retained", None
+                )
+                if callable(policy):
+                    rotation_retained = bool(policy(source_root_name))
+                if rotation_retained and np.all(wrapper_linear_scales > 1.0e-12):
                     wrapper_rotation = wrapper_linear / wrapper_linear_scales
                     wrapper_axis_conversion = bool(
                         np.allclose(
@@ -1024,6 +1398,16 @@ def build_mapped_rig_anm2(
             else "none"
         )
 
+    # Reflected wrappers remain canonicalized out of FBX sampling.  Detect the
+    # removed geometry for diagnostics and Auto bind-pose observation only.
+    # It does not authorize a second target-space conjugation.
+    mirror_context: BlenderLateralMirrorContext | None = None
+    if target_requires_dying_light_basis and not uses_canonical_document_basis:
+        mirror_context = resolve_blender_lateral_mirror(
+            document,
+            source_basis_matrix=source_basis_matrix,
+        )
+
     source_normalizers: dict[str, SourceGlobalNormalization] = {}
 
     def source_normalizer(source_name: str) -> SourceGlobalNormalization:
@@ -1042,11 +1426,54 @@ def build_mapped_rig_anm2(
             wrapper_axis_conversion=wrapper_axis_conversion,
             basis_matrix=source_basis_matrix,
             basis_label=source_basis_label,
+            wrapper_policy=(
+                "canonicalized_reflection_diagnostic_conjugation"
+                if mirror_context is not None
+                and diagnostic_post_canonicalization_mirror_conjugation
+                else "canonicalized_reflection_no_post_conjugation"
+                if mirror_context is not None
+                else "retained_and_scale_normalized"
+            ),
+            mirror_basis_matrix=(
+                mirror_context.matrix()
+                if mirror_context is not None
+                and diagnostic_post_canonicalization_mirror_conjugation
+                else None
+            ),
+            mirror_wrapper_name=(
+                mirror_context.wrapper_name if mirror_context is not None else ""
+            ),
+            wrapper_canonicalized_before_sampling=bool(
+                mirror_context is not None
+            ),
+            explicit_post_canonicalization_mirror_conjugation=bool(
+                diagnostic_post_canonicalization_mirror_conjugation
+            ),
         )
         source_normalizers[source_name] = normalizer
         return normalizer
 
     global_normalization = source_normalizer(source_root_name)
+    source_analysis = analyze_source_skeleton(document)
+    # Semantic body axes are required only when actor displacement will be
+    # emitted on a humanoid target.  In-place clips discard that displacement;
+    # generic/object rigs have no anatomical bilateral frame to infer.  Those
+    # two cases use the document/target declared coordinate frame explicitly,
+    # while moving humanoids retain the focused ambiguity failure.
+    actor_frame_is_advisory = (
+        resolved_root_motion.motion_mode == "inplace"
+        or str(source_analysis.archetype).casefold() != "humanoid"
+        or str(rig.category).casefold() != "humanoid"
+    )
+    source_actor_frame = build_source_actor_frame(
+        source_analysis,
+        allow_declared_fallback=actor_frame_is_advisory,
+    )
+    target_actor_frame = build_target_actor_frame(
+        rig,
+        build_target_retarget_policy(rig),
+        allow_declared_fallback=actor_frame_is_advisory,
+    )
     helper_source_names = {
         rule.source_bone
         for rule in helper_rules
@@ -1056,8 +1483,15 @@ def build_mapped_rig_anm2(
     canonical_bind_locals = dict(
         getattr(document, "bind_local_matrices", {}) or {}
     )
+    execution_source_names = {
+        source_name
+        for row in base_rows.values()
+        for source_name in _row_execution_source_bones(row)
+    }
     for source_name in sorted(
-        set(mapped.values()).union({source_root_name}, helper_source_names)
+        execution_source_names.union(
+            set(mapped.values()), {source_root_name}, helper_source_names
+        )
     ):
         raw_bind_local = canonical_bind_locals.get(source_name)
         if raw_bind_local is None:
@@ -1124,15 +1558,32 @@ def build_mapped_rig_anm2(
             if source_name in source_bind_globals
         }
     if source_bind_globals and source_root_name in source_bind_globals:
+        source_root_bind_raw_global = np.asarray(
+            source_bind_globals[source_root_name], dtype=float
+        )
         source_root_bind_global = global_normalization.apply(
             source_bind_globals[source_root_name]
         )
     elif hasattr(document, "global_matrices"):
+        source_root_bind_raw_global = np.asarray(
+            document.global_matrices(tick=0, use_animation=False)[source_root_name],
+            dtype=float,
+        )
         source_root_bind_global = global_normalization.apply(
-            document.global_matrices(tick=0, use_animation=False)[source_root_name]
+            source_root_bind_raw_global
         )
     else:
+        raw_bind_local = canonical_bind_locals.get(source_root_name)
+        if raw_bind_local is None:
+            raw_bind_local = document._local_matrix(
+                document.limb_models[source_root_name], tick=0, use_animation=False
+            )
+        source_root_bind_raw_global = np.asarray(raw_bind_local, dtype=float)
         source_root_bind_global = source_bind_local[source_root_name]
+    source_root_unit_scale = (
+        global_normalization.meters_per_unit
+        / global_normalization.wrapper_scale_normalization_factor
+    )
     if hasattr(document, "frame_ticks"):
         ticks = list(document.frame_ticks(fps=sample_fps))
     else:
@@ -1143,7 +1594,30 @@ def build_mapped_rig_anm2(
     if len(ticks) == 1:
         ticks.append(ticks[0])
 
-    values: list[list[list[float]]] = []
+    frame_count = len(ticks)
+    value_shape = (frame_count, len(rig.descriptors), 9)
+    value_bytes = int(np.prod(value_shape, dtype=np.int64)) * np.dtype(float).itemsize
+    # A long clip must not turn per-frame Python lists into an unbounded heap
+    # allocation.  The mapped encoder still needs random access for its
+    # byte-stable packed streams and all-frame safety checks, so spill only the
+    # request-local sample matrix to a temporary memory map once it exceeds a
+    # modest working-set budget.  No sample data survives this build call.
+    sample_storage_limit_bytes = _SAMPLE_STORAGE_LIMIT_BYTES
+    sample_storage_directory: tempfile.TemporaryDirectory[str] | None = None
+    sample_storage_mode = "memory"
+    if value_bytes > sample_storage_limit_bytes:
+        sample_storage_directory = tempfile.TemporaryDirectory(
+            prefix="dl_reanimated_retarget_"
+        )
+        values: np.ndarray = np.memmap(
+            Path(sample_storage_directory.name) / "samples.f64",
+            dtype=float,
+            mode="w+",
+            shape=value_shape,
+        )
+        sample_storage_mode = "memory_mapped"
+    else:
+        values = np.empty(value_shape, dtype=float)
     bind_track_values = rig.bind_track_values()
     bind_row_by_descriptor = {
         descriptor: bind_track_values[index]
@@ -1155,8 +1629,12 @@ def build_mapped_rig_anm2(
     maximum_animated_joint_extent = 0.0
     maximum_animated_joint_extent_frame = 0
     source_root_displacements: list[np.ndarray] = []
+    source_root_raw_displacements_m: list[np.ndarray] = []
+    source_root_animated_globals: list[np.ndarray] = []
     helper_source_local_frames: list[dict[str, np.ndarray]] = []
     helper_source_global_frames: list[dict[str, np.ndarray]] = []
+    representative_rotation_errors: dict[int, float] = {}
+    representative_direct_row_counts: dict[int, int] = {}
 
     # Record rest-pose differences for the UI/report, but they are not a build blocker.
     for bone in rig.bones:
@@ -1183,7 +1661,15 @@ def build_mapped_rig_anm2(
             }
         )
 
-    for tick in ticks:
+    retarget_planning_seconds = time.perf_counter() - planning_started
+    retarget_sampling_started = time.perf_counter()
+    for frame_index, tick in enumerate(ticks):
+        if progress is not None and (
+            frame_index == 0
+            or (frame_index + 1) % _FRAME_PROGRESS_INTERVAL == 0
+            or frame_index + 1 == len(ticks)
+        ):
+            progress(f"Sampling retarget frames {frame_index + 1}/{len(ticks)}")
         rows_by_descriptor: dict[int, list[float]] = {}
         target_animated_globals: dict[str, np.ndarray] = {}
         raw_source_animated_globals = (
@@ -1236,20 +1722,38 @@ def build_mapped_rig_anm2(
                 raw_source_animated_globals[source_name]
             )
         if source_root_name in raw_source_animated_globals:
+            root_animated_raw_global = np.asarray(
+                raw_source_animated_globals[source_root_name], dtype=float
+            )
             root_animated_global = global_normalization.apply(
-                raw_source_animated_globals[source_root_name]
+                root_animated_raw_global
             )
         else:
-            root_animated_global = global_normalization.apply_local(
+            root_animated_raw_global = np.asarray(
                 document._local_matrix(
                     document.limb_models[source_root_name],
                     tick=tick,
                     use_animation=True,
-                )
+                ),
+                dtype=float,
             )
-        root_displacement_global = (
-            root_animated_global[:3, 3] - source_root_bind_global[:3, 3]
+            root_animated_global = global_normalization.apply_local(
+                root_animated_raw_global
+            )
+        root_displacement_source_m = (
+            root_animated_raw_global[:3, 3]
+            - source_root_bind_raw_global[:3, 3]
+        ) * source_root_unit_scale
+        root_displacement_global = map_root_displacement_by_actor_frame(
+            root_displacement_source_m,
+            source_actor_frame,
+            target_actor_frame,
         )
+        root_displacement_global = global_normalization.apply_target_vector(
+            root_displacement_global
+        )
+        source_root_raw_displacements_m.append(root_displacement_source_m)
+        source_root_animated_globals.append(root_animated_global.copy())
         if target_root_bone.parent_index >= 0:
             parent_name = rig.bones[target_root_bone.parent_index].name
             root_displacement_local = (
@@ -1259,14 +1763,48 @@ def build_mapped_rig_anm2(
         else:
             root_displacement_local = root_displacement_global
         source_root_displacements.append(root_displacement_local)
+        normalized_source_animated_locals: dict[str, np.ndarray] = {}
+
+        def animated_source_local(source_bone: str) -> np.ndarray:
+            cached = normalized_source_animated_locals.get(source_bone)
+            if cached is not None:
+                return cached
+            raw = (
+                raw_source_animated_locals[source_bone]
+                if source_bone in raw_source_animated_locals
+                else document._local_matrix(
+                    document.limb_models[source_bone],
+                    tick=tick,
+                    use_animation=True,
+                )
+            )
+            normalized = source_normalizer(source_bone).apply_local(raw)
+            normalized_source_animated_locals[source_bone] = normalized
+            return normalized
+
         for bone in rig.bones:
             target_bind_local = target_bind[bone.name]
             pair = base_rows.get(bone.name)
             source_name = mapped.get(bone.name)
             parent_name = rig.bones[bone.parent_index].name if bone.parent_index >= 0 else None
             resolved_policy = _resolved_row_transfer_policy(pair, default_row_policy)
+            mapping_mode = _row_automatic_mapping_mode(pair)
             candidate_local = target_bind_local
-            if source_name is not None and resolved_policy == "global_bind_basis":
+            if source_name is not None and mapping_mode == "composed":
+                execution_sources = _row_execution_source_bones(pair)
+                candidate_local = mapped_local_from_composed_rotation_deltas(
+                    target_bind_local,
+                    [source_bind_local[name] for name in execution_sources],
+                    [animated_source_local(name) for name in execution_sources],
+                )
+            elif source_name is not None and mapping_mode == "distributed":
+                candidate_local = mapped_local_from_distributed_rotation_delta(
+                    target_bind_local,
+                    source_bind_local[source_name],
+                    animated_source_local(source_name),
+                    _row_distribution_weight(pair),
+                )
+            elif source_name is not None and resolved_policy == "global_bind_basis":
                 desired_global = corrected_target_global(
                     source_animated_globals[source_name], basis_corrections[bone.name]
                 )
@@ -1284,13 +1822,7 @@ def build_mapped_rig_anm2(
                             f"evaluating global-bind row {bone.name!r}."
                         ) from exc
             elif source_name is not None:
-                source_anim_local = source_normalizer(source_name).apply_local(
-                    raw_source_animated_locals.get(source_name)
-                    if source_name in raw_source_animated_locals
-                    else document._local_matrix(
-                        document.limb_models[source_name], tick=tick, use_animation=True
-                    )
-                )
+                source_anim_local = animated_source_local(source_name)
                 if resolved_policy == "rotation_delta":
                     candidate_local = mapped_local_from_rotation_delta(
                         target_bind_local,
@@ -1325,14 +1857,38 @@ def build_mapped_rig_anm2(
                 else local.copy()
             )
             rows_by_descriptor[bone.descriptor] = row
-            movement_ranges[bone.name] = max(
-                movement_ranges[bone.name],
-                max(abs(float(a) - float(b)) for a, b in zip(row, bind_row)),
-            )
+        if frame_index in _DL2_PARITY_FRAMES:
+            maximum_rotation_error = 0.0
+            compared_rows = 0
+            for target_name, pair in base_rows.items():
+                source_name = mapped.get(target_name)
+                if (
+                    target_name == target_root_name
+                    or source_name is None
+                    or _row_automatic_mapping_mode(pair) != "direct"
+                    or resolved_policy_by_target[target_name]
+                    != "global_bind_basis"
+                    or target_name not in basis_corrections
+                ):
+                    continue
+                expected_global = corrected_target_global(
+                    source_animated_globals[source_name],
+                    basis_corrections[target_name],
+                )
+                maximum_rotation_error = max(
+                    maximum_rotation_error,
+                    _rotation_error_degrees(
+                        target_animated_globals[target_name], expected_global
+                    ),
+                )
+                compared_rows += 1
+            representative_rotation_errors[frame_index] = maximum_rotation_error
+            representative_direct_row_counts[frame_index] = compared_rows
+
         frame_extent = _joint_pivot_extent(target_animated_globals)
         if frame_extent > maximum_animated_joint_extent:
             maximum_animated_joint_extent = frame_extent
-            maximum_animated_joint_extent_frame = len(values)
+            maximum_animated_joint_extent_frame = frame_index
         frame = [
             rows_by_descriptor.get(
                 descriptor,
@@ -1340,7 +1896,8 @@ def build_mapped_rig_anm2(
             )
             for descriptor in rig.descriptors
         ]
-        values.append(frame)
+        values[frame_index] = frame
+    retarget_sampling_seconds = time.perf_counter() - retarget_sampling_started
 
     root_row = base_rows.get(target_root_name)
     root_row_policy = _resolved_row_transfer_policy(root_row, default_row_policy)
@@ -1350,7 +1907,7 @@ def build_mapped_rig_anm2(
         and _row_can_change_translation(root_row, root_row_policy)
     )
     if not root_mapping_owns_translation:
-        root_track = rig.descriptors.index(target_root_bone.descriptor)
+        root_track = track_index_by_descriptor[target_root_bone.descriptor]
         root_bind_translation = np.asarray(target_root_bone.bind_translation, dtype=float)
         for frame, displacement in zip(values, source_root_displacements):
             frame[root_track][3:6] = [
@@ -1360,7 +1917,39 @@ def build_mapped_rig_anm2(
     # Root policies are target-track policies and apply to both the global and
     # local-delta solvers.  Previously mapped cross-rig clips silently ignored
     # the user's in-place/motion selection.
-    apply_global_root_policy(values, rig, target_root_name, root_policy)
+    root_heading_report = apply_global_root_policy(
+        values, rig, target_root_name, resolved_root_motion
+    )
+    root_policy_warning = _inplace_root_policy_warning(
+        target_root_name, resolved_root_motion, root_heading_report
+    )
+    if root_policy_warning:
+        warnings.append(root_policy_warning)
+    source_root_heading_degrees = root_heading_report.source_heading_degrees
+    source_frame_zero_displacement_m = source_root_raw_displacements_m[0]
+    source_last_displacement_m = source_root_raw_displacements_m[-1]
+    source_net_displacement_m = (
+        source_last_displacement_m - source_frame_zero_displacement_m
+    )
+    basis_report = root_motion_basis_report(
+        source_actor_frame,
+        target_actor_frame,
+        source_net_displacement_m,
+    )
+    basis_report.update(
+        {
+            "net_reference": "source_frame_zero_to_last_frame",
+            "source_bind_translation_native": (
+                source_root_bind_raw_global[:3, 3].tolist()
+            ),
+            "source_frame_zero_displacement_from_bind_m": (
+                source_frame_zero_displacement_m.tolist()
+            ),
+            "source_last_displacement_from_bind_m": (
+                source_last_displacement_m.tolist()
+            ),
+        }
+    )
 
     helper_report = HelperApplyReport()
     if helper_rules:
@@ -1368,9 +1957,7 @@ def build_mapped_rig_anm2(
             values,
             helper_rules,
             target_bind_local=target_bind,
-            target_track_indices={
-                bone.name: rig.descriptors.index(bone.descriptor) for bone in rig.bones
-            },
+            target_track_indices=track_index_by_bone,
             target_parents=rig_parents,
             source_bind_local={
                 name: source_bind_local[name]
@@ -1415,34 +2002,37 @@ def build_mapped_rig_anm2(
         if _component_owns_translation(rule.component_policy)
         and rule.transfer_policy not in {"bind", "rotation_delta"}
     )
+    hierarchy_validation_started = time.perf_counter()
     hierarchy_safety = validate_hierarchy_safety(
         rig,
         values,
         preserve_non_root_translations=True,
         allowed_non_root_translation_bones=authorized_translation_targets,
+        track_index_by_descriptor=track_index_by_descriptor,
+    )
+    hierarchy_validation_seconds = (
+        time.perf_counter() - hierarchy_validation_started
     )
 
+    output_validation_started = time.perf_counter()
+    value_array = np.asarray(values, dtype=float)
+    bind_track_array = np.asarray(bind_track_values, dtype=float)
+    movement_by_track = np.max(
+        np.abs(value_array - bind_track_array[None, :, :]), axis=(0, 2)
+    )
     for bone in rig.bones:
-        track_index = rig.descriptors.index(bone.descriptor)
-        bind_row = bind_row_by_descriptor[bone.descriptor]
-        movement_ranges[bone.name] = max(
-            max(abs(float(a) - float(b)) for a, b in zip(frame[track_index], bind_row))
-            for frame in values
+        movement_ranges[bone.name] = float(
+            movement_by_track[track_index_by_descriptor[bone.descriptor]]
         )
 
-    packed_flags: list[list[bool]] = []
-    for track_index in range(len(rig.descriptors)):
-        flags: list[bool] = []
-        for component_index in range(9):
-            curve = [frame[track_index][component_index] for frame in values]
-            flags.append(max(curve) - min(curve) > 1.0e-8)
+    packed_flags = (np.ptp(value_array, axis=0) > 1.0e-8).tolist()
+    for flags in packed_flags:
         if any(flags[6:9]):
             flags[6:9] = [True, True, True]
-        packed_flags.append(flags)
 
-    header = rig.make_header(frame_count=len(values))
+    header = rig.make_header(frame_count=frame_count)
     payload = build_payload_from_values(header, rig.descriptors, values, packed_flags)
-    sample_frames = sorted({0, len(values) // 2, len(values) - 1})
+    sample_frames = sorted({0, frame_count // 2, frame_count - 1})
     decoded = decode_samples(payload, [float(value) for value in sample_frames])
     maximum_error = validate_decoded_component_error(
         decoded,
@@ -1450,6 +2040,7 @@ def build_mapped_rig_anm2(
         sample_frames,
         engine_name="MappedRigRetargetEngine",
     )
+    output_validation_seconds = time.perf_counter() - output_validation_started
 
     intentionally_unmapped = {
         target_name
@@ -1525,12 +2116,261 @@ def build_mapped_rig_anm2(
         )
         for bone in rig.bones
     )
+    automatic_certificate = dict(
+        bone_map.extensions.get("automatic_retarget_certificate", {}) or {}
+    )
+    automatic_plan = dict(
+        bone_map.extensions.get("automatic_retarget_plan", {}) or {}
+    )
+    mirror_repair = dict(
+        bone_map.extensions.get("source_wrapper_mirror", {}) or {}
+    )
+    bilateral_semantic_decision = dict(
+        bone_map.extensions.get("bilateral_semantic_decision", {}) or {}
+    )
+    bilateral_warning = str(
+        bilateral_semantic_decision.get("warning", "") or ""
+    )
+    if bilateral_warning:
+        warnings.append(bilateral_warning)
+    if mirror_context is not None:
+        # Mapping provenance carries any semantic swap count independently.
+        # The removed wrapper is diagnostic unless a low-level ablation
+        # explicitly requests post-canonicalization conjugation.
+        mirror_repair = {
+            **mirror_context.to_dict(),
+            **mirror_repair,
+        }
+        mirror_repair.setdefault("swapped_row_count", 0)
+        mirror_repair["application"] = (
+            "diagnostic_conjugate"
+            if diagnostic_post_canonicalization_mirror_conjugation
+            else "diagnostic_only"
+        )
+    certificate_pass = bool(
+        automatic_certificate.get("status") == "pass"
+        and automatic_certificate.get("live_revalidated") is True
+    )
+    runtime_certificate_status = (
+        "pass"
+        if certificate_pass
+        else "failed"
+        if automatic_certificate
+        else "not_applicable"
+    )
+    certificate_mapped_body = int(
+        automatic_certificate.get(
+            "mapped_body_row_count",
+            automatic_certificate.get("direct_mapping_count", len(mapped)),
+        )
+        or 0
+    )
+    certificate_bind_rows = int(
+        automatic_certificate.get(
+            "bind_row_count",
+            automatic_certificate.get("held_at_bind_row_count", len(bind_only_targets)),
+        )
+        or 0
+    )
+    transform_contract = getattr(document, "transform_contract", None)
+    transform_contract_payload = (
+        transform_contract.to_dict()
+        if transform_contract is not None
+        and hasattr(transform_contract, "to_dict")
+        else {}
+    )
+    wrapper_models = list(
+        transform_contract_payload.get("common_wrapper_models", ()) or ()
+    )
+    wrapper_canonicalization = {
+        "applied": bool(
+            transform_contract_payload.get(
+                "canonicalized_wrapper_reflection", False
+            )
+        ),
+        "wrapper": (
+            wrapper_models[0]
+            if len(wrapper_models) == 1
+            else wrapper_models
+        ),
+        "matrix": transform_contract_payload.get("common_wrapper_matrix"),
+        "uniform": bool(
+            transform_contract_payload.get("common_wrapper_is_uniform", False)
+        ),
+        "static": bool(
+            transform_contract_payload.get("common_wrapper_is_static", False)
+        ),
+        "reflected": bool(
+            transform_contract_payload.get("common_wrapper_is_reflected", False)
+        ),
+        "mirror_diagnostics": mirror_repair if mirror_context is not None else None,
+    }
+    exact_subset_rows = int(
+        automatic_certificate.get("exact_target_subset_rows", 0) or 0
+    ) if certificate_pass else sum(
+        str(row.method or "").casefold() == "exact_or_subset"
+        or any(
+            str(item.get("kind", ""))
+            in {"exact_identity", "exact_target_subset"}
+            for item in (
+                dict(row.extensions or {})
+                .get("automatic_retarget_decision", {})
+                .get("evidence", ())
+            )
+        )
+        for row in base_rows.values()
+    )
+    manual_target_overrides = int(
+        automatic_certificate.get("manual_override_rows", 0) or 0
+    ) if certificate_pass else sum(
+        str(row.method or "").casefold().startswith("manual:target_override:")
+        for row in base_rows.values()
+    )
+    semantic_rows = int(
+        automatic_certificate.get("semantic_rows", 0) or 0
+    ) if certificate_pass else max(
+        0,
+        len(mapped) - exact_subset_rows - manual_target_overrides,
+    )
+    spatial_only_rows = int(
+        automatic_certificate.get("spatial_only_row_count", 0) or 0
+    ) if certificate_pass else sum(
+        str(row.method or "").casefold().startswith("spatial")
+        for row in base_rows.values()
+    )
+    mapping_summary = {
+        "exact_target_subset_rows": exact_subset_rows,
+        "semantic_rows": semantic_rows,
+        "manual_target_overrides": manual_target_overrides,
+        "target_bind_rows": (
+            certificate_bind_rows if certificate_pass else len(bind_only_targets)
+        ),
+        "spatial_only_rows": spatial_only_rows,
+    }
 
-    return MappedRigBuild(
-        payload=payload,
-        frame_count=len(values),
-        report={
+    report = {
+            "performance": {
+                "document_parse_seconds": round(document_parse_seconds, 6),
+                "transform_validation_seconds": round(
+                    transform_validation_seconds, 6
+                ),
+                "retarget_planning_seconds": round(
+                    retarget_planning_seconds, 6
+                ),
+                "retarget_sampling_seconds": round(
+                    retarget_sampling_seconds, 6
+                ),
+                "hierarchy_validation_seconds": round(
+                    hierarchy_validation_seconds, 6
+                ),
+                "output_validation_seconds": round(
+                    output_validation_seconds, 6
+                ),
+                "total_seconds": round(
+                    time.perf_counter() - operation_started, 6
+                ),
+                "frame_progress_interval": _FRAME_PROGRESS_INTERVAL,
+                "sample_storage": sample_storage_mode,
+                "sample_storage_limit_bytes": sample_storage_limit_bytes,
+            },
+            "preflight_policy": "export_first_v1",
+            "fbx_anm2_export_behavior": fbx_anm2_export_behavior,
+            "sampler_contract": "dlr_current_normalized_global_v2",
+            "bilateral_semantic_policy": bilateral_semantic_policy,
+            "bilateral_swap_applied": bool(
+                bilateral_semantic_decision.get(
+                    "bilateral_swap_applied", False
+                )
+            ),
+            "bilateral_swapped_row_count": int(
+                bilateral_semantic_decision.get(
+                    "bilateral_swapped_row_count",
+                    mirror_repair.get("swapped_row_count", 0),
+                )
+                or 0
+            ),
+            "bilateral_semantic_decision": bilateral_semantic_decision,
+            "post_canonicalization_mirror_conjugation_applied": bool(
+                diagnostic_post_canonicalization_mirror_conjugation
+                and mirror_context is not None
+            ),
+            "source_target_classification": str(
+                dict(
+                    mapped_preflight.inventory.get(
+                        "target_compatibility", {}
+                    )
+                    or {}
+                ).get("classification", "semantic_or_cross_rig")
+            ),
+            "bind_retained_bones": sorted(
+                bind_only_targets, key=str.casefold
+            ),
+            "wrapper_canonicalization": wrapper_canonicalization,
+            "wrapper_reflection_detected": bool(
+                transform_contract_payload.get(
+                    "common_wrapper_is_reflected", False
+                )
+            ),
+            "wrapper_canonicalized": bool(
+                transform_contract_payload.get(
+                    "canonicalized_wrapper_reflection", False
+                )
+            ),
+            "wrapper_matrix": transform_contract_payload.get(
+                "common_wrapper_matrix"
+            ),
+            "wrapper_reflection_diagnostics": mirror_repair or None,
+            "canonical_transform_validation": dict(
+                transform_contract_payload.get(
+                    "canonical_transform_validation", {}
+                )
+                or {}
+            ),
+            "mapping": mapping_summary,
+            "provenance": {
+                "raw_hash_mismatches": [],
+                "semantic_hash_matches": None,
+                "scope": "target_package_not_supplied_to_low_level_builder",
+            },
             "retarget_mode": "mapped_crig",
+            "root_heading_policy": root_heading_report.to_dict(),
+            "fixture_heading_audit": {
+                "source_root_heading_degrees": source_root_heading_degrees,
+                "pre_policy_target_root_heading_degrees": (
+                    root_heading_report.source_heading_degrees
+                ),
+                "post_policy_target_root_heading_degrees": (
+                    root_heading_report.skeletal_root_heading_degrees
+                ),
+                "motion_accumulator_heading_degrees": (
+                    root_heading_report.motion_heading_degrees
+                ),
+            },
+            "representative_target_global_rotation_parity": {
+                "frames": sorted(representative_rotation_errors),
+                "maximum_error_degrees": max(
+                    representative_rotation_errors.values(), default=0.0
+                ),
+                "maximum_error_by_frame_degrees": {
+                    str(frame): error
+                    for frame, error in sorted(
+                        representative_rotation_errors.items()
+                    )
+                },
+                "direct_non_root_rows_by_frame": {
+                    str(frame): count
+                    for frame, count in sorted(
+                        representative_direct_row_counts.items()
+                    )
+                },
+                "tolerance_degrees": 0.05,
+                "status": (
+                    "pass"
+                    if max(representative_rotation_errors.values(), default=0.0)
+                    < 0.05
+                    else "failed"
+                ),
+            },
             "engine": "MappedRigRetargetEngine",
             "source_fbx": str(source),
             "source_animation_stack": (
@@ -1542,6 +2382,37 @@ def build_mapped_rig_anm2(
             "target_rig_name": rig.name,
             "target_skeleton_hash": rig.skeleton_hash,
             "mapping_profile": bone_map.to_dict(),
+            "automatic_retarget_certificate": automatic_certificate or None,
+            "automatic_retarget_plan": automatic_plan or None,
+            "automatic_mapping_certificate_status": runtime_certificate_status,
+            "mapping_certificate_status": runtime_certificate_status,
+            "automatic_mapping_certificate_format": str(
+                automatic_certificate.get("format", "")
+            ),
+            "automatic_mapping_mode_counts": dict(
+                automatic_certificate.get("mapping_mode_counts", {}) or {}
+            ),
+            "target_row_count": len(rig.bones),
+            "mapped_body_row_count": (
+                certificate_mapped_body if certificate_pass else len(mapped)
+            ),
+            "verified_bind_default_row_count": (
+                certificate_bind_rows if certificate_pass else 0
+            ),
+            "bind_default_row_count": len(bind_only_targets),
+            "manual_intentionally_unmapped_row_count": (
+                0 if certificate_pass else len(intentionally_unmapped)
+            ),
+            "truly_missing_row_count": len(unmapped),
+            "spatial_only_mapping_count": int(
+                automatic_certificate.get("spatial_only_row_count", 0) or 0
+            ) if certificate_pass else sum(
+                str(row.method or "").casefold().startswith("spatial")
+                for row in base_rows.values()
+            ),
+            "mapped_non_body_target_count": len(
+                automatic_certificate.get("mapped_non_body_targets", ()) or ()
+            ) if certificate_pass else 0,
             "base_mapped_bone_count": len(mapped),
             "helper_override_count": helper_report.helper_override_count,
             "helper_source_fanout_count": helper_report.helper_source_fanout_count,
@@ -1554,6 +2425,10 @@ def build_mapped_rig_anm2(
             },
             "base_component_policies": {
                 target_name: base_rows[target_name].component_policy
+                for target_name in sorted(base_rows)
+            },
+            "base_execution_mapping_modes": {
+                target_name: _row_automatic_mapping_mode(base_rows[target_name])
                 for target_name in sorted(base_rows)
             },
             "base_review_states": {
@@ -1583,7 +2458,11 @@ def build_mapped_rig_anm2(
                 ),
                 "translation_target_bone": target_root_name,
                 "pose_and_root_motion_separated": True,
+                "motion_mode": resolved_root_motion.motion_mode,
+                "heading_mode": resolved_root_motion.heading_mode,
             },
+            "root_motion_basis": basis_report,
+            "root_heading": root_heading_report.to_dict(),
             "mapped_bone_count": len(mapped) + helper_report.helper_override_count,
             "intentionally_unmapped_bone_count": len(intentionally_unmapped),
             "intentionally_unmapped_target_bones": sorted(intentionally_unmapped),
@@ -1599,7 +2478,7 @@ def build_mapped_rig_anm2(
             "maximum_bind_rotation_discrepancy_degrees": max(
                 (float(row["rotation_delta_degrees"]) for row in bind_deltas), default=0.0
             ),
-            "frame_count": len(values),
+            "frame_count": frame_count,
             "fps": sample_fps,
             "track_count": len(rig.descriptors),
             "bone_count": len(rig.bones),
@@ -1627,6 +2506,10 @@ def build_mapped_rig_anm2(
             "basis_correction_policy": transfer_policy,
             "preserves_target_non_root_translation": preserves_non_root_translation,
             "preserves_target_non_root_scale": preserves_non_root_scale,
+            "preserves_target_translation": preserves_non_root_translation,
+            "preserves_target_scale": preserves_non_root_scale,
+            "preserve_target_translation": preserves_non_root_translation,
+            "preserve_target_scale": preserves_non_root_scale,
             "preserves_target_non_root_translation_and_scale": (
                 preserves_non_root_translation and preserves_non_root_scale
             ),
@@ -1654,11 +2537,28 @@ def build_mapped_rig_anm2(
                 bone.name for bone in rig.bones if bone.parent_index < 0
             ],
             "warnings": list(dict.fromkeys(warnings)),
-            "root_policy": root_policy,
-            "root_motion_policy_requested": root_policy,
-            "root_motion_policy_applied": root_policy,
+            "root_policy": resolved_root_motion.legacy_serialized_policy,
+            # Keep the historical string fields stable for downstream report
+            # readers and expose the independent v2 choices alongside them.
+            "root_motion_policy_requested": requested_root_motion.legacy_serialized_policy,
+            "root_motion_policy_applied": resolved_root_motion.legacy_serialized_policy,
+            "root_motion_selection_requested": requested_root_motion.to_dict(),
+            "root_motion_selection_applied": resolved_root_motion.to_dict(),
             "candidate_path": None,
-        },
+    }
+    if sample_storage_directory is not None:
+        # Windows cannot remove an open mapping. Close it before releasing the
+        # request-local temporary directory so long clips leave no cache file.
+        value_array = None
+        values.flush()
+        mapping = getattr(values, "_mmap", None)
+        if mapping is not None:
+            mapping.close()
+        sample_storage_directory.cleanup()
+    return MappedRigBuild(
+        payload=payload,
+        frame_count=frame_count,
+        report=report,
     )
 
 
@@ -1670,6 +2570,8 @@ __all__ = [
     "compose_local_matrix",
     "corrected_target_global",
     "global_bind_basis_correction",
+    "mapped_local_from_composed_rotation_deltas",
+    "mapped_local_from_distributed_rotation_delta",
     "mapped_local_from_rest_delta",
     "mapped_local_from_rotation_delta",
     "quaternion_wxyz_to_matrix",

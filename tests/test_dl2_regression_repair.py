@@ -11,6 +11,7 @@ from dlanm2_gui.bone_maps import GenericBoneMap
 from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.game_profiles import (
     DL2_GAME_ID,
+    DL2_LEGACY_RIG_REF,
     GAME_PROFILES,
     apply_game_profile_defaults,
 )
@@ -27,8 +28,10 @@ from dlanm2_gui.workspace_project import DlReanimatedProject, ProjectAnimation
 
 
 ROOT = Path(__file__).resolve().parents[1]
-DL2_SMD = ROOT / "reference" / "dl2" / "player_shadow_caster.smd"
-DL2_CRIG = ROOT / "reference" / "dl2" / "player_shadow_caster.crig"
+DL2_SMD = ROOT / "reference" / "dl2" / "player_skeleton.smd"
+DL2_CRIG = ROOT / "reference" / "dl2" / "player_skeleton.crig"
+DL2_LEGACY_SMD = ROOT / "reference" / "dl2" / "player_shadow_caster.smd"
+DL2_LEGACY_CRIG = ROOT / "reference" / "dl2" / "player_shadow_caster.crig"
 DL2_REFERENCE = ROOT / "reference" / "dl2" / "0_m_fpp_farjump.anm2"
 
 
@@ -44,20 +47,63 @@ def _bind_globals(rig: ChromeRig) -> dict[str, np.ndarray]:
     return result
 
 
-def test_bundled_dl2_target_package_is_the_coherent_81_bone_shadow_caster() -> None:
+def test_bundled_dl2_default_package_is_the_coherent_271_bone_advanced_rig() -> None:
     result = validate_target_package(GAME_PROFILES[DL2_GAME_ID], ROOT)
     assert result.status == "pass"
-    assert result.smd_bone_count == result.crig_bone_count == 81
+    assert result.smd_bone_count == result.crig_bone_count == 271
     assert result.bone_names_match
     assert result.parents_match
     assert result.roots_match
     assert result.bind_pose_match
     assert result.source_smd_filename_match
-    assert result.source_smd_hash_match
+    assert result.source_smd_semantic_hash_match
+    assert result.source_smd_hash_match or result.warnings
     assert result.reference_anm2_hash_match
     assert result.reference_anm2_format_match
     assert result.game_id_match
+    assert result.rig_id_match
     assert result.primary_root_match
+    assert result.roots == ["pelvis"]
+
+
+def test_smd_bom_and_line_endings_are_semantic_not_structural_changes(
+    tmp_path: Path,
+) -> None:
+    baseline = validate_target_package(GAME_PROFILES[DL2_GAME_ID], ROOT)
+    text = DL2_SMD.read_text(encoding="utf-8-sig")
+    normalized = text.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+    altered_smd = tmp_path / DL2_SMD.name
+    altered_smd.write_bytes(
+        b"\xef\xbb\xbf" + normalized.replace("\n", "\r\n").encode("utf-8")
+    )
+
+    result = validate_target_package(
+        GAME_PROFILES[DL2_GAME_ID],
+        smd_path=altered_smd,
+        crig_path=DL2_CRIG,
+        reference_anm2_path=DL2_REFERENCE,
+    )
+
+    assert result.status == "pass"
+    assert result.bind_pose_match
+    assert result.source_smd_semantic_hash_match
+    assert result.smd_semantic_sha256 == baseline.smd_semantic_sha256
+    assert result.smd_raw_sha256 != baseline.smd_raw_sha256
+    assert not result.source_smd_hash_match
+    assert result.warnings
+    payload = result.to_dict()
+    assert payload["provenance"]["raw_hashes_advisory"] is True
+    assert payload["provenance"]["smd"]["semantic_match"] is True
+    assert payload["smd_raw_sha256"] != payload["smd_semantic_sha256"]
+
+
+def test_bundled_dl2_legacy_package_remains_coherent_with_four_roots() -> None:
+    result = validate_target_package(
+        GAME_PROFILES[DL2_GAME_ID], ROOT, rig_ref=DL2_LEGACY_RIG_REF
+    )
+    assert result.status == "pass"
+    assert result.smd_bone_count == result.crig_bone_count == 81
+    assert result.rig_id_match
     assert set(result.roots) == {
         "pelvis", "l_iktarget", "r_iktarget", "player_shadowcaster"
     }
@@ -70,7 +116,7 @@ def test_modified_smd_fails_coherence_and_blocks_a_builtin_build(
     shutil.copy2(DL2_SMD, altered_smd)
     text = altered_smd.read_text(encoding="utf-8")
     altered_smd.write_text(
-        text.replace('64 "head" 63', '64 "head_regressed" 63'), encoding="utf-8"
+        text.replace('102 "head" 100', '102 "head_regressed" 100'), encoding="utf-8"
     )
     result = validate_target_package(
         GAME_PROFILES[DL2_GAME_ID],
@@ -138,6 +184,57 @@ def test_source_global_normalization_applies_units_and_axis_once() -> None:
             axis_conversion_count=2,
         )
 
+    mirror = np.diag((-1.0, 1.0, 1.0, 1.0))
+    canonicalized_default = SourceGlobalNormalization(
+        meters_per_unit=0.01,
+        convert_y_up_to_dying_light=True,
+        mirror_wrapper_name="Armature",
+        wrapper_canonicalized_before_sampling=True,
+        wrapper_policy="canonicalized_reflection_no_post_conjugation",
+    )
+    rotated = np.eye(4)
+    rotated[0, 0] = rotated[2, 2] = 0.0
+    rotated[0, 2] = 1.0
+    rotated[2, 0] = -1.0
+    rotated[:3, 3] = (20.0, 30.0, 40.0)
+    np.testing.assert_allclose(
+        canonicalized_default.apply(rotated),
+        explicit_contract.apply(rotated),
+    )
+    assert canonicalized_default.apply_target_vector(
+        np.asarray((0.5, 0.25, -1.0))
+    ) == pytest.approx((0.5, 0.25, -1.0))
+    assert not canonicalized_default.to_report()[
+        "post_canonicalization_mirror_conjugation_applied"
+    ]
+
+    with pytest.raises(ValueError, match="cannot implicitly apply"):
+        SourceGlobalNormalization(
+            meters_per_unit=0.01,
+            convert_y_up_to_dying_light=True,
+            mirror_basis_matrix=mirror,
+            mirror_wrapper_name="Armature",
+            wrapper_canonicalized_before_sampling=True,
+        )
+
+    diagnostic_contract = SourceGlobalNormalization(
+        meters_per_unit=0.01,
+        convert_y_up_to_dying_light=True,
+        mirror_basis_matrix=mirror,
+        mirror_wrapper_name="Armature",
+        wrapper_canonicalized_before_sampling=True,
+        explicit_post_canonicalization_mirror_conjugation=True,
+        wrapper_policy="canonicalized_reflection_diagnostic_conjugation",
+    )
+    expected = mirror @ explicit_contract.apply(rotated) @ mirror
+    np.testing.assert_allclose(diagnostic_contract.apply(rotated), expected)
+    assert diagnostic_contract.apply_target_vector(
+        np.asarray((0.5, 0.25, -1.0))
+    ) == pytest.approx((-0.5, 0.25, -1.0))
+    mirror_report = diagnostic_contract.to_report()["mirrored_wrapper"]
+    assert mirror_report["applied"]
+    assert mirror_report["wrapper"] == "Armature"
+
 
 def test_automatic_repair_cannot_silently_select_the_mapped_solver() -> None:
     profile = GenericBoneMap.create(
@@ -160,8 +257,44 @@ def test_automatic_repair_cannot_silently_select_the_mapped_solver() -> None:
     assert "explicitly reviewed" in selection.blocking_error
 
 
+def test_automatic_verified_origin_requires_live_revalidation_to_route() -> None:
+    profile = GenericBoneMap.create(
+        "Forged serialized certificate",
+        "target",
+        "source",
+        origin="automatic_verified",
+    )
+    profile.extensions["automatic_retarget_certificate"] = {
+        "format": "dl2_advanced_body_bridge_v1",
+        "status": "pass",
+    }
+    compatibility = {
+        "classification": "incompatible",
+        "required_missing_bones": ["pelvis"],
+        "hierarchy_mismatches": [],
+    }
+
+    denied = select_exact_solver(compatibility, profile)
+    assert not denied.build_allowed
+    assert denied.automatic_verification_status == "failed"
+
+    forged_live_dict = select_exact_solver(
+        compatibility,
+        profile,
+        automatic_verification={
+            "status": "pass",
+            "live_revalidated": True,
+            "certificate_format": "dl2_advanced_body_bridge_v1",
+        },
+    )
+    assert not forged_live_dict.build_allowed
+    assert forged_live_dict.selected_engine == ""
+    assert forged_live_dict.mapping_profile_origin == "automatic_verified"
+    assert forged_live_dict.automatic_verification_status == "failed"
+
+
 def test_bind_frame_reconstructs_target_and_independent_roots_stay_independent() -> None:
-    rig = ChromeRig.load(DL2_CRIG)
+    rig = ChromeRig.load(DL2_LEGACY_CRIG)
     bind_frame = rig.bind_track_values()
     reconstructed = reconstruct_target_globals(rig, bind_frame)
     expected = _bind_globals(rig)
@@ -179,7 +312,7 @@ def test_bind_frame_reconstructs_target_and_independent_roots_stay_independent()
 
 
 def test_hierarchy_safety_rejects_displacement_and_accepts_normal_pose() -> None:
-    rig = ChromeRig.load(DL2_CRIG)
+    rig = ChromeRig.load(DL2_LEGACY_CRIG)
     bind = rig.bind_track_values()
     normal = [deepcopy(bind), deepcopy(bind)]
     upperarm = next(bone for bone in rig.bones if bone.name == "l_upperarm")

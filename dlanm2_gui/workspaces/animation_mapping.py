@@ -3,9 +3,16 @@ from __future__ import annotations
 """Root/Bip01 and mapped-.crig editor embedded in Animations."""
 
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from ..animation_targets import resolve_animation_target
+from ..automatic_retarget import (
+    DL2_ADVANCED_RIG_ID,
+    AutomaticRetargetValidation,
+    build_automatic_retarget_plan,
+    build_dl2_advanced_body_map_with_local_recipe,
+    revalidate_verified_dl2_advanced_body_map,
+)
 from ..bone_maps import (
     BoneMapPair,
     COMPONENT_POLICIES,
@@ -34,6 +41,15 @@ from ..retarget_mapping import (
     source_mapping_evidence,
 )
 from ..retarget_profiles import HUMANOID_ROLES
+from ..retarget_recipes import (
+    build_reviewed_retarget_recipe_from_profile,
+    default_retarget_recipe_store,
+    load_retarget_recipe,
+    materialize_reviewed_retarget_recipe,
+    revalidate_materialized_retarget_recipe,
+    retarget_recipe_has_reviewed_provenance,
+    save_retarget_recipe,
+)
 from ..retarget_routing import select_exact_solver
 from ..root_mapping import (
     RootMappingSelection,
@@ -41,6 +57,10 @@ from ..root_mapping import (
     parent_names_from_smd,
     read_smd_hierarchy,
     resolve_source_root,
+)
+from ..target_retarget_policy import (
+    TargetRetargetPolicy,
+    build_target_retarget_policy,
 )
 
 
@@ -59,6 +79,84 @@ _COMPONENT_LABELS = {
     "scale": "Scale",
     "full_transform": "Full transform",
 }
+
+_LEGACY_AUTO_BUTTON_LABEL = "Auto-map .crig bones"
+_DL2_ADVANCED_AUTO_BUTTON_LABEL = "Regenerate safe DL2 body map"
+_DEFAULT_REVIEW_TOOLTIP = (
+    "Marks automatic cross-rig suggestions as explicitly reviewed. Incompatible "
+    "hierarchies cannot build through the mapped solver until approved."
+)
+
+
+def _certificate_payload(
+    value: AutomaticRetargetValidation | Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if isinstance(value, AutomaticRetargetValidation):
+        return value.certificate
+    certificate = value.get("certificate")
+    return certificate if isinstance(certificate, Mapping) else value
+
+
+def format_verified_dl2_body_map_summary(
+    value: AutomaticRetargetValidation | Mapping[str, Any],
+) -> str:
+    """Render the compact, stable five-line summary used by the mapping workspace."""
+
+    certificate = _certificate_payload(value)
+    mapped = int(certificate.get("mapped_body_row_count", 0) or 0)
+    bind = int(
+        certificate.get(
+            "bind_default_row_count",
+            certificate.get("bind_row_count", 0),
+        )
+        or 0
+    )
+    spatial = int(
+        certificate.get(
+            "spatial_only_mapping_count",
+            certificate.get("spatial_only_row_count", 0),
+        )
+        or 0
+    )
+    status = str(
+        certificate.get(
+            "certificate_status",
+            certificate.get("status", "unknown"),
+        )
+        or "unknown"
+    )
+    return "\n".join(
+        (
+            "Verified DL2 body map",
+            f"{mapped} body rows mapped",
+            f"{bind} target rows held at bind",
+            f"{spatial} spatial-only mappings",
+            f"certificate: {status}",
+        )
+    )
+
+
+def verified_dl2_solver_preview(
+    document_or_analysis: Any,
+    rig: ChromeRig,
+    profile: GenericBoneMap,
+    policy: TargetRetargetPolicy,
+) -> tuple[AutomaticRetargetValidation, Any]:
+    """Live-revalidate a verified profile before asking routing for a preview."""
+
+    verification = revalidate_verified_dl2_advanced_body_map(
+        profile,
+        document_or_analysis,
+        rig,
+        policy,
+    )
+    compatibility = classify_target_compatibility(document_or_analysis, rig)
+    solver = select_exact_solver(
+        compatibility,
+        profile,
+        automatic_verification=verification,
+    )
+    return verification, solver
 
 
 def shared_source_status(source_name: str, mapping_kind: str, use_count: int) -> str:
@@ -102,6 +200,8 @@ class CrigMappingWorkspace:
         self.controller = controller
         self.mark_dirty = mark_dirty
         self._refreshing_root = False
+        self._auto_map_busy = False
+        self._fresh_verified_profiles: dict[str, AutomaticRetargetValidation] = {}
         self.widget = qt["QWidget"]()
         layout = qt["QVBoxLayout"](self.widget)
         intro = qt["QLabel"](
@@ -142,7 +242,7 @@ class CrigMappingWorkspace:
         layout.addWidget(root_group)
 
         actions = qt["QHBoxLayout"]()
-        self.auto_button = qt["QPushButton"]("Auto-map .crig bones")
+        self.auto_button = qt["QPushButton"](_LEGACY_AUTO_BUTTON_LABEL)
         self.auto_button.clicked.connect(self.auto_map)
         self.clear_button = qt["QPushButton"]("Clear .crig mapping")
         self.clear_button.clicked.connect(self.clear_mapping)
@@ -150,16 +250,27 @@ class CrigMappingWorkspace:
         self.load_button.clicked.connect(self.load_mapping)
         self.save_button = qt["QPushButton"]("Save mapping…")
         self.save_button.clicked.connect(self.save_mapping)
-        self.review_button = qt["QPushButton"]("Approve mapped solver")
-        self.review_button.setToolTip(
-            "Marks automatic cross-rig suggestions as explicitly reviewed. Incompatible "
-            "hierarchies cannot build through the mapped solver until approved."
+        self.import_recipe_button = qt["QPushButton"]("Import retarget recipe…")
+        self.import_recipe_button.setToolTip(
+            "Import an explicitly reviewed recipe and live-revalidate it against "
+            "this source, target, bind pose, and policy before storing it locally."
         )
+        self.import_recipe_button.clicked.connect(self.import_retarget_recipe)
+        self.export_recipe_button = qt["QPushButton"]("Export reviewed recipe…")
+        self.export_recipe_button.setToolTip(
+            "Export only explicitly reviewed manual source assignments as a "
+            "versioned local retarget recipe."
+        )
+        self.export_recipe_button.clicked.connect(self.export_retarget_recipe)
+        self.review_button = qt["QPushButton"]("Approve mapped solver")
+        self.review_button.setToolTip(_DEFAULT_REVIEW_TOOLTIP)
         self.review_button.clicked.connect(self.approve_mapping)
         actions.addWidget(self.auto_button)
         actions.addWidget(self.clear_button)
         actions.addWidget(self.load_button)
         actions.addWidget(self.save_button)
+        actions.addWidget(self.import_recipe_button)
+        actions.addWidget(self.export_recipe_button)
         actions.addWidget(self.review_button)
         actions.addStretch(1)
         layout.addLayout(actions)
@@ -271,7 +382,12 @@ class CrigMappingWorkspace:
         source = Path(animation.source_fbx)
         if not source.is_file():
             raise FileNotFoundError(f"Animation FBX was not found: {source}")
-        document = FbxDocument(source)
+        cached_loader = getattr(self.controller, "_source_document", None)
+        document = (
+            cached_loader(str(source))
+            if callable(cached_loader)
+            else FbxDocument(source)
+        )
         if animation.source_animation_stack:
             document.select_animation_stack(animation.source_animation_stack)
         return document
@@ -301,6 +417,7 @@ class CrigMappingWorkspace:
         return GenericBoneMap.from_dict(payload)
 
     def _store_profile(self, animation, profile: GenericBoneMap) -> None:
+        getattr(self, "_fresh_verified_profiles", {}).pop(profile.profile_id, None)
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
         animation.mapping_profile_id = profile.profile_id
         self.mark_dirty()
@@ -308,25 +425,304 @@ class CrigMappingWorkspace:
         if callable(refresh_table):
             refresh_table()
 
+    def _is_dl2_advanced_selection(self, animation: Any) -> bool:
+        return self._target_selection(animation).rig_ref == DL2_ADVANCED_RIG_ID
+
+    def _target_retarget_policy(self, rig: ChromeRig) -> TargetRetargetPolicy:
+        return build_target_retarget_policy(
+            rig,
+            game_id=str(getattr(self.project, "game_id", "") or ""),
+            clip_domain="body",
+        )
+
+    def _empty_advanced_display_profile(
+        self,
+        animation: Any,
+        rig: ChromeRig,
+        document: FbxDocument,
+    ) -> GenericBoneMap:
+        """Return an unsaved placeholder so refresh never invokes the legacy mapper."""
+
+        profile = GenericBoneMap.create(
+            f"Pending safe map: {animation.display_name}",
+            rig.skeleton_hash,
+            skeleton_signature(
+                (name, document.parent_by_name.get(name))
+                for name in sorted(document.limb_models)
+            ),
+            source_rig_ref=rig.rig_id,
+        )
+        profile.target_bind_hash = rig.skeleton_hash
+        return profile
+
+    def _configure_mapping_actions(
+        self,
+        *,
+        exact_mode: bool,
+        advanced_target: bool,
+        saved_profile: GenericBoneMap | None,
+    ) -> None:
+        self.auto_button.setText(
+            _DL2_ADVANCED_AUTO_BUTTON_LABEL
+            if advanced_target
+            else _LEGACY_AUTO_BUTTON_LABEL
+        )
+        for widget in (
+            self.auto_button,
+            self.clear_button,
+            self.load_button,
+            self.save_button,
+        ):
+            widget.setEnabled(exact_mode)
+        for widget in (
+            getattr(self, "import_recipe_button", None),
+            getattr(self, "export_recipe_button", None),
+        ):
+            if widget is not None:
+                widget.setVisible(exact_mode)
+                widget.setEnabled(exact_mode)
+
+        origin = mapping_profile_origin(saved_profile)
+        verified_advanced = advanced_target and origin == "automatic_verified"
+        legacy_advanced_repair = advanced_target and origin == "automatic_repair"
+        self.review_button.setVisible(not verified_advanced)
+        self.review_button.setEnabled(
+            exact_mode
+            and saved_profile is not None
+            and not verified_advanced
+            and not legacy_advanced_repair
+        )
+        if legacy_advanced_repair:
+            self.review_button.setToolTip(
+                "Legacy DL2 automatic repair maps cannot be bulk-approved. Use "
+                "Regenerate safe DL2 body map."
+            )
+        else:
+            self.review_button.setToolTip(_DEFAULT_REVIEW_TOOLTIP)
+
+    def _set_dl2_advanced_profile_status(
+        self,
+        document: FbxDocument,
+        rig: ChromeRig,
+        saved_profile: GenericBoneMap | None,
+    ) -> bool:
+        """Handle statuses that must not fall through to legacy spatial coverage."""
+
+        if saved_profile is None:
+            self.status.setText(
+                "No safe DL2 body map is saved for this clip.\n"
+                "Use Regenerate safe DL2 body map in Root & .crig Mapping."
+            )
+            return True
+
+        origin = mapping_profile_origin(saved_profile)
+        if origin == "automatic_repair":
+            self.status.setText(
+                "This clip has a legacy DL2 automatic_repair map. It cannot be "
+                "bulk-approved.\nUse Regenerate safe DL2 body map to replace it with "
+                "a complete, live-verified body bridge."
+            )
+            return True
+        if origin != "automatic_verified":
+            return False
+
+        fresh_verification = getattr(self, "_fresh_verified_profiles", {}).get(
+            saved_profile.profile_id
+        )
+        if (
+            fresh_verification is not None
+            and fresh_verification.ok
+            and fresh_verification.live_revalidated
+        ):
+            self.status.setText(format_verified_dl2_body_map_summary(fresh_verification))
+            return True
+
+        try:
+            policy = self._target_retarget_policy(rig)
+            verification, solver = verified_dl2_solver_preview(
+                document,
+                rig,
+                saved_profile,
+                policy,
+            )
+        except Exception as exc:
+            self.status.setText(
+                f"Verified DL2 body map could not be revalidated: {exc}\n"
+                "Use Regenerate safe DL2 body map or inspect this clip in Root & "
+                ".crig Mapping."
+            )
+            return True
+
+        if verification.ok and verification.live_revalidated and solver.build_allowed:
+            self.status.setText(format_verified_dl2_body_map_summary(verification))
+            return True
+
+        reason = (
+            verification.errors[0]
+            if verification.errors
+            else solver.blocking_error
+            or "The live source/target certificate did not pass."
+        )
+        self.status.setText(
+            f"Verified DL2 body map needs regeneration: {reason}\n"
+            "Use Regenerate safe DL2 body map; automatic verification cannot be "
+            "replaced by bulk approval."
+        )
+        return True
+
     def auto_map(self) -> None:
         animation = self._selected_animation()
         if animation is None:
             return
+        runner = getattr(self.controller, "background_tasks", None)
+        if runner is None:
+            self._auto_map_sync(animation)
+            return
+        if runner.busy or self._auto_map_busy:
+            self.status.setText(
+                "Wait for the current animation operation to finish before regenerating the map."
+            )
+            return
+        advanced_target = False
         try:
+            advanced_target = self._is_dl2_advanced_selection(animation)
+            selection = self._target_selection(animation)
+            rig_path = str(selection.rig_path or "")
+            if not rig_path:
+                registry = getattr(self.controller, "rig_registry", None)
+                resolved = registry.resolve(selection.rig_ref) if registry is not None else None
+                rig_path = str(resolved or "")
+            if not rig_path:
+                raise FileNotFoundError("No CRIG path can be resolved for the selected target.")
+            source_path = str(Path(animation.source_fbx).resolve())
+            stack_name = str(animation.source_animation_stack or "")
+            game_id = str(getattr(self.project, "game_id", "") or "")
+            animation_id = str(animation.animation_id)
+        except Exception as exc:
+            self._auto_map_failed(advanced_target, exc)
+            return
+
+        self._set_auto_map_busy(True)
+        self.status.setText("Generating the retarget map in the background…")
+
+        def work(progress):
+            progress("Loading the source animation…")
+            document = FbxDocument(Path(source_path))
+            if stack_name:
+                document.select_animation_stack(stack_name)
+            progress("Loading the target rig…")
+            rig = ChromeRig.load(rig_path)
+            is_advanced = advanced_target or rig.rig_id == DL2_ADVANCED_RIG_ID
+            if is_advanced:
+                progress("Building and verifying the DL2 body map…")
+                policy = build_target_retarget_policy(
+                    rig, game_id=game_id, clip_domain="body"
+                )
+                profile = build_dl2_advanced_body_map_with_local_recipe(
+                    document, rig, policy
+                )
+                verification = revalidate_verified_dl2_advanced_body_map(
+                    profile, document, rig, policy
+                )
+            else:
+                progress("Matching source and target bones…")
+                profile = auto_map_crig_to_fbx(
+                    rig,
+                    document.limb_models.keys(),
+                    document.parent_by_name,
+                    **source_mapping_evidence(document),
+                )
+                verification = None
+            return document, profile, is_advanced, verification
+
+        def succeeded(result) -> None:
+            document, profile, is_advanced, verification = result
+            current = self.project.animation_by_id(animation_id)
+            if current is None:
+                return
+            source_cache = getattr(self.controller, "_source_cache", None)
+            if isinstance(source_cache, dict):
+                source_cache[str(Path(current.source_fbx).resolve())] = document
+            self._store_profile(current, profile)
+            if verification is not None:
+                cache = getattr(self, "_fresh_verified_profiles", None)
+                if cache is None:
+                    cache = {}
+                    self._fresh_verified_profiles = cache
+                cache[profile.profile_id] = verification
+            self.refresh()
+            self.status.setText(
+                "Verified DL2 body map regenerated."
+                if is_advanced
+                else "Automatic .crig mapping completed."
+            )
+
+        def failed(failure) -> None:
+            self._auto_map_failed(advanced_target, failure)
+
+        if not runner.start(
+            work,
+            progress=self.status.setText,
+            succeeded=succeeded,
+            failed=failed,
+            finished=lambda: self._set_auto_map_busy(False),
+        ):
+            self._set_auto_map_busy(False)
+            self.status.setText("Another animation operation is already running.")
+
+    def _auto_map_sync(self, animation: Any) -> None:
+        """Fallback for non-Qt test hosts that do not expose a task runner."""
+
+        advanced_target = False
+        try:
+            advanced_target = self._is_dl2_advanced_selection(animation)
             rig = self._load_rig()
             document = self._document(animation)
-            profile = auto_map_crig_to_fbx(
-                rig,
-                document.limb_models.keys(),
-                document.parent_by_name,
-                **source_mapping_evidence(document),
-            )
+            if advanced_target or rig.rig_id == DL2_ADVANCED_RIG_ID:
+                advanced_target = True
+                profile = build_dl2_advanced_body_map_with_local_recipe(
+                    document, rig, self._target_retarget_policy(rig)
+                )
+            else:
+                profile = auto_map_crig_to_fbx(
+                    rig,
+                    document.limb_models.keys(),
+                    document.parent_by_name,
+                    **source_mapping_evidence(document),
+                )
             self._store_profile(animation, profile)
             self.refresh()
         except Exception as exc:
-            self.qt["QMessageBox"].critical(
-                self.controller.window, "Auto-map failed", str(exc)
+            self._auto_map_failed(advanced_target, exc)
+
+    def _auto_map_failed(self, advanced_target: bool, failure: Any) -> None:
+        message = (
+            failure.display_message(False)
+            if hasattr(failure, "display_message")
+            else str(failure)
+        )
+        if advanced_target:
+            self.status.setText(
+                f"Safe DL2 body map was not generated: {message}\n"
+                "Open Root & .crig Mapping for this clip, confirm the selected "
+                "DL2 advanced target package, then regenerate. The existing mapping "
+                "was not changed."
             )
+        else:
+            self.qt["QMessageBox"].critical(
+                self.controller.window, "Auto-map failed", message
+            )
+
+    def _set_auto_map_busy(self, busy: bool) -> None:
+        self._auto_map_busy = bool(busy)
+        for widget in (
+            getattr(self, "auto_button", None),
+            getattr(self, "clear_button", None),
+            getattr(self, "load_button", None),
+            getattr(self, "import_recipe_button", None),
+        ):
+            if widget is not None:
+                widget.setEnabled(not busy)
 
     def clear_mapping(self) -> None:
         animation = self._selected_animation()
@@ -484,13 +880,29 @@ class CrigMappingWorkspace:
         animation = self._selected_animation()
         if animation is None:
             self.table.setRowCount(0)
+            self.auto_button.setText(_LEGACY_AUTO_BUTTON_LABEL)
+            for widget in (
+                getattr(self, "import_recipe_button", None),
+                getattr(self, "export_recipe_button", None),
+            ):
+                if widget is not None:
+                    widget.setVisible(False)
+            self.review_button.setVisible(True)
+            self.review_button.setEnabled(False)
             self.status.setText(
                 "Add an animation FBX first. Files with a different skeleton are allowed: "
                 "they will be added with an editable auto-map instead of being rejected."
             )
             self.root_status.setText("Add an animation FBX first.")
             return
+        advanced_target = False
         try:
+            advanced_target = self._is_dl2_advanced_selection(animation)
+            self.auto_button.setText(
+                _DL2_ADVANCED_AUTO_BUTTON_LABEL
+                if advanced_target
+                else _LEGACY_AUTO_BUTTON_LABEL
+            )
             document = self._document(animation)
             self._refresh_root_controls(animation, document)
         except Exception as exc:
@@ -500,27 +912,29 @@ class CrigMappingWorkspace:
             return
 
         exact_mode = self._target_selection(animation).retarget_mode == "exact"
-        for widget in (
-            self.auto_button,
-            self.clear_button,
-            self.load_button,
-            self.save_button,
-            self.review_button,
-        ):
-            widget.setEnabled(exact_mode)
         self.table.setEnabled(True)
 
         rig: ChromeRig | None = None
         profile: GenericBoneMap | None = None
+        saved_profile: GenericBoneMap | None = None
         helper_profile_description = ""
         try:
             if exact_mode:
                 rig = self._load_rig(animation)
+                advanced_target = advanced_target or rig.rig_id == DL2_ADVANCED_RIG_ID
+                saved_profile = self._current_profile(animation)
+                display_profile = saved_profile
+                if advanced_target and display_profile is None:
+                    display_profile = self._empty_advanced_display_profile(
+                        animation,
+                        rig,
+                        document,
+                    )
                 profile, rows = mapping_rows_for_ui(
                     rig,
                     document.limb_models.keys(),
                     document.parent_by_name,
-                    self._current_profile(animation),
+                    display_profile,
                     **source_mapping_evidence(document),
                 )
             else:
@@ -531,6 +945,11 @@ class CrigMappingWorkspace:
             self.table.setRowCount(0)
             self.status.setText(str(exc))
             return
+        self._configure_mapping_actions(
+            exact_mode=exact_mode,
+            advanced_target=advanced_target,
+            saved_profile=saved_profile,
+        )
         source_names = sorted(document.limb_models, key=str.casefold)
         normal_body_targets_by_source: dict[str, list[str]] = {}
         if not exact_mode:
@@ -670,6 +1089,40 @@ class CrigMappingWorkspace:
             return
 
         assert rig is not None and profile is not None
+        if (
+            saved_profile is not None
+            and isinstance(
+                saved_profile.extensions.get("local_retarget_recipe"), dict
+            )
+        ):
+            recipe_validation = revalidate_materialized_retarget_recipe(
+                saved_profile,
+                document,
+                rig,
+                self._target_retarget_policy(rig),
+                clip_domain="body",
+            )
+            if not recipe_validation.ok:
+                self.status.setText(
+                    "Reviewed retarget recipe needs attention: "
+                    + (
+                        recipe_validation.errors[0]
+                        if recipe_validation.errors
+                        else "live recipe revalidation did not pass"
+                    )
+                    + "\nThe saved mapping was preserved; review or import a "
+                    "matching recipe before export."
+                )
+                self._filter_rows()
+                return
+        if advanced_target and self._set_dl2_advanced_profile_status(
+            document,
+            rig,
+            saved_profile,
+        ):
+            self._filter_rows()
+            return
+
         mapped = len(profile.pairs)
         errors = profile.validate()
         evidence_rows = profile.extensions.get("automatic_mapping_evidence_v2", ()) or ()
@@ -823,6 +1276,12 @@ class CrigMappingWorkspace:
                     if bone.name == pair.target_rig_bone
                 )
             )
+            profile.extensions.pop("local_retarget_recipe", None)
+            animation_extensions = getattr(animation, "extensions", None)
+            if isinstance(animation_extensions, dict):
+                animation_extensions.pop(
+                    "local_retarget_recipe_validation", None
+                )
             set_mapping_profile_origin(profile, "manually_reviewed")
             self._store_profile(animation, profile)
             self.refresh()
@@ -895,6 +1354,28 @@ class CrigMappingWorkspace:
                 "Run Auto-map or assign at least one target bone before approving the mapped solver.",
             )
             return
+        advanced_target = bool(
+            animation is not None and self._is_dl2_advanced_selection(animation)
+        )
+        origin = mapping_profile_origin(profile)
+        if advanced_target and origin == "automatic_verified":
+            self.status.setText(
+                "Verified DL2 body maps are authorized only by live certificate "
+                "revalidation; bulk approval is not available."
+            )
+            return
+        if advanced_target and origin == "automatic_repair":
+            self.status.setText(
+                "Legacy DL2 automatic_repair maps cannot be bulk-approved. Use "
+                "Regenerate safe DL2 body map."
+            )
+            return
+        profile.extensions.pop("local_retarget_recipe", None)
+        animation_extensions = getattr(animation, "extensions", None)
+        if isinstance(animation_extensions, dict):
+            animation_extensions.pop(
+                "local_retarget_recipe_validation", None
+            )
         set_mapping_profile_origin(profile, "manually_reviewed")
         self._store_profile(animation, profile)
         self.refresh()
@@ -916,5 +1397,103 @@ class CrigMappingWorkspace:
         if path:
             profile.save(path)
 
+    def import_retarget_recipe(self) -> None:
+        """Import and cache a reviewed recipe only after live revalidation."""
 
-__all__ = ["CrigMappingWorkspace", "mapping_row_visible", "shared_source_status"]
+        animation = self._selected_animation()
+        if animation is None:
+            return
+        path, _ = self.qt["QFileDialog"].getOpenFileName(
+            self.controller.window,
+            "Import reviewed retarget recipe",
+            "",
+            "DL ReAnimated Retarget Recipe (*.dlrrecipe.json);;JSON (*.json)",
+        )
+        if not path:
+            return
+        try:
+            recipe = load_retarget_recipe(path)
+            if not retarget_recipe_has_reviewed_provenance(recipe):
+                raise ValueError(
+                    "The recipe has no explicit reviewed provenance and cannot be reused."
+                )
+            rig = self._load_rig()
+            document = self._document(animation)
+            policy = self._target_retarget_policy(rig)
+            profile = materialize_reviewed_retarget_recipe(
+                recipe,
+                document,
+                rig,
+                policy,
+                clip_domain="body",
+                profile_name=f"Reviewed recipe: {animation.display_name}",
+            )
+            store = default_retarget_recipe_store()
+            store.save(recipe)
+            self._store_profile(animation, profile)
+            self.refresh()
+        except Exception as exc:
+            self.qt["QMessageBox"].critical(
+                self.controller.window,
+                "Could not import retarget recipe",
+                str(exc),
+            )
+
+    def export_retarget_recipe(self) -> None:
+        """Export a live-validated recipe from explicitly reviewed corrections."""
+
+        animation = self._selected_animation()
+        profile = self._current_profile(animation) if animation else None
+        if animation is None or profile is None:
+            self.qt["QMessageBox"].information(
+                self.controller.window,
+                "No reviewed mapping",
+                "Make and review a manual mapping correction before exporting a recipe.",
+            )
+            return
+        try:
+            rig = self._load_rig()
+            document = self._document(animation)
+            policy = self._target_retarget_policy(rig)
+            fresh = build_automatic_retarget_plan(
+                document,
+                rig,
+                policy,
+                clip_domain="body",
+            )
+            recipe = build_reviewed_retarget_recipe_from_profile(
+                fresh,
+                profile,
+                document,
+                rig,
+                policy,
+                notes=f"Reviewed mapping for {animation.display_name}",
+            )
+            path, _ = self.qt["QFileDialog"].getSaveFileName(
+                self.controller.window,
+                "Export reviewed retarget recipe",
+                f"{animation.display_name}.dlrrecipe.json",
+                "DL ReAnimated Retarget Recipe (*.dlrrecipe.json)",
+            )
+            if not path:
+                return
+            destination = save_retarget_recipe(recipe, path)
+            default_retarget_recipe_store().save(recipe)
+            self.status.setText(
+                f"Exported and cached reviewed retarget recipe: {destination}"
+            )
+        except Exception as exc:
+            self.qt["QMessageBox"].critical(
+                self.controller.window,
+                "Could not export retarget recipe",
+                str(exc),
+            )
+
+
+__all__ = [
+    "CrigMappingWorkspace",
+    "format_verified_dl2_body_map_summary",
+    "mapping_row_visible",
+    "shared_source_status",
+    "verified_dl2_solver_preview",
+]
