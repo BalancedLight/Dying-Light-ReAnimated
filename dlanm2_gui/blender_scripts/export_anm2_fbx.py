@@ -213,6 +213,109 @@ def component_maps(arrays):
     }
 
 
+def install_armature_only_bind_pose_export():
+    """Teach Blender's FBX writer to emit BindPose for mesh-free armatures.
+
+    Blender normally writes Pose::BindPose only while serializing a Skin
+    deformer. DL ReAnimated intentionally exports animation skeletons without
+    a dummy mesh, so add the same native FBX elements for each unskinned
+    armature. This changes only FBX metadata: animation sampling and the
+    evaluated pose remain untouched.
+    """
+
+    from io_scene_fbx import export_fbx_bin
+
+    marker = "_dlr_armature_only_bind_pose_installed"
+    if getattr(export_fbx_bin, marker, False):
+        return
+
+    original_data_from_scene = export_fbx_bin.fbx_data_from_scene
+    original_armature_elements = export_fbx_bin.fbx_data_armature_elements
+    original_object_elements = export_fbx_bin.fbx_data_object_elements
+    original_object_tx = export_fbx_bin.ObjectWrapper.fbx_object_tx
+    static_model_state = {"rest_bone": False}
+
+    def data_from_scene_with_bind_pose(scene, depsgraph, settings):
+        scene_data = original_data_from_scene(scene, depsgraph, settings)
+        unskinned_armatures = tuple(
+            obj
+            for obj in scene_data.objects
+            if obj.is_object
+            and obj.type == "ARMATURE"
+            and not scene_data.data_deformers_skin.get(obj)
+        )
+        if not unskinned_armatures:
+            return scene_data
+
+        templates = dict(scene_data.templates)
+        existing = templates.get(b"BindPose")
+        existing_users = int(existing.nbr_users) if existing is not None else 0
+        templates[b"BindPose"] = export_fbx_bin.fbx_template_def_pose(
+            scene,
+            settings,
+            nbr_users=existing_users + len(unskinned_armatures),
+        )
+        return scene_data._replace(
+            templates=templates,
+            templates_users=scene_data.templates_users
+            + len(unskinned_armatures),
+        )
+
+    def armature_elements_with_bind_pose(root, arm_obj, scene_data):
+        original_armature_elements(root, arm_obj, scene_data)
+        if scene_data.data_deformers_skin.get(arm_obj):
+            return
+        bones = tuple(
+            bone
+            for bone in arm_obj.bones
+            if bone in scene_data.objects
+        )
+        if not bones:
+            return
+        matrix_world = arm_obj.fbx_object_matrix(
+            scene_data,
+            global_space=True,
+        )
+        export_fbx_bin.fbx_data_bindpose_element(
+            root,
+            arm_obj,
+            arm_obj.bdata.data,
+            scene_data,
+            arm_obj=arm_obj,
+            mat_world_arm=matrix_world,
+            bones=bones,
+        )
+
+    def object_tx_with_bind_default(
+        wrapped,
+        scene_data,
+        rest=False,
+        rot_euler_compat=None,
+    ):
+        if static_model_state["rest_bone"] and wrapped.is_bone:
+            rest = True
+        return original_object_tx(
+            wrapped,
+            scene_data,
+            rest=rest,
+            rot_euler_compat=rot_euler_compat,
+        )
+
+    def object_elements_with_bind_default(root, obj, scene_data):
+        previous = static_model_state["rest_bone"]
+        static_model_state["rest_bone"] = bool(obj.is_bone)
+        try:
+            return original_object_elements(root, obj, scene_data)
+        finally:
+            static_model_state["rest_bone"] = previous
+
+    export_fbx_bin.fbx_data_from_scene = data_from_scene_with_bind_pose
+    export_fbx_bin.fbx_data_armature_elements = armature_elements_with_bind_pose
+    export_fbx_bin.fbx_data_object_elements = object_elements_with_bind_default
+    export_fbx_bin.ObjectWrapper.fbx_object_tx = object_tx_with_bind_default
+    setattr(export_fbx_bin, marker, True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--job", required=True)
@@ -713,11 +816,9 @@ def main(argv=None):
         helper.select_set(True)
     bpy.context.view_layer.objects.active = armature
 
-    # The FBX exporter serializes a LimbNode's static transform from the
-    # currently evaluated pose.  The root-parity audit above necessarily ends
-    # on the last sample, which would otherwise rebase the visible armature at
-    # that final pose.  Anchor the editable FBX rest skeleton at the exact
-    # first sample instead; the baked action remains unchanged.
+    # Keep non-bone static defaults on the first sample. The exporter patch
+    # above writes LimbNode defaults and Pose::BindPose from edit-rest instead,
+    # so bone rest state no longer depends on the current animation frame.
     first_sample = float(frames[0])
     first_frame = math.floor(first_sample)
     scene.frame_set(first_frame, subframe=first_sample - first_frame)
@@ -726,6 +827,7 @@ def main(argv=None):
     output = Path(job["output_path"])
     output.parent.mkdir(parents=True, exist_ok=True)
     report("Writing FBX", 0, 1)
+    install_armature_only_bind_pose_export()
     bpy.ops.export_scene.fbx(
         filepath=str(output),
         use_selection=True,
@@ -747,6 +849,17 @@ def main(argv=None):
         use_custom_props=True,
     )
     report("Writing FBX", 1, 1)
+    bind_pose_report = {
+        "exported": True,
+        "bone_count": len(armature_indices),
+        "node_count": len(armature_indices) + 1,
+        "source": "armature_edit_rest",
+    }
+    print(
+        "DLR_BIND_POSE:"
+        + json.dumps(bind_pose_report, separators=(",", ":")),
+        flush=True,
+    )
     print(f"DLR_EXPORT_COMPLETE:{output}", flush=True)
 
 

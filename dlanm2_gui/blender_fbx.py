@@ -71,6 +71,9 @@ class FbxExportResult:
     motion_accumulator_baked: bool = False
     motion_accumulator_helper_preserved: bool = False
     motion_accumulator_root: str = ""
+    bind_pose_exported: bool = False
+    bind_pose_bone_count: int = 0
+    bind_pose_node_count: int = 0
 
 
 class _StageProgress:
@@ -243,6 +246,7 @@ def run_blender_export(
                 + (f"\n\nBlender log:\n{tail}" if tail else "")
             )
         parity_payload = None
+        bind_pose_payload = None
         for line in log.splitlines():
             if line.startswith("DLR_ROOT_PARITY:"):
                 try:
@@ -251,11 +255,32 @@ def run_blender_export(
                     )
                 except (TypeError, ValueError, json.JSONDecodeError):
                     parity_payload = None
+            elif line.startswith("DLR_BIND_POSE:"):
+                try:
+                    bind_pose_payload = json.loads(
+                        line[len("DLR_BIND_POSE:") :].strip()
+                    )
+                except (TypeError, ValueError, json.JSONDecodeError):
+                    bind_pose_payload = None
         if not isinstance(parity_payload, dict):
             Path(temporary_output_name).unlink(missing_ok=True)
             tail = "\n".join(log.splitlines()[-30:])
             raise RuntimeError(
                 "Blender exited without confirming native root parity."
+                + (f"\n\nBlender log:\n{tail}" if tail else "")
+            )
+        if (
+            not isinstance(bind_pose_payload, dict)
+            or not bool(bind_pose_payload.get("exported", False))
+            or int(bind_pose_payload.get("bone_count", -1))
+            != sum(not bone.helper for bone in scene.bones)
+            or int(bind_pose_payload.get("node_count", -1))
+            != sum(not bone.helper for bone in scene.bones) + 1
+        ):
+            Path(temporary_output_name).unlink(missing_ok=True)
+            tail = "\n".join(log.splitlines()[-30:])
+            raise RuntimeError(
+                "Blender exited without confirming a complete FBX bind pose."
                 + (f"\n\nBlender log:\n{tail}" if tail else "")
             )
         temporary_output = Path(temporary_output_name)
@@ -291,6 +316,9 @@ def run_blender_export(
         native_rest_basis_max_rotation_degrees=float(
             parity_payload["native_rest_basis_max_rotation_degrees"]
         ),
+        bind_pose_exported=bool(bind_pose_payload["exported"]),
+        bind_pose_bone_count=int(bind_pose_payload["bone_count"]),
+        bind_pose_node_count=int(bind_pose_payload["node_count"]),
     )
 
 

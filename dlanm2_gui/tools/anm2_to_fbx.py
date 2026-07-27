@@ -130,6 +130,11 @@ def main(argv: list[str] | None = None) -> int:
             "display-vs-native rest basis "
             f"{result.native_rest_basis_max_rotation_degrees:.6f} deg max"
         )
+        print(
+            "Bind pose: "
+            f"{result.bind_pose_bone_count} bone node(s), "
+            f"{result.bind_pose_node_count} total pose node(s)"
+        )
         if result.unknown_track_count:
             if result.unknown_tracks_sidecar:
                 print(
