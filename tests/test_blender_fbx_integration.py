@@ -79,9 +79,41 @@ def test_blender_exports_first_anm2_frame_and_animation(tmp_path: Path) -> None:
     output = tmp_path / "root_motion.fbx"
     result = export_anm2_to_fbx(source, rig, output, blender_executable=blender)
     assert result.frame_count == 3
+    assert result.bind_pose_exported
+    assert result.bind_pose_bone_count == len(rig.bones)
+    assert result.bind_pose_node_count == len(rig.bones) + 1
     assert output.is_file() and output.stat().st_size > 0
 
     document = _FbxDocument(output)
+    bind = document.bind_diagnostics()
+    assert bind["selected_bind_source"] == "Pose::BindPose"
+    assert bind["bind_coverage"]["Pose::BindPose"] == len(rig.bones)
+    assert set(bind["per_bone_source"].values()) == {"Pose::BindPose"}
+    pose_definitions = [
+        node
+        for node in document.top["Definitions"].children
+        if node.name == "ObjectType"
+        and node.properties
+        and str(node.properties[0]) == "Pose"
+    ]
+    bind_poses = [
+        node
+        for node in document.objects.children
+        if node.name == "Pose"
+        and len(node.properties) >= 3
+        and str(node.properties[2]) == "BindPose"
+    ]
+    assert len(pose_definitions) == len(bind_poses) == 1
+    pose_nodes = [
+        node for node in bind_poses[0].children if node.name == "PoseNode"
+    ]
+    declared_node_count = next(
+        node.properties[0]
+        for node in bind_poses[0].children
+        if node.name == "NbPoseNodes"
+    )
+    assert int(declared_node_count) == len(pose_nodes)
+    assert len(pose_nodes) == result.bind_pose_node_count
     document.select_animation_stack()
     ticks = document.frame_ticks(fps=30)
     assert len(ticks) == 3
@@ -93,7 +125,9 @@ def test_blender_exports_first_anm2_frame_and_animation(tmp_path: Path) -> None:
         assert global_matrix[:3, 3] == pytest.approx(expected, abs=2.0e-5)
 
 
-def test_blender_fbx_rest_pose_is_anchored_at_first_sample(tmp_path: Path) -> None:
+def test_blender_fbx_bind_pose_is_independent_from_first_sample(
+    tmp_path: Path,
+) -> None:
     blender = discover_blender()
     if blender is None:
         pytest.skip("Blender is not installed")
@@ -133,16 +167,23 @@ def test_blender_fbx_rest_pose_is_anchored_at_first_sample(tmp_path: Path) -> No
     output = tmp_path / "first_sample_rest_anchor.fbx"
     export_anm2_to_fbx(source, rig, output, fps=30.0, blender_executable=blender)
 
+    document = _FbxDocument(output)
+    bind = document.bind_diagnostics()
+    assert bind["selected_bind_source"] == "Pose::BindPose"
+    assert bind["bind_coverage"]["Pose::BindPose"] == len(rig.bones)
+
     rest_at_start, displayed_at_start = _imported_bone_head(
         blender, output, "child", frame=0,
     )
     _rest_at_end, displayed_at_end = _imported_bone_head(
-        blender, output, "child", frame=2,
+        blender, output, "child", frame=3,
     )
-    # Static data-bone basis must be the starting pose, while the action still
-    # visibly moves the child by the final sample. Version 0.5.0 left Blender
-    # on the final audited frame, so its rest head matched displayed_at_end.
-    assert rest_at_start == pytest.approx(displayed_at_start, abs=2.0e-5)
+    # The FBX BindPose now preserves the CRIG rest independently from frame 0.
+    # Animation still starts at its authored 30-degree sample and reaches the
+    # final -60-degree sample without rebasing the data-bone rest state.
+    assert rest_at_start == pytest.approx((0.0, 0.0, 0.8), abs=2.0e-5)
+    assert _rest_at_end == pytest.approx(rest_at_start, abs=2.0e-5)
+    assert float(np.linalg.norm(rest_at_start - displayed_at_start)) > 0.2
     assert float(np.linalg.norm(displayed_at_end - displayed_at_start)) > 0.2
     assert float(np.linalg.norm(rest_at_start - displayed_at_end)) > 0.2
 
@@ -173,9 +214,19 @@ def test_bundled_native_fbx_uses_readable_helpers_and_roundtrips(tmp_path: Path)
     rig = ChromeRig.load(root / "reference" / "male_npc_infected.crig")
     source = root / "reference" / "infected_turn_90r.template.anm2"
     output = tmp_path / "infected_turn_90r.fbx"
-    export_anm2_to_fbx(source, rig, output, blender_executable=blender)
+    result = export_anm2_to_fbx(
+        source,
+        rig,
+        output,
+        blender_executable=blender,
+    )
+    assert result.bind_pose_exported
+    assert result.bind_pose_bone_count == len(rig.bones)
 
     document = _FbxDocument(output)
+    bind = document.bind_diagnostics()
+    assert bind["selected_bind_source"] == "Pose::BindPose"
+    assert bind["bind_coverage"]["Pose::BindPose"] == len(rig.bones)
     assert len(document.animation_stacks) == 1
     assert len(document.limb_models) == len(rig.bones)
     assert "DLR_OffsetHelper_CCC3CDDF" not in document.limb_models
