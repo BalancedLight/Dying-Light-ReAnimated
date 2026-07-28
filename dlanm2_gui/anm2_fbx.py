@@ -117,6 +117,7 @@ class SceneBone:
     deform: bool = True
     helper: bool = False
     semantic: str = ""
+    node_kind: str = "bone"
 
 @dataclass(slots=True)
 class AnimationScene:
@@ -132,6 +133,7 @@ class AnimationScene:
     primary_root_index: int | None = None
     target_up_axis: tuple[float, float, float] = (0.0, 1.0, 0.0)
     motion_accumulator: dict[str, Any] = field(default_factory=dict)
+    roundtrip_contract: dict[str, Any] = field(default_factory=dict)
 
     @property
     def frame_count(self) -> int:
@@ -163,6 +165,7 @@ class AnimationScene:
                     "deform": bone.deform,
                     "helper": bone.helper,
                     "semantic": bone.semantic,
+                    "node_kind": bone.node_kind,
                 }
                 for bone in self.bones
             ],
@@ -179,6 +182,7 @@ class AnimationScene:
             ],
             "warnings": list(self.warnings),
             "motion_accumulator": dict(self.motion_accumulator),
+            "roundtrip_contract": dict(self.roundtrip_contract),
         }
 
 
@@ -315,6 +319,7 @@ def resample_animation_scene(
         primary_root_index=scene.primary_root_index,
         target_up_axis=scene.target_up_axis,
         motion_accumulator=dict(scene.motion_accumulator),
+        roundtrip_contract=dict(scene.roundtrip_contract),
     )
 
 
@@ -431,12 +436,23 @@ def build_sparse_fbx_job(
                 "deform": bone.deform,
                 "helper": bone.helper,
                 "semantic": bone.semantic,
+                "node_kind": bone.node_kind,
             }
             for bone in scene.bones
         ],
         "sparse_summary": {
-            "skeleton_bone_count": sum(not bone.helper for bone in scene.bones),
-            "helper_count": sum(bone.helper for bone in scene.bones),
+            "skeleton_bone_count": sum(
+                bone.node_kind == "bone" for bone in scene.bones
+            ),
+            "helper_bone_count": sum(
+                bone.node_kind == "bone" and bone.helper for bone in scene.bones
+            ),
+            "external_helper_count": sum(
+                bone.node_kind == "empty" for bone in scene.bones
+            ),
+            "helper_count": sum(
+                bone.node_kind == "empty" for bone in scene.bones
+            ),
             "animated_bone_count": len(animated_indices),
             "bind_only_bone_count": bone_count - len(animated_indices),
             "location_bone_count": len(location_indices),
@@ -449,6 +465,7 @@ def build_sparse_fbx_job(
         },
         "warnings": list(scene.warnings),
         "motion_accumulator": dict(scene.motion_accumulator),
+        "roundtrip_contract": dict(scene.roundtrip_contract),
     }
     return SparseFbxJob(metadata, arrays)
 
@@ -618,14 +635,20 @@ def _matrix_from_trs(translation, rotation_wxyz, scale) -> np.ndarray:
     result[:3, 3] = np.asarray(translation, dtype=float)
     return result
 
-def _scene_bone_from_crig(bone: ChromeRigBone, *, parent_index: int | None = None) -> SceneBone:
+def _scene_bone_from_crig(
+    bone: ChromeRigBone,
+    *,
+    parent_index: int | None = None,
+    expose_named_helper: bool = False,
+) -> SceneBone:
+    named_helper = bool(expose_named_helper and bone.helper)
     return SceneBone(
         bone.name, bone.parent_index if parent_index is None else parent_index, bone.descriptor,
         bone.bind_translation, bone.bind_rotation_wxyz, bone.bind_scale,
-        # CRIG helper/non-deform rows are still members of the authored
-        # skeleton hierarchy. ``SceneBone.helper`` is reserved for optional
-        # unknown-track EMPTY objects outside the armature.
-        bone.deform, False,
+        bone.deform,
+        named_helper,
+        "named_helper_bone" if named_helper else "",
+        "bone",
     )
 
 
@@ -857,6 +880,7 @@ def append_unknown_track_helpers(
                 if int(animation.descriptors[index]) == MOTION_HELPER_DESCRIPTOR
                 else "unknown_transform_track"
             ),
+            "empty",
         )
         for index in unresolved
     ]
@@ -880,6 +904,7 @@ def append_unknown_track_helpers(
         scene.primary_root_index,
         scene.target_up_axis,
         dict(scene.motion_accumulator),
+        dict(scene.roundtrip_contract),
     )
 
 
@@ -905,6 +930,7 @@ def append_motion_accumulator_helper(
         False,
         True,
         "motion_accumulator",
+        "empty",
     )
     return AnimationScene(
         scene.name,
@@ -919,6 +945,7 @@ def append_motion_accumulator_helper(
         scene.primary_root_index,
         scene.target_up_axis,
         dict(scene.motion_accumulator),
+        dict(scene.roundtrip_contract),
     )
 
 def reconstruct_native_scene(
@@ -935,7 +962,16 @@ def reconstruct_native_scene(
         preserve_extra_tracks=preserve_extra_tracks,
     )
     track_by_descriptor = {value: index for index, value in enumerate(animation.descriptors)}
-    bones = [_scene_bone_from_crig(bone) for bone in rig.bones]
+    expose_named_helpers = bool(
+        rig.extensions.get("roundtrip_contract_required", False)
+    )
+    bones = [
+        _scene_bone_from_crig(
+            bone,
+            expose_named_helper=expose_named_helpers,
+        )
+        for bone in rig.bones
+    ]
     extra_descriptors = [
         value for value in animation.descriptors
         if value not in {bone.descriptor for bone in rig.bones}
@@ -956,6 +992,7 @@ def reconstruct_native_scene(
                     if int(descriptor) == MOTION_HELPER_DESCRIPTOR
                     else "unknown_transform_track"
                 ),
+                "empty",
             ))
     frames, count = animation.frame_count, len(bones)
     translations = np.zeros((frames, count, 3), dtype=float)
@@ -1120,6 +1157,7 @@ def bake_motion_accumulator_into_root(
         root_index,
         scene.target_up_axis,
         motion_metadata,
+        dict(scene.roundtrip_contract),
     )
 
 
@@ -1169,7 +1207,16 @@ def retarget_decoded_animation(
     native = reconstruct_native_scene(animation, source_rig, preserve_extra_tracks=False)
     source_bones = native.bones
     source_index = {bone.descriptor: index for index, bone in enumerate(source_bones)}
-    target_bones = [_scene_bone_from_crig(bone) for bone in target_rig.bones]
+    expose_named_helpers = bool(
+        target_rig.extensions.get("roundtrip_contract_required", False)
+    )
+    target_bones = [
+        _scene_bone_from_crig(
+            bone,
+            expose_named_helper=expose_named_helpers,
+        )
+        for bone in target_rig.bones
+    ]
     target_index = {bone.name: index for index, bone in enumerate(target_bones)}
     map_source_to_target = {
         source_index[row.source_descriptor]: target_index[row.target_bone]

@@ -236,16 +236,70 @@ def validate_target_package(
         result.errors.append(f"Target CRIG cannot be loaded: {exc}")
         return result
 
-    result.smd_bone_count = len(pose.bones)
+    smd_bones = pose.bones
+    prefix_contract = str(
+        rig.extensions.get("smd_prefix_contract", "") or ""
+    )
+    if prefix_contract:
+        if prefix_contract != "animation_nodes_then_mesh_roots_v1":
+            result.errors.append(
+                f"Unsupported SMD prefix contract {prefix_contract!r}."
+            )
+        else:
+            try:
+                animation_node_count = int(
+                    rig.extensions["smd_animation_node_count"]
+                )
+                excluded_node_names = tuple(
+                    str(name)
+                    for name in rig.extensions["smd_excluded_node_names"]
+                )
+            except (KeyError, TypeError, ValueError):
+                result.errors.append(
+                    "The SMD prefix contract is missing a valid animation-node "
+                    "count or excluded-node inventory."
+                )
+            else:
+                prefix_is_bounded = (
+                    0 < animation_node_count <= len(pose.bones)
+                )
+                actual_excluded_names = (
+                    tuple(
+                        bone.name
+                        for bone in pose.bones[animation_node_count:]
+                    )
+                    if prefix_is_bounded
+                    else ()
+                )
+                prefix_parents_are_closed = prefix_is_bounded and all(
+                    bone.parent_index < animation_node_count
+                    for bone in pose.bones[:animation_node_count]
+                    if bone.parent_index >= 0
+                )
+                if (
+                    not prefix_is_bounded
+                    or animation_node_count + len(excluded_node_names)
+                    != len(pose.bones)
+                    or actual_excluded_names != excluded_node_names
+                    or not prefix_parents_are_closed
+                ):
+                    result.errors.append(
+                        "The canonical SMD no longer matches the declared "
+                        "animation-node prefix and excluded mesh-root inventory."
+                    )
+                else:
+                    smd_bones = pose.bones[:animation_node_count]
+
+    result.smd_bone_count = len(smd_bones)
     result.crig_bone_count = len(rig.bones)
     if result.smd_bone_count != result.crig_bone_count:
         result.errors.append(
             f"Bone count differs: SMD has {result.smd_bone_count}, CRIG has {result.crig_bone_count}."
         )
 
-    smd_names = {_normalized_name(bone.name): bone.name for bone in pose.bones}
+    smd_names = {_normalized_name(bone.name): bone.name for bone in smd_bones}
     crig_names = {_normalized_name(bone.name): bone.name for bone in rig.bones}
-    if len(smd_names) != len(pose.bones):
+    if len(smd_names) != len(smd_bones):
         result.errors.append("SMD bone names collide after NFKC/casefold normalization.")
     if len(crig_names) != len(rig.bones):
         result.errors.append("CRIG bone names collide after NFKC/casefold normalization.")
@@ -267,7 +321,7 @@ def validate_target_package(
             if bone.parent_index in smd_by_index
             else None
         )
-        for bone in pose.bones
+        for bone in smd_bones
     }
     crig_parents = {
         _normalized_name(bone.name): (
@@ -287,7 +341,7 @@ def validate_target_package(
         result.errors.append(f"Parent maps differ for: {mismatches[:12]}.")
 
     smd_roots = sorted(
-        (bone.name for bone in pose.bones if bone.parent_index < 0), key=str.casefold
+        (bone.name for bone in smd_bones if bone.parent_index < 0), key=str.casefold
     )
     crig_roots = sorted(
         (bone.name for bone in rig.bones if bone.parent_index < 0), key=str.casefold
@@ -301,7 +355,7 @@ def validate_target_package(
 
     smd_locals = smd_local_matrices(pose)
     smd_components: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
-    for bone in pose.bones:
+    for bone in smd_bones:
         smd_components[_normalized_name(bone.name)] = decompose_local_matrix(
             smd_locals[bone.name]
         )
@@ -326,7 +380,7 @@ def validate_target_package(
     result.maximum_bind_translation_delta_meters = max(translation_deltas, default=0.0)
     result.maximum_bind_rotation_delta_degrees = max(rotation_deltas, default=0.0)
     result.maximum_bind_scale_delta = max(scale_deltas, default=0.0)
-    compared_all = len(translation_deltas) == len(rig.bones) == len(pose.bones)
+    compared_all = len(translation_deltas) == len(rig.bones) == len(smd_bones)
     result.bind_translation_match = compared_all and (
         result.maximum_bind_translation_delta_meters <= BIND_TRANSLATION_TOLERANCE_METERS
     )

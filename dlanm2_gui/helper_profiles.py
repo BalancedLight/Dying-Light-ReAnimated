@@ -1,9 +1,10 @@
 """Dying Light 1 helper-track inventory and compatibility helpers.
 
 The selected target rig owns the helper inventory.  The GUI exposes recognized
-helper nodes directly from its canonical SMD, and the builder appends only the
-helpers that the user explicitly maps.  The older named helper profiles remain
-loadable solely for project compatibility; they are no longer a GUI gate.
+helper nodes directly from its canonical SMD. Unambiguous same-named source
+helpers are mapped automatically; other helpers remain explicit choices. The
+older named helper profiles remain loadable solely for project compatibility;
+they are no longer a GUI gate.
 """
 
 from __future__ import annotations
@@ -229,6 +230,31 @@ def _normalized(value: str) -> str:
     return "".join(character for character in value.casefold() if character.isalnum())
 
 
+def helper_names_match(target_name: str, source_name: str) -> bool:
+    """Return whether two helper names are the same after safe name cleanup."""
+
+    target = _normalized(target_name)
+    return bool(target) and target == _normalized(source_name)
+
+
+def exact_detected_helper_source(
+    target_name: str,
+    source_names: Iterable[str],
+) -> tuple[str, str] | None:
+    """Resolve one unambiguous same-named helper, without semantic guessing."""
+
+    matches = [
+        str(source_name)
+        for source_name in source_names
+        if helper_names_match(target_name, str(source_name))
+    ]
+    if len(matches) != 1:
+        return None
+    suggestion = HELPER_SUGGESTIONS.get(target_name)
+    components = suggestion[1] if suggestion else "full_transform"
+    return matches[0], components
+
+
 def suggested_helper_source(
     target_name: str,
     source_names: Iterable[str],
@@ -256,7 +282,9 @@ __all__ = [
     "available_helper_names",
     "extend_track_descriptors",
     "extend_track_descriptors_for_helpers",
+    "exact_detected_helper_source",
     "helper_target_profile",
+    "helper_names_match",
     "recognized_helper_names",
     "suggested_helper_source",
 ]

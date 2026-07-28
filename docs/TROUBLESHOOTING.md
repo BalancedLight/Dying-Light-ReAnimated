@@ -199,6 +199,16 @@ The spans must sum to `frame_count - 1`. Changing target/model/script resources 
 - **Hierarchy is wrong**: select the CRIG matching the ANM2 descriptors/model bind.
 - **Cross-rig bones do not move**: intentionally unmapped targets remain at bind; review the map.
 - **Playback speed is wrong**: standalone ANM2 has no authoritative FPS, so select the original rate.
+- **Helper-capable reimport says metadata is missing/stale**: copy the original
+  `<source>.fbx.dlrroundtrip.json` to the exact edited FBX name. Do not edit its
+  contents or reuse it for another export.
+- **Helper-capable reimport says the bind guard is missing**: export the
+  `DLR_RoundTripGuard_*` mesh together with the armature and required DLR
+  track Empties. It preserves bind matrices when custom properties are off.
+- **Helper-capable reimport rejects the skeleton/rest/armature**: animation
+  changes belong in Pose Mode on named helpers or Object Mode on DLR track
+  Empties. Undo Edit Mode rest changes, bone renames/reparenting, and armature
+  Object Mode transforms.
 
 ## The EXE build fails
 

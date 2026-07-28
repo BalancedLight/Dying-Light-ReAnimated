@@ -101,7 +101,11 @@ def build_exact_rig_anm2(
             progress=progress,
         )
     from .legacy_exact_rig import _is_dlr_native_export
-    if _is_dlr_native_export(document):
+    from ..roundtrip_contract import resolve_native_roundtrip_metadata
+    native_roundtrip_metadata, _native_roundtrip_source = (
+        resolve_native_roundtrip_metadata(animation_fbx, document)
+    )
+    if _is_dlr_native_export(document) or native_roundtrip_metadata:
         # Native ANM2->FBX exports carry an explicit basis/helper contract. Its
         # marker selects the metadata-aware inverse after hard transform
         # preflight. Current exports intentionally use child-facing Blender

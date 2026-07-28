@@ -149,7 +149,7 @@ The required source names and target ancestry match. The exact solver uses the m
 
 ### Source superset
 
-All required target tracks match, while the source may contain additional face, cloth, accessory, camera, weapon, twist, socket, or helper bones. Extra source nodes do not break required target tracks. Map only extras that must drive a target helper.
+All required target tracks match, while the source may contain additional face, cloth, accessory, camera, weapon, twist, socket, or helper bones. Extra source nodes do not break required target tracks. A uniquely detected normalized-name helper, such as `RefCamera` for `refcamera` or `Eye_Camera` for `eyecamera`, is mapped to its matching target automatically; semantic fallbacks and ambiguous names remain manual choices.
 
 ### Needs review
 
@@ -202,7 +202,7 @@ chains do not.
 
 For a differently named character, use rotation-delta transfer with rotation ownership on ordinary deform chains. This preserves target translation/scale and therefore bone lengths. Translation-owning policies are appropriate only for reviewed roots, props, sockets, mechanical parts, or deliberate exceptions.
 
-Intentionally unmapped targets stay at bind. One source bone may drive several distinct helper/socket/camera targets; helper fan-out is applied after the primary body solve.
+Intentionally unmapped targets stay at bind. Exact-name helper matches are enabled automatically when the source FBX contains one unambiguous matching LimbNode; fallback suggestions remain opt-in. One source bone may drive several distinct helper/socket/camera targets; helper fan-out is applied after the primary body solve.
 
 For either bundled DL2 player target, **Retargeting** shows 52 editable anatomical
 roles rather than the 271- or 81-row CRIG inventory. The source dropdown offers the
@@ -282,6 +282,33 @@ Output preflight resolves every enabled clip's target, mapping, roots, solver, s
 ## ANM2 to FBX
 
 The reverse workspace batches ANM2 files into skeleton-and-animation FBXs through Blender. Select the matching CRIG because ANM2 does not contain bone names, hierarchy, or bind transforms. Native mode needs no map; cross-rig mode exposes conservative automatic suggestions and review. **ANM2 FPS** describes the existing samples; **FBX FPS** selects the output cadence. A valid timing sidecar fills both automatically, while missing or rejected metadata defaults to 30/30. Changing FBX FPS performs real duration-preserving interpolation rather than relabeling the same keys.
+
+For DL1 helper animation, enable **Show advanced settings** and select
+**Dying Light 1 Player TPP — Helper-capable**. The ordinary 69-bone rig remains
+the default. The advanced rig exposes all 18 named non-deforming helpers as
+Pose Mode bones while unresolved source-only tracks remain Object Mode
+Empties. Choose **Non-deforming helper roots in FBX** for an editable lossless
+round trip.
+
+The safe round trip is:
+
+1. Export with the helper-capable native rig and unresolved tracks represented
+   as non-deforming helper roots.
+2. Edit named helpers in Blender Pose Mode and DLR track Empties in Object
+   Mode. Preserve the rest pose, armature object transform, action range, and
+   FPS.
+3. Export the selected armature, all required DLR Empties, and the
+   `DLR_RoundTripGuard_*` mesh with step `1`, simplification `0`, no leaf bones,
+   and no bake-space transform.
+4. Keep the generated `.fbx.dlrroundtrip.json` beside the FBX. If the edited
+   FBX has a new name and custom properties are disabled, copy the original
+   contract to the matching new `.fbx.dlrroundtrip.json` name.
+5. Reimport through **Animations** with the same helper-capable rig, FPS, and
+   frame count, then use **Export ANM2 only…**.
+
+See the [complete ANM2-to-FBX-to-ANM2 workflow and Blender best
+practices](ANM2_TO_FBX.md#quick-anm2-to-fbx-to-anm2-round-trip) for exact
+settings, a RefCamera example, verification, and troubleshooting.
 
 Progress remains nonmodal through reading, cached page/segment decoding, temporal resampling, sparse-curve
 construction, Blender startup, armature creation, bulk curve installation, root-parity audit, and FBX

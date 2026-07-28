@@ -1,6 +1,6 @@
 {
   "package": "DL ReAnimated DL1/DL2 Preview",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "source_basis": "BalancedLight/Dying-Light-ReAnimated model-testing branch, modified locally only",
   "git_operations_performed": false,
   "games": {
@@ -127,8 +127,8 @@
     {
       "path": "docs/ANM2_TO_FBX.md",
       "install_surface": "windows_bundle_docs",
-      "size": 11449,
-      "sha256": "D665A522DEC6C466AD3FB3A9B89AC4EE489BAECF7B2E11F9A3354C18854A7491"
+      "size": 25079,
+      "sha256": "13A0AF96E5B5FAF6CF89712D9F2F290A16D12D0FA95A90C0EE149ED0079D4CDA"
     },
     {
       "path": "docs/CHROME_RIGS.md",
@@ -163,8 +163,8 @@
     {
       "path": "docs/GUI_GUIDE.md",
       "install_surface": "windows_bundle_docs",
-      "size": 17873,
-      "sha256": "4640CC11A5E8D32A7EBCC294039936E86C9425BAD165A17BFAC99A767971047C"
+      "size": 19620,
+      "sha256": "51774A11691B3727D1ACCF128B2D8AF5C0A571680A86FCFB06A6E7D3280EE2EB"
     },
     {
       "path": "docs/reverse_notes/REFLECTED_FBX_WRAPPER_BILATERAL_SEMANTICS.md",

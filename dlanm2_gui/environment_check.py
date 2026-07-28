@@ -22,6 +22,7 @@ def run_checks(*, gui: bool, pipeline: bool) -> dict[str, Any]:
     for relative in (
         'reference/player_1_tpp.smd','reference/infected_turn_90r.template.anm2',
         'reference/stock_writer_control.anm2','reference/male_npc_infected.crig',
+        'reference/dl1/player_1_tpp_helpers.crig',
         'docs/GUI_GUIDE.md','docs/ANM2_TO_FBX.md',
         'dlanm2_gui/blender_scripts/export_anm2_fbx.py',
     ):

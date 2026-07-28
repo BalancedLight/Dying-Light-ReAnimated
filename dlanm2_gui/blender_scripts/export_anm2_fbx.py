@@ -353,11 +353,24 @@ def main(argv=None):
 
     bones = job["bones"]
     motion_accumulator = dict(job.get("motion_accumulator", {}) or {})
+    roundtrip_contract = dict(job.get("roundtrip_contract", {}) or {})
     armature_indices = [
-        index for index, row in enumerate(bones) if not row.get("helper", False)
+        index
+        for index, row in enumerate(bones)
+        if row.get(
+            "node_kind",
+            "empty" if row.get("helper", False) else "bone",
+        )
+        == "bone"
     ]
     helper_indices = [
-        index for index, row in enumerate(bones) if row.get("helper", False)
+        index
+        for index, row in enumerate(bones)
+        if row.get(
+            "node_kind",
+            "empty" if row.get("helper", False) else "bone",
+        )
+        == "empty"
     ]
     report("Creating armature", 0, len(armature_indices))
     bind_local = [
@@ -453,7 +466,7 @@ def main(argv=None):
             if row.get("descriptor") is None
             else f"0x{int(row['descriptor']):08X}"
         )
-        data_bone["dlr_helper"] = False
+        data_bone["dlr_helper"] = bool(row.get("helper", False))
 
     display_basis_corrections = {}
     display_rest_globals = {}
@@ -489,7 +502,7 @@ def main(argv=None):
             bind_global[index].inverted_safe() @ display_rest_global
         )
     native_metadata = {
-        "version": 4,
+        "version": 5 if roundtrip_contract else 4,
         "basis_mode": "child_pivot_display_v1",
         "sparse_summary": job["sparse_summary"],
         "display_basis_corrections": {
@@ -514,7 +527,14 @@ def main(argv=None):
             for index in helper_indices
             if bones[index].get("descriptor") is not None
         ],
+        "named_helper_descriptors": [
+            f"{int(bones[index]['descriptor']):08X}"
+            for index in armature_indices
+            if bones[index].get("helper", False)
+            and bones[index].get("descriptor") is not None
+        ],
         "motion_accumulator": motion_accumulator,
+        "roundtrip_contract": roundtrip_contract,
     }
     active_armature = sorted(
         (
@@ -810,10 +830,42 @@ def main(argv=None):
                     )
         helper_objects.append(helper)
 
+    rest_guard = None
+    guard_name = str(roundtrip_contract.get("guard_name", "") or "")
+    if guard_name:
+        # A stock Blender armature-only FBX export omits authoritative bind
+        # matrices. This tiny, non-rendering skinned point mesh makes Blender
+        # emit Skin Cluster TransformLink matrices even when custom properties
+        # are disabled, so exact reimport can reject Edit Mode rest changes.
+        guard_mesh = bpy.data.meshes.new(guard_name + "_Mesh")
+        guard_mesh.from_pydata(
+            [tuple(bind_heads[index]) for index in armature_indices],
+            [],
+            [],
+        )
+        guard_mesh.update()
+        rest_guard = bpy.data.objects.new(guard_name, guard_mesh)
+        bpy.context.collection.objects.link(rest_guard)
+        rest_guard.display_type = "WIRE"
+        rest_guard.hide_render = True
+        rest_guard["dlr_roundtrip_guard"] = str(
+            roundtrip_contract.get("contract_id", "")
+        )
+        for vertex_index, bone_index in enumerate(armature_indices):
+            group = rest_guard.vertex_groups.new(name=bones[bone_index]["name"])
+            group.add([vertex_index], 1.0, "REPLACE")
+        modifier = rest_guard.modifiers.new(
+            name="DLR Round-Trip Bind Guard",
+            type="ARMATURE",
+        )
+        modifier.object = armature
+
     bpy.ops.object.select_all(action="DESELECT")
     armature.select_set(True)
     for helper in helper_objects:
         helper.select_set(True)
+    if rest_guard is not None:
+        rest_guard.select_set(True)
     bpy.context.view_layer.objects.active = armature
 
     # Keep non-bone static defaults on the first sample. The exporter patch
@@ -831,7 +883,7 @@ def main(argv=None):
     bpy.ops.export_scene.fbx(
         filepath=str(output),
         use_selection=True,
-        object_types={"ARMATURE", "EMPTY"},
+        object_types={"ARMATURE", "EMPTY", "MESH"},
         use_mesh_modifiers=False,
         add_leaf_bones=False,
         bake_anim=True,
@@ -852,8 +904,12 @@ def main(argv=None):
     bind_pose_report = {
         "exported": True,
         "bone_count": len(armature_indices),
-        "node_count": len(armature_indices) + 1,
-        "source": "armature_edit_rest",
+        "node_count": len(armature_indices) + 1 + int(rest_guard is not None),
+        "source": (
+            "armature_edit_rest_with_roundtrip_guard"
+            if rest_guard is not None
+            else "armature_edit_rest"
+        ),
     }
     print(
         "DLR_BIND_POSE:"

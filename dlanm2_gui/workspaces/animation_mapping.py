@@ -26,6 +26,7 @@ from ..bone_maps import (
 from ..chrome_rig import ChromeRig
 from ..fbx_preflight import classify_target_compatibility
 from ..helper_profiles import (
+    helper_names_match,
     recognized_helper_names,
     suggested_helper_source,
 )
@@ -849,6 +850,10 @@ class CrigMappingWorkspace:
         for name in recognized_helper_names(by_name):
             rule = rules.get(name)
             suggestion = suggested_helper_source(name, source_names)
+            exact_helper_match = bool(
+                rule is not None
+                and helper_names_match(name, rule.source_bone)
+            )
             rows.append(
                 {
                     "target_bone": name,
@@ -865,7 +870,13 @@ class CrigMappingWorkspace:
                         else (suggestion[1] if suggestion else "full_transform")
                     ),
                     "confidence": 1.0 if rule else 0.0,
-                    "method": "manual" if rule else "suggested_not_enabled",
+                    "method": (
+                        "automatic_exact_helper_name"
+                        if exact_helper_match
+                        else "manual"
+                    )
+                    if rule
+                    else "suggested_not_enabled",
                     "suggested_source": suggestion[0] if suggestion else "",
                     "target_helper": True,
                 }
@@ -1081,7 +1092,8 @@ class CrigMappingWorkspace:
             )
             self.status.setText(
                 f"{helper_profile_description} Active helper overrides: {active}. "
-                f"Shared source bones: {shared}. Suggestions are never enabled automatically. "
+                f"Shared source bones: {shared}. Exact-name helpers are mapped automatically; "
+                "fallback suggestions remain opt-in. "
                 "Humanoid body/finger retargeting and root-motion policy remain unchanged. "
                 + visibility_note
             )

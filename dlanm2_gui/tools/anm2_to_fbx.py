@@ -10,7 +10,13 @@ from ..bone_maps import GenericBoneMap, auto_map_skeletons
 from ..chrome_rig import ChromeRig
 from ..chrome_rig_builder import build_chrome_rig_from_smd_template
 from ..chrome_rig_registry import BUILTIN_MALE_RIG_REF
-from ..game_profiles import DL2_ADVANCED_RIG_REF, DL2_LEGACY_RIG_REF, DL2_RIG_REF
+from ..dl1_player_tpp import DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH
+from ..game_profiles import (
+    DL1_HELPER_RIG_REF,
+    DL2_ADVANCED_RIG_REF,
+    DL2_LEGACY_RIG_REF,
+    DL2_RIG_REF,
+)
 from ..anm2_fbx import chrome_rig_from_fbx_skeleton
 from ..runtime_paths import resource_root
 
@@ -24,6 +30,10 @@ def load_source_rig(value: str) -> ChromeRig:
         return build_chrome_rig_from_smd_template(
             root / "reference" / "player_1_tpp.smd",
             root / "reference" / "infected_turn_90r.template.anm2",
+        )
+    if value == DL1_HELPER_RIG_REF:
+        return ChromeRig.load(
+            resource_root() / DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH
         )
     if value in {DL2_RIG_REF, DL2_ADVANCED_RIG_REF}:
         return ChromeRig.load(resource_root() / "reference" / "dl2" / "player_skeleton.crig")
@@ -154,6 +164,8 @@ def main(argv: list[str] | None = None) -> int:
             active = "active" if result.motion_accumulator_active else "static"
             root = f" into {result.motion_accumulator_root}" if result.motion_accumulator_root else ""
             print(f"Motion accumulator: {active}, {state}{root}")
+        if result.roundtrip_metadata_path:
+            print(f"Round-trip contract: {result.roundtrip_metadata_path}")
         for warning in result.warnings:
             print(f"WARNING: {warning}")
     return 0
