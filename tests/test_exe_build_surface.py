@@ -48,6 +48,8 @@ def test_windows_build_surface_exists_and_mentions_frozen_self_test() -> None:
     script = (root() / "tools/build_windows_exe.py").read_text(encoding="utf-8")
     assert "--self-test" in script
     assert "DL-ReAnimated-Windows-x64.zip" in script
+    entrypoint = (root() / "dl_reanimated_gui.py").read_text(encoding="utf-8")
+    assert "from dlanm2_gui.__main__ import main" in entrypoint
 
 
 def test_setup_only_mode_exits_before_gui_launch() -> None:

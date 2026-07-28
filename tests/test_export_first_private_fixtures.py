@@ -81,6 +81,8 @@ def _curve_correlation(left: np.ndarray, right: np.ndarray) -> float:
 )
 def test_left_whistle_legacy_matches_real_tag_0_5_0() -> None:
     rig = ChromeRig.load(ROOT / "reference" / "dl2" / "player_skeleton.crig")
+    # The known-good artifact's provenance records skeletal_root/preserve.
+    # Compare the same policy; an in-place override intentionally changes pelvis.
     build = build_exact_rig_anm2(
         LEFT_WHISTLE,
         rig,
@@ -265,7 +267,6 @@ def test_dl2test_current_v2_control_stays_within_legacy_parity(
         DL2TEST,
         rig,
         fps=24.0,
-        root_motion={"motion_mode": "inplace", "heading_mode": "lock_initial"},
         bilateral_semantic_policy="auto",
     )
     current = _decoded_payload(tmp_path, "dl2test_v2.anm2", build.payload)

@@ -297,15 +297,27 @@ def test_normal_retarget_tab_shows_and_edits_target_helpers(tmp_path) -> None:
     controller = shell.controller
     animation = ProjectAnimation.create(str(tmp_path / "source.fbx"))
     document = SimpleNamespace(
-        limb_models={"pelvis": object(), "head": object()},
-        parent_by_name={"pelvis": None, "head": "pelvis"},
+        limb_models={
+            "pelvis": object(),
+            "head": object(),
+            "RefCamera": object(),
+            "Eye_Camera": object(),
+        },
+        parent_by_name={
+            "pelvis": None,
+            "head": "pelvis",
+            "RefCamera": "head",
+            "Eye_Camera": "head",
+        },
     )
-    profile = SourceBoneMappingProfile.empty(document.limb_models)
-    profile.set_mapping("hips", "pelvis")
-    animation.mapping_profile_id = profile.profile_id
     controller.project.animations = [animation]
-    controller.project.mapping_profiles[profile.profile_id] = profile.to_dict()
     controller._source_cache[str(Path(animation.source_fbx).resolve())] = document
+    profile = controller._profile_for_animation(
+        animation,
+        document,
+        create=True,
+    )
+    assert profile is not None
 
     assert controller.show_helper_bones.text() == "Show helper bones"
     controller.show_helper_bones.setChecked(True)
@@ -321,18 +333,32 @@ def test_normal_retarget_tab_shows_and_edits_target_helpers(tmp_path) -> None:
     row = helper_rows["refcamera"]
     source_combo = controller.mapping_table.cellWidget(row, 2)
     component_combo = controller.mapping_table.cellWidget(row, 6)
+    assert source_combo.currentData() == "RefCamera"
     assert component_combo.currentData() == "translation"
+    assert controller.mapping_table.item(row, 5).text() == (
+        "automatic exact helper name"
+    )
+    initial_rules = {
+        rule["target_bone"]: rule
+        for rule in animation.extensions["helper_retarget_rules"]
+    }
+    assert initial_rules["refcamera"]["source_bone"] == "RefCamera"
+    assert initial_rules["eyecamera"]["source_bone"] == "Eye_Camera"
+
     source_combo.setCurrentIndex(source_combo.findData("head"))
     source_combo.activated.emit(source_combo.currentIndex())
 
-    assert animation.extensions["helper_retarget_rules"] == [
-        {
-            "target_bone": "refcamera",
-            "source_bone": "head",
-            "transfer_policy": "rest_relative",
-            "component_policy": "translation",
-        }
-    ]
+    changed_rules = {
+        rule["target_bone"]: rule
+        for rule in animation.extensions["helper_retarget_rules"]
+    }
+    assert changed_rules["refcamera"] == {
+        "target_bone": "refcamera",
+        "source_bone": "head",
+        "transfer_policy": "rest_relative",
+        "component_policy": "translation",
+    }
+    assert changed_rules["eyecamera"]["source_bone"] == "Eye_Camera"
     assert controller.mapping_table.cellWidget(row, 2) is source_combo
     controller.dirty = False
     shell.window.close()
@@ -502,6 +528,63 @@ def test_prepare_multifile_import_publishes_each_completed_file(
     assert [Path(part.rows[0].source_fbx).name for part in partials] == [
         path.name for path in paths
     ]
+
+
+def test_background_humanoid_import_automaps_detected_helper_names(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    path = tmp_path / "helper_source.fbx"
+    path.write_bytes(b"fixture")
+    stack = SimpleNamespace(name="Take 001")
+    document = SimpleNamespace(
+        animation_stacks=(stack,),
+        preferred_animation_stack=lambda: stack,
+        declared_timebase=None,
+        limb_models={
+            "pelvis": 1,
+            "head": 2,
+            "RefCamera": 3,
+            "Eye_Camera": 4,
+        },
+        parent_by_name={
+            "pelvis": None,
+            "head": "pelvis",
+            "RefCamera": "head",
+            "Eye_Camera": "head",
+        },
+    )
+    monkeypatch.setattr(gui, "FbxDocument", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(
+        gui,
+        "preflight_fbx",
+        lambda input_path, **_kwargs: FbxPreflightReport(
+            str(input_path),
+            "animation",
+        ),
+    )
+    request = gui._AnimationImportRequest(
+        paths=(str(path),),
+        existing=set(),
+        game_id="dying_light_1",
+        retarget_mode="humanoid",
+        target_rig_path="",
+        resource_root=tmp_path,
+        resource_prefix="",
+        tolerance=gui.FbxImportTolerance.RECOMMENDED,
+        target_helper_names=("refcamera", "eyecamera", "l_eye"),
+    )
+
+    result = gui._prepare_animation_import(request, lambda _message: None)
+
+    rules = {
+        rule["target_bone"]: rule
+        for rule in result.rows[0].extensions["helper_retarget_rules"]
+    }
+    assert rules["refcamera"]["source_bone"] == "RefCamera"
+    assert rules["refcamera"]["component_policy"] == "translation"
+    assert rules["eyecamera"]["source_bone"] == "Eye_Camera"
+    assert "l_eye" not in rules
 
 
 def test_close_during_animation_import_cancels_then_closes(

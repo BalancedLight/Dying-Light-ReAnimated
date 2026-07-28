@@ -10,7 +10,12 @@ import shutil
 import tempfile
 
 from .chrome_rig import CRIG_EXTENSION, ChromeRig
-from .game_profiles import DL2_ADVANCED_RIG_REF, DL2_LEGACY_RIG_REF
+from .game_profiles import (
+    DL1_HELPER_RIG_REF,
+    DL2_ADVANCED_RIG_REF,
+    DL2_LEGACY_RIG_REF,
+)
+from .dl1_player_tpp import DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH
 from .runtime_paths import resource_root
 
 
@@ -40,6 +45,15 @@ class ChromeRigRegistry:
                 True,
             )
         ]
+        dl1_helper_path = resource_root() / DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH
+        if dl1_helper_path.is_file():
+            rows.append(ChromeRigRecord(
+                DL1_HELPER_RIG_REF,
+                "Dying Light 1 Player TPP — Helper-capable (bundled)",
+                "Humanoid",
+                str(dl1_helper_path),
+                True,
+            ))
         dl2_advanced_path = resource_root() / "reference" / "dl2" / "player_skeleton.crig"
         if dl2_advanced_path.is_file():
             rows.append(ChromeRigRecord(
@@ -92,6 +106,9 @@ class ChromeRigRegistry:
     def resolve(self, rig_ref: str, explicit_path: str = "") -> Path | None:
         if rig_ref == BUILTIN_MALE_RIG_REF:
             return None
+        if rig_ref == DL1_HELPER_RIG_REF:
+            path = resource_root() / DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH
+            return path if path.is_file() else None
         if rig_ref == DL2_ADVANCED_RIG_REF:
             path = resource_root() / "reference" / "dl2" / "player_skeleton.crig"
             return path if path.is_file() else None
@@ -108,4 +125,8 @@ class ChromeRigRegistry:
         return None
 
 
-__all__ = ["BUILTIN_MALE_RIG_REF", "ChromeRigRecord", "ChromeRigRegistry"]
+__all__ = [
+    "BUILTIN_MALE_RIG_REF",
+    "ChromeRigRecord",
+    "ChromeRigRegistry",
+]

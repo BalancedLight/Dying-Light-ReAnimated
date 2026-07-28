@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, replace
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -39,6 +41,12 @@ from .anm2_fbx import (
 from .anm2_provenance import load_anm2_provenance
 from .bone_maps import GenericBoneMap
 from .chrome_rig import ChromeRig
+from .fbx_core import FbxDocument
+from .roundtrip_contract import (
+    embedded_native_metadata,
+    finalize_roundtrip_contract,
+    write_roundtrip_sidecar,
+)
 from .runtime_paths import resource_root
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +82,7 @@ class FbxExportResult:
     bind_pose_exported: bool = False
     bind_pose_bone_count: int = 0
     bind_pose_node_count: int = 0
+    roundtrip_metadata_path: str = ""
 
 
 class _StageProgress:
@@ -88,6 +97,206 @@ class _StageProgress:
         self.callback(
             f"{stage} — {int(current)}/{int(total)} — {elapsed:.1f}s elapsed"
         )
+
+
+def _build_roundtrip_contract(
+    animation: DecodedAnm2Animation,
+    source_rig: ChromeRig,
+    scene: AnimationScene,
+    *,
+    unknown_track_policy: str,
+    accumulator_info: object | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    descriptor_nodes: dict[int, dict[str, object]] = {}
+    for node in scene.bones:
+        if node.descriptor is None:
+            continue
+        descriptor = int(node.descriptor)
+        if descriptor in descriptor_nodes:
+            raise ValueError(
+                f"FBX scene maps descriptor 0x{descriptor:08X} to more than one node"
+            )
+        descriptor_nodes[descriptor] = {
+            "descriptor": descriptor,
+            "node_name": node.name,
+            "node_kind": node.node_kind,
+            "semantic": node.semantic,
+        }
+
+    source_descriptors = tuple(
+        int(value)
+        for value in (
+            animation.container_descriptors or animation.descriptors
+        )
+    )
+    if len(set(source_descriptors)) != len(source_descriptors):
+        raise ValueError("Source ANM2 descriptor table contains duplicates")
+    mapped_source_nodes = [
+        descriptor_nodes[descriptor]
+        for descriptor in source_descriptors
+        if descriptor in descriptor_nodes
+    ]
+    missing_source_descriptors = [
+        descriptor
+        for descriptor in source_descriptors
+        if descriptor not in descriptor_nodes
+    ]
+    if animation.frame_count == scene.frame_count and math.isclose(
+        float(animation.fps),
+        float(scene.fps),
+        rel_tol=0.0,
+        abs_tol=1.0e-9,
+    ):
+        nearest_source_frames = np.arange(scene.frame_count, dtype=np.int64)
+    elif animation.frame_count <= 1:
+        nearest_source_frames = np.zeros(scene.frame_count, dtype=np.int64)
+    else:
+        positions = np.arange(scene.frame_count, dtype=np.float64) * (
+            float(animation.fps) / float(scene.fps)
+        )
+        positions[-1] = float(animation.frame_count - 1)
+        nearest_source_frames = np.clip(
+            np.rint(positions).astype(np.int64),
+            0,
+            animation.frame_count - 1,
+        )
+    animation_index = {
+        int(descriptor): index
+        for index, descriptor in enumerate(animation.descriptors)
+    }
+    rotation_branch_bits: dict[str, str] = {}
+    rotation_orientation_bits: dict[str, str] = {}
+    for descriptor in source_descriptors:
+        track_index = animation_index.get(descriptor)
+        if track_index is None:
+            continue
+        source_cayley = np.asarray(
+            animation.values[nearest_source_frames, track_index, :3],
+            dtype=np.float64,
+        )
+        far_branch = np.sum(source_cayley * source_cayley, axis=1) > 1.0
+        packed = np.packbits(far_branch, bitorder="little")
+        rotation_branch_bits[f"{descriptor:08X}"] = base64.b64encode(
+            packed.tobytes()
+        ).decode("ascii")
+        dominant = np.argmax(np.abs(source_cayley), axis=1)
+        dominant_values = source_cayley[
+            np.arange(len(source_cayley)),
+            dominant,
+        ]
+        positive_orientation = dominant_values >= 0.0
+        orientation_packed = np.packbits(
+            positive_orientation,
+            bitorder="little",
+        )
+        rotation_orientation_bits[
+            f"{descriptor:08X}"
+        ] = base64.b64encode(orientation_packed.tobytes()).decode("ascii")
+
+    skeleton_rows: list[dict[str, object]] = []
+    for node in scene.bones:
+        if node.node_kind != "bone":
+            continue
+        parent_name = (
+            scene.bones[node.parent_index].name
+            if node.parent_index >= 0
+            else None
+        )
+        skeleton_rows.append(
+            {
+                "name": node.name,
+                "parent_name": parent_name,
+                "descriptor": int(node.descriptor or 0),
+                "bind_translation": list(node.bind_translation),
+                "bind_rotation_wxyz": list(node.bind_rotation_wxyz),
+                "bind_scale": list(node.bind_scale),
+                "deform": bool(node.deform),
+                "helper": bool(node.helper),
+            }
+        )
+    info_present = bool(getattr(accumulator_info, "present", False))
+    info_active = bool(getattr(accumulator_info, "active", False))
+    motion: dict[str, object] = {
+        **dict(scene.motion_accumulator),
+        "present": info_present,
+        "active": info_active,
+        "baked": bool(scene.motion_accumulator.get("baked", False)),
+        "descriptor": MOTION_HELPER_DESCRIPTOR,
+    }
+    if motion["baked"]:
+        helper_index = next(
+            (
+                index
+                for index, node in enumerate(scene.bones)
+                if int(node.descriptor or -1) == MOTION_HELPER_DESCRIPTOR
+                and node.node_kind == "empty"
+            ),
+            None,
+        )
+        if helper_index is None:
+            raise ValueError(
+                "Baked motion accumulator has no preserved FBX helper node"
+            )
+        motion["original_bake_samples"] = [
+            {
+                "translation": [
+                    float(value)
+                    for value in scene.translations[frame, helper_index]
+                ],
+                "rotation_wxyz": [
+                    float(value)
+                    for value in scene.rotations_wxyz[frame, helper_index]
+                ],
+                "scale": [
+                    float(value) for value in scene.scales[frame, helper_index]
+                ],
+            }
+            for frame in range(scene.frame_count)
+        ]
+
+    contract: dict[str, object] = {
+        "format": "dl-reanimated-native-roundtrip-contract",
+        "schema_version": 1,
+        "source_anm2_name": Path(animation.source_path).name,
+        "source_anm2_sha256": animation.source_sha256,
+        "source_container": animation.container,
+        "source_descriptors": list(source_descriptors),
+        "source_frame_start": animation.source_frame_start,
+        "source_frame_end": animation.source_frame_end,
+        "source_frame_count": animation.frame_count,
+        "anm2_input_fps": float(
+            scene.anm2_input_fps
+            if scene.anm2_input_fps is not None
+            else animation.fps
+        ),
+        "fbx_output_fps": float(scene.fps),
+        "fbx_frame_count": scene.frame_count,
+        "animation_stack": scene.name,
+        "armature_object_name": scene.name,
+        "rig_id": source_rig.rig_id,
+        "rig_skeleton_hash": source_rig.skeleton_hash,
+        "primary_root_name": source_rig.bones[source_rig.root_index].name,
+        "expected_skeleton": skeleton_rows,
+        "source_track_nodes": mapped_source_nodes,
+        "source_rotation_branch_bits": rotation_branch_bits,
+        "source_rotation_orientation_bits": rotation_orientation_bits,
+        "source_rotation_branch_bit_order": "little",
+        "missing_source_descriptors": missing_source_descriptors,
+        "unknown_track_policy": unknown_track_policy,
+        "roundtrip_capable": not missing_source_descriptors,
+        "edit_policy": {
+            "translation_tolerance_m": 2.0e-5,
+            "scale_tolerance": 2.0e-5,
+            "rotation_tolerance_degrees": 0.01,
+            "allowed": [
+                "pose_animation_on_named_bones",
+                "object_animation_on_exported_track_empties",
+            ],
+        },
+        "motion_accumulator": motion,
+        "armature_object_transform_policy": "blender_identity_axis_export_v1",
+    }
+    return finalize_roundtrip_contract(contract), motion
 
 
 def _pump_process_stream(stream, output: queue.Queue[str]) -> None:
@@ -269,13 +478,21 @@ def run_blender_export(
                 "Blender exited without confirming native root parity."
                 + (f"\n\nBlender log:\n{tail}" if tail else "")
             )
+        expected_bind_bones = sum(
+            bone.node_kind == "bone" for bone in scene.bones
+        )
+        expected_bind_nodes = (
+            expected_bind_bones
+            + 1
+            + int(bool(scene.roundtrip_contract))
+        )
         if (
             not isinstance(bind_pose_payload, dict)
             or not bool(bind_pose_payload.get("exported", False))
             or int(bind_pose_payload.get("bone_count", -1))
-            != sum(not bone.helper for bone in scene.bones)
+            != expected_bind_bones
             or int(bind_pose_payload.get("node_count", -1))
-            != sum(not bone.helper for bone in scene.bones) + 1
+            != expected_bind_nodes
         ):
             Path(temporary_output_name).unlink(missing_ok=True)
             tail = "\n".join(log.splitlines()[-30:])
@@ -296,7 +513,7 @@ def run_blender_export(
         str(destination.resolve()),
         scene.frame_count,
         scene.fps,
-        sum(not bone.helper for bone in scene.bones),
+        sum(bone.node_kind == "bone" for bone in scene.bones),
         tuple(scene.warnings), log,
         animated_bone_count=sparse_job.animated_bone_count,
         fcurve_count=sparse_job.fcurve_count,
@@ -467,6 +684,11 @@ def export_anm2_to_fbx(
             progress=stages,
             cancel_check=cancel_check,
         )
+    roundtrip_animation = (
+        _merge_decoded_tracks(animation, unknown_animation)
+        if unknown_animation is not None
+        else animation
+    )
 
     accumulator_animation: DecodedAnm2Animation | None = None
     if MOTION_HELPER_DESCRIPTOR in animation.descriptors:
@@ -542,6 +764,34 @@ def export_anm2_to_fbx(
         output_fps=output_rate,
     )
     stages("Resampling animation", scene.frame_count, scene.frame_count)
+    helper_roundtrip = bool(
+        source_rig.extensions.get("roundtrip_contract_required", False)
+    )
+    if (
+        target_fbx is None
+        and animation.header_version == 1
+        and helper_roundtrip
+    ):
+        roundtrip_contract, motion_contract = _build_roundtrip_contract(
+            roundtrip_animation,
+            source_rig,
+            scene,
+            unknown_track_policy=resolved_unknown_policy,
+            accumulator_info=accumulator_info,
+        )
+        roundtrip_warnings = list(scene.warnings)
+        if not bool(roundtrip_contract["roundtrip_capable"]):
+            roundtrip_warnings.append(
+                "This FBX is a one-way export because one or more source "
+                "descriptors have no editable FBX node. Choose helper roots "
+                "for lossless exact reimport."
+            )
+        scene = replace(
+            scene,
+            warnings=list(dict.fromkeys(roundtrip_warnings)),
+            motion_accumulator=motion_contract,
+            roundtrip_contract=roundtrip_contract,
+        )
     result = run_blender_export(
         scene,
         output_path,
@@ -558,6 +808,16 @@ def export_anm2_to_fbx(
         )
         if progress and sidecar is not None:
             progress(f"Preserved {unresolved_count} unresolved track(s): {sidecar.name}")
+    roundtrip_metadata = None
+    if scene.roundtrip_contract and Path(result.output_path).is_file():
+        exported_document = FbxDocument(result.output_path)
+        native_metadata = embedded_native_metadata(exported_document)
+        roundtrip_metadata = write_roundtrip_sidecar(
+            result.output_path,
+            native_metadata,
+        )
+        if progress:
+            progress(f"Wrote round-trip contract: {roundtrip_metadata.name}")
     motion_metadata = dict(scene.motion_accumulator)
     return replace(
         result,
@@ -579,6 +839,7 @@ def export_anm2_to_fbx(
             motion_metadata.get("preserved_helper", False)
         ),
         motion_accumulator_root=str(motion_metadata.get("root_name", "")),
+        roundtrip_metadata_path=str(roundtrip_metadata or ""),
     )
 
 __all__ = [

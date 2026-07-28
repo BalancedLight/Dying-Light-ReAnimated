@@ -6,12 +6,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .dl1_player_tpp import (
+    DL1_PLAYER_TPP_HELPER_RIG_REF,
+    DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH,
+)
 
 DL1_GAME_ID = "dying_light_1"
 DL2_GAME_ID = "dying_light_2"
 SUPPORTED_GAME_IDS = (DL1_GAME_ID, DL2_GAME_ID)
 
 DL1_RIG_REF = "builtin:male_npc_infected"
+DL1_HELPER_RIG_REF = DL1_PLAYER_TPP_HELPER_RIG_REF
 DL2_ADVANCED_RIG_REF = "builtin:dl2_player_advanced"
 DL2_LEGACY_RIG_REF = "builtin:dl2_player_shadow_caster"
 # Backward-compatible public name.  It has always represented the current DL2
@@ -125,6 +130,16 @@ _DL1_PACKAGE = TargetPackageDescriptor(
     "bip01",
 )
 
+_DL1_HELPER_PACKAGE = TargetPackageDescriptor(
+    DL1_HELPER_RIG_REF,
+    "Dying Light 1 Player TPP — Helper-capable",
+    DL1_PLAYER_TPP_HELPER_RIG_RELATIVE_PATH,
+    "reference/player_1_tpp.smd",
+    "reference/infected_turn_90r.template.anm2",
+    "bip01",
+    "bundled 87-node player helper-capable skeleton",
+)
+
 _DL2_ADVANCED_PACKAGE = TargetPackageDescriptor(
     DL2_ADVANCED_RIG_REF,
     "Dying Light 2 Player — Advanced",
@@ -151,8 +166,8 @@ GAME_PROFILES = {
         DL1_GAME_ID,
         "Dying Light 1",
         DL1_RIG_REF,
-        (DL1_RIG_REF,),
-        (_DL1_PACKAGE,),
+        (DL1_RIG_REF, DL1_HELPER_RIG_REF),
+        (_DL1_PACKAGE, _DL1_HELPER_PACKAGE),
         "reference/stock_writer_control.anm2",
         "format 1",
         "validated",

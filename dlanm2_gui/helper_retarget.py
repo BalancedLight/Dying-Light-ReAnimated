@@ -17,6 +17,10 @@ import numpy as np
 
 from .bone_maps import COMPONENT_POLICIES, TRANSFER_POLICIES, BoneMapPair
 from .chrome_rig_builder import decompose_local_matrix
+from .helper_profiles import (
+    exact_detected_helper_source,
+    recognized_helper_names,
+)
 from .oracle.smd_bind_pose import (
     anm2_cayley_vector_from_quaternion,
     quaternion_wxyz_from_anm2_cayley,
@@ -102,6 +106,35 @@ def helper_rules_from_dicts(rows: Iterable[Mapping[str, Any]]) -> list[HelperRet
 
 def helper_rules_to_dicts(rows: Iterable[HelperRetargetRule]) -> list[dict[str, str]]:
     return [row.to_dict() for row in rows]
+
+
+def merge_detected_helper_rules(
+    existing: Iterable[HelperRetargetRule],
+    target_names: Iterable[str],
+    source_names: Iterable[str],
+) -> list[HelperRetargetRule]:
+    """Append conservative exact-name helper matches without replacing edits."""
+
+    result = list(existing)
+    assigned = {rule.target_bone for rule in result}
+    sources = tuple(str(name) for name in source_names)
+    for target_name in recognized_helper_names(target_names):
+        if target_name in assigned:
+            continue
+        detected = exact_detected_helper_source(target_name, sources)
+        if detected is None:
+            continue
+        source_name, component_policy = detected
+        result.append(
+            HelperRetargetRule(
+                target_name,
+                source_name,
+                "rest_relative",
+                component_policy,
+            )
+        )
+        assigned.add(target_name)
+    return result
 
 
 def include_base_source_fanout(
@@ -591,6 +624,7 @@ __all__ = [
     "helper_rules_from_dicts",
     "helper_rules_from_pairs",
     "helper_rules_to_dicts",
+    "merge_detected_helper_rules",
     "include_base_source_fanout",
     "local_matrix_to_anm2_values",
     "merge_helper_components",

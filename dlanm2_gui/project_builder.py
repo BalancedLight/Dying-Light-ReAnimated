@@ -73,6 +73,7 @@ from .fbx_preflight import (
 )
 from .game_profiles import (
     DL1_GAME_ID,
+    DL1_HELPER_RIG_REF,
     DL2_ADVANCED_RIG_REF,
     DL2_GAME_ID,
     get_game_profile,
@@ -545,7 +546,11 @@ def _animation_target_context(
     project_mode = str(project.rig.retarget_mode or "auto")
     if project_mode == "auto" and rig_ref in game_profile.compatible_builtin_rig_refs:
         clip_mode = "auto"
-        execution_mode = "humanoid" if project.game_id == DL1_GAME_ID else "exact"
+        execution_mode = (
+            "humanoid"
+            if project.game_id == DL1_GAME_ID and rig_ref != DL1_HELPER_RIG_REF
+            else "exact"
+        )
     elif (
         project_mode == "humanoid"
         and rig_ref == game_default_target_rig_ref

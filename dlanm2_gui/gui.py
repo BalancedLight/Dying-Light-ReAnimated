@@ -43,11 +43,16 @@ from .bone_maps import (
     auto_map_skeletons,
     mapping_profile_origin,
 )
-from .helper_profiles import recognized_helper_names, suggested_helper_source
+from .helper_profiles import (
+    helper_names_match,
+    recognized_helper_names,
+    suggested_helper_source,
+)
 from .helper_retarget import (
     HelperRetargetRule,
     helper_rules_from_dicts,
     helper_rules_to_dicts,
+    merge_detected_helper_rules,
 )
 from .fbx_core import FbxDocument, resolve_fbx_declared_timebase
 from .project_builder import build_project, export_project_anm2_files
@@ -85,7 +90,7 @@ from .script_targets import (
 )
 from .runtime_paths import resource_root, writable_application_root
 from .game_profiles import (
-    DL1_GAME_ID, DL2_GAME_ID, DL2_RIG_REF, GAME_PROFILES,
+    DL1_GAME_ID, DL1_HELPER_RIG_REF, DL2_GAME_ID, DL2_RIG_REF, GAME_PROFILES,
     apply_game_profile_defaults, apply_target_package_selection, get_game_profile,
 )
 from .workspace_project import (
@@ -129,6 +134,8 @@ class _AnimationImportRequest:
     resource_root: Path
     resource_prefix: str
     tolerance: FbxImportTolerance
+    target_rig_ref: str = ""
+    target_helper_names: tuple[str, ...] = ()
     bilateral_semantic_policy: str = "preserve_source_names"
 
 
@@ -162,6 +169,28 @@ def _apply_declared_animation_timing(
     extensions = dict(row.extensions)
     extensions["timing_origin_v10"] = timebase.to_dict()
     row.extensions = extensions
+
+
+def _auto_map_detected_animation_helpers(
+    animation: ProjectAnimation,
+    target_names: tuple[str, ...] | list[str],
+    source_names: Any,
+) -> int:
+    """Persist unambiguous same-named helper rows and preserve manual rules."""
+
+    existing = helper_rules_from_dicts(
+        animation.extensions.get("helper_retarget_rules", ()) or ()
+    )
+    merged = merge_detected_helper_rules(
+        existing,
+        target_names,
+        source_names,
+    )
+    if merged != existing:
+        animation.extensions["helper_retarget_rules"] = helper_rules_to_dicts(
+            merged
+        )
+    return len(merged) - len(existing)
 
 
 def _exact_import_mapping_profile_for_request(
@@ -311,8 +340,16 @@ def _prepare_animation_import(
     automatic_dl2 = (
         request.retarget_mode == "auto" and request.game_id == DL2_GAME_ID
     )
+    automatic_helper_exact = bool(
+        request.retarget_mode == "auto"
+        and request.target_rig_ref == DL1_HELPER_RIG_REF
+    )
     try:
-        if request.retarget_mode == "exact" or automatic_dl2:
+        if (
+            request.retarget_mode == "exact"
+            or automatic_dl2
+            or automatic_helper_exact
+        ):
             if not request.target_rig_path:
                 raise FileNotFoundError(
                     "No target .crig is selected. Choose or import one on the Project tab."
@@ -512,6 +549,11 @@ def _prepare_animation_import(
                     )
                     result.mapping_profiles[profile.profile_id] = profile.to_dict()
                     row.mapping_profile_id = profile.profile_id
+                    _auto_map_detected_animation_helpers(
+                        row,
+                        request.target_helper_names,
+                        document.limb_models,
+                    )
             except Exception as exc:
                 if (
                     target_rig is not None
@@ -1350,7 +1392,8 @@ class MainWindow:
         self.show_helper_bones = qt["QCheckBox"]("Show helper bones")
         self.show_helper_bones.setToolTip(
             "Adds helper targets from the selected Dying Light target SMD to this table. "
-            "Helpers remain unmapped until you select a source FBX bone."
+            "Detected exact-name helpers are mapped automatically; other helpers remain "
+            "unmapped until you select a source FBX bone."
         )
         self.show_helper_bones.toggled.connect(self._retarget_clip_changed)
         actions.addWidget(self.show_helper_bones)
@@ -1688,7 +1731,9 @@ class MainWindow:
         )
         self.reverse_unknown_track_policy.setToolTip(
             "DL2 defaults to a deterministic .dlr_unknown_tracks.json sidecar so unresolved "
-            "descriptors are preserved without pretending they are skeleton bones."
+            "descriptors are preserved without pretending they are skeleton bones. "
+            "For editable DL1 helper-capable round trips, choose non-deforming helper "
+            "roots; JSON-sidecar-only and drop exports are one-way."
         )
         self.reverse_unknown_track_policy.currentIndexChanged.connect(self._mark_dirty)
         form.addRow("Unresolved ANM2 tracks", self.reverse_unknown_track_policy)
@@ -2184,6 +2229,10 @@ class MainWindow:
         if not paths:
             return
 
+        try:
+            target_helper_names = self._target_helper_names()
+        except (OSError, ValueError):
+            target_helper_names = ()
         request = _AnimationImportRequest(
             paths=tuple(paths),
             existing={
@@ -2196,6 +2245,8 @@ class MainWindow:
                 self.project.rig.bilateral_semantic_policy
             ),
             target_rig_path=self.project.rig.target_rig_path,
+            target_rig_ref=self.project.rig.target_rig_ref,
+            target_helper_names=target_helper_names,
             resource_root=self.resource_root,
             resource_prefix=self.project.export.resource_prefix.strip(),
             tolerance=self._current_import_tolerance(),
@@ -2254,6 +2305,10 @@ class MainWindow:
         )
         if not paths:
             return
+        try:
+            target_helper_names = self._target_helper_names()
+        except (OSError, ValueError):
+            target_helper_names = ()
         existing = {
             (Path(row.source_fbx).resolve(), row.source_animation_stack)
             for row in self.project.animations
@@ -2297,7 +2352,15 @@ class MainWindow:
                     self.project.rig.retarget_mode == "auto"
                     and self.project.game_id == DL2_GAME_ID
                 )
-                if self.project.rig.retarget_mode == "exact" or automatic_dl2:
+                automatic_helper_exact = bool(
+                    self.project.rig.retarget_mode == "auto"
+                    and self.project.rig.target_rig_ref == DL1_HELPER_RIG_REF
+                )
+                if (
+                    self.project.rig.retarget_mode == "exact"
+                    or automatic_dl2
+                    or automatic_helper_exact
+                ):
                     if not self.project.rig.target_rig_path:
                         raise FileNotFoundError(
                             "No target .crig is selected. Choose or import one on the Project tab."
@@ -2416,6 +2479,11 @@ class MainWindow:
                         )
                         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
                         row.mapping_profile_id = profile.profile_id
+                        _auto_map_detected_animation_helpers(
+                            row,
+                            target_helper_names,
+                            document.limb_models,
+                        )
                 except Exception as exc:
                     if (
                         target_rig is not None
@@ -4225,6 +4293,14 @@ class MainWindow:
             parents=document.parent_by_name,
             profile_name=f"Humanoid mapping: {animation.display_name}",
         )
+        try:
+            _auto_map_detected_animation_helpers(
+                animation,
+                self._target_helper_names(),
+                document.limb_models,
+            )
+        except (OSError, ValueError):
+            pass
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
         animation.mapping_profile_id = profile.profile_id
         self._mark_dirty()
@@ -4335,8 +4411,16 @@ class MainWindow:
                     if rule is not None
                     else (suggestion[1] if suggestion else "full_transform")
                 )
+                exact_helper_match = bool(
+                    rule is not None
+                    and helper_names_match(target_name, rule.source_bone)
+                )
                 method = (
-                    "manual helper override"
+                    (
+                        "automatic exact helper name"
+                        if exact_helper_match
+                        else "manual helper override"
+                    )
                     if rule is not None
                     else (
                         f"Suggested: {suggestion[0]} (not enabled)"
@@ -4475,7 +4559,14 @@ class MainWindow:
                 continue
             self.mapping_table.item(row, 4).setText("1.00" if source_name else "0.00")
             self.mapping_table.item(row, 5).setText(
-                "manual helper override" if source_name else "unmapped helper"
+                (
+                    "automatic exact helper name"
+                    if source_name
+                    and helper_names_match(target_name, source_name)
+                    else "manual helper override"
+                )
+                if source_name
+                else "unmapped helper"
             )
             break
 
@@ -4653,6 +4744,14 @@ class MainWindow:
                 profile.profile_id = request.existing_profile_id
             current.mapping_profile_id = profile.profile_id
             self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
+            try:
+                _auto_map_detected_animation_helpers(
+                    current,
+                    self._target_helper_names(),
+                    result.document.limb_models,
+                )
+            except (OSError, ValueError):
+                pass
             self._mark_dirty()
             self._refresh_mapping_table(current, result.document, profile)
             self._refresh_animation_table()
@@ -5126,7 +5225,28 @@ class MainWindow:
             return rig_ref, str(resolved or "")
         header = Anm2Header.parse(data)
         descriptors = set(struct.unpack_from(f"<{header.track_count}I", data, HEADER_LENGTH))
-        matches: list[tuple[int, str, str]] = []
+        legacy_descriptors = set(
+            self._reverse_load_rig(BUILTIN_MALE_RIG_REF).descriptors
+        )
+        helper_record = next(
+            (
+                row
+                for row in self.rig_registry.records()
+                if row.rig_ref == DL1_HELPER_RIG_REF
+            ),
+            None,
+        )
+        helper_only_descriptors: set[int] = set()
+        if helper_record is not None:
+            helper_rig = self._reverse_load_rig(
+                helper_record.rig_ref,
+                helper_record.path,
+            )
+            helper_only_descriptors = (
+                set(helper_rig.descriptors) - legacy_descriptors
+            )
+        helper_evidence = bool(descriptors & helper_only_descriptors)
+        matches: list[tuple[int, int, int, str, str]] = []
         for row in self.rig_registry.records():
             try:
                 rig = self._reverse_load_rig(row.rig_ref, row.path)
@@ -5134,11 +5254,23 @@ class MainWindow:
                 continue
             overlap = len(descriptors & set(rig.descriptors))
             if overlap:
-                matches.append((overlap, row.rig_ref, row.path))
+                helper_priority = int(
+                    row.rig_ref == DL1_HELPER_RIG_REF and helper_evidence
+                )
+                legacy_priority = int(row.rig_ref == BUILTIN_MALE_RIG_REF)
+                matches.append(
+                    (
+                        overlap,
+                        helper_priority,
+                        legacy_priority,
+                        row.rig_ref,
+                        row.path,
+                    )
+                )
         if not matches:
             return BUILTIN_MALE_RIG_REF, ""
         matches.sort(reverse=True)
-        return matches[0][1], matches[0][2]
+        return matches[0][3], matches[0][4]
 
     def _reverse_add_files(self) -> None:
         paths, _ = self.qt["QFileDialog"].getOpenFileNames(
@@ -5566,6 +5698,11 @@ class MainWindow:
                     )
                     progress(
                         f"Motion accumulator {item.output_name}: {activity}, {state}{root_name}"
+                    )
+                if result.roundtrip_metadata_path:
+                    progress(
+                        "Round-trip contract "
+                        f"{item.output_name}: {result.roundtrip_metadata_path}"
                     )
                 exported += 1
             return exported, warnings, self._reverse_cancel_event.is_set()

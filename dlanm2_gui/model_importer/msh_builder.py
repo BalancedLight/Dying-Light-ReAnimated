@@ -31,6 +31,10 @@ from .fbx_model import (
     FbxScene,
     FbxTriangleCorner,
 )
+from ..dl1_player_tpp import (
+    PLAYER_1_TPP_HELPER_NAMES as _PLAYER_1_TPP_HELPER_NAMES,
+    PLAYER_1_TPP_MESH_ROOT_NAMES as _PLAYER_1_TPP_MESH_ROOT_NAMES,
+)
 from ..retarget_mapping import HumanoidBoneMatch, scan_humanoid_bones
 from .vendor.chrome_mesh_tools.math3d import matrix3x4_from_matrix4
 from .vendor.chrome_mesh_tools.msh import MshFile
@@ -857,51 +861,6 @@ def _build_dying_light_humanoid(
         aliases_by_name=aliases_by_name,
     )
     return ModelBuildResult(source, report, ascr, bscr, contract)
-
-
-_PLAYER_1_TPP_HELPER_NAMES = (
-    "hspine",
-    "hspine1",
-    "refcamera",
-    "eyecamera",
-    "l_normal",
-    "l_normal2",
-    "l_handholder",
-    "headend",
-    "l_eye",
-    "l_eye_pos",
-    "r_eye",
-    "r_eye_pos",
-    "eyes",
-    "r_normal",
-    "r_normal2",
-    "r_handholder",
-    "propsholder1",
-    "propsholder2",
-)
-
-_PLAYER_1_TPP_MESH_ROOT_NAMES = (
-    "sc_boots",
-    "sc_hand_l",
-    "sc_hand_r",
-    "sc_head",
-    "sc_shirt",
-    "sc_trousers",
-    "beard",
-    "cult_arm_belt",
-    "flashlight",
-    "hair",
-    "kevin_boots",
-    "kevin_shirt",
-    "kevin_trousers",
-    "mask",
-    "player_1_hand_l_tpp",
-    "player_1_hand_r_tpp",
-    "player_1_hip_bag",
-    "player_4_head",
-    "watch",
-)
-
 
 def _dying_light_humanoid_target_profile(target_nodes: Sequence[Any]) -> dict[str, Any]:
     """Recover the stock player compact-element roles from its source SMD.

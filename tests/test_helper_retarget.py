@@ -11,6 +11,7 @@ from dlanm2_gui.helper_retarget import (
     evaluate_helper_target_local,
     include_base_source_fanout,
     local_matrix_to_anm2_values,
+    merge_detected_helper_rules,
     merge_helper_components,
 )
 
@@ -137,3 +138,27 @@ def test_fanout_report_includes_existing_body_target() -> None:
 
     assert report.helper_source_fanout_count == 1
     assert report.shared_source_bones == {"Head": ["head", "refcamera"]}
+
+
+def test_detected_exact_name_helpers_are_automapped_conservatively() -> None:
+    rules = merge_detected_helper_rules(
+        [HelperRetargetRule("refcamera", "Head", component_policy="translation")],
+        ("refcamera", "eyecamera", "l_eye", "head"),
+        ("Head", "RefCamera", "Eye_Camera", "Camera"),
+    )
+
+    by_target = {rule.target_bone: rule for rule in rules}
+    assert by_target["refcamera"].source_bone == "Head"
+    assert by_target["eyecamera"].source_bone == "Eye_Camera"
+    assert by_target["eyecamera"].component_policy == "rotation_translation"
+    assert "l_eye" not in by_target
+
+
+def test_ambiguous_normalized_helper_names_are_not_automapped() -> None:
+    rules = merge_detected_helper_rules(
+        (),
+        ("refcamera",),
+        ("RefCamera", "ref_camera"),
+    )
+
+    assert rules == []
