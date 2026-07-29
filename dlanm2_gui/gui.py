@@ -64,6 +64,9 @@ from .retarget_profiles import (
     SourceBoneMappingProfile,
     auto_map_source_bones,
 )
+from .roundtrip_contract import (
+    detect_native_helper_roundtrip_target,
+)
 from .semantic_retarget import (
     BundledSemanticState,
     compile_bundled_semantic_profile,
@@ -120,6 +123,18 @@ _TRANSFER_LABELS = {
 
 _RECENT_PROJECTS_SETTING = "recent_projects"
 _MAX_RECENT_PROJECTS = 10
+_STARTUP_WIP_NOTICE_HIDDEN_SETTING = (
+    "startup/work_in_progress_notice_hidden"
+)
+_STARTUP_WIP_NOTICE_TEXT = (
+    "DL ReAnimated is still under active development. Errors, incomplete "
+    "behavior, and unexpected output can occur. Keep backups, work from "
+    "copies of source or game files, and validate generated animations, "
+    "models, and RPacks before relying on them.\n\n"
+    "For supported workflows, required settings, troubleshooting, and "
+    "Blender/export best practices, read the GUI Guide and Troubleshooting "
+    "documentation."
+)
 
 
 @dataclass(slots=True)
@@ -191,6 +206,89 @@ def _auto_map_detected_animation_helpers(
             merged
         )
     return len(merged) - len(existing)
+
+
+def _detect_dl1_helper_roundtrip_target(
+    fbx_path: str | Path,
+    document: FbxDocument,
+) -> dict[str, Any]:
+    """Return a confirmed expanded-rig offer from canonical native metadata.
+
+    Helper-looking names alone are not enough: the expanded rig intentionally
+    requires the native contract for lossless reimport. Only offer a switch
+    when that contract is current, internally consistent, round-trip capable,
+    and describes the expanded helper skeleton. This also permits editing a
+    bind-only helper that was absent from the original descriptor table.
+    """
+
+    detected = detect_native_helper_roundtrip_target(fbx_path, document)
+    return (
+        detected
+        if detected.get("rig_ref") == DL1_HELPER_RIG_REF
+        else {}
+    )
+
+
+def _switch_animations_to_dl1_helper_roundtrip(
+    project: DlReanimatedProject,
+    rows: list[ProjectAnimation] | tuple[ProjectAnimation, ...],
+) -> int:
+    """Apply the confirmed helper target as a per-animation native override."""
+
+    switched = 0
+    abandoned_profile_ids: set[str] = set()
+    for row in rows:
+        detected = row.extensions.get("detected_native_roundtrip_target", {})
+        if (
+            not isinstance(detected, dict)
+            or detected.get("status") != "confirmed"
+            or detected.get("rig_ref") != DL1_HELPER_RIG_REF
+        ):
+            continue
+        current_ref = str(row.target_rig_ref or project.rig.target_rig_ref)
+        if current_ref == DL1_HELPER_RIG_REF:
+            continue
+        if row.mapping_profile_id:
+            abandoned_profile_ids.add(row.mapping_profile_id)
+        row.target_rig_ref = DL1_HELPER_RIG_REF
+        # The stable built-in ID is portable and resolves the bundled CRIG.
+        row.target_rig_path = ""
+        row.mapping_profile_id = ""
+        for key in (
+            "helper_retarget_rules",
+            "compiled_target_map_profile_id",
+            "compiled_target_map_hash",
+            "compiled_target_map_live_validation",
+            "legacy_target_map_profile_id",
+            "semantic_profile_migration",
+            "automatic_retarget_migration",
+            "automatic_retarget_generation_failure",
+            "retarget_domain",
+        ):
+            row.extensions.pop(key, None)
+        row.extensions["native_roundtrip_target_switch"] = {
+            "status": "accepted",
+            "rig_ref": DL1_HELPER_RIG_REF,
+            "contract_id": str(detected.get("contract_id", "") or ""),
+            "mapping_policy": "native_contract_no_automap",
+        }
+        import_state = row.extensions.get("import_state")
+        if isinstance(import_state, dict):
+            import_state["mapping_note"] = (
+                "Valid DL1 helper round-trip contract detected; native nodes "
+                "are used directly and Auto-map is not needed."
+            )
+            import_state["target_rig_error"] = ""
+        switched += 1
+
+    referenced_profile_ids = {
+        row.mapping_profile_id
+        for row in project.animations
+        if row.mapping_profile_id
+    }
+    for profile_id in abandoned_profile_ids - referenced_profile_ids:
+        project.mapping_profiles.pop(profile_id, None)
+    return switched
 
 
 def _exact_import_mapping_profile_for_request(
@@ -419,6 +517,13 @@ def _prepare_animation_import(
             continue
 
         result.documents[str(path)] = document
+        helper_roundtrip_target = _detect_dl1_helper_roundtrip_target(
+            path,
+            document,
+        )
+        native_helper_roundtrip = bool(
+            automatic_helper_exact and helper_roundtrip_target
+        )
         stacks = list(document.animation_stacks)
         preferred_stack = (
             document.preferred_animation_stack()
@@ -445,6 +550,10 @@ def _prepare_animation_import(
                 resource_name=resource_seed,
                 animation_stack=stack_name,
             )
+            if helper_roundtrip_target:
+                row.extensions["detected_native_roundtrip_target"] = dict(
+                    helper_roundtrip_target
+                )
             _apply_declared_animation_timing(row, document)
             if multi:
                 row.display_name = f"{path.stem}: {stack_name}"
@@ -454,7 +563,13 @@ def _prepare_animation_import(
                 path,
                 purpose="animation",
                 animation_stack=stack_name or None,
-                target_rig=target_rig,
+                target_rig=(
+                    target_rig
+                    if request.retarget_mode == "exact"
+                    or automatic_dl2
+                    or native_helper_roundtrip
+                    else None
+                ),
                 game_id=request.game_id,
                 document=document,
                 tolerance=request.tolerance,
@@ -481,7 +596,9 @@ def _prepare_animation_import(
             verified_mapping_ready = False
             try:
                 if (
-                    request.retarget_mode == "exact" or automatic_dl2
+                    request.retarget_mode == "exact"
+                    or automatic_dl2
+                    or native_helper_roundtrip
                 ) and target_rig is not None:
                     compatibility = dict(
                         preflight.inventory.get("target_compatibility", {}) or {}
@@ -822,6 +939,7 @@ def main() -> int:
     )
     controller = MainWindow(qt)
     controller.show()
+    controller.schedule_startup_notice()
     return int(app.exec())
 
 
@@ -893,6 +1011,8 @@ class MainWindow:
         self._refreshing = False
         self._animation_operation_kind = ""
         self._close_when_background_idle = False
+        self._startup_notice_scheduled = False
+        self._startup_notice_checked_this_run = False
         self._source_cache: dict[str, FbxDocument] = {}
         self.mapping_navigation_callback = None
         self.target_selection_changed_callback = None
@@ -916,6 +1036,96 @@ class MainWindow:
 
     def show(self) -> None:
         self.window.show()
+
+    def schedule_startup_notice(self) -> None:
+        """Queue the optional notice only from a real desktop entry point."""
+
+        if self._startup_notice_scheduled:
+            return
+        self._startup_notice_scheduled = True
+        self.qt["QTimer"].singleShot(
+            0,
+            self.show_work_in_progress_notice,
+        )
+
+    def show_work_in_progress_notice(self, *, force: bool = False) -> bool:
+        """Show the launch notice and persist its machine-local opt-out."""
+
+        hidden = self.settings.value(
+            _STARTUP_WIP_NOTICE_HIDDEN_SETTING,
+            False,
+            type=bool,
+        )
+        if not force:
+            if self._startup_notice_checked_this_run:
+                return False
+            self._startup_notice_checked_this_run = True
+            if hidden:
+                return False
+
+        qt = self.qt
+        dialog = qt["QDialog"](self.window)
+        dialog.setObjectName("workInProgressNotice")
+        dialog.setWindowTitle("DL ReAnimated is a work in progress")
+        dialog.setModal(True)
+        dialog.setMinimumWidth(620)
+
+        layout = qt["QVBoxLayout"](dialog)
+        layout.setSpacing(12)
+
+        heading = qt["QLabel"]("DL ReAnimated is a work in progress")
+        heading.setStyleSheet("font-size: 14pt; font-weight: 600;")
+        layout.addWidget(heading)
+
+        message = qt["QLabel"](_STARTUP_WIP_NOTICE_TEXT)
+        message.setObjectName("workInProgressNoticeText")
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        dont_show_again = qt["QCheckBox"]("Don't show this again")
+        dont_show_again.setObjectName(
+            "workInProgressNoticeDontShowAgain"
+        )
+        dont_show_again.setChecked(bool(hidden))
+        dont_show_again.setToolTip(
+            "Reopen this notice later from Help > "
+            "Show Work-in-Progress Notice."
+        )
+        layout.addWidget(dont_show_again)
+
+        button_row = qt["QHBoxLayout"]()
+        guide_button = qt["QPushButton"]("Open GUI Guide")
+        guide_button.setObjectName("workInProgressNoticeGuide")
+        guide_button.clicked.connect(
+            lambda: self.open_doc("GUI_GUIDE.md")
+        )
+        troubleshooting_button = qt["QPushButton"](
+            "Open Troubleshooting"
+        )
+        troubleshooting_button.setObjectName(
+            "workInProgressNoticeTroubleshooting"
+        )
+        troubleshooting_button.clicked.connect(
+            lambda: self.open_doc("TROUBLESHOOTING.md")
+        )
+        continue_button = qt["QPushButton"]("Continue")
+        continue_button.setObjectName("workInProgressNoticeContinue")
+        continue_button.setDefault(True)
+        continue_button.setAutoDefault(True)
+        continue_button.clicked.connect(dialog.accept)
+        button_row.addWidget(guide_button)
+        button_row.addWidget(troubleshooting_button)
+        button_row.addStretch(1)
+        button_row.addWidget(continue_button)
+        layout.addLayout(button_row)
+
+        dialog.exec()
+        self.settings.setValue(
+            _STARTUP_WIP_NOTICE_HIDDEN_SETTING,
+            dont_show_again.isChecked(),
+        )
+        self.settings.sync()
+        return True
 
     # ------------------------------------------------------------------ setup
     def _new_default_project(self) -> DlReanimatedProject:
@@ -1845,6 +2055,16 @@ class MainWindow:
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        startup_notice = qt["QPushButton"](
+            "Show Work-in-Progress Notice..."
+        )
+        startup_notice.setToolTip(
+            "Review the launch warning or re-enable it for future launches."
+        )
+        startup_notice.clicked.connect(
+            lambda: self.show_work_in_progress_notice(force=True)
+        )
+        layout.addWidget(startup_notice)
         self.advanced_help_buttons: list[Any] = []
         rows = (
             ("GUI quick start", "GUI_GUIDE.md", False),
@@ -2200,6 +2420,88 @@ class MainWindow:
         return profile, note
 
     # --------------------------------------------------------------- animation
+    def _prompt_for_detected_helper_roundtrip_rows(
+        self,
+        rows: list[ProjectAnimation] | tuple[ProjectAnimation, ...],
+    ) -> int:
+        """Offer the expanded built-in only for confirmed native helper FBXs."""
+
+        if self.project.game_id != DL1_GAME_ID:
+            return 0
+        candidates = [
+            row
+            for row in rows
+            if isinstance(
+                row.extensions.get("detected_native_roundtrip_target"),
+                dict,
+            )
+            and row.extensions["detected_native_roundtrip_target"].get("status")
+            == "confirmed"
+            and str(row.target_rig_ref or self.project.rig.target_rig_ref)
+            != DL1_HELPER_RIG_REF
+        ]
+        if not candidates:
+            return 0
+
+        helper_tracks = tuple(
+            dict.fromkeys(
+                str(name)
+                for row in candidates
+                for name in row.extensions[
+                    "detected_native_roundtrip_target"
+                ].get("helper_tracks", ())
+                if str(name)
+            )
+        )
+        examples = ", ".join(helper_tracks[:5])
+        if len(helper_tracks) > 5:
+            examples += ", …"
+        helper_detail = (
+            f" Detected helper tracks include {examples}." if examples else ""
+        )
+        clip_label = (
+            "this imported animation"
+            if len(candidates) == 1
+            else f"these {len(candidates)} imported animations"
+        )
+        answer = self.qt["QMessageBox"].question(
+            self.window,
+            "Expanded DL1 helper rig detected",
+            "This rig looks like it contains helpers."
+            + helper_detail
+            + "\n\nWould you like to switch "
+            + clip_label
+            + " to Dying Light 1 Player TPP — Helper-capable?"
+            + "\n\nChoose Yes for the normal ANM2 → FBX → Blender → FBX → "
+            "ANM2 workflow. ReAnimated will use the native round-trip contract "
+            "directly; no Auto-map or helper-mapping buttons are needed.",
+            self.qt["QMessageBox"].Yes | self.qt["QMessageBox"].No,
+            self.qt["QMessageBox"].Yes,
+        )
+        if answer != self.qt["QMessageBox"].Yes:
+            return 0
+
+        switched = _switch_animations_to_dl1_helper_roundtrip(
+            self.project,
+            candidates,
+        )
+        if not switched:
+            return 0
+        semantic_cache = getattr(self, "_semantic_state_cache", {})
+        for row in candidates:
+            semantic_cache.pop(row.animation_id, None)
+        self._mark_dirty()
+        self._refresh_animation_table()
+        self._refresh_retarget_clip_combo(analyze=False)
+        if self.project.animations:
+            self.animation_table.selectRow(len(self.project.animations) - 1)
+        self.status.showMessage(
+            f"Switched {switched} imported animation(s) to the native "
+            "DL1 helper round trip; Auto-map is not needed.",
+            10000,
+        )
+        return switched
+
     def add_animations(self) -> None:
         """Choose FBXs, then parse and map them without blocking Qt's event loop."""
 
@@ -2257,18 +2559,23 @@ class MainWindow:
             f"Importing {len(request.paths)} animation FBX file(s) in the background…",
         )
 
-        imported = {"rows": 0, "blocked": 0}
+        imported: dict[str, Any] = {"rows": 0, "blocked": 0, "items": []}
 
         def partial_result(result: _AnimationImportResult) -> None:
             imported["rows"] += len(result.rows)
             imported["blocked"] += len(result.blocked_messages)
+            imported["items"].extend(result.rows)
             self._apply_animation_import_result(result)
 
         def succeeded(_result: _AnimationImportResult) -> None:
+            switched = self._prompt_for_detected_helper_roundtrip_rows(
+                _result.rows
+            )
             if imported["rows"]:
-                self.status.showMessage(
-                    f"Imported {imported['rows']} animation clip(s).", 6000
-                )
+                if not switched:
+                    self.status.showMessage(
+                        f"Imported {imported['rows']} animation clip(s).", 6000
+                    )
             elif imported["blocked"]:
                 self.status.showMessage(
                     "No animation clips were imported; review the import diagnostics.",
@@ -2285,9 +2592,14 @@ class MainWindow:
             failed=lambda failure: self._background_animation_error(
                 "Animation import failed", failure
             ),
-            cancelled=lambda: self.status.showMessage(
-                f"Import cancelled; kept {imported['rows']} completed clip(s).",
-                8000,
+            cancelled=lambda: (
+                self._prompt_for_detected_helper_roundtrip_rows(
+                    tuple(imported["items"])
+                ),
+                self.status.showMessage(
+                    f"Import cancelled; kept {imported['rows']} completed clip(s).",
+                    8000,
+                ),
             ),
             finished=lambda: self._set_animation_operation_busy(False),
         ):
@@ -2331,6 +2643,10 @@ class MainWindow:
                     f"{path.name}\n{preflight.actionable_message()}"
                 )
                 continue
+            helper_roundtrip_target = _detect_dl1_helper_roundtrip_target(
+                path,
+                document,
+            )
             stacks = list(document.animation_stacks)
             preferred_stack = (
                 document.preferred_animation_stack()
@@ -2347,6 +2663,8 @@ class MainWindow:
                 selections = [""]
             target_rig = None
             target_rig_error = ""
+            automatic_dl2 = False
+            automatic_helper_exact = False
             try:
                 automatic_dl2 = (
                     self.project.rig.retarget_mode == "auto"
@@ -2372,6 +2690,9 @@ class MainWindow:
                     )
             except (OSError, ValueError) as exc:
                 target_rig_error = str(exc)
+            native_helper_roundtrip = bool(
+                automatic_helper_exact and helper_roundtrip_target
+            )
             for stack_name in selections:
                 key = (path, stack_name)
                 if key in existing:
@@ -2383,6 +2704,10 @@ class MainWindow:
                     resource_name=resource_seed,
                     animation_stack=stack_name,
                 )
+                if helper_roundtrip_target:
+                    row.extensions["detected_native_roundtrip_target"] = dict(
+                        helper_roundtrip_target
+                    )
                 _apply_declared_animation_timing(row, document)
                 if multi:
                     row.display_name = f"{path.stem}: {stack_name}"
@@ -2391,7 +2716,14 @@ class MainWindow:
                     row.resource_name = f"{prefix}_{row.resource_name}"
                 preflight = preflight_fbx(
                     path, purpose="animation", animation_stack=stack_name or None,
-                    target_rig=target_rig, game_id=self.project.game_id,
+                    target_rig=(
+                        target_rig
+                        if self.project.rig.retarget_mode == "exact"
+                        or automatic_dl2
+                        or native_helper_roundtrip
+                        else None
+                    ),
+                    game_id=self.project.game_id,
                     document=document,
                     tolerance=self._current_import_tolerance(),
                 )
@@ -2418,7 +2750,9 @@ class MainWindow:
                 verified_mapping_ready = False
                 try:
                     if (
-                        self.project.rig.retarget_mode == "exact" or automatic_dl2
+                        self.project.rig.retarget_mode == "exact"
+                        or automatic_dl2
+                        or native_helper_roundtrip
                     ) and target_rig is not None:
                         compatibility = dict(
                             preflight.inventory.get("target_compatibility", {}) or {}
@@ -2597,6 +2931,7 @@ class MainWindow:
                 "animation domain. No project row was added for those files.",
                 12000,
             )
+        self._prompt_for_detected_helper_roundtrip_rows(added_rows)
         # Repairable mapping/adaptation findings stay on the row and in its
         # details panel. Import uses a modal only for unreadable/no-skeleton/
         # no-requested-animation blockers, so recognized partial rigs do not
@@ -2915,13 +3250,31 @@ class MainWindow:
             f"Rig reference: {selection.rig_ref or '(empty)'}",
             f"Resolved mode: {selection.retarget_mode}",
         ]
+        ui_kind = self._retarget_ui_kind(animation)
 
         # Table painting and project loading must never open an FBX or build a
         # retarget plan.  A cached import result is enough for a useful status;
         # full analysis is performed only when the user opens Retargeting (or
         # explicitly rebuilds the map).
         if not analyze:
-            if self._retarget_ui_kind(animation) == RetargetUiKind.CUSTOM_CRIG:
+            if ui_kind == RetargetUiKind.NATIVE_ROUNDTRIP:
+                details.append(
+                    "This target uses the FBX native round-trip contract; "
+                    "humanoid and generic CRIG mappings are not used."
+                )
+                if animation.mapping_profile_id:
+                    details.append(
+                        "A saved mapping from an older import is present but "
+                        "will be ignored."
+                    )
+                details.append(
+                    "Contract and skeleton validation is deferred until build."
+                )
+                return (
+                    "Ready — native helper round trip",
+                    "\n".join(details),
+                )
+            if ui_kind == RetargetUiKind.CUSTOM_CRIG:
                 details.append(
                     "Exact skeleton validation is deferred until build; project loading "
                     "does not open the source FBX."
@@ -2959,7 +3312,36 @@ class MainWindow:
         if selection.rig_path:
             details.append(f"CRIG path: {selection.rig_path}")
 
-        ui_kind = self._retarget_ui_kind(animation)
+        if ui_kind == RetargetUiKind.NATIVE_ROUNDTRIP:
+            try:
+                rig = self._target_rig_for_status(animation)
+            except (OSError, ValueError) as exc:
+                details.append(f"Target error: {exc}")
+                rig = None
+            if rig is None:
+                return (
+                    "Needs attention — target rig missing",
+                    "\n".join(details),
+                )
+            details.extend(
+                (
+                    "The helper-capable target uses exact native reimport.",
+                    "Humanoid maps, generic CRIG maps, and helper override "
+                    "rules are ignored for this route.",
+                    "The embedded/adjacent round-trip contract, guard, "
+                    "skeleton, bind pose, and cadence are validated during "
+                    "build.",
+                )
+            )
+            if animation.mapping_profile_id:
+                details.append(
+                    f"Ignored saved mapping: {animation.mapping_profile_id}"
+                )
+            return (
+                "Ready — native helper round trip",
+                "\n".join(details),
+            )
+
         if (
             ui_kind == RetargetUiKind.BUILTIN_HUMANOID
             and self.project.game_id == DL2_GAME_ID
@@ -4206,6 +4588,41 @@ class MainWindow:
         animation = self.project.animation_by_id(str(self.retarget_clip_combo.currentData() or ""))
         mode = self._animation_target_mode(animation) if animation is not None else ""
         ui_kind = self._retarget_ui_kind(animation) if animation is not None else None
+        native_roundtrip = ui_kind == RetargetUiKind.NATIVE_ROUNDTRIP
+        for widget in (
+            self.retarget_filter,
+            self.retarget_auto_map_button,
+            self.retarget_apply_button,
+            self.show_helper_bones,
+            self.show_all_target_bones,
+            self.retarget_advanced_actions,
+        ):
+            widget.setEnabled(not native_roundtrip)
+        if animation is not None and native_roundtrip:
+            self.root_locomotion_panel.setVisible(False)
+            self.show_helper_bones.setVisible(True)
+            self.show_all_target_bones.setVisible(True)
+            self.mapping_table.setRowCount(0)
+            ignored_mapping = (
+                f"<br>Saved mapping <code>{animation.mapping_profile_id}</code> "
+                "is ignored."
+                if animation.mapping_profile_id
+                else ""
+            )
+            self.mapping_status.setText(
+                "<b style='color:#2e7d32'>Native helper round trip</b> — "
+                "the 87 armature nodes and DLR track Empties are read exactly "
+                "from the round-trip contract; Auto-map is neither required "
+                "nor applied."
+                + ignored_mapping
+            )
+            self.ignored_bones.setPlainText(
+                "Edit named helpers in Blender Pose Mode and DLR track "
+                "Empties in Object Mode. Build validates the matching "
+                ".fbx.dlrroundtrip.json contract, guard, hierarchy, bind "
+                "pose, armature transform, frame count, and cadence."
+            )
+            return
         if (
             animation is not None
             and ui_kind == RetargetUiKind.BUILTIN_HUMANOID
@@ -4284,10 +4701,14 @@ class MainWindow:
     ) -> SourceBoneMappingProfile | None:
         if animation.mapping_profile_id:
             payload = self.project.mapping_profiles.get(animation.mapping_profile_id)
-            if payload is not None:
+            if (
+                payload is not None
+                and payload.get("format") == "dl-reanimated-retarget-profile"
+            ):
                 return SourceBoneMappingProfile.from_dict(payload)
         if not create:
             return None
+        replaced_profile_id = str(animation.mapping_profile_id or "")
         profile = auto_map_source_bones(
             document.limb_models,
             parents=document.parent_by_name,
@@ -4303,6 +4724,19 @@ class MainWindow:
             pass
         self.project.mapping_profiles[profile.profile_id] = profile.to_dict()
         animation.mapping_profile_id = profile.profile_id
+        if replaced_profile_id:
+            animation.extensions["replaced_incompatible_mapping_profile"] = {
+                "profile_id": replaced_profile_id,
+                "reason": (
+                    "normal humanoid animation selected; native/generic CRIG "
+                    "mapping was not applicable"
+                ),
+            }
+            if not any(
+                row.mapping_profile_id == replaced_profile_id
+                for row in self.project.animations
+            ):
+                self.project.mapping_profiles.pop(replaced_profile_id, None)
         self._mark_dirty()
         return profile
 
@@ -4652,6 +5086,13 @@ class MainWindow:
         if animation is None:
             return
         ui_kind = self._retarget_ui_kind(animation)
+        if ui_kind == RetargetUiKind.NATIVE_ROUNDTRIP:
+            self.status.showMessage(
+                "Auto-map is not used for the helper-capable native "
+                "round trip; exact nodes come from its validated contract.",
+                7000,
+            )
+            return
         if ui_kind == RetargetUiKind.CUSTOM_CRIG:
             return
         if self.background_tasks.busy:

@@ -57,7 +57,7 @@ _BASE_ROLES = [
     _role("upper_chest", "Upper Chest", "mixamorig:Spine2", "Body", "spine3", parent="chest", aliases=("spine2", "upperchest", "upper_chest")),
     _role("neck", "Neck", "mixamorig:Neck", "Body", "neck", parent="upper_chest"),
     _role("head", "Head", "mixamorig:Head", "Body", "head", parent="neck"),
-    _role("head_end", "Head End", "mixamorig:HeadTop_End", "Body", "head_end", required=False, parent="head", aliases=("headtop_end", "head_end", "head_tip")),
+    _role("head_end", "Head End", "mixamorig:HeadTop_End", "Body", "headend", required=False, parent="head", aliases=("headtop_end", "head_end", "head_tip")),
     _role("left_shoulder", "Left Shoulder", "mixamorig:LeftShoulder", "Left Arm", "l_clavicle", parent="upper_chest", aliases=("clavicle_l", "shoulder_l")),
     _role("left_upper_arm", "Left Upper Arm", "mixamorig:LeftArm", "Left Arm", "l_upperarm", parent="left_shoulder", aliases=("upperarm_l", "upper_arm_l", "arm_l")),
     _role("left_lower_arm", "Left Lower Arm", "mixamorig:LeftForeArm", "Left Arm", "l_forearm", parent="left_upper_arm", aliases=("forearm_l", "lowerarm_l", "lower_arm_l")),
@@ -88,14 +88,14 @@ def _finger_roles() -> list[HumanoidRole]:
             previous = hand_role
             for index in range(1, 5):
                 role_id = f"{side}_{digit_id}_{index}"
-                dl_segment = index if digit_id == "thumb" else index - 1
+                dl_segment = index
                 dl_finger = f"{target_side}_finger{digit_offsets[digit_id]}{dl_segment}"
                 rows.append(_role(
                     role_id,
                     f"{side.title()} {digit_label} {index}",
                     f"mixamorig:{source_side}Hand{digit_label}{index}",
                     group,
-                    f"{target_side}_{digit_id}{index}",
+                    dl_finger,
                     required=False,
                     parent=previous,
                     aliases=(
@@ -389,21 +389,79 @@ def auto_map_source_bones(source_bones: Iterable[str], *, parents: Mapping[str, 
     profile = SourceBoneMappingProfile.empty(bones, name=profile_name, parents=parents)
     used: set[str] = set()
     normalized = {bone: normalize_bone_name(bone) for bone in bones}
-    for role in HUMANOID_ROLES:
-        aliases = {normalize_bone_name(role.canonical_source_name), normalize_bone_name(role.target_name), *(normalize_bone_name(value) for value in role.aliases)}
-        candidates: list[tuple[float, str]] = []
-        for bone in bones:
-            if bone in used:
+
+    def claim_normalized(role: HumanoidRole, names: Iterable[str], *, confidence: float, method: str) -> bool:
+        wanted = {normalize_bone_name(value) for value in names if str(value).strip()}
+        bone = next(
+            (
+                candidate
+                for candidate in bones
+                if candidate not in used and normalized[candidate] in wanted
+            ),
+            None,
+        )
+        if bone is None:
+            return False
+        profile.set_mapping(role.role_id, bone, confidence=confidence, method=method)
+        used.add(bone)
+        return True
+
+    def claim_full_name(role: HumanoidRole, name: str, *, confidence: float, method: str) -> bool:
+        bone = next(
+            (
+                candidate
+                for candidate in bones
+                if candidate not in used and candidate.casefold() == name.casefold()
+            ),
+            None,
+        )
+        if bone is None:
+            return False
+        profile.set_mapping(role.role_id, bone, confidence=confidence, method=method)
+        used.add(bone)
+        return True
+
+    # Map required body roles before optional roles so a generic one-bone
+    # "Pelvis" skeleton still satisfies the required hips role. Within each
+    # group, reserve every exact target name before considering canonical names
+    # or aliases. This prevents an earlier broad alias from stealing a native
+    # DL bone such as headend or l_finger11 from its exact role.
+    for required in (True, False):
+        roles = tuple(role for role in HUMANOID_ROLES if role.required is required)
+        for role in roles:
+            claim_normalized(
+                role,
+                (role.target_name,),
+                confidence=1.0,
+                method="target_exact",
+            )
+        for role in roles:
+            if role.role_id in profile.role_to_bone:
                 continue
-            name = normalized[bone]
-            exact_full_name = bone.casefold() == role.canonical_source_name.casefold()
-            score = 1.0 if exact_full_name else 0.93 if name in aliases else 0.0
-            if score:
-                candidates.append((score, bone))
-        if candidates:
-            score, bone = max(candidates, key=lambda row: (row[0], -bones.index(row[1])))
-            profile.set_mapping(role.role_id, bone, confidence=score, method="exact" if score == 1.0 else "alias")
-            used.add(bone)
+            claim_full_name(
+                role,
+                role.canonical_source_name,
+                confidence=1.0,
+                method="exact",
+            )
+        for role in roles:
+            if role.role_id in profile.role_to_bone:
+                continue
+            claim_normalized(
+                role,
+                (role.canonical_source_name,),
+                confidence=0.98,
+                method="canonical",
+            )
+        for role in roles:
+            if role.role_id in profile.role_to_bone:
+                continue
+            claim_normalized(
+                role,
+                role.aliases,
+                confidence=0.93,
+                method="alias",
+            )
 
     # Fill the remaining roles with the same anatomical scan used by model
     # import and the animation workspace. Exact/canonical matches above always

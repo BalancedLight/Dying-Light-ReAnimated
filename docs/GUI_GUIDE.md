@@ -11,6 +11,24 @@ build_exe.bat           build the portable Windows EXE folder and ZIP
 
 The **File > Open Recent** menu keeps the ten most recently opened or saved projects available across launches. Missing project files are removed when selected, and **Clear Recent Projects** resets the list.
 
+### Work-in-progress launch notice
+
+DL ReAnimated shows a work-in-progress notice after its desktop window opens.
+Errors, incomplete behavior, and unexpected output are still possible, so keep
+backups, work from copies of source or game files, and validate generated
+animations, models, and RPacks before relying on them.
+
+The notice has direct buttons for this guide and **Troubleshooting**. Those
+buttons leave the notice open so you can return and choose **Continue**.
+Selecting **Don't show this again** suppresses the notice for future launches
+on the same Windows account, including after application updates or moving the
+application folder. This is a local application preference and is never stored
+in a `.dlraproj` file.
+
+To review the notice or change that preference later, choose
+**Help > Show Work-in-Progress Notice...**. Clear **Don't show this again** and
+dismiss the notice to enable it for subsequent launches.
+
 ## Project default and simple animation workflow
 
 The Project page selects the game profile and **project default target rig**. Both
@@ -149,7 +167,7 @@ The required source names and target ancestry match. The exact solver uses the m
 
 ### Source superset
 
-All required target tracks match, while the source may contain additional face, cloth, accessory, camera, weapon, twist, socket, or helper bones. Extra source nodes do not break required target tracks. A uniquely detected normalized-name helper, such as `RefCamera` for `refcamera` or `Eye_Camera` for `eyecamera`, is mapped to its matching target automatically; semantic fallbacks and ambiguous names remain manual choices.
+All required target tracks match, while the source may contain additional face, cloth, accessory, camera, weapon, twist, socket, or helper bones. Extra source nodes do not break required target tracks. Normalized exact target names are reserved before aliases and anatomical guesses, so names such as `headend` cannot be stolen by another role. Native DL finger names keep their actual segment numbers: `finger11/12/13` map to index 1/2/3, not shifted slots. A uniquely detected normalized-name helper, such as `RefCamera` for `refcamera` or `Eye_Camera` for `eyecamera`, is mapped to its matching target automatically; semantic fallbacks and ambiguous names remain manual choices.
 
 ### Needs review
 
@@ -290,7 +308,7 @@ Pose Mode bones while unresolved source-only tracks remain Object Mode
 Empties. Choose **Non-deforming helper roots in FBX** for an editable lossless
 round trip.
 
-The safe round trip is:
+The normal round trip is:
 
 1. Export with the helper-capable native rig and unresolved tracks represented
    as non-deforming helper roots.
@@ -302,9 +320,24 @@ The safe round trip is:
    and no bake-space transform.
 4. Keep the generated `.fbx.dlrroundtrip.json` beside the FBX. If the edited
    FBX has a new name and custom properties are disabled, copy the original
-   contract to the matching new `.fbx.dlrroundtrip.json` name.
-5. Reimport through **Animations** with the same helper-capable rig, FPS, and
-   frame count, then use **Export ANM2 only…**.
+   contract to the matching new `.fbx.dlrroundtrip.json` name. The FBX may be
+   moved to any folder: it works by itself when embedded Custom Properties
+   survived, or with that same-folder companion JSON when they did not.
+5. Reimport through **Animations**. If the project uses the base DL1 target,
+   accept the default-Yes **expanded DL1 helper rig detected** offer. It changes
+   only the imported contract-bearing clip.
+6. Leave FPS and frame count unchanged, then use **Export ANM2 only…**.
+
+Native helper reimports do not use the humanoid mapper. The Retargeting page
+labels the route as a native helper round trip and disables Auto-map/apply
+controls. Older projects may still contain a semantic mapping ID on the row;
+that stale mapping is ignored when a valid helper round-trip contract is
+present.
+
+This label is based on the individual FBX contract, not the selected target
+name. A normal Mixamo/mocap FBX remains a normal humanoid animation—with
+Auto-map and helper rows available—even when **Dying Light 1 Player TPP —
+Helper-capable** is its target.
 
 See the [complete ANM2-to-FBX-to-ANM2 workflow and Blender best
 practices](ANM2_TO_FBX.md#quick-anm2-to-fbx-to-anm2-round-trip) for exact

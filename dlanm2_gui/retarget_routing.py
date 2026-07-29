@@ -192,4 +192,29 @@ def select_exact_solver(
     )
 
 
-__all__ = ["SolverSelection", "select_exact_solver"]
+def select_native_roundtrip_solver() -> SolverSelection:
+    """Route a contract-required native target to the strict inverse.
+
+    This selection does not trust or validate FBX metadata. The exact engine
+    remains the authorization boundary and must validate the canonical
+    contract, rig identity, skeleton/rest structure, sampling cadence, DLR
+    nodes, and guard before producing output.
+    """
+
+    return SolverSelection(
+        requested_mode="exact",
+        selected_engine="ExactRigRetargetEngine",
+        selected_policy="native_roundtrip_contract",
+        mapping_profile_origin="ignored_for_native_roundtrip",
+        mapping_profile_changed_solver=False,
+        selection_reason=(
+            "selected target requires metadata-validated native round-trip"
+        ),
+    )
+
+
+__all__ = [
+    "SolverSelection",
+    "select_exact_solver",
+    "select_native_roundtrip_solver",
+]

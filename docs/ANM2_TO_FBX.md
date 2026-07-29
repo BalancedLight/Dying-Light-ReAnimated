@@ -30,8 +30,10 @@ This workflow uses two parts of DL ReAnimated:
    rebuilt ANM2.
 
 For an editable, metadata-validated DL1 player round trip, use
-**Dying Light 1 Player TPP — Helper-capable** for both directions. Do not
-export with that rig and then import onto the legacy 69-bone rig.
+**Dying Light 1 Player TPP — Helper-capable** for export. On reimport,
+ReAnimated recognizes its contract and either uses that rig immediately or
+offers a default-Yes switch for the imported clip. You do not need to create,
+approve, or repair a humanoid bone map for a native round trip.
 
 > **DL2 boundary:** DL2 ANM2-to-FBX export is supported, but native DL2
 > FBX-to-ANM2 writing is not. The complete round trip in this section is for
@@ -177,29 +179,59 @@ run_helpers.fbx.dlrroundtrip.json
 Do not modify the JSON contents. If embedded metadata and the companion file
 are both present, DL ReAnimated requires them to agree.
 
+The edited FBX may be moved to any folder. When Blender preserved Custom
+Properties, the moved FBX is self-contained and the JSON is optional. When
+Custom Properties were disabled or stripped, move or copy the contract into
+the same folder and rename it from the edited FBX's complete filename:
+
+```text
+D:\animations\run_helpers_edited.fbx
+D:\animations\run_helpers_edited.fbx.dlrroundtrip.json
+```
+
+The `.blend` file and the `DLR_RoundTripGuard_*` object are not substitutes for
+the embedded or companion contract.
+
 ### 5. Import the edited FBX and rebuild ANM2
 
-1. On the **Project** page, select **Dying Light 1** and set the default target
-   rig to **Dying Light 1 Player TPP — Helper-capable**.
-2. Open **Animations** and click **Add FBX animations…**.
-3. Select the edited FBX. Leave its matching
+1. Keep the project on **Dying Light 1**.
+2. Open **Animations**, click **Add FBX animations…**, and select the edited
+   FBX. Leave its matching
    `.fbx.dlrroundtrip.json` beside it.
-4. Confirm the row resolves to the helper-capable target. Contract-bearing
-   native exports use exact reimport; do not remap them through the humanoid or
-   cross-rig solver.
-5. Keep the original sampling FPS and frame count.
+3. If the project still uses the ordinary 69-bone target, ReAnimated asks:
+   **“This rig looks like it contains helpers. Would you like to switch this
+   imported animation to Dying Light 1 Player TPP — Helper-capable?”** Choose
+   **Yes**. The switch affects only the detected contract-bearing clip.
+4. Do not click **Auto-map humanoid**. The Retargeting page identifies the clip
+   as a **native helper round trip**, disables irrelevant mapping controls, and
+   uses the contract nodes directly. A stale semantic map saved by an older
+   project is ignored for this route.
+5. Leave the imported sampling FPS and frame range unchanged.
 6. Click **Export ANM2 only…** and choose a new output directory.
 7. Compare the rebuilt ANM2 with the source before putting it into a mod.
+
+That is the normal user path: export, edit in Pose Mode, export from Blender,
+add the edited FBX, accept the helper-rig offer if shown, and export ANM2. No
+mapping review or expert rig buttons are part of a native helper round trip.
+
+The classification is per clip. Merely selecting the expanded target does not
+mark an ordinary Mixamo, mocap, or authored FBX as a round trip. Without a
+validated native contract, that clip keeps the normal humanoid Auto-map and
+optional helper-mapping workflow.
 
 The source descriptor table remains first and in its original order. A
 rig-backed helper absent from the source is appended only when its sampled
 animation was actually changed beyond the edit tolerances.
 
-For ordinary mapped FBX imports, one unambiguous normalized-name helper is also
-enabled automatically: for example, `RefCamera` maps to `refcamera` and
-`Eye_Camera` maps to `eyecamera`. Ambiguous duplicates and semantic fallback
-suggestions remain manual choices. Contract-bearing native reimports use the
-validated exact nodes recorded by the contract.
+For ordinary mapped FBX imports, normalized exact target names are reserved
+before aliases or anatomical guesses. This includes `headend`, `refcamera`,
+and native DL finger chains: `l_finger11/12/13` and `r_finger11/12/13` map to
+index segments 1/2/3 rather than shifted slots. One unambiguous normalized-name
+helper is also enabled automatically; for example, `RefCamera` maps to
+`refcamera` and `Eye_Camera` maps to `eyecamera`. Ambiguous duplicates and
+semantic fallback suggestions remain manual choices. Contract-bearing native
+reimports bypass this mapper and use the validated exact nodes recorded by the
+contract.
 
 ### 6. Verify the result
 
@@ -260,7 +292,8 @@ using **Selected Objects** keeps the FBX easier to audit.
 | Skeleton structure changed | Bone/Empty was renamed, deleted, duplicated, or reparented | Reopen the untouched export and redo the animation edit |
 | Rest pose or armature transform changed | Edit Mode or armature Object Mode transform was used | Undo the structural transform; use Pose Mode instead |
 | Frame count or cadence changed | Wrong action range, FPS, or FBX bake range | Restore the original range and sampling rate |
-| Rig mismatch | Edited FBX is being imported onto another target rig | Select the same helper-capable rig used for export |
+| Rig mismatch | Edited FBX is being imported onto another target rig | Accept the automatic expanded-rig offer, or select the helper-capable target for that clip |
+| “Mapping is not a generic CRIG bone map” from an older project | A stale humanoid map was attached to a native helper FBX | Reimport the FBX; native helper contracts ignore that map and use exact nodes directly |
 | Original descriptor cannot be resolved | A required DLR Empty was not exported | Re-export with the armature, all required DLR Empties, and guard selected |
 
 Do not remove metadata to bypass an error. The rejection identifies a change

@@ -1,6 +1,6 @@
 {
   "package": "DL ReAnimated DL1/DL2 Preview",
-  "version": "0.6.5",
+  "version": "0.6.6",
   "source_basis": "BalancedLight/Dying-Light-ReAnimated model-testing branch, modified locally only",
   "git_operations_performed": false,
   "games": {
@@ -49,8 +49,8 @@
     {
       "path": "dlanm2_gui/animation_targets.py",
       "install_surface": "python_package",
-      "size": 3903,
-      "sha256": "046E7FCDE6AF348FBDFFA365C73F313CB5F2E529DD14698074FD3BDBEFD37C36"
+      "size": 5282,
+      "sha256": "C92EAE1F8A347AA397D5443BD6842A3FDA7C6D1A423A52882BEE3BA351F28219"
     },
     {
       "path": "dlanm2_gui/automatic_retarget.py",
@@ -67,8 +67,8 @@
     {
       "path": "dlanm2_gui/retarget_profiles.py",
       "install_surface": "python_package",
-      "size": 23797,
-      "sha256": "CEE0D6A4E2161CBB59879CCD2C1134D4B92C63F22A30AE65E7B6C93DD20BD7CF"
+      "size": 25507,
+      "sha256": "65895517DA574CDEFB1D836BFDFF941971A53B5CCD24443A68CC9E878CC5CDDE"
     },
     {
       "path": "dlanm2_gui/semantic_retarget.py",
@@ -91,8 +91,8 @@
     {
       "path": "dlanm2_gui/retarget_routing.py",
       "install_surface": "python_package",
-      "size": 7971,
-      "sha256": "9D3931B7DAD9D9BAEA8F33A11572052676B18103B86A69B4DE88589735F5D4EF"
+      "size": 8820,
+      "sha256": "377591AB8C59677390E935A710BC62539E3E79DFCBD4E18E6B8CB80A8C5C021C"
     },
     {
       "path": "dlanm2_gui/root_motion.py",
@@ -127,8 +127,8 @@
     {
       "path": "docs/ANM2_TO_FBX.md",
       "install_surface": "windows_bundle_docs",
-      "size": 25079,
-      "sha256": "13A0AF96E5B5FAF6CF89712D9F2F290A16D12D0FA95A90C0EE149ED0079D4CDA"
+      "size": 27091,
+      "sha256": "7D167276A09FB5642D28C7D2D61443682ED2F911E4E55FB25F3A16085AC3F7D8"
     },
     {
       "path": "docs/CHROME_RIGS.md",
@@ -163,8 +163,8 @@
     {
       "path": "docs/GUI_GUIDE.md",
       "install_surface": "windows_bundle_docs",
-      "size": 19620,
-      "sha256": "51774A11691B3727D1ACCF128B2D8AF5C0A571680A86FCFB06A6E7D3280EE2EB"
+      "size": 21694,
+      "sha256": "EF24F49D9B94EBB0F06DC3925ED4B31A2305EE52829F1DC26840D7B21AF33992"
     },
     {
       "path": "docs/reverse_notes/REFLECTED_FBX_WRAPPER_BILATERAL_SEMANTICS.md",
