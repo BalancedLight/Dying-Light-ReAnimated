@@ -49,6 +49,7 @@ def main() -> int:
     )
     shell = UnifiedMainWindow(qt, legacy_gui)
     shell.show()
+    shell.controller.schedule_startup_notice()
     return int(app.exec())
 
 
@@ -246,6 +247,12 @@ class UnifiedMainWindow:
         action(help_menu, "Troubleshooting", None, lambda: self.controller.open_doc("TROUBLESHOOTING.md"))
         action(help_menu, "Project Compatibility", None, lambda: self.controller.open_doc("PROJECT_FORMAT.md"))
         help_menu.addSeparator()
+        action(
+            help_menu,
+            "Show Work-in-Progress Notice...",
+            None,
+            lambda: self.controller.show_work_in_progress_notice(force=True),
+        )
         action(help_menu, "About DL ReAnimated", None, self._show_about)
 
         advanced_toggle = self.controller.advanced_mode_toggle

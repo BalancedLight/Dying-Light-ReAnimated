@@ -83,3 +83,7 @@ base assets/
 /.codex-remote-attachments/
 /.github/instructions/codacy.instructions.md
 /AGENTS.md
+
+
+#Ignore vscode AI rules
+.github\instructions\codacy.instructions.md

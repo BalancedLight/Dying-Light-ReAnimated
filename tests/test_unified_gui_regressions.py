@@ -17,6 +17,7 @@ from dlanm2_gui.bone_maps import BoneMapPair, GenericBoneMap
 from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.fbx_preflight import ERROR, FbxPreflightReport
 from dlanm2_gui.retarget_profiles import HUMANOID_ROLES, SourceBoneMappingProfile
+from dlanm2_gui.roundtrip_contract import finalize_roundtrip_contract
 from dlanm2_gui.unified_gui import UnifiedMainWindow
 from dlanm2_gui.workspace_project import (
     Anm2ToFbxItem,
@@ -31,6 +32,190 @@ def _application(tmp_path):
     qt = gui._load_qt()
     app = qt["QApplication"].instance() or qt["QApplication"]([])
     return qt, app
+
+
+def test_work_in_progress_notice_copy_help_buttons_and_project_clean(
+    tmp_path,
+) -> None:
+    qt, app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    opened: list[str] = []
+    observed: dict[str, object] = {}
+    controller.open_doc = opened.append
+
+    def interact() -> None:
+        dialog = app.activeModalWidget()
+        assert dialog is not None
+        observed["title"] = dialog.windowTitle()
+        message = dialog.findChild(
+            qt["QLabel"],
+            "workInProgressNoticeText",
+        )
+        observed["message"] = message.text()
+        guide = dialog.findChild(
+            qt["QPushButton"],
+            "workInProgressNoticeGuide",
+        )
+        troubleshooting = dialog.findChild(
+            qt["QPushButton"],
+            "workInProgressNoticeTroubleshooting",
+        )
+        guide.click()
+        observed["visible_after_guide"] = dialog.isVisible()
+        troubleshooting.click()
+        observed["visible_after_troubleshooting"] = dialog.isVisible()
+        dialog.findChild(
+            qt["QPushButton"],
+            "workInProgressNoticeContinue",
+        ).click()
+
+    assert not controller.dirty
+    QTimer.singleShot(0, interact)
+    assert controller.show_work_in_progress_notice()
+    assert observed == {
+        "title": "DL ReAnimated is a work in progress",
+        "message": gui._STARTUP_WIP_NOTICE_TEXT,
+        "visible_after_guide": True,
+        "visible_after_troubleshooting": True,
+    }
+    assert opened == ["GUI_GUIDE.md", "TROUBLESHOOTING.md"]
+    assert not controller.settings.value(
+        gui._STARTUP_WIP_NOTICE_HIDDEN_SETTING,
+        False,
+        type=bool,
+    )
+    assert not controller.dirty
+    shell.window.close()
+
+
+@pytest.mark.parametrize(
+    ("dismissal", "hidden"),
+    (("continue", True), ("escape", True), ("window_close", False)),
+)
+def test_work_in_progress_notice_persists_checkbox_for_every_dismissal(
+    tmp_path,
+    dismissal,
+    hidden,
+) -> None:
+    qt, app = _application(tmp_path)
+    controller = gui.MainWindow(qt)
+
+    def interact() -> None:
+        dialog = app.activeModalWidget()
+        assert dialog is not None
+        dialog.findChild(
+            qt["QCheckBox"],
+            "workInProgressNoticeDontShowAgain",
+        ).setChecked(hidden)
+        if dismissal == "continue":
+            dialog.findChild(
+                qt["QPushButton"],
+                "workInProgressNoticeContinue",
+            ).click()
+        elif dismissal == "escape":
+            dialog.reject()
+        else:
+            dialog.close()
+
+    QTimer.singleShot(0, interact)
+    assert controller.show_work_in_progress_notice(force=True)
+    assert (
+        controller.settings.value(
+            gui._STARTUP_WIP_NOTICE_HIDDEN_SETTING,
+            not hidden,
+            type=bool,
+        )
+        is hidden
+    )
+    assert not controller.dirty
+    controller.window.close()
+
+
+def test_work_in_progress_notice_opt_out_and_manual_recovery(
+    tmp_path,
+) -> None:
+    qt, app = _application(tmp_path)
+    controller = gui.MainWindow(qt)
+    controller.settings.setValue(
+        gui._STARTUP_WIP_NOTICE_HIDDEN_SETTING,
+        True,
+    )
+    controller.settings.sync()
+
+    assert not controller.show_work_in_progress_notice()
+
+    def reenable() -> None:
+        dialog = app.activeModalWidget()
+        assert dialog is not None
+        checkbox = dialog.findChild(
+            qt["QCheckBox"],
+            "workInProgressNoticeDontShowAgain",
+        )
+        assert checkbox.isChecked()
+        checkbox.setChecked(False)
+        dialog.close()
+
+    QTimer.singleShot(0, reenable)
+    assert controller.show_work_in_progress_notice(force=True)
+    assert not controller.settings.value(
+        gui._STARTUP_WIP_NOTICE_HIDDEN_SETTING,
+        True,
+        type=bool,
+    )
+    controller.window.close()
+
+    reopened = gui.MainWindow(qt)
+
+    def dismiss_reopened() -> None:
+        dialog = app.activeModalWidget()
+        assert dialog is not None
+        dialog.close()
+
+    QTimer.singleShot(0, dismiss_reopened)
+    assert reopened.show_work_in_progress_notice()
+    assert not reopened.dirty
+    legacy_help_labels = {
+        button.text()
+        for button in reopened.tabs.findChildren(qt["QPushButton"])
+    }
+    assert "Show Work-in-Progress Notice..." in legacy_help_labels
+    reopened.window.close()
+
+    shell = UnifiedMainWindow(qt, gui)
+    help_action = next(
+        action
+        for action in shell.window.menuBar().actions()
+        if action.text() == "&Help"
+    )
+    help_menu = help_action.menu()
+    assert "Show Work-in-Progress Notice..." in {
+        action.text() for action in help_menu.actions()
+    }
+    shell.window.close()
+
+
+def test_startup_notice_is_queued_once_after_window_is_visible(
+    tmp_path,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    calls: list[bool] = []
+    controller.show_work_in_progress_notice = lambda: calls.append(
+        shell.window.isVisible()
+    )
+
+    shell.show()
+    controller.schedule_startup_notice()
+    controller.schedule_startup_notice()
+    loop = QEventLoop()
+    QTimer.singleShot(20, loop.quit)
+    loop.exec()
+
+    assert calls == [True]
+    assert not controller.dirty
+    shell.window.close()
 
 
 def test_timing_controls_preserve_fractional_standard_rates(tmp_path) -> None:
@@ -585,6 +770,429 @@ def test_background_humanoid_import_automaps_detected_helper_names(
     assert rules["refcamera"]["component_policy"] == "translation"
     assert rules["eyecamera"]["source_bone"] == "Eye_Camera"
     assert "l_eye" not in rules
+
+
+def test_background_dl1_helper_roundtrip_import_does_not_create_humanoid_map(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    rig_path = root / "reference" / "dl1" / "player_1_tpp_helpers.crig"
+    rig = ChromeRig.load(rig_path)
+    path = tmp_path / "native_helpers.fbx"
+    path.write_bytes(b"fixture")
+    stack = SimpleNamespace(name="Take 001")
+    names = [bone.name for bone in rig.bones]
+    document = SimpleNamespace(
+        animation_stacks=(stack,),
+        preferred_animation_stack=lambda: stack,
+        declared_timebase=None,
+        limb_models={name: index for index, name in enumerate(names)},
+        parent_by_name={
+            bone.name: (
+                rig.bones[bone.parent_index].name
+                if bone.parent_index >= 0
+                else None
+            )
+            for bone in rig.bones
+        },
+    )
+    monkeypatch.setattr(gui, "FbxDocument", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(
+        gui,
+        "_detect_dl1_helper_roundtrip_target",
+        lambda _path, _document: {
+            "status": "confirmed",
+            "rig_ref": gui.DL1_HELPER_RIG_REF,
+            "contract_id": "a" * 64,
+            "metadata_source": "sidecar",
+            "helper_tracks": ["refcamera", "eyecamera"],
+        },
+    )
+    monkeypatch.setattr(
+        gui,
+        "preflight_fbx",
+        lambda input_path, **_kwargs: FbxPreflightReport(
+            str(input_path),
+            "animation",
+            inventory={
+                "target_compatibility": {
+                    "classification": "exact_identity",
+                }
+            },
+        ),
+    )
+    request = gui._AnimationImportRequest(
+        paths=(str(path),),
+        existing=set(),
+        game_id="dying_light_1",
+        retarget_mode="auto",
+        target_rig_path=str(rig_path),
+        target_rig_ref=gui.DL1_HELPER_RIG_REF,
+        resource_root=root,
+        resource_prefix="",
+        tolerance=gui.FbxImportTolerance.RECOMMENDED,
+        target_helper_names=("refcamera", "eyecamera"),
+    )
+
+    result = gui._prepare_animation_import(request, lambda _message: None)
+
+    assert len(result.rows) == 1
+    assert result.rows[0].mapping_profile_id == ""
+    assert result.mapping_profiles == {}
+    assert "helper_retarget_rules" not in result.rows[0].extensions
+
+
+def test_background_normal_animation_on_helper_target_keeps_humanoid_mapper(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    rig_path = root / "reference" / "dl1" / "player_1_tpp_helpers.crig"
+    path = tmp_path / "ordinary_mixamo.fbx"
+    path.write_bytes(b"fixture")
+    stack = SimpleNamespace(name="Take 001")
+    document = SimpleNamespace(
+        animation_stacks=(stack,),
+        preferred_animation_stack=lambda: stack,
+        declared_timebase=None,
+        limb_models={
+            "mixamorig:Hips": 1,
+            "mixamorig:Spine": 2,
+            "mixamorig:Spine1": 3,
+            "mixamorig:Spine2": 4,
+            "mixamorig:Neck": 5,
+            "mixamorig:Head": 6,
+            "headend": 7,
+            "l_finger11": 8,
+            "refcamera": 9,
+        },
+        parent_by_name={
+            "mixamorig:Hips": None,
+            "mixamorig:Spine": "mixamorig:Hips",
+            "mixamorig:Spine1": "mixamorig:Spine",
+            "mixamorig:Spine2": "mixamorig:Spine1",
+            "mixamorig:Neck": "mixamorig:Spine2",
+            "mixamorig:Head": "mixamorig:Neck",
+            "headend": "mixamorig:Head",
+            "l_finger11": "mixamorig:Hips",
+            "refcamera": "mixamorig:Head",
+        },
+    )
+    monkeypatch.setattr(gui, "FbxDocument", lambda *_args, **_kwargs: document)
+    monkeypatch.setattr(
+        gui,
+        "preflight_fbx",
+        lambda input_path, **_kwargs: FbxPreflightReport(
+            str(input_path),
+            "animation",
+        ),
+    )
+    request = gui._AnimationImportRequest(
+        paths=(str(path),),
+        existing=set(),
+        game_id="dying_light_1",
+        retarget_mode="auto",
+        target_rig_path=str(rig_path),
+        target_rig_ref=gui.DL1_HELPER_RIG_REF,
+        resource_root=root,
+        resource_prefix="",
+        tolerance=gui.FbxImportTolerance.RECOMMENDED,
+        target_helper_names=("refcamera", "eyecamera"),
+    )
+
+    result = gui._prepare_animation_import(request, lambda _message: None)
+
+    assert len(result.rows) == 1
+    animation = result.rows[0]
+    assert animation.mapping_profile_id
+    profile = result.mapping_profiles[animation.mapping_profile_id]
+    assert profile["format"] == "dl-reanimated-retarget-profile"
+    assert profile["role_to_bone"]["head_end"] == "headend"
+    assert profile["role_to_bone"]["left_index_1"] == "l_finger11"
+    rules = {
+        row["target_bone"]: row
+        for row in animation.extensions["helper_retarget_rules"]
+    }
+    assert rules["refcamera"]["source_bone"] == "refcamera"
+    assert "detected_native_roundtrip_target" not in animation.extensions
+
+
+def test_helper_roundtrip_offer_requires_a_valid_expanded_rig_contract(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    contract = finalize_roundtrip_contract(
+        {
+            "format": "dl-reanimated-native-roundtrip-contract",
+            "schema_version": 1,
+            "rig_id": gui.DL1_HELPER_RIG_REF,
+            "roundtrip_capable": True,
+            "source_descriptors": [0xC9C05F6E],
+            "expected_skeleton": [
+                {
+                    "name": "refcamera",
+                    "descriptor": 0xC9C05F6E,
+                    "helper": True,
+                }
+            ],
+            "source_track_nodes": [
+                {
+                    "node_name": "refcamera",
+                    "descriptor": 0xC9C05F6E,
+                    "node_kind": "bone",
+                    "semantic": "named_helper_bone",
+                }
+            ],
+        }
+    )
+    metadata = {"version": 5, "roundtrip_contract": contract}
+    from dlanm2_gui import roundtrip_contract as roundtrip_service
+
+    monkeypatch.setattr(
+        roundtrip_service,
+        "resolve_native_roundtrip_metadata",
+        lambda _path, _document: (metadata, "sidecar"),
+    )
+
+    detected = gui._detect_dl1_helper_roundtrip_target(
+        tmp_path / "edited.fbx",
+        SimpleNamespace(),
+    )
+
+    assert detected["status"] == "confirmed"
+    assert detected["rig_ref"] == gui.DL1_HELPER_RIG_REF
+    assert detected["contract_id"] == contract["contract_id"]
+    assert detected["metadata_source"] == "sidecar"
+    assert detected["helper_tracks"] == ["refcamera"]
+
+    bind_only_helper_source = dict(contract)
+    bind_only_helper_source["source_descriptors"] = [1]
+    bind_only_helper_source = finalize_roundtrip_contract(
+        bind_only_helper_source
+    )
+    monkeypatch.setattr(
+        roundtrip_service,
+        "resolve_native_roundtrip_metadata",
+        lambda _path, _document: (
+            {"version": 5, "roundtrip_contract": bind_only_helper_source},
+            "sidecar",
+        ),
+    )
+    assert gui._detect_dl1_helper_roundtrip_target(
+        tmp_path / "body_only.fbx",
+        SimpleNamespace(),
+    )
+
+    no_helper_rig = dict(contract)
+    no_helper_rig["expected_skeleton"] = [
+        {
+            "name": "bip01",
+            "descriptor": 1,
+            "helper": False,
+        }
+    ]
+    no_helper_rig = finalize_roundtrip_contract(no_helper_rig)
+    monkeypatch.setattr(
+        roundtrip_service,
+        "resolve_native_roundtrip_metadata",
+        lambda _path, _document: (
+            {"version": 5, "roundtrip_contract": no_helper_rig},
+            "sidecar",
+        ),
+    )
+    assert not gui._detect_dl1_helper_roundtrip_target(
+        tmp_path / "not_expanded.fbx",
+        SimpleNamespace(),
+    )
+
+
+def test_confirmed_helper_roundtrip_offer_switches_only_imported_clip(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    project_default = controller.project.rig.target_rig_ref
+    animation = ProjectAnimation.create(tmp_path / "edited_helpers.fbx")
+    animation.mapping_profile_id = "auto-profile"
+    animation.extensions.update(
+        {
+            "detected_native_roundtrip_target": {
+                "status": "confirmed",
+                "rig_ref": gui.DL1_HELPER_RIG_REF,
+                "contract_id": "a" * 64,
+                "metadata_source": "sidecar",
+                "helper_tracks": ["refcamera", "headend"],
+            },
+            "helper_retarget_rules": [{"target_bone": "refcamera"}],
+            "compiled_target_map_profile_id": "compiled-profile",
+            "automatic_retarget_generation_failure": {"status": "failed"},
+        }
+    )
+    controller.project.mapping_profiles["auto-profile"] = {
+        "format": "dl-reanimated-retarget-profile"
+    }
+    controller.project.animations.append(animation)
+    prompts: list[tuple[str, str]] = []
+
+    def accept(_parent, title, message, *_args):
+        prompts.append((title, message))
+        return qt["QMessageBox"].Yes
+
+    monkeypatch.setattr(qt["QMessageBox"], "question", accept)
+
+    assert controller._prompt_for_detected_helper_roundtrip_rows([animation]) == 1
+    assert controller.project.rig.target_rig_ref == project_default
+    assert animation.target_rig_ref == gui.DL1_HELPER_RIG_REF
+    assert animation.target_rig_path == ""
+    assert animation.mapping_profile_id == ""
+    assert "auto-profile" not in controller.project.mapping_profiles
+    assert "helper_retarget_rules" not in animation.extensions
+    assert "compiled_target_map_profile_id" not in animation.extensions
+    assert "automatic_retarget_generation_failure" not in animation.extensions
+    assert animation.extensions["native_roundtrip_target_switch"][
+        "mapping_policy"
+    ] == "native_contract_no_automap"
+    assert len(prompts) == 1
+    assert "looks like it contains helpers" in prompts[0][1]
+    assert "no Auto-map" in prompts[0][1]
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_declining_helper_roundtrip_offer_preserves_current_target(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    animation = ProjectAnimation.create(tmp_path / "edited_helpers.fbx")
+    animation.mapping_profile_id = "keep-profile"
+    animation.extensions["detected_native_roundtrip_target"] = {
+        "status": "confirmed",
+        "rig_ref": gui.DL1_HELPER_RIG_REF,
+        "contract_id": "b" * 64,
+        "helper_tracks": ["refcamera"],
+    }
+    controller.project.animations.append(animation)
+    monkeypatch.setattr(
+        qt["QMessageBox"],
+        "question",
+        lambda *_args: qt["QMessageBox"].No,
+    )
+
+    assert controller._prompt_for_detected_helper_roundtrip_rows([animation]) == 0
+    assert animation.target_rig_ref == ""
+    assert animation.mapping_profile_id == "keep-profile"
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_dl1_helper_roundtrip_panel_disables_irrelevant_mapping(
+    tmp_path,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    controller.project.rig.target_rig_ref = gui.DL1_HELPER_RIG_REF
+    controller.project.rig.target_rig_path = str(
+        controller.resource_root
+        / "reference"
+        / "dl1"
+        / "player_1_tpp_helpers.crig"
+    )
+    controller.project.rig.retarget_mode = "auto"
+    animation = ProjectAnimation.create(tmp_path / "native_helpers.fbx")
+    animation.mapping_profile_id = "stale-humanoid-map"
+    animation.extensions["detected_native_roundtrip_target"] = {
+        "status": "confirmed",
+        "rig_ref": gui.DL1_HELPER_RIG_REF,
+        "contract_id": "c" * 64,
+    }
+    controller.project.mapping_profiles[animation.mapping_profile_id] = {
+        "format": "dl-reanimated-retarget-profile",
+    }
+    controller.project.animations.append(animation)
+
+    controller._refresh_retarget_clip_combo()
+
+    assert controller.mapping_table.rowCount() == 0
+    assert not controller.retarget_auto_map_button.isEnabled()
+    assert not controller.retarget_apply_button.isEnabled()
+    assert "native helper round trip" in controller.mapping_status.text().casefold()
+    assert "ignored" in controller.mapping_status.text().casefold()
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_normal_animation_on_expanded_target_keeps_mapping_controls(
+    tmp_path,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    controller.project.rig.target_rig_ref = gui.DL1_HELPER_RIG_REF
+    controller.project.rig.target_rig_path = str(
+        controller.resource_root
+        / "reference"
+        / "dl1"
+        / "player_1_tpp_helpers.crig"
+    )
+    controller.project.rig.retarget_mode = "auto"
+    animation = ProjectAnimation.create(tmp_path / "ordinary_dance.fbx")
+    controller.project.animations.append(animation)
+
+    controller._refresh_retarget_clip_combo()
+
+    assert controller._retarget_ui_kind(animation) == gui.RetargetUiKind.BUILTIN_HUMANOID
+    assert controller.retarget_auto_map_button.isEnabled()
+    assert controller.retarget_apply_button.isEnabled()
+    assert "native helper round trip" not in controller.mapping_status.text().casefold()
+    controller.dirty = False
+    shell.window.close()
+
+
+def test_normal_animation_replaces_intermediate_generic_map_with_humanoid_map(
+    tmp_path,
+) -> None:
+    qt, _app = _application(tmp_path)
+    shell = UnifiedMainWindow(qt, gui)
+    controller = shell.controller
+    animation = ProjectAnimation.create(tmp_path / "ordinary_dance.fbx")
+    animation.mapping_profile_id = "bad-intermediate-generic-map"
+    controller.project.mapping_profiles[animation.mapping_profile_id] = {
+        "format": "dl-reanimated-bone-map",
+        "profile_id": animation.mapping_profile_id,
+    }
+    controller.project.animations.append(animation)
+    document = SimpleNamespace(
+        limb_models={"mixamorig:Hips": 1, "headend": 2, "l_finger11": 3},
+        parent_by_name={
+            "mixamorig:Hips": None,
+            "headend": "mixamorig:Hips",
+            "l_finger11": "mixamorig:Hips",
+        },
+    )
+
+    profile = controller._profile_for_animation(
+        animation,
+        document,
+        create=True,
+    )
+
+    assert profile is not None
+    assert animation.mapping_profile_id == profile.profile_id
+    assert profile.mapped_bone("head_end") == "headend"
+    assert profile.mapped_bone("left_index_1") == "l_finger11"
+    assert "bad-intermediate-generic-map" not in controller.project.mapping_profiles
+    assert animation.extensions["replaced_incompatible_mapping_profile"][
+        "profile_id"
+    ] == "bad-intermediate-generic-map"
+    controller.dirty = False
+    shell.window.close()
 
 
 def test_close_during_animation_import_cancels_then_closes(

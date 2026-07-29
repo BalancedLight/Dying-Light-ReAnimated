@@ -416,11 +416,26 @@ def test_contract_sidecar_fallback_agreement_and_stale_identity(
     assert resolved == metadata
     assert source == "sidecar"
 
+    moved_directory = tmp_path / "another_folder"
+    moved_directory.mkdir()
+    moved_fbx = moved_directory / "clip_edited.fbx"
+    moved_fbx.write_bytes(fbx.read_bytes())
+    moved_sidecar = roundtrip_sidecar_path(moved_fbx)
+    moved_sidecar.write_bytes(sidecar.read_bytes())
+    resolved, source = resolve_native_roundtrip_metadata(moved_fbx, object())
+    assert resolved == metadata
+    assert source == "sidecar"
+
     monkeypatch.setattr(
         service,
         "embedded_native_metadata",
         lambda _doc: copy.deepcopy(metadata),
     )
+    moved_sidecar.unlink()
+    resolved, source = resolve_native_roundtrip_metadata(moved_fbx, object())
+    assert resolved == metadata
+    assert source == "embedded"
+
     resolved, source = resolve_native_roundtrip_metadata(fbx, object())
     assert resolved == metadata
     assert source == "embedded_and_sidecar"

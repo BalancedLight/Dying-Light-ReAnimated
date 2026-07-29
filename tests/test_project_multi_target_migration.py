@@ -276,6 +276,135 @@ def test_builder_groups_two_per_animation_crig_targets(
     } == {"custom:first", "custom:second"}
 
 
+def test_helper_roundtrip_builder_ignores_stale_humanoid_mapping(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    rig_path = root / "reference" / "dl1" / "player_1_tpp_helpers.crig"
+    source = tmp_path / "native_helpers.fbx"
+    source.write_bytes(b"synthetic native helper fixture")
+
+    project = DlReanimatedProject.new("Native helper route")
+    project.rig.retarget_mode = "auto"
+    project.rig.target_rig_ref = "builtin:dl1_player_tpp_helpers"
+    project.rig.target_rig_path = str(rig_path)
+    project.export.output_directory = str(tmp_path / "build")
+    project.export.include_validation_controls = False
+    animation = ProjectAnimation.create(
+        str(source),
+        resource_name="native_helpers",
+    )
+    animation.mapping_profile_id = "stale-humanoid-map"
+    project.mapping_profiles[animation.mapping_profile_id] = {
+        "format": "dl-reanimated-retarget-profile",
+        "profile_id": animation.mapping_profile_id,
+        "name": "Former Auto-map result",
+    }
+    project.animations.append(animation)
+    monkeypatch.setattr(
+        project_builder,
+        "detect_native_helper_roundtrip_target",
+        lambda _path: {
+            "status": "confirmed",
+            "rig_ref": "builtin:dl1_player_tpp_helpers",
+            "contract_id": "d" * 64,
+            "metadata_source": "sidecar",
+            "helper_tracks": ["refcamera"],
+        },
+    )
+
+    class FakeDocument:
+        animation_stacks: tuple[object, ...] = ()
+
+        def __init__(self, _path: Path) -> None:
+            pass
+
+    monkeypatch.setattr(project_builder, "_FbxDocument", FakeDocument)
+    monkeypatch.setattr(
+        project_builder,
+        "classify_target_compatibility",
+        lambda _document, _rig: {
+            "classification": "exact_identity",
+            "required_missing_bones": [],
+            "hierarchy_mismatches": [],
+        },
+    )
+
+    calls: list[str] = []
+
+    def fake_exact(_source: Path, rig: ChromeRig, **_kwargs):
+        calls.append(rig.rig_id)
+        return SimpleNamespace(
+            payload=_valid_anm2_payload(rig.bones[0].descriptor),
+            report={
+                "frame_count": 2,
+                "warnings": [],
+                "source_animation_stack": "",
+            },
+        )
+
+    monkeypatch.setattr(project_builder, "build_exact_rig_anm2", fake_exact)
+
+    result = project_builder.build_project(project)
+
+    assert calls == ["builtin:dl1_player_tpp_helpers"]
+    report = json.loads(
+        Path(result.built_animations[0].retarget_report).read_text(
+            encoding="utf-8"
+        )
+    )
+    route = report["project_native_roundtrip_route"]
+    assert route["mapping_profile_ignored"] is True
+    assert route["ignored_mapping_profile_id"] == "stale-humanoid-map"
+    assert (
+        route["ignored_mapping_profile_format"]
+        == "dl-reanimated-retarget-profile"
+    )
+    assert (
+        report["solver_selection"]["selected_policy"]
+        == "native_roundtrip_contract"
+    )
+
+
+def test_expanded_dl1_target_routes_normal_and_contract_clips_separately(
+    tmp_path: Path,
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    project = DlReanimatedProject.new("Mixed expanded target")
+    project.rig.retarget_mode = "auto"
+    project.rig.target_rig_ref = "builtin:dl1_player_tpp_helpers"
+    project.rig.target_rig_path = str(
+        root / "reference" / "dl1" / "player_1_tpp_helpers.crig"
+    )
+    ordinary = ProjectAnimation.create(tmp_path / "ordinary_dance.fbx")
+    native = ProjectAnimation.create(tmp_path / "edited_native.fbx")
+    native.extensions["detected_native_roundtrip_target"] = {
+        "status": "confirmed",
+        "rig_ref": "builtin:dl1_player_tpp_helpers",
+        "contract_id": "e" * 64,
+    }
+
+    ordinary_context = project_builder._animation_target_context(
+        project,
+        ordinary,
+        game_default_target_rig_ref="builtin:male_npc_infected",
+        cache={},
+    )
+    native_context = project_builder._animation_target_context(
+        project,
+        native,
+        game_default_target_rig_ref="builtin:male_npc_infected",
+        cache={},
+    )
+
+    assert ordinary_context.execution_mode == "humanoid"
+    assert ordinary_context.rig is None
+    assert native_context.execution_mode == "exact"
+    assert native_context.rig is not None
+    assert native_context.rig.rig_id == "builtin:dl1_player_tpp_helpers"
+
+
 def test_missing_late_animation_fails_before_any_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

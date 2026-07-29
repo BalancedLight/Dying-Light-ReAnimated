@@ -66,6 +66,25 @@ def test_common_non_mixamo_names_are_recognized() -> None:
     assert not required_errors
 
 
+def test_native_dl_names_win_exactly_and_fingers_keep_native_segment_numbers() -> None:
+    bones = ["headend"]
+    for side in ("l", "r"):
+        for digit in range(5):
+            bones.extend(f"{side}_finger{digit}{segment}" for segment in range(1, 4))
+
+    profile = auto_map_source_bones(bones)
+
+    assert profile.mapped_bone("head_end") == "headend"
+    assert profile.method_by_role["head_end"] == "target_exact"
+    for side, role_side in (("l", "left"), ("r", "right")):
+        for digit, role_digit in enumerate(("thumb", "index", "middle", "ring", "pinky")):
+            for segment in range(1, 4):
+                role_id = f"{role_side}_{role_digit}_{segment}"
+                assert profile.mapped_bone(role_id) == f"{side}_finger{digit}{segment}"
+                assert profile.method_by_role[role_id] == "target_exact"
+            assert profile.mapped_bone(f"{role_side}_{role_digit}_4") is None
+
+
 def test_character_creator_and_dl_suffix_names_use_shared_scan() -> None:
     bones = [
         "root", "pelvis", "CC_Base_Pelvis",

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Mapping
 
-from .game_profiles import get_game_profile
+from .game_profiles import DL1_HELPER_RIG_REF, get_game_profile
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,8 +19,30 @@ class AnimationTargetSelection:
 
 class RetargetUiKind(Enum):
     BUILTIN_HUMANOID = "builtin_humanoid"
+    NATIVE_ROUNDTRIP = "native_roundtrip"
     CUSTOM_CRIG = "custom_crig"
     UNKNOWN = "unknown"
+
+
+def native_roundtrip_target_ref(animation: Any) -> str:
+    """Return a per-clip native target only when import recorded contract evidence."""
+
+    if animation is None:
+        return ""
+    extensions = getattr(animation, "extensions", {}) or {}
+    detected = extensions.get("detected_native_roundtrip_target", {})
+    if (
+        isinstance(detected, Mapping)
+        and detected.get("status") == "confirmed"
+    ):
+        return str(detected.get("rig_ref", "") or "")
+    accepted = extensions.get("native_roundtrip_target_switch", {})
+    if (
+        isinstance(accepted, Mapping)
+        and accepted.get("status") == "accepted"
+    ):
+        return str(accepted.get("rig_ref", "") or "")
+    return ""
 
 
 def _deliberate_expert_crig_override(project: Any, animation: Any) -> bool:
@@ -77,7 +99,15 @@ def resolve_animation_target(
     built_in_for_game = rig_ref in profile.compatible_builtin_rig_refs
     project_mode = str(project.rig.retarget_mode or "auto")
     if project_mode == "auto" and built_in_for_game:
-        retarget_mode = "auto"
+        # The expanded DL1 target remains an ordinary built-in humanoid target
+        # for normal FBXs. Only a clip with recorded native-contract evidence
+        # enters the exact round-trip route.
+        retarget_mode = (
+            "exact"
+            if rig_ref == DL1_HELPER_RIG_REF
+            and native_roundtrip_target_ref(animation) == rig_ref
+            else "auto"
+        )
     elif (
         project_mode == "humanoid"
         and rig_ref == profile.default_target_rig_ref
@@ -109,6 +139,11 @@ def retarget_ui_kind(
     if selection.rig_ref in profile.compatible_builtin_rig_refs:
         if _deliberate_expert_crig_override(project, animation):
             return RetargetUiKind.CUSTOM_CRIG
+        if (
+            selection.rig_ref == DL1_HELPER_RIG_REF
+            and native_roundtrip_target_ref(animation) == selection.rig_ref
+        ):
+            return RetargetUiKind.NATIVE_ROUNDTRIP
         return RetargetUiKind.BUILTIN_HUMANOID
     return RetargetUiKind.CUSTOM_CRIG
 
@@ -116,6 +151,7 @@ def retarget_ui_kind(
 __all__ = [
     "AnimationTargetSelection",
     "RetargetUiKind",
+    "native_roundtrip_target_ref",
     "resolve_animation_target",
     "retarget_ui_kind",
 ]

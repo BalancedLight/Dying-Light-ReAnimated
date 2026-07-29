@@ -22,7 +22,11 @@ from .animation_scr import (
     parse_animation_scr_sections,
     patch_animation_scr_sequence_ranges,
 )
-from .animation_targets import RetargetUiKind, retarget_ui_kind
+from .animation_targets import (
+    RetargetUiKind,
+    native_roundtrip_target_ref,
+    retarget_ui_kind,
+)
 from .fbx_pipeline import FbxAnimationClip, build_fbx_rpack
 from .chrome_rig import ChromeRig
 from .chrome_rig_builder import build_chrome_rig_from_smd_template
@@ -81,7 +85,11 @@ from .game_profiles import (
 from .helper_retarget import helper_rules_from_dicts, helper_rules_to_dicts
 from .root_mapping import RootMappingSelection
 from .root_motion import ROOT_MOTION_EXTENSION_KEY, RootMotionSelection
-from .retarget_routing import select_exact_solver
+from .retarget_routing import (
+    select_exact_solver,
+    select_native_roundtrip_solver,
+)
+from .roundtrip_contract import detect_native_helper_roundtrip_target
 from .target_package import validate_target_package
 
 # DLR_MIMIC_PROTOTYPE_BODY_CORE
@@ -548,7 +556,11 @@ def _animation_target_context(
         clip_mode = "auto"
         execution_mode = (
             "humanoid"
-            if project.game_id == DL1_GAME_ID and rig_ref != DL1_HELPER_RIG_REF
+            if project.game_id == DL1_GAME_ID
+            and (
+                rig_ref != DL1_HELPER_RIG_REF
+                or native_roundtrip_target_ref(animation) != rig_ref
+            )
             else "exact"
         )
     elif (
@@ -617,6 +629,27 @@ def _animation_target_context(
     return _AnimationTargetContext(
         rig_ref or rig.rig_id, resolved, clip_mode, execution_mode, rig
     )
+
+
+def _hydrate_native_roundtrip_target_hints(
+    project: DlReanimatedProject,
+    animations: list[ProjectAnimation],
+) -> None:
+    """Recover v5 sidecar evidence for projects saved before per-clip hints."""
+
+    for animation in animations:
+        rig_ref = str(animation.target_rig_ref or project.rig.target_rig_ref)
+        if (
+            rig_ref != DL1_HELPER_RIG_REF
+            or native_roundtrip_target_ref(animation) == rig_ref
+        ):
+            continue
+        detected = detect_native_helper_roundtrip_target(animation.source_fbx)
+        if detected.get("rig_ref") != rig_ref:
+            continue
+        extensions = dict(animation.extensions)
+        extensions["detected_native_roundtrip_target"] = dict(detected)
+        animation.extensions = extensions
 
 
 @dataclass(slots=True)
@@ -699,6 +732,7 @@ def _build_body_project(
     if not enabled:
         raise ValueError("Project does not contain any enabled animations")
 
+    _hydrate_native_roundtrip_target_hints(project, enabled)
     retarget_mode = project.rig.retarget_mode
     fbx_anm2_export_behavior = coerce_fbx_anm2_export_behavior(
         project.rig.fbx_anm2_export_behavior
@@ -827,6 +861,7 @@ def _build_body_project(
     automatic_verification_by_animation: dict[str, Any] = {}
     compatibility_by_animation: dict[str, dict[str, Any]] = {}
     solver_by_animation: dict[str, Any] = {}
+    native_roundtrip_route_by_animation: dict[str, dict[str, Any]] = {}
     humanoid_profile_by_animation: dict[str, SourceBoneMappingProfile] = {}
     expected_frame_count_by_animation: dict[str, int] = {}
     timing_by_animation: dict[str, dict[str, Any]] = {}
@@ -993,6 +1028,60 @@ def _build_body_project(
             stage_timings_by_animation[animation.animation_id] = stage_timings
             continue
         assert context.rig is not None
+        if bool(
+            context.rig.extensions.get("roundtrip_contract_required", False)
+        ) and native_roundtrip_target_ref(animation) == context.rig_ref:
+            # The helper-capable DL1 target is not a humanoid or generic-CRIG
+            # mapping target. Its FBX carries the source descriptor order and
+            # exact inverse contract. Old projects and the former import path
+            # may still reference a semantic/generic mapping profile; it is
+            # intentionally irrelevant and must not intercept native reimport.
+            compatibility = classify_target_compatibility(document, context.rig)
+            mapping_payload = dict(
+                project.mapping_profiles.get(
+                    str(animation.mapping_profile_id or ""), {}
+                )
+                or {}
+            )
+            route = {
+                "mode": "native_roundtrip_contract",
+                "target_rig_id": context.rig.rig_id,
+                "mapping_profile_ignored": bool(
+                    animation.mapping_profile_id
+                ),
+                "ignored_mapping_profile_id": str(
+                    animation.mapping_profile_id or ""
+                ),
+                "ignored_mapping_profile_format": str(
+                    mapping_payload.get("format", "") or ""
+                ),
+                "ignored_helper_rule_count": len(
+                    animation.extensions.get(
+                        "helper_retarget_rules", ()
+                    )
+                    or ()
+                ),
+                "contract_validation": (
+                    "deferred_to_exact_native_engine"
+                ),
+            }
+            native_roundtrip_route_by_animation[
+                animation.animation_id
+            ] = route
+            bone_map_by_animation[animation.animation_id] = None
+            compatibility_by_animation[
+                animation.animation_id
+            ] = compatibility
+            solver_by_animation[
+                animation.animation_id
+            ] = select_native_roundtrip_solver()
+            stage_timings["planning_seconds"] = (
+                time.perf_counter() - planning_started
+            )
+            stage_timings_by_animation[
+                animation.animation_id
+            ] = stage_timings
+            continue
         bundled_dl2_semantic = bool(
             project.game_id == DL2_GAME_ID
             and retarget_ui_kind(project, animation)
@@ -1354,6 +1443,15 @@ def _build_body_project(
                 if fbx_anm2_export_behavior == LEGACY_5_0
                 else solver_selection.to_dict()
             )
+            native_roundtrip_route = (
+                native_roundtrip_route_by_animation.get(
+                    animation.animation_id
+                )
+            )
+            if native_roundtrip_route is not None:
+                exact_build.report[
+                    "project_native_roundtrip_route"
+                ] = dict(native_roundtrip_route)
             automatic_verification = automatic_verification_by_animation.get(
                 animation.animation_id
             )
@@ -2013,7 +2111,11 @@ def _mapping_profile_for_animation(
                 f"Animation {animation.display_name!r} references missing mapping profile "
                 f"{animation.mapping_profile_id}"
             )
-        return SourceBoneMappingProfile.from_dict(payload)
+        if payload.get("format") == "dl-reanimated-retarget-profile":
+            return SourceBoneMappingProfile.from_dict(payload)
+        replaced_profile_id = animation.mapping_profile_id
+    else:
+        replaced_profile_id = ""
     profile = auto_map_source_bones(
         document.limb_models,
         parents=document.parent_by_name,
@@ -2021,6 +2123,19 @@ def _mapping_profile_for_animation(
     )
     project.mapping_profiles[profile.profile_id] = profile.to_dict()
     animation.mapping_profile_id = profile.profile_id
+    if replaced_profile_id:
+        animation.extensions["replaced_incompatible_mapping_profile"] = {
+            "profile_id": replaced_profile_id,
+            "reason": (
+                "normal humanoid animation selected; native/generic CRIG "
+                "mapping was not applicable"
+            ),
+        }
+        if not any(
+            row.mapping_profile_id == replaced_profile_id
+            for row in project.animations
+        ):
+            project.mapping_profiles.pop(replaced_profile_id, None)
     return profile
 
 

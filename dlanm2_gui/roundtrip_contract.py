@@ -185,10 +185,69 @@ def resolve_native_roundtrip_metadata(
     return {}, ""
 
 
+def detect_native_helper_roundtrip_target(
+    fbx_path: str | Path,
+    document: FbxDocument | None = None,
+) -> dict[str, Any]:
+    """Return validated helper-contract evidence suitable for route selection.
+
+    With no document, only the adjacent canonical sidecar is inspected. GUI
+    import passes its already parsed document so embedded-only metadata is also
+    recognized without another FBX parse.
+    """
+
+    try:
+        if document is None:
+            metadata = load_roundtrip_sidecar(fbx_path)
+            metadata_source = "sidecar" if metadata else ""
+        else:
+            metadata, metadata_source = resolve_native_roundtrip_metadata(
+                fbx_path,
+                document,
+            )
+        contract = metadata.get("roundtrip_contract", {})
+        if not isinstance(contract, dict) or not contract:
+            return {}
+        contract_id = validate_roundtrip_contract_identity(contract)
+        if int(metadata.get("version", 0) or 0) < 5:
+            return {}
+        if not bool(contract.get("roundtrip_capable", False)):
+            return {}
+        rig_ref = str(contract.get("rig_id", "") or "")
+        if not rig_ref:
+            return {}
+        helper_descriptors = {
+            int(row.get("descriptor", 0)) & 0xFFFFFFFF
+            for row in contract.get("expected_skeleton", ())
+            if isinstance(row, dict) and bool(row.get("helper", False))
+        }
+    except (OSError, TypeError, ValueError):
+        return {}
+    if not helper_descriptors:
+        return {}
+    helper_tracks = tuple(
+        dict.fromkeys(
+            str(row.get("node_name", "") or "")
+            for row in contract.get("source_track_nodes", ())
+            if isinstance(row, dict)
+            and row.get("semantic") == "named_helper_bone"
+            and str(row.get("node_name", "") or "")
+        )
+    )
+    return {
+        "status": "confirmed",
+        "rig_ref": rig_ref,
+        "contract_id": contract_id,
+        "metadata_source": metadata_source,
+        "helper_tracks": list(helper_tracks),
+    }
+
+
 __all__ = [
     "ROUNDTRIP_FORMAT",
     "ROUNDTRIP_GUARD_PREFIX",
     "ROUNDTRIP_SCHEMA_VERSION",
+    "detect_native_helper_roundtrip_target",
     "embedded_native_metadata",
     "finalize_roundtrip_contract",
     "load_roundtrip_sidecar",

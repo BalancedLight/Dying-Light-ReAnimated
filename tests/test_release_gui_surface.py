@@ -10,7 +10,7 @@ from dlanm2_gui.workspace_project import DlReanimatedProject
 
 def test_gui_module_is_importable_without_loading_qt() -> None:
     assert callable(gui.main)
-    assert __version__ == "0.6.5"
+    assert __version__ == "0.6.6"
 
 
 def test_release_docs_launchers_and_examples_exist() -> None:
@@ -63,11 +63,18 @@ def test_builtin_script_targets_include_player_and_female() -> None:
 def test_alpha3_gui_usability_surface_is_present() -> None:
     root = Path(__file__).resolve().parents[1]
     source = (root / "dlanm2_gui/gui.py").read_text(encoding="utf-8")
+    unified_source = (root / "dlanm2_gui/unified_gui.py").read_text(
+        encoding="utf-8"
+    )
     assert "Use imported animation FBX bind pose (recommended)" in source
     assert "class _NoWheelComboBox" in source
     assert "Show advanced settings" in source
     assert "setMaximumHeight(84)" in source
     assert "Include stock writer and bind-pose controls" in source
+    assert 'startup/work_in_progress_notice_hidden' in source
+    assert "controller.schedule_startup_notice()" in source
+    assert "shell.controller.schedule_startup_notice()" in unified_source
+    assert "Show Work-in-Progress Notice..." in unified_source
 
 
 def test_release_root_is_not_cluttered_with_project_documents() -> None:

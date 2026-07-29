@@ -5,9 +5,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from dlanm2_gui.animation_targets import RetargetUiKind, retarget_ui_kind
+from dlanm2_gui.animation_targets import (
+    RetargetUiKind,
+    resolve_animation_target,
+    retarget_ui_kind,
+)
 from dlanm2_gui.chrome_rig import ChromeRig
 from dlanm2_gui.game_profiles import (
+    DL1_GAME_ID,
+    DL1_HELPER_RIG_REF,
     DL2_ADVANCED_RIG_REF,
     DL2_GAME_ID,
     DL2_LEGACY_RIG_REF,
@@ -334,6 +340,35 @@ def test_editor_ownership_uses_target_origin_not_exact_solver_mode() -> None:
         "expose_crig_mapping": True,
     }
     assert retarget_ui_kind(project, animation) == RetargetUiKind.CUSTOM_CRIG
+
+
+def test_dl1_helper_target_is_native_only_with_per_clip_contract_evidence() -> None:
+    project = DlReanimatedProject.new("Helper round trip")
+    project.game_id = DL1_GAME_ID
+    project.rig.target_rig_ref = DL1_HELPER_RIG_REF
+    project.rig.retarget_mode = "auto"
+    animation = ProjectAnimation.create("native_helpers.fbx")
+
+    selection = resolve_animation_target(project, animation)
+
+    assert selection.retarget_mode == "auto"
+    assert (
+        retarget_ui_kind(project, animation)
+        == RetargetUiKind.BUILTIN_HUMANOID
+    )
+
+    animation.extensions["detected_native_roundtrip_target"] = {
+        "status": "confirmed",
+        "rig_ref": DL1_HELPER_RIG_REF,
+        "contract_id": "a" * 64,
+    }
+    selection = resolve_animation_target(project, animation)
+
+    assert selection.retarget_mode == "exact"
+    assert (
+        retarget_ui_kind(project, animation)
+        == RetargetUiKind.NATIVE_ROUNDTRIP
+    )
 
 
 def test_build_resolution_recompiles_semantic_source_of_truth_and_rejects_stale_cache() -> None:
