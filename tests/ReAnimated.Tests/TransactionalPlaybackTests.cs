@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Numerics;
 using System.Reflection;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
@@ -311,11 +312,15 @@ public sealed class TransactionalPlaybackTests : IDisposable
         await using var assets = new Dl1AssetWorkspace(
             Path.Combine(_temporaryDirectory, "assets.sqlite3"),
             Path.Combine(_temporaryDirectory, "cache"));
+        SetWorkspaceInstall(assets, @"C:\retail");
+        var decoder = new ControlledMeshDecodeService("armored");
         await using var viewModel = new MainWindowViewModel(
             new JsonWorkspaceStateStore(
                 Path.Combine(_temporaryDirectory, "workspace.json")),
             new NoOpDialogs(),
-            assets);
+            assets,
+            new NullFingerprintService(),
+            retailMeshDecodeService: decoder);
         viewModel.Timeline.CurrentFrame = 17;
         viewModel.Timeline.IsPlaying = true;
         WorkspaceSnapshot before = viewModel.CreateSnapshot();
@@ -323,13 +328,106 @@ public sealed class TransactionalPlaybackTests : IDisposable
         viewModel.AssetBrowser.ReplaceAssets([row]);
 
         viewModel.AssetBrowser.SelectedAsset = row;
+        decoder.Complete(
+            "armored",
+            CreatePreviewableMeshPayload(
+                "armored",
+                new string('c', 64),
+                new Vector3(12, 0, 0)));
+        await WaitUntilAsync(
+            () => viewModel.TargetViewport.SceneSource
+                .HasExternalPreviewScene,
+            () =>
+                $"Status: {viewModel.StatusText}; diagnostics: {string.Join(" | ", viewModel.Diagnostics.Select(static row => $"{row.Message}: {row.Detail}"))}");
 
         WorkspaceSnapshot after = viewModel.CreateSnapshot();
         Assert.Equal(before.Project, after.Project);
         Assert.Equal(17, viewModel.Timeline.CurrentFrame);
         Assert.True(viewModel.Timeline.IsPlaying);
         Assert.Equal("No target model", viewModel.ActiveTargetModelLabel);
-        Assert.Contains("choose Preview Asset", viewModel.StatusText);
+        Assert.Contains("Previewing armored", viewModel.StatusText);
+        Assert.Equal(
+            "armored/preview",
+            Assert.Single(
+                    viewModel.TargetViewport.SceneSource
+                        .CaptureFrame()
+                        .Meshes)
+                .Id);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task BrowsePreviewSceneAndCameraDoNotReplaceAnimateState()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "browse-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "browse-cache"));
+        SetWorkspaceInstall(assets, @"C:\retail");
+        var decoder = new ControlledMeshDecodeService("armored");
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(
+                    _temporaryDirectory,
+                    "browse-workspace.json")),
+            new NoOpDialogs(),
+            assets,
+            new NullFingerprintService(),
+            retailMeshDecodeService: decoder);
+        MeshRenderData authoritative = CreateTriangleMesh(
+            "authoritative-target",
+            Vector3.Zero);
+        viewModel.SetTargetPreviewScene([authoritative], null);
+        RenderCamera authoringCamera = viewModel.TargetViewport
+            .SceneSource.CaptureFrame().Camera;
+        AssetItemViewModel row = CreateMeshRow("armored");
+        viewModel.AssetBrowser.ReplaceAssets([row]);
+        viewModel.AssetBrowser.SelectedAsset = row;
+
+        Task preview = viewModel.PreviewSelectedAssetCommand
+            .ExecuteAsync(null);
+        decoder.Complete(
+            "armored",
+            CreatePreviewableMeshPayload(
+                "armored",
+                new string('d', 64),
+                new Vector3(25, 0, 0)));
+        await preview;
+
+        Assert.True(
+            viewModel.TargetViewport.SceneSource
+                .HasExternalPreviewScene,
+            $"Status: {viewModel.StatusText}; diagnostics: {string.Join(" | ", viewModel.Diagnostics.Select(static row => $"{row.Message}: {row.Detail}"))}");
+        RenderFrameSnapshot browse = viewModel.TargetViewport.SceneSource
+            .CaptureFrame();
+        Assert.Equal(
+            "armored/preview",
+            Assert.Single(browse.Meshes).Id);
+        Assert.True(browse.Camera.Target.X > 20.0f);
+        RenderCamera browseCamera = browse.Camera;
+
+        viewModel.ActiveWorkspaceMode = "Animate";
+
+        Assert.False(viewModel.TargetViewport.SceneSource
+            .HasExternalPreviewScene);
+        RenderFrameSnapshot animate = viewModel.TargetViewport.SceneSource
+            .CaptureFrame();
+        Assert.Equal(
+            authoritative.Id,
+            Assert.Single(animate.Meshes).Id);
+        Assert.Equal(authoringCamera, animate.Camera);
+
+        viewModel.ActiveWorkspaceMode = "Browse";
+
+        Assert.True(viewModel.TargetViewport.SceneSource
+            .HasExternalPreviewScene);
+        RenderFrameSnapshot restored = viewModel.TargetViewport.SceneSource
+            .CaptureFrame();
+        Assert.Equal(
+            "armored/preview",
+            Assert.Single(restored.Meshes).Id);
+        Assert.Equal(browseCamera, restored.Camera);
     }
 
     [Fact]
@@ -701,6 +799,68 @@ public sealed class TransactionalPlaybackTests : IDisposable
             [],
             [],
             contentSha256);
+    }
+
+    private static Dl1MeshPreviewPayload CreatePreviewableMeshPayload(
+        string name,
+        string contentSha256,
+        Vector3 offset)
+    {
+        Dl1MeshPreviewPayload empty = CreateMeshPayload(
+            name,
+            contentSha256);
+        return empty with
+        {
+            Meshes = [CreateTriangleMesh($"{name}/preview", offset)],
+        };
+    }
+
+    private static MeshRenderData CreateTriangleMesh(
+        string id,
+        Vector3 offset) => new(
+        id,
+        new MeshVertex[]
+        {
+            new(
+                new Vector3(-0.5f, 0, 0),
+                Vector3.UnitZ,
+                Vector2.Zero,
+                Vector4.UnitX,
+                Vector4.Zero),
+            new(
+                new Vector3(0.5f, 0, 0),
+                Vector3.UnitZ,
+                Vector2.UnitX,
+                Vector4.UnitX,
+                Vector4.Zero),
+            new(
+                new Vector3(0, 1, 0),
+                Vector3.UnitZ,
+                Vector2.UnitY,
+                Vector4.UnitX,
+                Vector4.Zero),
+        },
+        new uint[] { 0, 1, 2 },
+        Matrix4x4.CreateTranslation(offset),
+        Array.Empty<Matrix4x4>(),
+        IsSkinned: false);
+
+    private static async Task WaitUntilAsync(
+        Func<bool> condition,
+        Func<string>? describeFailure = null)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+        while (!condition())
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                throw new TimeoutException(
+                    "The automatic Browse preview did not publish in time. " +
+                    (describeFailure?.Invoke() ?? string.Empty));
+            }
+
+            await Task.Delay(20);
+        }
     }
 
     private static void SetWorkspaceInstall(

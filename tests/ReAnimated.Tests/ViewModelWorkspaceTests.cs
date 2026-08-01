@@ -16,6 +16,37 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"ReAnimated-ViewModelTests-{Guid.NewGuid():N}");
 
     [Fact]
+    public void AssetBrowserDescribesAutomaticCachedCatalogLoadingClearly()
+    {
+        var browser = new AssetBrowserViewModel();
+
+        Assert.Equal("Load catalog", browser.CatalogActionLabel);
+        Assert.Contains(
+            "saved asset catalog",
+            browser.EmptyResultMessage,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "Index the Dying Light",
+            browser.EmptyResultMessage,
+            StringComparison.OrdinalIgnoreCase);
+
+        browser.SetCatalogLoading(true);
+
+        Assert.True(browser.IsCatalogLoading);
+        Assert.Equal("Loading...", browser.CatalogActionLabel);
+        Assert.Equal("Loading saved catalog", browser.ResultSummary);
+        Assert.Contains(
+            "Loading the saved Dying Light 1 asset catalog",
+            browser.EmptyResultMessage,
+            StringComparison.Ordinal);
+        Assert.False(browser.IndexGameCommand.CanExecute(null));
+
+        browser.SetCatalogLoading(false);
+
+        Assert.True(browser.IndexGameCommand.CanExecute(null));
+    }
+
+    [Fact]
     public void WorkspaceSnapshotRoundTripsEditorState()
     {
         JsonWorkspaceStateStore store = CreateStore();

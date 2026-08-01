@@ -58,6 +58,52 @@ public sealed class RendererSceneSourceTests
     }
 
     [Fact]
+    public void EvaluatedTargetCameraCanBeSuspendedAcrossWorkspaceLayoutChanges()
+    {
+        LinkedViewportCoordinator coordinator = new();
+        RenderCamera orbit = RenderCamera.Default with
+        {
+            Eye = new Vector3(9.0f, 5.0f, 3.0f),
+        };
+        RenderCamera evaluated = RenderCamera.Default with
+        {
+            Eye = new Vector3(0.25f, 1.7f, 0.1f),
+            VerticalFieldOfViewDegrees = 72.0f,
+        };
+        coordinator.UpdateCamera(ViewportSide.Source, orbit);
+        coordinator.SetTargetPreviewCameraOverride(evaluated);
+
+        Assert.False(
+            coordinator.SetTargetPreviewCameraOverrideActive(false));
+        Assert.False(coordinator.HasTargetPreviewCameraOverride);
+        Assert.Equal(orbit, coordinator.GetCamera(ViewportSide.Source));
+        Assert.Equal(orbit, coordinator.GetCamera(ViewportSide.Target));
+        Assert.Equal(
+            RenderCameraNavigationResult.Applied,
+            coordinator.NavigateCamera(
+                ViewportSide.Target,
+                RenderCameraNavigationInput.Pan(
+                    8.0f,
+                    -4.0f,
+                    800,
+                    600)));
+
+        Assert.True(
+            coordinator.SetTargetPreviewCameraOverrideActive(true));
+        Assert.True(coordinator.HasTargetPreviewCameraOverride);
+        Assert.Equal(evaluated, coordinator.GetCamera(ViewportSide.Target));
+        Assert.Equal(
+            RenderCameraNavigationResult.PreviewCameraLocked,
+            coordinator.NavigateCamera(
+                ViewportSide.Target,
+                RenderCameraNavigationInput.Orbit(
+                    8.0f,
+                    -4.0f,
+                    800,
+                    600)));
+    }
+
+    [Fact]
     public void Dl1CameraAdapterUsesRetailMtx34DirectionAndUpAxes()
     {
         TransformMatrix world =

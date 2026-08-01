@@ -86,6 +86,16 @@ public partial class MainWindow : Window
         object sender,
         MouseButtonEventArgs args)
     {
+        if (_viewModel.AssetBrowser.SelectedAsset?.Kind ==
+                AssetKind.Mesh &&
+            _viewModel.PreviewSelectedAssetCommand.CanExecute(null))
+        {
+            args.Handled = true;
+            await _viewModel.PreviewSelectedAssetCommand
+                .ExecuteAsync(null);
+            return;
+        }
+
         if (_viewModel.AssetBrowser.SelectedAsset?.Kind !=
                 AssetKind.Animation ||
             !_viewModel.PlaySelectedExplorerAnimationCommand.CanExecute(

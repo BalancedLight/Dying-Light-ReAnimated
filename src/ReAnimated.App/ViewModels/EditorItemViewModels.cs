@@ -383,6 +383,7 @@ public sealed class AssetBrowserViewModel : ObservableObject
     private AssetFilterOption _selectedDlcFilter;
     private AssetFilterOption _selectedVariantFilter;
     private AssetItemViewModel? _selectedAsset;
+    private bool _isCatalogLoading;
     private bool _isProfileScanRunning;
     private string _profileScanStatus =
         "Profiles are decoded lazily; unknown rows never satisfy evidence filters.";
@@ -480,7 +481,8 @@ public sealed class AssetBrowserViewModel : ObservableObject
         _selectedVariantFilter = VariantFilters[0];
 
         IndexGameCommand = new RelayCommand(
-            () => IndexGameRequested?.Invoke(this, EventArgs.Empty));
+            () => IndexGameRequested?.Invoke(this, EventArgs.Empty),
+            () => !IsCatalogLoading);
         ClearSearchCommand = new RelayCommand(
             () => SearchText = string.Empty,
             () => SearchText.Length > 0);
@@ -540,6 +542,14 @@ public sealed class AssetBrowserViewModel : ObservableObject
     public IRelayCommand CancelProfileScanCommand { get; }
 
     public IRelayCommand ResetProfileFiltersCommand { get; }
+
+    public bool IsCatalogLoading => _isCatalogLoading;
+
+    public string CatalogActionLabel => IsCatalogLoading
+        ? "Loading..."
+        : HasIndexedAssets
+            ? "Refresh catalog"
+            : "Load catalog";
 
     public string SearchText
     {
@@ -676,16 +686,20 @@ public sealed class AssetBrowserViewModel : ObservableObject
 
     public bool HasFilteredAssets => FilteredAssetCount > 0;
 
-    public string EmptyResultMessage => HasIndexedAssets
-        ? "No resources match the current filters. Undecoded meshes only appear in explicit unknown/not-decoded profile filters."
-        : "No assets indexed. Index the Dying Light 1 install; optional project RPack roots are layered above base and DLC content.";
+    public string EmptyResultMessage => IsCatalogLoading
+        ? "Loading the saved Dying Light 1 asset catalog..."
+        : HasIndexedAssets
+            ? "No resources match the current filters. Undecoded meshes only appear in explicit unknown/not-decoded profile filters."
+            : "No saved asset catalog is available. Load the Dying Light 1 assets once; later launches reuse the validated local cache.";
 
     public bool IsResultTruncated =>
         FilteredAssetCount > VisibleAssets.Count;
 
-    public string ResultSummary => IsResultTruncated
-        ? $"Showing {VisibleAssets.Count:N0} of {FilteredAssetCount:N0} matches"
-        : $"{FilteredAssetCount:N0} matching resources";
+    public string ResultSummary => IsCatalogLoading
+        ? "Loading saved catalog"
+        : IsResultTruncated
+            ? $"Showing {VisibleAssets.Count:N0} of {FilteredAssetCount:N0} matches"
+            : $"{FilteredAssetCount:N0} matching resources";
 
     public int ClassifiedMeshCount =>
         _allAssets.Count(static item =>
@@ -758,8 +772,25 @@ public sealed class AssetBrowserViewModel : ObservableObject
         OnPropertyChanged(nameof(IndexedAssetCount));
         OnPropertyChanged(nameof(HasIndexedAssets));
         OnPropertyChanged(nameof(EmptyResultMessage));
+        OnPropertyChanged(nameof(CatalogActionLabel));
         NotifyProfileCountsChanged();
         RebuildVisibleAssets();
+    }
+
+    public void SetCatalogLoading(bool isLoading)
+    {
+        if (!SetProperty(
+                ref _isCatalogLoading,
+                isLoading,
+                nameof(IsCatalogLoading)))
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(CatalogActionLabel));
+        OnPropertyChanged(nameof(EmptyResultMessage));
+        OnPropertyChanged(nameof(ResultSummary));
+        IndexGameCommand.NotifyCanExecuteChanged();
     }
 
     public void NotifyProfileChanged(AssetItemViewModel asset)

@@ -298,8 +298,11 @@ public sealed partial class MainWindowViewModel :
     private AssetItemViewModel? _pendingExplorerAnimationTimingChoice;
     private Dl1RetailAnimationTiming? _selectedExplorerAnimationTiming;
     private JobViewModel? _assetDecodeJob;
+    private CancellationTokenSource? _automaticAssetPreviewSource;
+    private Task? _automaticAssetPreviewTask;
     private JobViewModel? _assetProfileScanJob;
     private JobViewModel? _ikBakeJob;
+    private Task? _assetCatalogLoadTask;
     private bool _isViewportsLinked = true;
     private bool _isSourceViewportVisible = true;
     private bool _isTargetSwitching;
@@ -320,7 +323,7 @@ public sealed partial class MainWindowViewModel :
     private bool _disposed;
     private WorkspaceSnapshot? _recoverySnapshot;
     private string _statusText =
-        "Ready — index a Dying Light 1 Steam installation";
+        "Ready - loading the saved Dying Light 1 asset catalog";
     private string _activeWorkspaceMode = "Browse";
     private EditorWorkspaceMode _activeWorkspace =
         EditorWorkspaceMode.Browse;
@@ -380,6 +383,12 @@ public sealed partial class MainWindowViewModel :
     private int _rootMotionTrailGeneration;
     private long _previewGeneration;
     private PreviewFramePair? _lastPreviewFramePair;
+    private RenderFppProjectionState? _suspendedTargetProjection;
+    private RenderFrameSnapshot? _isolatedBrowsePreviewFrame;
+    private string? _isolatedBrowsePreviewTitle;
+    private string? _isolatedBrowsePreviewFidelity;
+    private ViewportOrbitCameraPair? _authoringOrbitCameras;
+    private ViewportOrbitCameraPair? _browseOrbitCameras;
 
     public MainWindowViewModel(JsonWorkspaceStateStore recoveryStore)
         : this(
@@ -1200,6 +1209,13 @@ public sealed partial class MainWindowViewModel :
     public string ActiveAnimationLabel =>
         GetActiveAnimation()?.Name ?? "No animation";
 
+    public bool CanOpenAnimateWorkspace =>
+        GetActiveAnimation() is not null;
+
+    public string AnimateWorkspaceHint => CanOpenAnimateWorkspace
+        ? "Open the active animation and its authoritative target preview."
+        : "Play or import an animation before opening Animate.";
+
     public string ActiveSourceModelLabel
     {
         get
@@ -1412,6 +1428,17 @@ public sealed partial class MainWindowViewModel :
 
     private void SelectWorkspace(string? value)
     {
+        if (string.Equals(
+                value,
+                "Animate",
+                StringComparison.Ordinal) &&
+            !CanOpenAnimateWorkspace)
+        {
+            StatusText =
+                "Animate needs an active animation. The Browse preview remains unchanged.";
+            return;
+        }
+
         ActiveWorkspaceMode = value ?? "Browse";
     }
 
@@ -1419,6 +1446,9 @@ public sealed partial class MainWindowViewModel :
         EditorWorkspaceMode workspace,
         bool preserveLegacyCutscene)
     {
+        EditorWorkspaceMode previousWorkspace = _activeWorkspace;
+        string previousLegacyName = _activeWorkspaceMode;
+        bool usedLinkedTargetView = UsesLinkedTargetExternalView();
         string legacyName = preserveLegacyCutscene
             ? "Cutscene"
             : workspace switch
@@ -1464,12 +1494,59 @@ public sealed partial class MainWindowViewModel :
             PreviewLayoutMode.FppDualView;
         if (workspaceChanged || legacyChanged)
         {
-            if (!UsesLinkedTargetExternalView())
+            if (previousWorkspace == EditorWorkspaceMode.Browse &&
+                workspace != EditorWorkspaceMode.Browse)
+            {
+                SuspendIsolatedBrowsePreview();
+            }
+
+            bool usesLinkedTargetView = UsesLinkedTargetExternalView();
+            if (!usesLinkedTargetView)
             {
                 // Layout changes consume the last authoritative frame pair.
                 // Leaving FPP/movie comparison must restore the authored
                 // source scene without evaluating or mutating the project.
+                if (usedLinkedTargetView)
+                {
+                    _suspendedTargetProjection = TargetViewport.SceneSource
+                        .CaptureFrame()
+                        .FppProjectionState;
+                }
+
+                _viewportCoordinator
+                    .SetTargetPreviewCameraOverrideActive(false);
+                TargetViewport.SceneSource.SetFppProjectionState(null);
                 ClearLinkedTargetExternalView();
+            }
+            else if (!usedLinkedTargetView)
+            {
+                bool restoredPreviewCamera = _viewportCoordinator
+                    .SetTargetPreviewCameraOverrideActive(true);
+                TargetViewport.SceneSource.SetFppProjectionState(
+                    restoredPreviewCamera
+                        ? _suspendedTargetProjection
+                        : null);
+                _suspendedTargetProjection = null;
+                RestoreLinkedTargetExternalViewFromCurrentScene();
+            }
+            else if (!string.Equals(
+                         previousLegacyName,
+                         legacyName,
+                         StringComparison.Ordinal))
+            {
+                // FPP and movie/cutscene cameras are different contracts.
+                // A context switch waits for its own evaluated camera rather
+                // than reusing the other context's override.
+                _viewportCoordinator.SetTargetPreviewCameraOverride(null);
+                _suspendedTargetProjection = null;
+                TargetViewport.SceneSource.SetFppProjectionState(null);
+                RestoreLinkedTargetExternalViewFromCurrentScene();
+            }
+
+            if (workspace == EditorWorkspaceMode.Browse &&
+                previousWorkspace != EditorWorkspaceMode.Browse)
+            {
+                RestoreIsolatedBrowsePreview();
             }
             OnPropertyChanged(nameof(IsBrowseWorkspace));
             OnPropertyChanged(nameof(IsAnimateWorkspace));
@@ -1488,6 +1565,56 @@ public sealed partial class MainWindowViewModel :
                     "Load or activate an animation to evaluate this workspace.");
             }
         }
+    }
+
+    private void SuspendIsolatedBrowsePreview()
+    {
+        if (_isolatedBrowsePreviewFrame is null)
+        {
+            return;
+        }
+
+        _browseOrbitCameras = _viewportCoordinator
+            .CaptureOrbitCameras();
+        TargetViewport.SceneSource.SetExternalPreviewScene(null);
+        if (_authoringOrbitCameras is not null)
+        {
+            _viewportCoordinator.RestoreOrbitCameras(
+                _authoringOrbitCameras);
+        }
+    }
+
+    private void RestoreIsolatedBrowsePreview()
+    {
+        if (_isolatedBrowsePreviewFrame is null)
+        {
+            return;
+        }
+
+        _authoringOrbitCameras = _viewportCoordinator
+            .CaptureOrbitCameras();
+        if (_browseOrbitCameras is not null)
+        {
+            _viewportCoordinator.RestoreOrbitCameras(
+                _browseOrbitCameras);
+        }
+
+        TargetViewport.SceneSource.SetExternalPreviewScene(
+            _isolatedBrowsePreviewFrame);
+        TargetViewport.SetPresentation(
+            _isolatedBrowsePreviewTitle ?? "Asset Preview",
+            _isolatedBrowsePreviewFidelity ??
+                "Isolated retail asset; project state unchanged");
+    }
+
+    private void ClearIsolatedBrowsePreview()
+    {
+        TargetViewport.SceneSource.SetExternalPreviewScene(null);
+        _isolatedBrowsePreviewFrame = null;
+        _isolatedBrowsePreviewTitle = null;
+        _isolatedBrowsePreviewFidelity = null;
+        _authoringOrbitCameras = null;
+        _browseOrbitCameras = null;
     }
 
     private void SetTargetBindingStatus(TargetBindingStatus status)
@@ -1663,6 +1790,28 @@ public sealed partial class MainWindowViewModel :
         Timeline.Tick(now);
     }
 
+    /// <summary>
+    /// Opens the validated LocalAppData catalog on application startup. The
+    /// underlying catalog checks bounded pack fingerprints and only scans the
+    /// retail sources again when that saved snapshot is absent or stale.
+    /// Concurrent startup/manual requests share the same operation.
+    /// </summary>
+    public Task InitializeAssetCatalogAsync()
+    {
+        if (_disposed)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (_assetCatalogLoadTask is { IsCompleted: false } activeLoad)
+        {
+            return activeLoad;
+        }
+
+        _assetCatalogLoadTask = LoadAssetCatalogAsync();
+        return _assetCatalogLoadTask;
+    }
+
     public async Task InitializeInstalledBuildStatusAsync(
         CancellationToken cancellationToken = default)
     {
@@ -1828,7 +1977,16 @@ public sealed partial class MainWindowViewModel :
         }
 
         _disposed = true;
+        CancelAutomaticAssetPreview();
         _lifetimeSource.Cancel();
+        if (_assetDecodeJob is { IsCancellable: true } activeAssetDecode)
+        {
+            activeAssetDecode.Cancel();
+        }
+        if (_automaticAssetPreviewTask is { } automaticPreviewTask)
+        {
+            await automaticPreviewTask;
+        }
         Task<Vector3[]>[] rootMotionTrailWorkers;
         lock (_rootMotionTrailWorkerGate)
         {
@@ -2412,7 +2570,7 @@ public sealed partial class MainWindowViewModel :
                 "ANM2 source binding",
                 "The saved ANM2 is waiting for the indexed retail catalog",
                 "After indexing, the editor will resolve the exact saved source-model fingerprint and activate the clip without using the currently selected target as a fallback.");
-            StatusText = "Index DL1 to resolve the saved ANM2 source model";
+            StatusText = "Load the asset catalog to resolve the saved ANM2 source model";
             return;
         }
 
@@ -6369,6 +6527,7 @@ public sealed partial class MainWindowViewModel :
 
         if (clearPreview)
         {
+            ClearIsolatedBrowsePreview();
             ClearLinkedTargetExternalView();
             _pendingExplorerAnimationSourceChoice = null;
             OnPropertyChanged(
@@ -7614,6 +7773,9 @@ public sealed partial class MainWindowViewModel :
     {
         OnPropertyChanged(nameof(CurrentProject));
         OnPropertyChanged(nameof(WindowTitle));
+        OnPropertyChanged(nameof(ActiveAnimationLabel));
+        OnPropertyChanged(nameof(CanOpenAnimateWorkspace));
+        OnPropertyChanged(nameof(AnimateWorkspaceHint));
         UpdateFidelityStatusBadges();
         UndoCommand.NotifyCanExecuteChanged();
         RedoCommand.NotifyCanExecuteChanged();
@@ -8338,6 +8500,11 @@ public sealed partial class MainWindowViewModel :
 
     private async void OnIndexGameRequested(object? sender, EventArgs args)
     {
+        await InitializeAssetCatalogAsync();
+    }
+
+    private async Task LoadAssetCatalogAsync()
+    {
         if (_disposed)
         {
             return;
@@ -8348,10 +8515,11 @@ public sealed partial class MainWindowViewModel :
             profileJob.Cancel();
         }
 
+        AssetBrowser.SetCatalogLoading(true);
         JobViewModel job = AddJob(
-            "Index Dying Light 1 retail assets",
+            "Load Dying Light 1 asset catalog",
             "Discovery",
-            "Running");
+            "Opening saved catalog");
         var progress = new Progress<Dl1AssetIndexProgress>(update =>
         {
             job.Stage = update.Stage;
@@ -8411,13 +8579,19 @@ public sealed partial class MainWindowViewModel :
                 job.CancellationToken);
             job.Progress = 100.0;
             job.Complete("Complete");
+            string catalogSource =
+                result.Catalog.WasRestoredFromPersistentIndex
+                    ? "the validated local cache"
+                    : "a fresh retail scan";
             StatusText =
-                $"Indexed {assets.Length:N0} DL1 assets from {result.Install.InstallPath}";
+                $"Loaded {assets.Length:N0} Dying Light 1 assets from {catalogSource}";
             AddDiagnostic(
                 "Info",
                 "Assets",
-                "Dying Light 1 retail catalog indexed",
-                $"{assets.Length:N0} resolved assets; {result.Catalog.Conflicts.Count:N0} precedence conflicts retained in the catalog.");
+                result.Catalog.WasRestoredFromPersistentIndex
+                    ? "Saved Dying Light 1 asset catalog loaded"
+                    : "Dying Light 1 asset catalog refreshed",
+                $"{assets.Length:N0} resolved assets from {catalogSource}; {result.Catalog.Conflicts.Count:N0} precedence conflicts retained in the catalog.");
             foreach (Dl1RetailProviderDiagnostic diagnostic in
                      result.ProviderDiagnostics)
             {
@@ -8444,7 +8618,7 @@ public sealed partial class MainWindowViewModel :
         catch (OperationCanceledException)
         {
             job.Complete("Canceled");
-            StatusText = "DL1 indexing canceled";
+            StatusText = "Dying Light 1 asset catalog loading canceled";
         }
         catch (Exception exception)
         {
@@ -8452,9 +8626,13 @@ public sealed partial class MainWindowViewModel :
             AddDiagnostic(
                 "Error",
                 "Assets",
-                "Dying Light 1 indexing failed",
+                "Dying Light 1 asset catalog could not be loaded",
                 exception.Message);
-            StatusText = "DL1 indexing failed";
+            StatusText = "Dying Light 1 asset catalog loading failed";
+        }
+        finally
+        {
+            AssetBrowser.SetCatalogLoading(false);
         }
     }
 
@@ -8691,10 +8869,25 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        CancelAutomaticAssetPreview();
+        await PreviewAssetAsync(selected, requireCurrentSelection: false);
+    }
+
+    private async Task PreviewAssetAsync(
+        AssetItemViewModel selected,
+        bool requireCurrentSelection,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(selected);
+
         IsBusy = true;
         JobViewModel job = BeginExclusiveAssetDecode(
             $"Preview {selected.Name}",
             "Reading isolated asset preview");
+        using CancellationTokenRegistration cancellationRegistration =
+            cancellationToken.CanBeCanceled
+                ? cancellationToken.Register(job.Cancel)
+                : default;
         try
         {
             DecodedRetailModelSession model =
@@ -8703,25 +8896,55 @@ public sealed partial class MainWindowViewModel :
             {
                 return;
             }
+            if (requireCurrentSelection &&
+                !string.Equals(
+                    AssetBrowser.SelectedAsset?.Id,
+                    selected.Id,
+                    StringComparison.Ordinal))
+            {
+                job.Complete("Superseded");
+                return;
+            }
 
             job.Stage = "Isolated GPU preview";
             job.Progress = 85.0;
             long generation = Interlocked.Increment(
                 ref _previewGeneration);
-            TargetViewport.SceneSource.SetScene(
-                model.PreviewMeshes,
-                model.Payload.Skeleton,
-                [],
-                generation: generation);
-            TargetViewport.SetPresentation(
-                "Asset Preview",
-                $"Isolated retail asset; {model.PreviewMeshes.Length:N0} draw surface(s); active animation unchanged");
-            SetBlenderExportTarget(
-                model.Payload,
-                model.RetailAsset);
             SetWorkspace(
                 EditorWorkspaceMode.Browse,
                 preserveLegacyCutscene: false);
+            if (_isolatedBrowsePreviewFrame is null)
+            {
+                _authoringOrbitCameras = _viewportCoordinator
+                    .CaptureOrbitCameras();
+            }
+
+            RenderFrameSnapshot authored = TargetViewport.SceneSource
+                .CaptureFrame();
+            _isolatedBrowsePreviewFrame = authored with
+            {
+                Meshes = model.PreviewMeshes,
+                Skeleton = model.Payload.Skeleton,
+                Gizmos = [],
+                MorphWeights = [],
+                Generation = generation,
+                FppProjectionState = null,
+                AuthoringOverlays =
+                    RenderAuthoringOverlayState.Disabled,
+            };
+            _isolatedBrowsePreviewTitle =
+                $"Asset Preview - {selected.Name}";
+            _isolatedBrowsePreviewFidelity =
+                $"Isolated retail asset; {model.PreviewMeshes.Length:N0} draw surface(s); active animation unchanged";
+            TargetViewport.SceneSource.SetExternalPreviewScene(
+                _isolatedBrowsePreviewFrame);
+            TargetViewport.SetPresentation(
+                _isolatedBrowsePreviewTitle,
+                _isolatedBrowsePreviewFidelity);
+            FrameIsolatedBrowsePreview();
+            SetBlenderExportTarget(
+                model.Payload,
+                model.RetailAsset);
             job.Progress = 100.0;
             job.Complete("Complete");
             StatusText =
@@ -8758,8 +8981,94 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    private void FrameIsolatedBrowsePreview()
+    {
+        RenderFrameSnapshot frame = TargetViewport.SceneSource
+            .CaptureFrame();
+        if (!RenderCameraFraming.TryFrame(
+                frame,
+                out RenderCamera camera))
+        {
+            return;
+        }
+
+        _viewportCoordinator.UpdateCamera(
+            ViewportSide.Target,
+            camera);
+        _browseOrbitCameras = _viewportCoordinator
+            .CaptureOrbitCameras();
+    }
+
+    private void ScheduleAutomaticAssetPreview(
+        AssetItemViewModel selected)
+    {
+        CancelAutomaticAssetPreview();
+        CancellationTokenSource source =
+            CancellationTokenSource.CreateLinkedTokenSource(
+                _lifetimeSource.Token);
+        _automaticAssetPreviewSource = source;
+        _automaticAssetPreviewTask = PreviewSelectedAssetAfterDelayAsync(
+            selected,
+            source);
+    }
+
+    private async Task PreviewSelectedAssetAfterDelayAsync(
+        AssetItemViewModel selected,
+        CancellationTokenSource source)
+    {
+        try
+        {
+            await Task.Delay(300, source.Token);
+            source.Token.ThrowIfCancellationRequested();
+            if (_disposed ||
+                ActiveWorkspace != EditorWorkspaceMode.Browse ||
+                !string.Equals(
+                    AssetBrowser.SelectedAsset?.Id,
+                    selected.Id,
+                    StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            await PreviewAssetAsync(
+                selected,
+                requireCurrentSelection: true,
+                cancellationToken: source.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer selection or explicit Use action superseded the
+            // debounced Browse preview.
+        }
+        finally
+        {
+            if (ReferenceEquals(
+                    _automaticAssetPreviewSource,
+                    source))
+            {
+                _automaticAssetPreviewSource = null;
+            }
+            source.Dispose();
+        }
+    }
+
+    private void CancelAutomaticAssetPreview()
+    {
+        CancellationTokenSource? source =
+            Interlocked.Exchange(
+                ref _automaticAssetPreviewSource,
+                null);
+        if (source is null)
+        {
+            return;
+        }
+
+        source.Cancel();
+    }
+
     private async Task UseSelectedAssetAsSourceAsync()
     {
+        CancelAutomaticAssetPreview();
         if (AssetBrowser.SelectedAsset is not
             {
                 Kind: AssetKind.Mesh,
@@ -8858,6 +9167,7 @@ public sealed partial class MainWindowViewModel :
 
     private async Task UseSelectedAssetAsTargetAsync()
     {
+        CancelAutomaticAssetPreview();
         if (AssetBrowser.SelectedAsset is not
             {
                 Kind: AssetKind.Mesh,
@@ -9309,6 +9619,7 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         AssetItemViewModel? selected)
     {
+        CancelAutomaticAssetPreview();
         PlaySelectedExplorerAnimationCommand
             .NotifyCanExecuteChanged();
         PreviewSelectedAssetCommand.NotifyCanExecuteChanged();
@@ -9319,9 +9630,18 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        StatusText = selected.Kind == AssetKind.Mesh
-            ? $"Selected {selected.Name}; choose Preview Asset, Use as Source, or Use as Target"
-            : $"Selected {selected.Name}; selection is metadata-only";
+        if (selected.Kind == AssetKind.Mesh &&
+            selected.RetailAsset is not null &&
+            ActiveWorkspace == EditorWorkspaceMode.Browse)
+        {
+            StatusText =
+                $"Selected {selected.Name}; loading an isolated Browse preview";
+            ScheduleAutomaticAssetPreview(selected);
+            return;
+        }
+
+        StatusText =
+            $"Selected {selected.Name}; selection is metadata-only";
     }
 
     private void PublishDecodedMesh(
@@ -9971,7 +10291,7 @@ public sealed partial class MainWindowViewModel :
                 "Error",
                 "Attachments",
                 "A retail mesh, target rig, parent bone, and animation are required",
-                "Index DL1, choose a mesh in the attachment picker, load the animated target, and choose a decoded bone or helper.");
+                "Load the asset catalog, choose a mesh in the attachment picker, load the animated target, and choose a decoded bone or helper.");
             return;
         }
 
@@ -12884,6 +13204,38 @@ public sealed partial class MainWindowViewModel :
             evaluationUnavailable
                 ? "Waiting for an evaluated DL1 target scene"
                 : TargetPaneFidelity);
+    }
+
+    private void RestoreLinkedTargetExternalViewFromCurrentScene()
+    {
+        if (!UsesLinkedTargetExternalView())
+        {
+            return;
+        }
+
+        RenderFrameSnapshot targetFrame =
+            TargetViewport.SceneSource.CaptureFrame();
+        SourceViewport.SceneSource.SetExternalPreviewScene(targetFrame);
+        SourceViewport.SetPresentation(
+            "DL1 Target / External",
+            ActiveWorkspaceMode == "Cutscene"
+                ? "Same evaluated target | free orbit | movie camera override disabled"
+                : "Same evaluated target | free orbit | FPP hands projection disabled");
+        bool hasPreviewCamera =
+            _viewportCoordinator.HasTargetPreviewCameraOverride;
+        TargetViewport.SetPresentation(
+            ActiveWorkspaceMode == "Cutscene"
+                ? hasPreviewCamera
+                    ? "DL1 Target / Movie Camera"
+                    : "DL1 Target / Orbit"
+                : hasPreviewCamera
+                    ? "DL1 Target / EyeCamera"
+                    : "DL1 Target / Orbit",
+            hasPreviewCamera
+                ? ActiveWorkspaceMode == "Cutscene"
+                    ? "Restored evaluated movie camera | current published frame"
+                    : "Restored evaluated EyeCamera | current published frame"
+                : "Evaluated target | free orbit until a camera is available");
     }
 
     private void UpdateUnevaluatedPreviewStatus(string nextStep)

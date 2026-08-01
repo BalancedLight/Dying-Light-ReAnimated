@@ -13,12 +13,17 @@ public enum ViewportSide
     Target,
 }
 
+public sealed record ViewportOrbitCameraPair(
+    RenderCamera Source,
+    RenderCamera Target);
+
 public sealed class LinkedViewportCoordinator
 {
     private readonly object _gate = new();
     private RenderCamera _sourceCamera = RenderCamera.Default;
     private RenderCamera _targetCamera = RenderCamera.Default;
     private RenderCamera? _targetPreviewCameraOverride;
+    private bool _isTargetPreviewCameraOverrideActive;
     private bool _isLinked = true;
 
     public bool IsLinked
@@ -55,7 +60,36 @@ public sealed class LinkedViewportCoordinator
         {
             return side == ViewportSide.Source
                 ? _sourceCamera
-                : _targetPreviewCameraOverride ?? _targetCamera;
+                : GetEffectiveTargetCameraCore();
+        }
+    }
+
+    /// <summary>
+    /// Captures the two editor orbit cameras without substituting an active
+    /// EyeCamera or movie-camera preview override.
+    /// </summary>
+    public ViewportOrbitCameraPair CaptureOrbitCameras()
+    {
+        lock (_gate)
+        {
+            return new ViewportOrbitCameraPair(
+                _sourceCamera,
+                _targetCamera);
+        }
+    }
+
+    /// <summary>
+    /// Restores both editor orbit cameras exactly. Workspace presentation
+    /// changes use this instead of linked navigation so an isolated Browse
+    /// framing operation cannot move the Animate or Retarget cameras.
+    /// </summary>
+    public void RestoreOrbitCameras(ViewportOrbitCameraPair cameras)
+    {
+        ArgumentNullException.ThrowIfNull(cameras);
+        lock (_gate)
+        {
+            _sourceCamera = cameras.Source;
+            _targetCamera = cameras.Target;
         }
     }
 
@@ -74,7 +108,7 @@ public sealed class LinkedViewportCoordinator
         {
             RenderCamera camera = side == ViewportSide.Source
                 ? _sourceCamera
-                : _targetPreviewCameraOverride ?? _targetCamera;
+                : GetEffectiveTargetCameraCore();
             return sceneBuffer.Capture(camera);
         }
     }
@@ -99,7 +133,8 @@ public sealed class LinkedViewportCoordinator
         {
             lock (_gate)
             {
-                return _targetPreviewCameraOverride is not null;
+                return _isTargetPreviewCameraOverrideActive &&
+                       _targetPreviewCameraOverride is not null;
             }
         }
     }
@@ -114,6 +149,23 @@ public sealed class LinkedViewportCoordinator
         lock (_gate)
         {
             _targetPreviewCameraOverride = camera;
+            _isTargetPreviewCameraOverrideActive = camera is not null;
+        }
+    }
+
+    /// <summary>
+    /// Temporarily selects the editor orbit camera without discarding a valid
+    /// evaluated EyeCamera/movie camera. This is used by presentation-only
+    /// workspace changes so returning to FPP does not require a fresh sample.
+    /// Returns whether an evaluated camera is active after the request.
+    /// </summary>
+    public bool SetTargetPreviewCameraOverrideActive(bool isActive)
+    {
+        lock (_gate)
+        {
+            _isTargetPreviewCameraOverrideActive =
+                isActive && _targetPreviewCameraOverride is not null;
+            return _isTargetPreviewCameraOverrideActive;
         }
     }
 
@@ -132,6 +184,7 @@ public sealed class LinkedViewportCoordinator
         lock (_gate)
         {
             if (side == ViewportSide.Target &&
+                _isTargetPreviewCameraOverrideActive &&
                 _targetPreviewCameraOverride is not null)
             {
                 return RenderCameraNavigationResult
@@ -158,6 +211,11 @@ public sealed class LinkedViewportCoordinator
             return RenderCameraNavigationResult.Applied;
         }
     }
+
+    private RenderCamera GetEffectiveTargetCameraCore() =>
+        _isTargetPreviewCameraOverrideActive
+            ? _targetPreviewCameraOverride ?? _targetCamera
+            : _targetCamera;
 
     public void UpdateLens(float fieldOfViewDegrees, float nearPlane)
     {
@@ -379,29 +437,26 @@ public sealed class ViewportSceneSource :
         Volatile.Read(ref _externalPreviewScene) is not null;
 
     /// <summary>
-    /// Shows the evaluated target scene through the source pane's ordinary
-    /// orbit camera. The authored source buffer remains live behind this
+    /// Shows an isolated presentation scene through this pane's ordinary
+    /// orbit camera. The authoritative scene buffer remains live behind this
     /// display-only override, so passing <see langword="null"/> restores it
-    /// without reconstructing or approximating any scene state.
+    /// without reconstructing or approximating any scene state. The source
+    /// pane uses this for the linked FPP external view; the target pane uses
+    /// it for Browse asset inspection.
     /// </summary>
     public void SetExternalPreviewScene(RenderFrameSnapshot? targetFrame)
     {
-        if (_side != ViewportSide.Source)
-        {
-            throw new InvalidOperationException(
-                "Only the source viewport can host an external target preview.");
-        }
-
         RenderFrameSnapshot? stableFrame = targetFrame is null
             ? null
             : targetFrame with
             {
                 Meshes = targetFrame.Meshes.ToArray(),
                 Skeleton = targetFrame.Skeleton is { } skeleton
-                    ? skeleton with
-                    {
-                        Bones = skeleton.Bones.ToArray(),
-                    }
+                    ? ApplySkeletonVisibility(
+                        skeleton with
+                        {
+                            Bones = skeleton.Bones.ToArray(),
+                        })
                     : null,
                 Gizmos = targetFrame.Gizmos.ToArray(),
                 MorphWeights = targetFrame.MorphWeights.ToArray(),

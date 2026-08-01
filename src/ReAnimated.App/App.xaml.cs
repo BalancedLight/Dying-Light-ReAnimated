@@ -52,6 +52,10 @@ public partial class App : Application, IDisposable
         MainWindow = window;
         _startupSmoke?.Attach(this, window, viewModel);
         window.Show();
+        if (_startupSmoke is null)
+        {
+            _ = InitializeAssetCatalogAsync(viewModel);
+        }
         _ = InitializeInstalledBuildStatusAsync(viewModel);
     }
 
@@ -211,6 +215,26 @@ public partial class App : Application, IDisposable
                 AppLogLevel.Warning,
                 "dl1_build_fingerprint_unexpected_failure",
                 "Installed DL1 build detection failed unexpectedly.",
+                exception: exception);
+        }
+    }
+
+    private async Task InitializeAssetCatalogAsync(
+        MainWindowViewModel viewModel)
+    {
+        try
+        {
+            await viewModel.InitializeAssetCatalogAsync();
+        }
+        catch (Exception exception)
+        {
+            // The ViewModel normally reports expected discovery, I/O, and
+            // validation failures in its diagnostics drawer. Keep this final
+            // guard for unexpected startup failures without taking down WPF.
+            _logger?.Write(
+                AppLogLevel.Warning,
+                "dl1_asset_catalog_unexpected_failure",
+                "The saved Dying Light 1 asset catalog could not be opened unexpectedly.",
                 exception: exception);
         }
     }

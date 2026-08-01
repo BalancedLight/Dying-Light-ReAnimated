@@ -182,9 +182,9 @@ public sealed class Dl1AssetWorkspace : IAsyncDisposable
                     _databasePath);
 
                 progress?.Report(new Dl1AssetIndexProgress(
-                    "Index",
+                    "Catalog",
                     24.0,
-                    "Validating the saved catalog before scanning DL1 asset sources"));
+                    "Validating the saved catalog against the current DL1 pack fingerprints"));
                 RetailAssetCatalog pendingCatalog =
                     await RetailAssetCatalog.BuildAsync(
                         pendingProviders.Providers,
@@ -201,7 +201,7 @@ public sealed class Dl1AssetWorkspace : IAsyncDisposable
                     94.0,
                     pendingCatalog.WasRestoredFromPersistentIndex
                         ? $"Publishing {pendingCatalog.Assets.Count:N0} restored assets"
-                        : $"Publishing {pendingCatalog.Assets.Count:N0} newly indexed assets"));
+                        : $"Publishing {pendingCatalog.Assets.Count:N0} newly scanned assets"));
                 await ReplaceResourcesAsync(
                     install,
                     pendingCatalog,
@@ -216,8 +216,8 @@ public sealed class Dl1AssetWorkspace : IAsyncDisposable
                     "Ready",
                     100.0,
                     pendingCatalog.WasRestoredFromPersistentIndex
-                        ? $"Restored {pendingCatalog.Assets.Count:N0} DL1 assets from the validated local catalog"
-                        : $"Indexed {pendingCatalog.Assets.Count:N0} DL1 assets"));
+                        ? $"Loaded {pendingCatalog.Assets.Count:N0} DL1 assets from the validated local catalog"
+                        : $"Scanned and cached {pendingCatalog.Assets.Count:N0} DL1 assets"));
                 return new Dl1AssetIndexResult(
                     install,
                     pendingCatalog,
