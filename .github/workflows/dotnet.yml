@@ -80,7 +80,7 @@ jobs:
       - name: Build, test, validate, and package
         shell: powershell
         working-directory: csharp
-        run: .\package_csharp.ps1 -OutputRoot artifacts\csharp -PythonOracleRoot ..\python-oracle
+        run: .\package_csharp.ps1 -OutputRoot artifacts\csharp -PythonOracleRoot ..\python-oracle -SkipUnavailableOptionalBlenderOracle
 
       - name: Upload WPF validation diagnostics on failure
         if: failure()

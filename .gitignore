@@ -35,6 +35,8 @@ Desktop.ini
 *.dlraproj
 *.dlrmap.json
 *.anm2
+!tests/ReAnimated.Tests/Fixtures/Anm2/infected_turn_90r.template.anm2
+!tests/ReAnimated.Tests/Fixtures/Anm2/stock_writer_control.anm2
 *.smd
 *.ascii
 *.chr
