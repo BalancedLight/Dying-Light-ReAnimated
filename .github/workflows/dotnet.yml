@@ -12,7 +12,10 @@ permissions:
 
 jobs:
   build-test-package:
-    runs-on: windows-latest
+    # The packaged acceptance gate exercises an offscreen WPF/D3D11 window.
+    # Keep it on the stable Windows Server 2022 desktop image instead of
+    # inheriting windows-latest's Windows Server/Visual Studio migrations.
+    runs-on: windows-2022
     timeout-minutes: 60
 
     steps:
@@ -78,6 +81,17 @@ jobs:
         shell: powershell
         working-directory: csharp
         run: .\package_csharp.ps1 -OutputRoot artifacts\csharp -PythonOracleRoot ..\python-oracle
+
+      - name: Upload WPF validation diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: CSharp-wpf-validation-diagnostics
+          path: |
+            csharp/artifacts/validation/.wpf-startup-stage-*
+            csharp/artifacts/validation/dl1-wpf-startup-smoke.json
+          include-hidden-files: true
+          if-no-files-found: warn
 
       - name: Upload validated Windows package
         uses: actions/upload-artifact@v7
