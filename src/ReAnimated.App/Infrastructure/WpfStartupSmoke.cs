@@ -399,7 +399,8 @@ internal sealed class WpfStartupSmoke
             {
                 ThrowIfAnyViewportFaulted(
                     latestStatuses);
-                if (hosts.All(host =>
+                if (IsWindowAtCurrentSize(window, target) &&
+                    hosts.All(host =>
                         latestStatuses.TryGetValue(
                             host,
                             out D3D11RendererStatus? status) &&
@@ -418,7 +419,7 @@ internal sealed class WpfStartupSmoke
             if (!stepReady)
             {
                 throw new TimeoutException(
-                    $"Resize step {stepIndex + 1:N0}/{schedule.Count:N0} did not leave both packaged WPF viewports Ready with advanced frames and matching renderer pixel dimensions inside {_timeout.TotalSeconds:N0} seconds.");
+                    $"Resize step {stepIndex + 1:N0}/{schedule.Count:N0} did not settle the packaged WPF window at {target.Width:0.##}x{target.Height:0.##} and leave both viewports Ready with advanced frames and matching renderer pixel dimensions inside {_timeout.TotalSeconds:N0} seconds. Actual window size: {window.ActualWidth:0.##}x{window.ActualHeight:0.##}.");
             }
 
             resizeSteps.Add(
@@ -488,6 +489,32 @@ internal sealed class WpfStartupSmoke
                 measurement.ExpectedPixelWidth &&
             status.ViewportPixelHeight ==
                 measurement.ExpectedPixelHeight;
+    }
+
+    private static bool IsWindowAtCurrentSize(
+        Window window,
+        WpfResizeTarget target)
+    {
+        double actualWidth = window.ActualWidth;
+        double actualHeight = window.ActualHeight;
+        if (actualWidth <= 0.0 || actualHeight <= 0.0)
+        {
+            return false;
+        }
+
+        DpiScale dpi = VisualTreeHelper.GetDpi(window);
+        double widthTolerance =
+            Math.Max(
+                0.01,
+                1.0 / Math.Max(0.01, dpi.DpiScaleX));
+        double heightTolerance =
+            Math.Max(
+                0.01,
+                1.0 / Math.Max(0.01, dpi.DpiScaleY));
+        return Math.Abs(actualWidth - target.Width) <=
+                widthTolerance &&
+            Math.Abs(actualHeight - target.Height) <=
+                heightTolerance;
     }
 
     private static void ThrowIfAnyViewportFaulted(

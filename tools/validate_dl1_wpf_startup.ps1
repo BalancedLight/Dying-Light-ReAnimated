@@ -60,6 +60,41 @@ function Test-ViewportSizeEvidence {
             [int]$Viewport.expectedPixelHeight)
 }
 
+function Test-WindowSizeEvidence {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Step
+    )
+
+    $actualWidth = [double]$Step.actualWindowWidth
+    $actualHeight = [double]$Step.actualWindowHeight
+    $dpiScaleX = 1.0
+    $dpiScaleY = 1.0
+    $stepViewports = @($Step.viewports)
+    if ($stepViewports.Count -gt 0) {
+        if ([double]$stepViewports[0].dpiScaleX -gt 0) {
+            $dpiScaleX = [double]$stepViewports[0].dpiScaleX
+        }
+        if ([double]$stepViewports[0].dpiScaleY -gt 0) {
+            $dpiScaleY = [double]$stepViewports[0].dpiScaleY
+        }
+    }
+
+    $widthTolerance =
+        [Math]::Max(0.01, 1.0 / [Math]::Max(0.01, $dpiScaleX))
+    $heightTolerance =
+        [Math]::Max(0.01, 1.0 / [Math]::Max(0.01, $dpiScaleY))
+    return (
+        $actualWidth -gt 0 -and
+        $actualHeight -gt 0 -and
+        [Math]::Abs(
+            $actualWidth - [double]$Step.requestedWindowWidth) -le
+            $widthTolerance -and
+        [Math]::Abs(
+            $actualHeight - [double]$Step.requestedWindowHeight) -le
+            $heightTolerance)
+}
+
 $repositoryRoot =
     [System.IO.Path]::GetFullPath(
         (Split-Path -Parent $PSScriptRoot))
@@ -272,17 +307,15 @@ try {
         if ([int]$step.stepIndex -ne $stepIndex -or
             [double]$step.requestedWindowWidth -le 0 -or
             [double]$step.requestedWindowHeight -le 0 -or
-            [double]$step.actualWindowWidth -le 0 -or
-            [double]$step.actualWindowHeight -le 0 -or
-            [Math]::Abs(
-                [double]$step.actualWindowWidth -
-                [double]$step.requestedWindowWidth) -gt 0.01 -or
-            [Math]::Abs(
-                [double]$step.actualWindowHeight -
-                [double]$step.requestedWindowHeight) -gt 0.01) {
+            -not (Test-WindowSizeEvidence $step)) {
             throw (
-                "WPF resize step $stepIndex has invalid window-size " +
-                "or ordering evidence.")
+                "WPF resize step $stepIndex has invalid window-size or " +
+                "ordering evidence. Requested " +
+                ("{0:0.##}x{1:0.##}; actual {2:0.##}x{3:0.##}." -f
+                    [double]$step.requestedWindowWidth,
+                    [double]$step.requestedWindowHeight,
+                    [double]$step.actualWindowWidth,
+                    [double]$step.actualWindowHeight))
         }
         if (($stepIndex % 2) -eq 1) {
             $compactStep =
