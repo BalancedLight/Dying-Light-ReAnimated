@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "SharpCompress": {
+        "type": "Direct",
+        "requested": "[0.50.1, )",
+        "resolved": "0.50.1",
+        "contentHash": "VY90K8BBvaAMvvRDJ8EvsfI/GgoIYxlgxMpxdgwpzaesJ0pGSHTLbZ7SD4JYxsGCnOibzua/+8HvDjV6KTw4jA=="
+      },
+      "reanimated.core": {
+        "type": "Project"
+      },
+      "reanimated.evaluation": {
+        "type": "Project",
+        "dependencies": {
+          "ReAnimated.Core": "[0.1.0, )",
+          "ReAnimated.Retargeting": "[0.1.0, )"
+        }
+      },
+      "reanimated.retargeting": {
+        "type": "Project",
+        "dependencies": {
+          "ReAnimated.Core": "[0.1.0, )"
+        }
+      }
+    },
+    "net10.0/win-x64": {}
+  }
+}

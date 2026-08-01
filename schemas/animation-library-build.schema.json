@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dl-reanimated.local/schemas/animation-library-build.schema.json",
+  "title": "DL ReAnimated Animation Library Build Manifest",
+  "type": "object",
+  "required": [
+    "format",
+    "animations",
+    "animationScripts"
+  ],
+  "properties": {
+    "format": {
+      "const": "dl-reanimated-animation-library-build-v1"
+    },
+    "animations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "path"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "animationScripts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "headerPath": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "bodyPath": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "sequences": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "anm2Name",
+                "startFrame",
+                "endFrame",
+                "framesPerSecond"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "anm2Name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "startFrame": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "endFrame": {
+                  "type": "number",
+                  "minimum": 0
+                },
+                "framesPerSecond": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "enabled": {
+                  "type": "integer"
+                },
+                "blend": {
+                  "type": "number"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "appendFrom": {
+      "$ref": "#/$defs/relativePath"
+    },
+    "replaceExisting": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "not": {
+        "pattern": "(^[/\\\\])|(^[A-Za-z]:)|(^|[/\\\\])\\.\\.([/\\\\]|$)"
+      }
+    }
+  }
+}

@@ -114,7 +114,7 @@ base segment repeated on every page
 page spans sum to frame_count - 1
 ```
 
-The writer splits long clips into valid pages and rejects malformed output before RPack packaging. The supplied 2,210-frame stock control uses 12 pages, confirming that clip duration is not the limitation; physical page construction is.
+The writer splits long clips into valid pages and rejects malformed output before RPack packaging. The generated 2,210-frame control uses 12 pages and compares bulk versus random-access decode on both sides of the first physical transition, confirming that clip duration is not the limitation; physical page construction is.
 
 Packed animation data is processed in blocks of 16 frames. The engine selects:
 
@@ -349,7 +349,11 @@ ANM2 alone owns final actor/world movement
 one target skeleton automatically fits every Dying Light character
 ```
 
-## 14. Useful source modules
+## 14. Archived Python reference modules
+
+The former Python decoder/writer is retained outside this repository at
+`F:\DyingLightTools\ReAnimated - Python`. These paths are relative to that
+archive:
 
 ```
 dlanm2_gui/anm2.py

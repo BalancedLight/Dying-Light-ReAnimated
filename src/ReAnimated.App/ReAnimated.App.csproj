@@ -1,0 +1,75 @@
+<Project Sdk="Microsoft.NET.Sdk"
+         TreatAsLocalProperty="SolutionSingleFilePublishDirectory">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>ReAnimated.App</RootNamespace>
+    <AssemblyName>DLReAnimated</AssemblyName>
+    <StartupObject>ReAnimated.App.Program</StartupObject>
+    <UseWPF>true</UseWPF>
+    <ApplicationIcon>Assets\DLReAnimated.ico</ApplicationIcon>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <AutoPublishSingleFileOnSolutionBuild Condition="'$(AutoPublishSingleFileOnSolutionBuild)' == ''">true</AutoPublishSingleFileOnSolutionBuild>
+    <!-- This path is intentionally project-local and fixed. TreatAsLocalProperty
+         prevents a command-line global property from redirecting RemoveDir. -->
+    <SolutionSingleFilePublishDirectory>$(MSBuildThisFileDirectory)..\..\artifacts\csharp\solution-build\$(Configuration)\win-x64</SolutionSingleFilePublishDirectory>
+    <_CandidateProvenancePublishArguments Condition="'$(DlReAnimatedCandidateSourceSha256)' != ''">-p:DlReAnimatedCandidateSourceSha256=&quot;$(DlReAnimatedCandidateSourceSha256)&quot; -p:DlReAnimatedCandidateInputCount=&quot;$(DlReAnimatedCandidateInputCount)&quot; -p:DlReAnimatedGitHead=&quot;$(DlReAnimatedGitHead)&quot; -p:DlReAnimatedGitState=&quot;$(DlReAnimatedGitState)&quot; -p:DlReAnimatedSourceIdentity=&quot;$(DlReAnimatedSourceIdentity)&quot; -p:InformationalVersion=&quot;$(InformationalVersion)&quot; -p:IncludeSourceRevisionInInformationalVersion=false -p:SourceRevisionId=&quot;$(SourceRevisionId)&quot; -p:RepositoryCommit=&quot;$(RepositoryCommit)&quot;</_CandidateProvenancePublishArguments>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ReAnimated.Cli\ReAnimated.Cli.csproj" />
+    <ProjectReference Include="..\ReAnimated.Core\ReAnimated.Core.csproj" />
+    <ProjectReference Include="..\ReAnimated.Codecs\ReAnimated.Codecs.csproj" />
+    <ProjectReference Include="..\ReAnimated.DL1.Assets\ReAnimated.DL1.Assets.csproj" />
+    <ProjectReference Include="..\ReAnimated.Evaluation\ReAnimated.Evaluation.csproj" />
+    <ProjectReference Include="..\ReAnimated.Renderer.D3D11\ReAnimated.Renderer.D3D11.csproj" />
+    <ProjectReference Include="..\ReAnimated.Retargeting\ReAnimated.Retargeting.csproj" />
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+  <ItemGroup>
+    <Resource Include="Assets\DLReAnimated.ico" />
+    <EmbeddedResource Include="..\..\LICENSE"
+                      Link="Embedded\LICENSE" />
+    <EmbeddedResource Include="..\..\README.md"
+                      Link="Embedded\README.md" />
+    <EmbeddedResource Include="..\..\schemas\dlraproj.schema.json"
+                      Link="Embedded\Schemas\dlraproj.schema.json" />
+    <EmbeddedResource Include="..\..\schemas\animation-library-build.schema.json"
+                      Link="Embedded\Schemas\animation-library-build.schema.json" />
+    <EmbeddedResource Include="..\..\docs\CSHARP_REWRITE.md"
+                      Link="Embedded\Docs\CSHARP_REWRITE.md" />
+    <EmbeddedResource Include="..\..\docs\DL1_*.md"
+                      Link="Embedded\Docs\%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Blender\export_dl1_retail_anm2_fbx.py"
+                      Link="Embedded\Blender\export_dl1_retail_anm2_fbx.py" />
+  </ItemGroup>
+  <Target Name="PublishSingleFileAfterSolutionBuild"
+          AfterTargets="Build"
+          Condition="'$(BuildingSolutionFile)' == 'true' And '$(DesignTimeBuild)' != 'true' And '$(IsCrossTargetingBuild)' != 'true' And '$(AutoPublishSingleFileOnSolutionBuild)' == 'true'">
+    <Error Condition="'$(Configuration)' != 'Debug' And '$(Configuration)' != 'Release'"
+           Text="Automatic single-file publishing only permits the managed Debug or Release output directories." />
+    <!-- The RID publish must rebuild project references: the outer solution
+         build targets non-RID output paths, which cannot safely satisfy a
+         current win-x64 publish after referenced source changes. -->
+    <!-- Remove only this configuration's managed single-file output directory
+         so stale files from an older publish cannot survive the exact-output
+         validation below. -->
+    <RemoveDir Directories="$(SolutionSingleFilePublishDirectory)"
+               Condition="Exists('$(SolutionSingleFilePublishDirectory)')" />
+    <MakeDir Directories="$(SolutionSingleFilePublishDirectory)" />
+    <Exec WorkingDirectory="$(MSBuildThisFileDirectory)..\.."
+          Command="dotnet publish &quot;$(MSBuildProjectFullPath)&quot; --configuration &quot;$(Configuration)&quot; --runtime win-x64 --self-contained true --no-restore --output &quot;$(SolutionSingleFilePublishDirectory)&quot; -p:AutoPublishSingleFileOnSolutionBuild=false -p:DebugSymbols=false -p:DebugType=None $(_CandidateProvenancePublishArguments)" />
+    <ItemGroup>
+      <_SolutionSingleFileOutput Include="$(SolutionSingleFilePublishDirectory)\**\*" />
+      <_UnexpectedSolutionSingleFileOutput Include="@(_SolutionSingleFileOutput)"
+                                           Exclude="$(SolutionSingleFilePublishDirectory)\DLReAnimated.exe" />
+    </ItemGroup>
+    <Error Condition="!Exists('$(SolutionSingleFilePublishDirectory)\DLReAnimated.exe')"
+           Text="The solution build did not publish DLReAnimated.exe to $(SolutionSingleFilePublishDirectory)." />
+    <Error Condition="'@(_UnexpectedSolutionSingleFileOutput)' != ''"
+           Text="The solution single-file output contains unexpected files: @(_UnexpectedSolutionSingleFileOutput)." />
+    <Message Importance="high"
+             Text="Published the one-executable win-x64 build to $(SolutionSingleFilePublishDirectory)\DLReAnimated.exe" />
+  </Target>
+</Project>

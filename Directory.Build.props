@@ -1,0 +1,32 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
+    <DebugType>embedded</DebugType>
+    <VersionPrefix>0.1.0</VersionPrefix>
+    <Authors>DL ReAnimated contributors</Authors>
+    <Product>DL ReAnimated</Product>
+    <RepositoryUrl>https://github.com/BalancedLight/dl-reanimated</RepositoryUrl>
+    <PackageLicenseExpression>Unlicense</PackageLicenseExpression>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(DlReAnimatedCandidateSourceSha256)' != ''">
+    <AssemblyMetadata Include="DLReAnimatedCandidateSourceSha256"
+                      Value="$(DlReAnimatedCandidateSourceSha256)" />
+    <AssemblyMetadata Include="DLReAnimatedCandidateInputCount"
+                      Value="$(DlReAnimatedCandidateInputCount)" />
+    <AssemblyMetadata Include="DLReAnimatedGitHead"
+                      Value="$(DlReAnimatedGitHead)" />
+    <AssemblyMetadata Include="DLReAnimatedGitState"
+                      Value="$(DlReAnimatedGitState)" />
+    <AssemblyMetadata Include="DLReAnimatedSourceIdentity"
+                      Value="$(DlReAnimatedSourceIdentity)" />
+  </ItemGroup>
+</Project>

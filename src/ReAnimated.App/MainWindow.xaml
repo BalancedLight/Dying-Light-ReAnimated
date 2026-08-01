@@ -1,0 +1,2003 @@
+<Window x:Class="ReAnimated.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:behaviors="clr-namespace:ReAnimated.App.Behaviors"
+        xmlns:vm="clr-namespace:ReAnimated.App.ViewModels"
+        xmlns:views="clr-namespace:ReAnimated.App.Views"
+         mc:Ignorable="d"
+         Title="{Binding WindowTitle}"
+         Icon="Assets/DLReAnimated.ico"
+         Width="1600"
+        Height="980"
+        MinWidth="1180"
+        MinHeight="640"
+        WindowStartupLocation="CenterScreen">
+    <Window.CommandBindings>
+        <CommandBinding Command="ApplicationCommands.Close"
+                        Executed="OnCloseCommandExecuted" />
+    </Window.CommandBindings>
+    <Window.InputBindings>
+        <KeyBinding Key="N" Modifiers="Control" Command="{Binding NewWorkspaceCommand}" />
+        <KeyBinding Key="O" Modifiers="Control" Command="{Binding OpenWorkspaceCommand}" />
+        <KeyBinding Key="S" Modifiers="Control" Command="{Binding SaveWorkspaceCommand}" />
+        <KeyBinding Key="Z" Modifiers="Control" Command="{Binding UndoCommand}" />
+        <KeyBinding Key="Y" Modifiers="Control" Command="{Binding RedoCommand}" />
+        <KeyBinding Key="Space" Command="{Binding Timeline.TogglePlaybackCommand}" />
+    </Window.InputBindings>
+    <DockPanel LastChildFill="True">
+        <Menu DockPanel.Dock="Top"
+              Background="#0F131A"
+              Foreground="{StaticResource TextBrush}">
+            <MenuItem Header="_File">
+                <MenuItem Command="{Binding NewWorkspaceCommand}" Header="_New workspace" InputGestureText="Ctrl+N" />
+                <MenuItem Command="{Binding OpenWorkspaceCommand}" Header="_Open…" InputGestureText="Ctrl+O" />
+                <MenuItem Command="{Binding SaveWorkspaceCommand}" Header="_Save project" InputGestureText="Ctrl+S" />
+                <MenuItem Command="{Binding ImportAnimationCommand}" Header="_Import FBX / ANM2..." />
+                <MenuItem Command="{Binding ImportMimicAnimationCommand}" Header="Import _mimic ANM2..." />
+                <MenuItem Command="{Binding ImportFacialFbxCommand}" Header="Import _facial FBX for review..." />
+                <MenuItem Header="_Export DL1 ANM2">
+                    <MenuItem Command="{Binding ExportBodyCommand}" Header="_Body..." />
+                    <MenuItem Command="{Binding ExportMimicCommand}" Header="_Mimic..." />
+                    <MenuItem Command="{Binding ExportBodyAndMimicCommand}" Header="Body + _mimic..." />
+                </MenuItem>
+                <Separator />
+                <MenuItem Command="{Binding AssetBrowser.IndexGameCommand}" Header="Index _Dying Light 1…" />
+                <MenuItem Header="Project R_Pack roots">
+                    <MenuItem Command="{Binding AddAdditionalRpackRootCommand}"
+                              Header="_Add project-relative folder…" />
+                    <MenuItem Command="{Binding RemoveAdditionalRpackRootCommand}"
+                              Header="_Remove selected folder" />
+                </MenuItem>
+                <Separator />
+                <MenuItem Command="ApplicationCommands.Close" Header="E_xit" />
+            </MenuItem>
+            <MenuItem Header="_Edit">
+                <MenuItem Command="{Binding UndoCommand}" Header="_Undo" InputGestureText="Ctrl+Z" />
+                <MenuItem Command="{Binding RedoCommand}" Header="_Redo" InputGestureText="Ctrl+Y" />
+                <Separator />
+                <MenuItem Command="{Binding Timeline.AddKeyframeCommand}" Header="Add _keyframe" />
+            </MenuItem>
+            <MenuItem Header="_Viewport">
+                <MenuItem Command="{Binding ResetCameraCommand}" Header="_Reset camera" />
+                <MenuItem Command="{Binding FrameSelectionCommand}" Header="_Frame scene" />
+                <MenuItem Header="_Link cameras" IsCheckable="True" IsChecked="{Binding IsViewportsLinked}" />
+                <Separator />
+                <MenuItem Header="Show _mesh surfaces"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowMeshes}" />
+                <MenuItem Header="Show _skeleton overlay"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowSkeletonOverlay}" />
+                <Separator />
+                <MenuItem Header="Show deform _bones"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowDeformBones}" />
+                <MenuItem Header="Show _helpers"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowHelpers}" />
+                <MenuItem Header="Show _camera helpers"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowCameraHelpers}" />
+                <MenuItem Header="Show _prop / pivot helpers"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowPropHelpers}" />
+                <Separator />
+                <MenuItem Header="Show bone local _axes"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowBoneLocalAxes}" />
+                <MenuItem Header="Show current deformed _bounds"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowDeformedBounds}" />
+                <MenuItem Header="_Highlight selected retail mesh"
+                          IsCheckable="True"
+                          IsChecked="{Binding HighlightSelectedMeshes}" />
+                <MenuItem Header="Show _root-motion trail"
+                          IsCheckable="True"
+                          IsChecked="{Binding ShowRootMotionTrail}"
+                          ToolTip="Samples the authoritative exportable pipeline on a cancellable worker; preview-only procedural motion is excluded." />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="DL1 fidelity status" />
+            </MenuItem>
+        </Menu>
+
+        <StatusBar DockPanel.Dock="Bottom"
+                   Background="#0F131A"
+                   BorderBrush="{StaticResource BorderBrush}"
+                   BorderThickness="0,1,0,0">
+            <StatusBarItem>
+                <TextBlock Text="{Binding StatusText}" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Foreground="{StaticResource MutedTextBrush}"
+                           Text="{Binding AssetBrowser.IndexedAssetCount, StringFormat={}{0:N0} indexed assets}" />
+            </StatusBarItem>
+            <Separator />
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock Foreground="{StaticResource WarningBrush}"
+                           Text="DL1 only · live D3D11 authoring preview" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Grid.Row="0"
+                    MinHeight="46"
+                    Padding="5,3"
+                    Background="{StaticResource PanelRaisedBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,0,0,1">
+                <WrapPanel VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal" Margin="5,0">
+                        <Button Command="{Binding NewWorkspaceCommand}" Content="New" />
+                        <Button Command="{Binding OpenWorkspaceCommand}" Content="Open" />
+                        <Button Command="{Binding SaveWorkspaceCommand}" Content="Save" />
+                        <Separator Margin="4,6" />
+                        <Button Command="{Binding UndoCommand}" Content="Undo" />
+                        <Button Command="{Binding RedoCommand}" Content="Redo" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="8,2">
+                        <TextBlock Margin="0,0,5,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Workspace" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="Browse"
+                                      Content="Browse"
+                                      IsChecked="{Binding IsBrowseWorkspace, Mode=OneWay}" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="Animate"
+                                      Content="Animate"
+                                      IsChecked="{Binding IsAnimateWorkspace, Mode=OneWay}" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="Retarget/Edit"
+                                      Content="Retarget / Edit"
+                                      IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="Face"
+                                      Content="Face"
+                                      IsChecked="{Binding IsFaceWorkspace, Mode=OneWay}" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="FPP"
+                                      Content="FPP"
+                                      IsChecked="{Binding IsFppWorkspace, Mode=OneWay}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal"
+                                Margin="0,2"
+                                Visibility="{Binding IsAnimationAuthoringWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Margin="10,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Root" />
+                        <ComboBox Width="140"
+                                  Margin="6,0"
+                                  ItemsSource="{Binding RootMotionModes}"
+                                  SelectedItem="{Binding SelectedRootMotionMode}" />
+                        <TextBlock Margin="10,0,0,0"
+                                   VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Preview" />
+                        <ComboBox Width="112"
+                                  Margin="6,0"
+                                  ItemsSource="{Binding PreviewModes}"
+                                  SelectedItem="{Binding SelectedPreviewMode}"
+                                  ToolTip="Raw shows decoded/authored data without runtime emulation. DL1 profile enables the selected versioned body, FPP, or movie authoring context." />
+                        <ToggleButton Content="Accumulate"
+                                      IsChecked="{Binding PreviewMotionAccumulationEnabled}"
+                                      ToolTip="Preview the auxiliary 0xCCC3CDDF accumulator as actor/world translation and yaw. Skeletal locals and export data remain recorded and untouched." />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2">
+                        <ToggleButton Content="Linked cameras"
+                                      IsChecked="{Binding IsViewportsLinked}"
+                                      Visibility="{Binding IsLinkedCameraControlVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
+                        <Button Command="{Binding FrameSelectionCommand}" Content="Frame" />
+                        <ToggleButton Content="Show mesh"
+                                      IsChecked="{Binding ShowMeshes}"
+                                      ToolTip="Show or hide every actor and attachment mesh without discarding the decoded scene." />
+                        <ToggleButton Content="Show bones"
+                                      IsChecked="{Binding ShowSkeletonOverlay}"
+                                      ToolTip="Show or hide the complete skeleton overlay while retaining the individual bone/helper filters." />
+                        <Button Command="{Binding ToggleDiagnosticsDrawerCommand}"
+                                Content="Jobs / diagnostics" />
+                    </StackPanel>
+                    <Border Margin="10,2"
+                            Padding="9,4"
+                            Background="#171D25"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="3"
+                            ToolTip="Raw, DL1 profile, installed-build, and validation details are listed in the Fidelity tab at the bottom of the window.">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontSize="10"
+                                       FontWeight="SemiBold"
+                                       Text="Fidelity:" />
+                            <TextBlock Margin="5,0,0,0"
+                                       FontSize="10"
+                                       Foreground="{StaticResource WarningBrush}"
+                                       Text="{Binding SelectedPreviewMode}" />
+                            <TextBlock Margin="5,0,0,0"
+                                       FontSize="10"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="· details below" />
+                        </StackPanel>
+                    </Border>
+                    <StackPanel Orientation="Horizontal"
+                                Margin="4,2"
+                                Visibility="{Binding IsAnimationAuthoringWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <Button Command="{Binding Timeline.StepBackwardCommand}" Content="◀|" />
+                        <Button Command="{Binding Timeline.TogglePlaybackCommand}"
+                                Content="{Binding Timeline.PlaybackLabel}"
+                                MinWidth="56" />
+                        <Button Command="{Binding Timeline.StepForwardCommand}" Content="|▶" />
+                    </StackPanel>
+                </WrapPanel>
+            </Border>
+
+            <Border Grid.Row="1"
+                    Margin="8,6,8,0"
+                    Padding="10,7"
+                    Background="#3B301D"
+                    BorderBrush="#735D2A"
+                    BorderThickness="1"
+                    CornerRadius="3"
+                    Visibility="{Binding HasRecoverySnapshot, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <DockPanel>
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                        <Button Command="{Binding RestoreRecoveryCommand}" Content="Restore" />
+                        <Button Command="{Binding DismissRecoveryCommand}" Content="Dismiss" />
+                    </StackPanel>
+                    <TextBlock VerticalAlignment="Center"
+                               Foreground="#F3C978"
+                               Text="A recoverable workspace snapshot is available from the previous session." />
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="2" Margin="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="320" MinWidth="260" />
+                    <ColumnDefinition Width="5" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="5" />
+                    <ColumnDefinition>
+                        <ColumnDefinition.Style>
+                            <Style TargetType="{x:Type ColumnDefinition}">
+                                <Setter Property="Width" Value="380" />
+                                <Setter Property="MinWidth" Value="320" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsInspectorPanelVisible}" Value="False">
+                                        <Setter Property="Width" Value="0" />
+                                        <Setter Property="MinWidth" Value="0" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ColumnDefinition.Style>
+                    </ColumnDefinition>
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0" Style="{StaticResource PaneBorderStyle}">
+                    <TabControl x:Name="ExplorerTabControl">
+                        <TabItem Header="Assets">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding AssetBrowser.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="Filter by asset name, logical path, provider, or type" />
+                                    <Button Grid.Column="1"
+                                            Command="{Binding AssetBrowser.ClearSearchCommand}"
+                                            Content="×"
+                                            ToolTip="Clear filter" />
+                                </Grid>
+                                <StackPanel Grid.Row="1" Margin="0,4">
+                                    <DockPanel LastChildFill="True">
+                                        <Button DockPanel.Dock="Right"
+                                                Command="{Binding AssetBrowser.IndexGameCommand}"
+                                                Content="Index DL1..." />
+                                        <TextBlock VerticalAlignment="Center"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding AssetBrowser.ResultSummary}" />
+                                    </DockPanel>
+                                    <WrapPanel Margin="0,4,0,0">
+                                        <Button Command="{Binding PreviewSelectedAssetCommand}"
+                                                Content="Preview Asset"
+                                                ToolTip="Isolated Browse preview; no animation or project state changes." />
+                                        <Button Command="{Binding UseSelectedAssetAsSourceCommand}"
+                                                Content="Use as Source"
+                                                ToolTip="Use this exact retail model fingerprint as the immutable source." />
+                                        <Button Command="{Binding UseSelectedAssetAsTargetCommand}"
+                                                Content="Use as Target"
+                                                ToolTip="Create or reuse a target-specific variant transactionally." />
+                                        <Button Command="{Binding PlaySelectedExplorerAnimationCommand}"
+                                                Content="Play Animation"
+                                                ToolTip="Decode this type-320 clip against the currently decoded source model, add it once, reset to frame zero, and play." />
+                                    </WrapPanel>
+                                </StackPanel>
+                                <Grid Grid.Row="2" Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox Margin="0,0,2,0"
+                                              ItemsSource="{Binding AssetBrowser.KindFilters}"
+                                              SelectedItem="{Binding AssetBrowser.SelectedKindFilter}"
+                                              ToolTip="Resource type" />
+                                    <ComboBox Grid.Column="1"
+                                              Margin="2,0,0,0"
+                                              ItemsSource="{Binding AssetBrowser.ProviderFilters}"
+                                              SelectedItem="{Binding AssetBrowser.SelectedProviderFilter}"
+                                              ToolTip="Base, DLC, or configured provider" />
+                                </Grid>
+                                <StackPanel Grid.Row="3">
+                                    <Border Margin="0,0,0,5"
+                                            Padding="6"
+                                            Background="#25344A"
+                                            BorderBrush="{StaticResource AccentBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="3"
+                                            Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <DockPanel LastChildFill="True">
+                                            <Button DockPanel.Dock="Right"
+                                                    Margin="6,0,0,0"
+                                                    Command="{Binding CancelExplorerSourceModelPickerCommand}"
+                                                    Content="Cancel" />
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       Text="{Binding ExplorerSourceModelPickerPrompt}"
+                                                       TextWrapping="Wrap" />
+                                        </DockPanel>
+                                    </Border>
+                                    <Border Margin="0,0,0,5"
+                                            Padding="6"
+                                            Background="#3A2D18"
+                                            BorderBrush="{StaticResource WarningBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="3"
+                                            Visibility="{Binding IsExplorerAnimationTimingPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <StackPanel>
+                                            <TextBlock Foreground="{StaticResource TextBrush}"
+                                                       Text="{Binding ExplorerAnimationTimingPrompt}"
+                                                       TextWrapping="Wrap" />
+                                            <ComboBox Margin="0,5,0,4"
+                                                      DisplayMemberPath="SelectionLabel"
+                                                      ItemsSource="{Binding ExplorerAnimationTimingChoices}"
+                                                      SelectedItem="{Binding SelectedExplorerAnimationTiming}" />
+                                            <WrapPanel>
+                                                <Button Command="{Binding ConfirmExplorerAnimationTimingCommand}"
+                                                        Content="Use timing and play" />
+                                                <Button Margin="4,0,0,0"
+                                                        Command="{Binding CancelExplorerAnimationTimingCommand}"
+                                                        Content="Cancel" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                                <Expander Grid.Row="4"
+                                          Margin="0,0,0,4"
+                                          Header="Decoded mesh filters"
+                                          ToolTip="Family, geometry, perspective, facial, DLC, and variant filters use decoded classification evidence only.">
+                                    <StackPanel Margin="0,4,0,0">
+                                        <UniformGrid Columns="2">
+                                            <ComboBox Margin="0,0,2,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.GeometryFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedGeometryFilter}"
+                                                      ToolTip="Static, skinned, metadata container, or explicit unknown geometry" />
+                                            <ComboBox Margin="2,0,0,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.RigFamilyFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedRigFamilyFilter}"
+                                                      ToolTip="Evidence-backed DL1 rig family" />
+                                            <ComboBox Margin="0,2,2,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.RigSignatureFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedRigSignatureFilter}"
+                                                      ToolTip="Exact decoded rig signature" />
+                                            <ComboBox Margin="2,2,0,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.PerspectiveFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedPerspectiveFilter}"
+                                                      ToolTip="Explicit decoded FPP/TPP evidence" />
+                                            <ComboBox Margin="0,2,2,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.FacialFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedFacialFilter}"
+                                                      ToolTip="Decoded facial morph support" />
+                                            <ComboBox Margin="2,2,0,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.SourceScopeFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedSourceScopeFilter}"
+                                                      ToolTip="Base game, DLC, user-added root, or explicit unknown scope" />
+                                            <ComboBox Margin="0,2,2,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.DlcFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedDlcFilter}"
+                                                      ToolTip="Decoded provider/DLC identity" />
+                                            <ComboBox Margin="2,2,0,2"
+                                                      DisplayMemberPath="Label"
+                                                      ItemsSource="{Binding AssetBrowser.VariantFilters}"
+                                                      SelectedItem="{Binding AssetBrowser.SelectedVariantFilter}"
+                                                      ToolTip="Decoded variant inventory or a specific variant" />
+                                        </UniformGrid>
+                                        <WrapPanel>
+                                            <Button Command="{Binding AssetBrowser.ClassifyFilteredMeshesCommand}"
+                                                    Content="Classify next 128"
+                                                    ToolTip="Decode and classify a bounded batch matching the text, type, and provider filters on a cancellable background job." />
+                                            <Button Margin="4,0,0,0"
+                                                    Command="{Binding AssetBrowser.CancelProfileScanCommand}"
+                                                    Content="Cancel" />
+                                            <Button Margin="4,0,0,0"
+                                                    Command="{Binding AssetBrowser.ResetProfileFiltersCommand}"
+                                                    Content="Reset" />
+                                        </WrapPanel>
+                                        <TextBlock Margin="0,3,0,0"
+                                                   FontSize="10"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding AssetBrowser.ProfileScanStatus}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock FontSize="10"
+                                                   Foreground="{StaticResource MutedTextBrush}">
+                                            <Run Text="{Binding AssetBrowser.ClassifiedMeshCount, Mode=OneWay}" />
+                                            <Run Text=" classified; " />
+                                            <Run Text="{Binding AssetBrowser.PendingProfileCount, Mode=OneWay}" />
+                                            <Run Text=" filtered mesh rows pending" />
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Expander>
+                                <Grid Grid.Row="5" Margin="0,0,0,4">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <ComboBox ItemsSource="{Binding AdditionalRpackRoots}"
+                                              SelectedItem="{Binding SelectedAdditionalRpackRoot}"
+                                              ToolTip="Portable project-relative RPack roots; the first root has highest override precedence" />
+                                    <Button Grid.Column="1"
+                                            Command="{Binding AddAdditionalRpackRootCommand}"
+                                            Content="+"
+                                            ToolTip="Add a project-relative RPack folder" />
+                                    <Button Grid.Column="2"
+                                            Command="{Binding RemoveAdditionalRpackRootCommand}"
+                                            Content="−"
+                                            ToolTip="Remove the selected RPack folder" />
+                                </Grid>
+                                <Border Grid.Row="6"
+                                        Margin="0,0,0,5"
+                                        Padding="6"
+                                        Background="#202A3A"
+                                        BorderBrush="#40506A"
+                                        BorderThickness="1"
+                                        CornerRadius="3">
+                                    <StackPanel>
+                                        <WrapPanel>
+                                            <Button Padding="8,3"
+                                                    Command="{Binding ExportSelectedMeshToBlenderFbxCommand}"
+                                                    Content="Mesh + ANM2 to FBX…"
+                                                    ToolTip="Create one armature-owned Blender Action/FBX take per selected ANM2 clip using the selected decoded retail mesh." />
+                                            <Button Margin="4,0,0,0"
+                                                    Padding="8,3"
+                                                    Command="{Binding ConfigureBlenderCommand}"
+                                                    Content="Blender…"
+                                                    ToolTip="Configure the optional local blender.exe used only for FBX writing." />
+                                        </WrapPanel>
+                                        <TextBlock Margin="0,4,0,0"
+                                                   FontSize="10"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding BlenderExportStatus}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Margin="0,3,0,0"
+                                                   FontSize="9"
+                                                   Foreground="{StaticResource WarningBrush}"
+                                                   Text="Local use only — FBX/DDS output contains retail DL1 data and must not be redistributed. Base color only."
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                                <Grid Grid.Row="7">
+                                    <ListBox x:Name="AssetExplorerList"
+                                             ItemsSource="{Binding AssetBrowser.VisibleAssets}"
+                                             MouseDoubleClick="OnAssetExplorerDoubleClick"
+                                             SelectedItem="{Binding AssetBrowser.SelectedAsset}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="3,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                        <TextBlock FontSize="10"
+                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                   Text="{Binding LogicalPath}" />
+                                                        <TextBlock FontSize="10"
+                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                   Text="{Binding Provider}" />
+                                                        <TextBlock FontSize="10"
+                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                   Text="{Binding ProfileSummary}"
+                                                                   ToolTip="{Binding ProfileEvidenceSummary}" />
+                                                    </StackPanel>
+                                                    <Border Grid.Column="1"
+                                                            Margin="4"
+                                                            Padding="5,2"
+                                                            Background="{StaticResource AccentDimBrush}"
+                                                            CornerRadius="8">
+                                                        <TextBlock FontSize="9" Text="{Binding Kind}" />
+                                                    </Border>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               MaxWidth="220"
+                                               TextAlignment="Center"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="{Binding AssetBrowser.EmptyResultMessage}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="{x:Type TextBlock}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding AssetBrowser.HasFilteredAssets}" Value="False">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem x:Name="AnimationLibraryTab"
+                                 Header="Animations">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Margin="4,2,4,6"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="Each clip keeps an immutable source rig. Target variants are grouped below and retain their own mapping, edits, face, IK, and attachments."
+                                           TextWrapping="Wrap" />
+                                <WrapPanel Grid.Row="1" Margin="0,0,0,5">
+                                    <Button Command="{Binding ActivateSelectedAnimationCommand}" Content="Activate" />
+                                    <Button Command="{Binding RenameSelectedAnimationCommand}" Content="Rename" />
+                                    <Button Command="{Binding DuplicateSelectedAnimationCommand}" Content="Duplicate" />
+                                    <Button Command="{Binding RebindSelectedAnimationSourceCommand}" Content="Rebind Source" />
+                                    <Button Command="{Binding RemoveSelectedAnimationCommand}" Content="Remove" />
+                                    <Button Command="{Binding RevealSelectedAnimationSourceCommand}" Content="Reveal source" />
+                                    <Button Command="{Binding AttachSelectedAnimationAsFacialCommand}" Content="Attach as facial" />
+                                </WrapPanel>
+                                <ListBox x:Name="AnimationLibraryList"
+                                         Grid.Row="2"
+                                         ItemsSource="{Binding AnimationLibrary}"
+                                         MouseDoubleClick="OnAnimationLibraryDoubleClick"
+                                         SelectedItem="{Binding SelectedAnimationLibraryItem}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="2,3"
+                                                    Padding="6"
+                                                    BorderBrush="#344258"
+                                                    BorderThickness="1"
+                                                    CornerRadius="3">
+                                                <StackPanel>
+                                                    <Border Margin="0,2,0,6"
+                                                            Padding="7,4"
+                                                            Background="#243044"
+                                                            BorderBrush="#405574"
+                                                            BorderThickness="1"
+                                                            CornerRadius="3">
+                                                        <Border.Style>
+                                                            <Style TargetType="{x:Type Border}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding ShowVariantGroupHeader}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <TextBlock FontWeight="SemiBold"
+                                                                   Foreground="{StaticResource AccentBrush}"
+                                                                   Text="{Binding VariantGroupLabel, StringFormat=Clip: {0}}" />
+                                                    </Border>
+                                                    <TextBox FontWeight="SemiBold"
+                                                             MaxLength="128"
+                                                             Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                                    <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Source, StringFormat=Source: {0}}" TextWrapping="Wrap" />
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding SourceModel, StringFormat=Source model: {0}}" TextWrapping="Wrap" />
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding TargetModel, StringFormat=Target: {0}}" TextWrapping="Wrap" />
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}">
+                                                        <Run Text="{Binding Roles, Mode=OneWay}" />
+                                                        <Run Text=" | " />
+                                                        <Run Text="{Binding Cadence, Mode=OneWay}" />
+                                                        <Run Text=" | " />
+                                                        <Run Text="{Binding Duration, Mode=OneWay}" />
+                                                    </TextBlock>
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource AccentBrush}" Text="{Binding MappingState}" />
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource WarningBrush}" Text="{Binding Diagnostics}" TextWrapping="Wrap" />
+                                                    <TextBlock FontSize="9" FontWeight="Bold" Foreground="#67D5A7" Text="ACTIVE">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="{x:Type TextBlock}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="Skeleton">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <TextBlock Margin="4"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="{Binding SelectedBoneLabel}" />
+                                <WrapPanel Grid.Row="1"
+                                           Margin="2,0,2,4">
+                                    <CheckBox Margin="3,1"
+                                              Content="Mesh"
+                                              IsChecked="{Binding ShowMeshes}" />
+                                    <CheckBox Margin="3,1"
+                                              Content="All rig"
+                                              IsChecked="{Binding ShowSkeletonOverlay}"
+                                              ToolTip="Master visibility for all skeleton categories." />
+                                    <CheckBox Margin="3,1"
+                                              Content="Bones"
+                                              IsChecked="{Binding ShowDeformBones}" />
+                                    <CheckBox Margin="3,1"
+                                              Content="Helpers"
+                                              IsChecked="{Binding ShowHelpers}"
+                                              ToolTip="Ordinary non-deforming helpers are hidden by default." />
+                                    <CheckBox Margin="3,1"
+                                              Content="Cameras"
+                                              IsChecked="{Binding ShowCameraHelpers}"
+                                              ToolTip="EyeCamera and RefCamera are classified separately from ordinary helpers." />
+                                    <CheckBox Margin="3,1"
+                                              Content="Props / pivots"
+                                              IsChecked="{Binding ShowPropHelpers}"
+                                              ToolTip="Animated prop pivots, such as the slums door rig, are separate from deform bones." />
+                                </WrapPanel>
+                                <Grid Grid.Row="2">
+                                    <TreeView ItemsSource="{Binding SkeletonRoots}"
+                                              behaviors:TreeViewSelection.IsEnabled="True"
+                                              behaviors:TreeViewSelection.SelectedItem="{Binding SelectedBone}">
+                                        <TreeView.Resources>
+                                            <HierarchicalDataTemplate DataType="{x:Type vm:SkeletonNodeViewModel}"
+                                                                      ItemsSource="{Binding Children}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="◇" Foreground="{StaticResource AccentBrush}" />
+                                                    <TextBlock Margin="5,0" Text="{Binding Name}" />
+                                                    <TextBlock Margin="5,0"
+                                                               FontSize="9"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="{Binding Role}" />
+                                                    <TextBlock Margin="5,0"
+                                                               FontSize="9"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="{Binding Index, StringFormat=№{0}}" />
+                                                </StackPanel>
+                                            </HierarchicalDataTemplate>
+                                        </TreeView.Resources>
+                                    </TreeView>
+                                    <TextBlock HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Load a skinned mesh to inspect its hierarchy.">
+                                        <TextBlock.Style>
+                                            <Style TargetType="{x:Type TextBlock}">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SkeletonRoots.Count}" Value="0">
+                                                        <Setter Property="Visibility" Value="Visible" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </Grid>
+                            </Grid>
+                        </TabItem>
+                    </TabControl>
+                </Border>
+
+                <GridSplitter Grid.Column="1"
+                              HorizontalAlignment="Stretch"
+                              Background="#2D3541" />
+
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="5" />
+                        <RowDefinition Height="245" />
+                    </Grid.RowDefinitions>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition>
+                                <ColumnDefinition.Style>
+                                    <Style TargetType="{x:Type ColumnDefinition}">
+                                        <Setter Property="Width" Value="*" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSourceViewportVisible}" Value="False">
+                                                <Setter Property="Width" Value="0" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ColumnDefinition.Style>
+                            </ColumnDefinition>
+                            <ColumnDefinition>
+                                <ColumnDefinition.Style>
+                                    <Style TargetType="{x:Type ColumnDefinition}">
+                                        <Setter Property="Width" Value="6" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSourceViewportVisible}" Value="False">
+                                                <Setter Property="Width" Value="0" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ColumnDefinition.Style>
+                            </ColumnDefinition>
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.ColumnSpan="3"
+                                Panel.ZIndex="20"
+                                Margin="8"
+                                Padding="8,5"
+                                HorizontalAlignment="Left"
+                                VerticalAlignment="Top"
+                                Background="#D9171D25"
+                                BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                CornerRadius="3">
+                            <StackPanel>
+                                <TextBlock FontWeight="SemiBold">
+                                    <Run Text="{Binding ActiveAnimationLabel, Mode=OneWay}" />
+                                    <Run Text="  |  " />
+                                    <Run Text="{Binding TargetBindingStatusText, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock FontSize="10"
+                                           Foreground="{StaticResource MutedTextBrush}">
+                                    <Run Text="Source: " />
+                                    <Run Text="{Binding ActiveSourceModelLabel, Mode=OneWay}" />
+                                    <Run Text="  →  Target: " />
+                                    <Run Text="{Binding ActiveTargetModelLabel, Mode=OneWay}" />
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+                        <views:ViewportPane DataContext="{Binding SourceViewport}"
+                                            Visibility="{Binding IsSourceViewportVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <GridSplitter Grid.Column="1"
+                                      HorizontalAlignment="Stretch"
+                                      Background="#2D3541"
+                                      Visibility="{Binding IsSourceViewportVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <views:ViewportPane Grid.Column="2"
+                                            DataContext="{Binding TargetViewport}" />
+                        <Border Grid.Column="2"
+                                Panel.ZIndex="25"
+                                Width="300"
+                                Padding="12"
+                                HorizontalAlignment="Center"
+                                VerticalAlignment="Center"
+                                Background="#E63B301D"
+                                BorderBrush="{StaticResource WarningBrush}"
+                                BorderThickness="1"
+                                CornerRadius="4"
+                                Visibility="{Binding IsTargetPlaybackBlocked, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <StackPanel>
+                                <TextBlock FontSize="15"
+                                           FontWeight="SemiBold"
+                                           Foreground="#F3C978"
+                                           Text="{Binding TargetBindingStatusText}"
+                                           TextAlignment="Center" />
+                                <TextBlock Margin="0,6,0,0"
+                                           Foreground="{StaticResource TextBrush}"
+                                           Text="{Binding TargetPlaybackMessage}"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                    <GridSplitter Grid.Row="1"
+                                  HorizontalAlignment="Stretch"
+                                  Background="#2D3541" />
+                    <views:TimelinePanel Grid.Row="2"
+                                         DataContext="{Binding Timeline}" />
+                </Grid>
+
+                <GridSplitter Grid.Column="3"
+                              HorizontalAlignment="Stretch"
+                              Background="#2D3541"
+                              Visibility="{Binding IsInspectorPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+
+                <Border Grid.Column="4"
+                        Style="{StaticResource PaneBorderStyle}"
+                        Visibility="{Binding IsInspectorPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TabControl>
+                        <TabItem Header="Mapping"
+                                 Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <Grid Margin="6">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel>
+                                    <WrapPanel>
+                                        <Button Command="{Binding AutoMapCommand}" Content="Auto-map" />
+                                        <Button Command="{Binding ValidateMappingCommand}"
+                                                Content="Validate"
+                                                ToolTip="Check deterministic identities, explicit row review, and required target-bind ownership" />
+                                        <Button Command="{Binding SaveMappingProfileCommand}"
+                                                Content="Save selections"
+                                                ToolTip="Persist only the individually checked mapping and required target-bind review rows. This action never accepts every row automatically." />
+                                    </WrapPanel>
+                                    <TextBlock Margin="4,7,4,3"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Text="Helper / camera fan-out" />
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <ComboBox Margin="0,0,3,0"
+                                                  IsTextSearchEnabled="True"
+                                                  ItemsSource="{Binding MappingSourceBoneOptions}"
+                                                  SelectedItem="{Binding SelectedHelperOverrideSourceBone}"
+                                                  ToolTip="One source may keep its ordinary body row and also drive multiple distinct helper targets." />
+                                        <TextBlock Grid.Column="1"
+                                                   Margin="3,0"
+                                                   VerticalAlignment="Center"
+                                                   Text="-&gt;" />
+                                        <ComboBox Grid.Column="2"
+                                                  Margin="3,0"
+                                                  IsTextSearchEnabled="True"
+                                                  ItemsSource="{Binding MappingHelperTargetOptions}"
+                                                  SelectedItem="{Binding SelectedHelperOverrideTargetBone}"
+                                                  ToolTip="Validated target helper, camera, or prop node. A target may appear in only one mapping row." />
+                                        <Button Grid.Column="3"
+                                                Margin="3,0"
+                                                Command="{Binding AddHelperOverrideCommand}"
+                                                Content="Add helper override"
+                                                ToolTip="Add a rest-relative helper fan-out row without replacing the source's ordinary body mapping." />
+                                        <Button Grid.Column="4"
+                                                Margin="3,0,0,0"
+                                                Command="{Binding RemoveHelperOverrideCommand}"
+                                                Content="Remove"
+                                                ToolTip="Remove the selected helper override. Ordinary body rows cannot be removed with this action." />
+                                    </Grid>
+                                </StackPanel>
+                                <DataGrid Grid.Row="1"
+                                          Margin="0,5"
+                                          AutoGenerateColumns="False"
+                                          CanUserAddRows="False"
+                                          FrozenColumnCount="2"
+                                          HorizontalScrollBarVisibility="Auto"
+                                          ItemsSource="{Binding BoneMappings}"
+                                          SelectedItem="{Binding SelectedBoneMapping}">
+                                    <DataGrid.Columns>
+                                        <DataGridTextColumn Width="150"
+                                                            Binding="{Binding SourceBone}"
+                                                            Header="Source"
+                                                            IsReadOnly="True" />
+                                        <DataGridTextColumn Width="150"
+                                                            Binding="{Binding TargetBone}"
+                                                            Header="DL1 target" />
+                                        <DataGridTextColumn Width="105"
+                                                            Binding="{Binding MappingKindLabel}"
+                                                            Header="Kind"
+                                                            IsReadOnly="True" />
+                                        <DataGridTemplateColumn Width="125"
+                                                                Header="Transfer">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox IsEnabled="{Binding HasTarget}"
+                                                              ItemsSource="{Binding TransferPolicies}"
+                                                              SelectedItem="{Binding TransferPolicy, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTemplateColumn Width="135"
+                                                                Header="Components">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox IsEnabled="{Binding HasTarget}"
+                                                              ItemsSource="{Binding ComponentPolicies}"
+                                                              SelectedItem="{Binding ComponentPolicy, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
+                                        <DataGridTextColumn Width="62"
+                                                            Binding="{Binding Confidence, StringFormat={}{0:P0}}"
+                                                            Header="Match"
+                                                            IsReadOnly="True" />
+                                        <DataGridCheckBoxColumn Width="45"
+                                                                Binding="{Binding IsLocked, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                Header="Lock" />
+                                        <DataGridCheckBoxColumn Width="55"
+                                                                Binding="{Binding IsReviewed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                Header="Review" />
+                                        <DataGridTextColumn Width="92"
+                                                            Binding="{Binding ReviewState}"
+                                                            Header="State"
+                                                            IsReadOnly="True" />
+                                    </DataGrid.Columns>
+                                </DataGrid>
+                                <StackPanel Grid.Row="2"
+                                            Margin="0,2,0,5">
+                                    <TextBlock Margin="4,2,4,0"
+                                               FontSize="10"
+                                               FontWeight="SemiBold"
+                                               Text="Required target-bind fallbacks" />
+                                    <TextBlock Margin="4,1,4,3"
+                                               FontSize="9"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Check only target bones you intentionally want to leave at their decoded bind-local transform."
+                                               TextWrapping="Wrap" />
+                                    <DataGrid Height="108"
+                                              AutoGenerateColumns="False"
+                                              CanUserAddRows="False"
+                                              HeadersVisibility="Column"
+                                              ItemsSource="{Binding RequiredTargetBindReviews}">
+                                        <DataGrid.Columns>
+                                            <DataGridTextColumn Width="150"
+                                                                Binding="{Binding TargetBone}"
+                                                                Header="DL1 target"
+                                                                IsReadOnly="True" />
+                                            <DataGridTextColumn Width="70"
+                                                                Binding="{Binding BoneKind}"
+                                                                Header="Kind"
+                                                                IsReadOnly="True" />
+                                            <DataGridCheckBoxColumn Width="55"
+                                                                    Binding="{Binding IsReviewed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                    Header="Review" />
+                                            <DataGridTextColumn Width="100"
+                                                                Binding="{Binding ReviewState}"
+                                                                Header="State"
+                                                                IsReadOnly="True" />
+                                        </DataGrid.Columns>
+                                    </DataGrid>
+                                </StackPanel>
+                                <Border Grid.Row="3"
+                                        Padding="8"
+                                        Background="#3B301D"
+                                        BorderBrush="#735D2A"
+                                        BorderThickness="1"
+                                        CornerRadius="3">
+                                    <TextBlock Foreground="#F3C978"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding MappingReviewStatus}" />
+                                </Border>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem Header="Inspector"
+                                 Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="10">
+                                    <TextBlock Style="{StaticResource PanelTitleStyle}" Text="Bone transform" />
+                                    <TextBlock Margin="8,0,8,8"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="{Binding SelectedBoneLabel}" />
+                                    <TextBlock Margin="8,4,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Viewport transform gizmo" />
+                                    <ComboBox Margin="6,0,6,4"
+                                              ItemsSource="{Binding BoneEditor.GizmoModes}"
+                                              SelectedItem="{Binding BoneEditor.GizmoMode}"
+                                              ToolTip="Translate moves along an axis, Rotate authors quaternion keys, and Scale applies a bounded positive local-axis multiplier." />
+                                    <ComboBox Margin="6,0,6,4"
+                                              IsEnabled="{Binding BoneEditor.IsGizmoSpaceEnabled}"
+                                              ItemsSource="{Binding BoneEditor.GizmoSpaces}"
+                                              SelectedItem="{Binding BoneEditor.GizmoSpace}"
+                                              ToolTip="Local follows the selected bone orientation. Global uses world X/Y/Z axes. Scale is always local." />
+                                    <TextBlock Margin="8,0,8,8"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="Drag colored handles to stage a transient preview. Mouse-up stores one undoable key in the selected layer; canceled or zero-length drags store nothing." />
+                                    <CheckBox Margin="8,2"
+                                              Content="Lock bone"
+                                              IsChecked="{Binding BoneEditor.Bone.IsLocked}" />
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Translation" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="X" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.PositionX, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="Y" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.PositionY, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="Z" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.PositionZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                    </UniformGrid>
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Rotation (degrees)" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="X" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.RotationX, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="Y" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.RotationY, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="Z" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.RotationZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                    </UniformGrid>
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Scale" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="X" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.ScaleX, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="Y" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.ScaleY, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                        <StackPanel Margin="2">
+                                            <TextBlock FontSize="9" Text="Z" />
+                                            <TextBox Text="{Binding BoneEditor.Bone.ScaleZ, UpdateSourceTrigger=PropertyChanged}" />
+                                        </StackPanel>
+                                    </UniformGrid>
+
+                                    <StackPanel Margin="6,12" Orientation="Horizontal">
+                                        <Button Command="{Binding BoneEditor.ApplyCommand}" Content="Apply transform" />
+                                        <Button Command="{Binding BoneEditor.ResetCommand}" Content="Reset" />
+                                        <Button Command="{Binding Timeline.AddKeyframeCommand}" Content="Keyframe" />
+                                    </StackPanel>
+
+                                    <TextBlock Margin="8,8,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Non-destructive bone layers" />
+                                    <TextBlock Margin="8,0,8,5"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               FontSize="10"
+                                               TextWrapping="Wrap"
+                                               Text="Select a layer, stage its controls, then Apply. Enabled is the persisted, undoable A/B switch; the shown layer scope determines whether it reaches preview only or authored export. There is no hidden enable override that could misrepresent exported results. The decoded rest skeleton is never mutated." />
+                                    <ComboBox Margin="6,0,6,4"
+                                              DisplayMemberPath="Name"
+                                              ItemsSource="{Binding BoneEditLayers}"
+                                              SelectedItem="{Binding SelectedBoneEditLayer}"
+                                              ToolTip="The selected layer receives numeric and gizmo bone keys" />
+                                    <Border Margin="6,0"
+                                            Padding="7"
+                                            BorderBrush="{StaticResource BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="3"
+                                            DataContext="{Binding SelectedBoneEditLayer}">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="68" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <CheckBox VerticalAlignment="Center"
+                                                      Content="Enabled"
+                                                      IsChecked="{Binding LayerEnabled}"
+                                                      ToolTip="Persisted A/B switch evaluated according to the layer's shown scope; Apply commits one undoable project change" />
+                                            <StackPanel Grid.Column="1"
+                                                        Margin="8,0">
+                                                <TextBlock FontWeight="SemiBold"
+                                                           Text="{Binding Name}" />
+                                                <TextBlock FontSize="9"
+                                                           Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding Scope}" />
+                                            </StackPanel>
+                                            <Button Grid.Column="2"
+                                                    Command="{Binding ApplyCommand}"
+                                                    Content="Apply" />
+
+                                            <TextBlock Grid.Row="1"
+                                                       Margin="0,9,8,0"
+                                                       VerticalAlignment="Center"
+                                                       Text="Blend" />
+                                            <ComboBox Grid.Row="1"
+                                                      Grid.Column="1"
+                                                      Grid.ColumnSpan="2"
+                                                      Margin="0,7,0,0"
+                                                      ItemsSource="{Binding BlendModes}"
+                                                      SelectedItem="{Binding BlendMode}"
+                                                      ToolTip="Additive stores local offsets; Override replaces the underlying local transform at the layer weight" />
+
+                                            <TextBlock Grid.Row="2"
+                                                       Margin="0,9,8,0"
+                                                       VerticalAlignment="Center"
+                                                       Text="Key interpolation" />
+                                            <ComboBox Grid.Row="2"
+                                                      Grid.Column="1"
+                                                      Grid.ColumnSpan="2"
+                                                      Margin="0,7,0,0"
+                                                      IsEnabled="{Binding CanEditSelectedBoneInterpolation}"
+                                                      ItemsSource="{Binding InterpolationModes}"
+                                                      SelectedItem="{Binding SelectedBoneInterpolation}"
+                                                      ToolTip="Interpolation for the selected bone track. Linear uses quaternion-safe slerp; Step holds the complete local transform." />
+
+                                            <TextBlock Grid.Row="3"
+                                                       Margin="0,9,8,0"
+                                                       VerticalAlignment="Center"
+                                                       Text="Layer weight" />
+                                            <Slider Grid.Row="3"
+                                                    Grid.Column="1"
+                                                    Margin="0,7,8,0"
+                                                    Minimum="0"
+                                                    Maximum="1"
+                                                    TickFrequency="0.05"
+                                                    IsSnapToTickEnabled="True"
+                                                    Value="{Binding Weight}" />
+                                            <TextBox Grid.Row="3"
+                                                     Grid.Column="2"
+                                                     Margin="0,7,0,0"
+                                                     HorizontalContentAlignment="Right"
+                                                     Text="{Binding Weight, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
+                                                     ToolTip="Finite value clamped from 0 to 1" />
+
+                                            <CheckBox Grid.Row="4"
+                                                      Grid.ColumnSpan="3"
+                                                      Margin="0,10,0,2"
+                                                      Content="{Binding SelectedBoneLabel, StringFormat={}Use explicit mask for {0}}"
+                                                      IsChecked="{Binding HasSelectedBoneMask}"
+                                                      IsEnabled="{Binding CanEditSelectedBoneMask}"
+                                                      ToolTip="Uncheck to remove this bone from the explicit mask; unlisted bones use 100%" />
+
+                                            <TextBlock Grid.Row="5"
+                                                       Margin="0,7,8,0"
+                                                       VerticalAlignment="Center"
+                                                       Text="Bone mask" />
+                                            <Slider Grid.Row="5"
+                                                    Grid.Column="1"
+                                                    Margin="0,5,8,0"
+                                                    Minimum="0"
+                                                    Maximum="1"
+                                                    TickFrequency="0.05"
+                                                    IsSnapToTickEnabled="True"
+                                                    IsEnabled="{Binding HasSelectedBoneMask}"
+                                                    Value="{Binding SelectedBoneMaskWeight}" />
+                                            <TextBox Grid.Row="5"
+                                                     Grid.Column="2"
+                                                     Margin="0,5,0,0"
+                                                     HorizontalContentAlignment="Right"
+                                                     IsEnabled="{Binding HasSelectedBoneMask}"
+                                                     Text="{Binding SelectedBoneMaskWeight, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}"
+                                                     ToolTip="Finite per-bone multiplier clamped from 0 to 1" />
+                                        </Grid>
+                                    </Border>
+                                    <TextBlock Margin="8,4,8,0"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               FontSize="9"
+                                               TextWrapping="Wrap"
+                                               Text="{Binding SelectedBoneEditLayer.ExplicitBoneMaskCount, StringFormat={}{0} explicit per-bone mask entries; unlisted bones use 100%.}" />
+
+                                    <Border Margin="8"
+                                            Padding="8"
+                                            Background="#3B2228"
+                                            BorderBrush="#713A43"
+                                            BorderThickness="1"
+                                            CornerRadius="3">
+                                        <TextBlock Foreground="#F2A1A5"
+                                                   TextWrapping="Wrap"
+                                                   Text="Bone keys are stored non-destructively in the project and deform decoded DL1 meshes through the GPU skinning preview. Diagnostic materials, unsupported morph layouts, normal deltas, and unvalidated game captures remain visible fidelity limits." />
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="Attachments"
+                                 Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="10">
+                                    <TextBlock Style="{StaticResource PanelTitleStyle}"
+                                               Text="DL1 prop / weapon" />
+                                    <TextBlock Margin="8,0,8,8"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="One animated target can carry rigid retail props or weapons. Bindings follow the authoritative timeline and store identities and transforms, never retail bytes." />
+
+                                    <TextBlock Margin="8,5,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Retail mesh" />
+                                    <TextBox Margin="6,0,6,4"
+                                             Text="{Binding AttachmentEditor.AssetSearch, UpdateSourceTrigger=PropertyChanged}"
+                                             ToolTip="Filter decoded DL1 mesh resources for attachment selection" />
+                                    <ComboBox Margin="6,0"
+                                              DisplayMemberPath="Name"
+                                              IsTextSearchEnabled="True"
+                                              ItemsSource="{Binding AttachmentEditor.VisibleCatalogAssets}"
+                                              SelectedItem="{Binding AttachmentEditor.SelectedCatalogAsset}"
+                                              ToolTip="Retail mesh identity; the resource is decoded only when Add is pressed"
+                                              VirtualizingPanel.IsVirtualizing="True"
+                                              VirtualizingPanel.VirtualizationMode="Recycling" />
+
+                                    <TextBlock Margin="8,10,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Parent bone / helper" />
+                                    <ComboBox Margin="6,0"
+                                              DisplayMemberPath="DisplayName"
+                                              ItemsSource="{Binding AttachmentEditor.ParentBones}"
+                                              SelectedItem="{Binding AttachmentEditor.SelectedParentBone}"
+                                              ToolTip="Decoded target bones, helpers, camera nodes, and prop sockets are listed with their roles" />
+
+                                    <TextBlock Margin="8,10,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Binding name" />
+                                    <TextBox Margin="6,0"
+                                             MaxLength="128"
+                                             Text="{Binding AttachmentEditor.Name, UpdateSourceTrigger=PropertyChanged}" />
+                                    <CheckBox Margin="8,8,8,3"
+                                              Content="Preview only"
+                                              ToolTip="Preview-only bindings are excluded from authoritative export evaluation"
+                                              IsChecked="{Binding AttachmentEditor.IsPreviewOnly}" />
+                                    <Button Margin="6,8"
+                                            Command="{Binding AddAttachmentCommand}"
+                                            Content="Add retail attachment" />
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Document attachments" />
+                                    <ListBox Margin="6,0"
+                                             MaxHeight="150"
+                                             ItemsSource="{Binding AttachmentEditor.Attachments}"
+                                             SelectedItem="{Binding AttachmentEditor.SelectedAttachment}">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="2,3">
+                                                    <TextBlock FontWeight="SemiBold"
+                                                               Text="{Binding Name}" />
+                                                    <TextBlock FontSize="10"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="{Binding AssetLabel}" />
+                                                    <TextBlock FontSize="10"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="{Binding ParentLabel}" />
+                                                    <TextBlock FontSize="10"
+                                                               Foreground="{StaticResource WarningBrush}"
+                                                               TextWrapping="Wrap"
+                                                               Text="{Binding Status}" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Local translation" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionX, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionY, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionZ, UpdateSourceTrigger=PropertyChanged}" />
+                                    </UniformGrid>
+
+                                    <TextBlock Margin="8,10,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Local rotation (degrees)" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationX, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationY, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationZ, UpdateSourceTrigger=PropertyChanged}" />
+                                    </UniformGrid>
+
+                                    <TextBlock Margin="8,10,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Local scale" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleX, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleY, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleZ, UpdateSourceTrigger=PropertyChanged}" />
+                                    </UniformGrid>
+
+                                    <WrapPanel Margin="6,10">
+                                        <Button Command="{Binding ApplyAttachmentCommand}"
+                                                Content="Apply offset" />
+                                        <Button Command="{Binding FrameAttachmentCommand}"
+                                                Content="Frame attachment"
+                                                ToolTip="Frame only the selected prop or weapon in the target viewport" />
+                                        <Button Command="{Binding ResetAttachmentOffsetCommand}"
+                                                Content="Reset fields" />
+                                        <Button Command="{Binding RemoveAttachmentCommand}"
+                                                Content="Remove" />
+                                    </WrapPanel>
+
+                                    <Border Margin="8"
+                                            Padding="8"
+                                            Background="#3B301D"
+                                            BorderBrush="#735D2A"
+                                            BorderThickness="1"
+                                            CornerRadius="3">
+                                        <TextBlock Foreground="#F3C978"
+                                                   TextWrapping="Wrap"
+                                                   Text="New attachments start at the selected bone/helper with zero local offset, so a prop may initially sit inside the actor. The selected attachment is highlighted and Frame attachment isolates it for inspection. A missing retail fingerprint or changed parent fails visibly and is never substituted." />
+                                    </Border>
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="Hand / Foot IK"
+                                 Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel Margin="10">
+                                    <TextBlock Style="{StaticResource PanelTitleStyle}"
+                                               Text="Validated two-bone IK" />
+                                    <TextBlock Margin="8,0,8,8"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               TextWrapping="Wrap"
+                                               Text="Only chains decoded and validated for the selected retail rig are offered. Rigs without a validated chain retain normal FK bone editing." />
+                                    <TextBlock Margin="8,5,8,3" Text="Chain" />
+                                    <ComboBox Margin="6,0"
+                                              ItemsSource="{Binding IkEditor.Chains}"
+                                              SelectedItem="{Binding IkEditor.SelectedChain}" />
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Effector (world)" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <TextBox Margin="2" Text="{Binding IkEditor.EffectorX, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding IkEditor.EffectorY, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding IkEditor.EffectorZ, UpdateSourceTrigger=PropertyChanged}" />
+                                    </UniformGrid>
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Pole target (world)" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <TextBox Margin="2" Text="{Binding IkEditor.PoleX, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding IkEditor.PoleY, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding IkEditor.PoleZ, UpdateSourceTrigger=PropertyChanged}" />
+                                    </UniformGrid>
+
+                                    <TextBlock Margin="8,12,8,3"
+                                               FontWeight="SemiBold"
+                                               Text="Constraint weight" />
+                                    <Slider Margin="8,0"
+                                            Minimum="0"
+                                            Maximum="1"
+                                            Value="{Binding IkEditor.Weight}" />
+
+                                    <CheckBox Margin="8,12,8,3"
+                                              Content="Author end orientation"
+                                              IsChecked="{Binding IkEditor.UseEndOrientation}" />
+                                    <UniformGrid Margin="6,0" Columns="3">
+                                        <TextBox Margin="2" Text="{Binding IkEditor.EndRotationX, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding IkEditor.EndRotationY, UpdateSourceTrigger=PropertyChanged}" />
+                                        <TextBox Margin="2" Text="{Binding IkEditor.EndRotationZ, UpdateSourceTrigger=PropertyChanged}" />
+                                    </UniformGrid>
+
+                                    <Button Margin="6,12"
+                                            Command="{Binding KeyIkConstraintCommand}"
+                                            Content="Key IK constraint" />
+                                    <CheckBox Margin="8,2,8,3"
+                                              Content="Mark keyed IK for baking to an authored bone layer"
+                                              ToolTip="Baking samples every animation frame, creates ordinary FK override keys, and removes the IK layer in one undoable transaction"
+                                              IsChecked="{Binding IkEditor.BakeToEditLayer}" />
+                                    <Button Margin="6,6,6,12"
+                                            Command="{Binding BakeIkConstraintCommand}"
+                                            Content="Bake selected IK to bone layer" />
+                                </StackPanel>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="Face / FPP"
+                                 Visibility="{Binding IsFaceOrFppWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TabControl>
+                                <TabItem Header="Facial">
+                                    <Grid Margin="8">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        <TextBox Text="{Binding FacialFpp.MimicFilter, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Filter FED mimic presets and morph channels" />
+                                         <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,5">
+                                             <Button Command="{Binding ImportFedCommand}" Content="Load FED..." />
+                                             <Button Command="{Binding KeyMorphPoseCommand}" Content="Key facial pose" />
+                                             <Button Command="{Binding FacialFpp.ResetMorphsCommand}" Content="Reset morphs" />
+                                             <Button Command="{Binding FacialFpp.PreviewBlinkCommand}" Content="Blink" />
+                                         </StackPanel>
+                                         <Grid Grid.Row="2" Margin="0,0,0,5">
+                                             <Grid.ColumnDefinitions>
+                                                 <ColumnDefinition Width="*" />
+                                                 <ColumnDefinition Width="Auto" />
+                                             </Grid.ColumnDefinitions>
+                                             <ComboBox ItemsSource="{Binding FacialFpp.VisibleMimicPresets}"
+                                                       SelectedItem="{Binding FacialFpp.SelectedMimicPreset}"
+                                                       ToolTip="FED expression preset" />
+                                             <Button Grid.Column="1"
+                                                     Command="{Binding ApplyFedExpressionCommand}"
+                                                     Content="Apply FED layer" />
+                                         </Grid>
+                                         <Expander Grid.Row="3"
+                                                   Margin="0,2,0,7"
+                                                   Header="Facial FBX mapping review"
+                                                   IsExpanded="True">
+                                             <StackPanel Margin="6">
+                                                 <TextBlock Margin="0,0,0,6"
+                                                            Foreground="{StaticResource MutedTextBrush}"
+                                                            TextWrapping="Wrap"
+                                                            Text="Choose how raw FBX DeformPercent values are authored. No value-range heuristic is used." />
+                                                 <TextBlock Margin="0,0,0,6"
+                                                            Foreground="{StaticResource MutedTextBrush}"
+                                                            TextWrapping="Wrap"
+                                                            Text="The FBX curves are retained on the body timeline for real-mesh preview. After enabled mappings are reviewed and locked, mimic ANM2 is generated through the same authored export pipeline." />
+                                                 <Grid Margin="0,0,0,6">
+                                                     <Grid.ColumnDefinitions>
+                                                         <ColumnDefinition Width="*" />
+                                                         <ColumnDefinition Width="Auto" />
+                                                     </Grid.ColumnDefinitions>
+                                                     <ComboBox MinWidth="96"
+                                                               ItemsSource="{Binding FacialFpp.FacialSourceValueUnits}"
+                                                               SelectedItem="{Binding FacialFpp.SelectedFacialSourceValueUnit}"
+                                                               ToolTip="Required explicit source-value interpretation" />
+                                                     <Button Grid.Column="1"
+                                                             Margin="5,0,0,0"
+                                                             Command="{Binding ImportFacialFbxCommand}"
+                                                             Content="Import FBX..." />
+                                                 </Grid>
+                                                 <TextBlock Margin="0,0,0,6"
+                                                            Foreground="{StaticResource MutedTextBrush}"
+                                                            TextWrapping="Wrap"
+                                                            Text="{Binding FacialFpp.FacialMappingReviewStatus}" />
+                                                 <ScrollViewer MaxHeight="230"
+                                                               VerticalScrollBarVisibility="Auto">
+                                                     <ItemsControl ItemsSource="{Binding FacialFpp.FacialMappingReviews}">
+                                                         <ItemsControl.ItemTemplate>
+                                                             <DataTemplate>
+                                                                 <Border Margin="0,0,0,5"
+                                                                         Padding="6"
+                                                                         Background="{StaticResource PanelRaisedBrush}"
+                                                                         BorderBrush="{StaticResource BorderBrush}"
+                                                                         BorderThickness="1"
+                                                                         CornerRadius="2">
+                                                                     <StackPanel>
+                                                                         <TextBlock FontWeight="SemiBold"
+                                                                                    TextWrapping="Wrap">
+                                                                             <Run Text="{Binding SourceChannel, Mode=OneWay}" />
+                                                                             <Run Text="  →  " />
+                                                                             <Run Text="{Binding TargetMorph, Mode=OneWay}" />
+                                                                         </TextBlock>
+                                                                         <TextBlock Margin="0,2,0,3"
+                                                                                    Foreground="{StaticResource MutedTextBrush}"
+                                                                                    TextWrapping="Wrap">
+                                                                             <Run Text="{Binding SourceValueUnit, Mode=OneWay}" />
+                                                                             <Run Text=" · " />
+                                                                             <Run Text="{Binding TargetDescriptor, Mode=OneWay}" />
+                                                                             <Run Text=" · " />
+                                                                             <Run Text="{Binding ConfidenceLabel, Mode=OneWay}" />
+                                                                         </TextBlock>
+                                                                         <WrapPanel>
+                                                                             <CheckBox Margin="0,0,8,0"
+                                                                                       Content="Enabled"
+                                                                                       IsChecked="{Binding Enabled}" />
+                                                                             <CheckBox Margin="0,0,8,0"
+                                                                                       Content="Reviewed"
+                                                                                       IsChecked="{Binding IsReviewed}" />
+                                                                             <CheckBox Content="Locked"
+                                                                                       IsChecked="{Binding IsLocked}"
+                                                                                       ToolTip="A row can only be locked after it is reviewed" />
+                                                                         </WrapPanel>
+                                                                         <TextBlock Margin="0,3,0,0"
+                                                                                    Foreground="{StaticResource MutedTextBrush}"
+                                                                                    Text="{Binding ReviewState}" />
+                                                                     </StackPanel>
+                                                                 </Border>
+                                                             </DataTemplate>
+                                                         </ItemsControl.ItemTemplate>
+                                                     </ItemsControl>
+                                                 </ScrollViewer>
+                                                 <WrapPanel Margin="0,2,0,0">
+                                                     <Button Command="{Binding ApplyFacialMappingReviewCommand}"
+                                                             Content="Apply row changes" />
+                                                     <Button Command="{Binding ReviewAndLockAllFacialMappingsCommand}"
+                                                             Content="Review + lock all"
+                                                             ToolTip="Explicitly accepts every displayed suggestion and stores the locked rows in the project" />
+                                                 </WrapPanel>
+                                                 <StackPanel Margin="0,6,0,0">
+                                                     <TextBlock FontWeight="SemiBold"
+                                                                Text="Unmapped animated FBX channels">
+                                                         <TextBlock.Style>
+                                                             <Style TargetType="{x:Type TextBlock}">
+                                                                 <Setter Property="Visibility" Value="Visible" />
+                                                                 <Style.Triggers>
+                                                                     <DataTrigger Binding="{Binding FacialFpp.UnmappedFacialChannels.Count}" Value="0">
+                                                                         <Setter Property="Visibility" Value="Collapsed" />
+                                                                     </DataTrigger>
+                                                                 </Style.Triggers>
+                                                             </Style>
+                                                         </TextBlock.Style>
+                                                     </TextBlock>
+                                                     <ItemsControl ItemsSource="{Binding FacialFpp.UnmappedFacialChannels}">
+                                                         <ItemsControl.ItemTemplate>
+                                                             <DataTemplate>
+                                                                 <TextBlock Foreground="{StaticResource WarningBrush}"
+                                                                            TextWrapping="Wrap">
+                                                                     <Run Text="• " />
+                                                                     <Run Text="{Binding Mode=OneWay}" />
+                                                                 </TextBlock>
+                                                             </DataTemplate>
+                                                         </ItemsControl.ItemTemplate>
+                                                     </ItemsControl>
+                                                 </StackPanel>
+                                             </StackPanel>
+                                         </Expander>
+                                         <Grid Grid.Row="4">
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                                <ItemsControl ItemsSource="{Binding FacialFpp.VisibleMorphs}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Grid Margin="3">
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="105" />
+                                                                    <ColumnDefinition Width="*" />
+                                                                    <ColumnDefinition Width="46" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <TextBlock VerticalAlignment="Center" Text="{Binding Name}" />
+                                                                 <Slider Grid.Column="1"
+                                                                         Margin="5,0"
+                                                                         Minimum="-4"
+                                                                         Maximum="4"
+                                                                         Value="{Binding Weight, Mode=TwoWay}" />
+                                                                 <TextBox Grid.Column="2"
+                                                                          HorizontalContentAlignment="Right"
+                                                                          ToolTip="Authored values remain unclamped; DL1 runtime limits apply only in the selected preview profile"
+                                                                          Text="{Binding Weight, Mode=TwoWay, UpdateSourceTrigger=LostFocus, StringFormat={}{0:F2}}" />
+                                                            </Grid>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </ScrollViewer>
+                                            <TextBlock HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center"
+                                                       MaxWidth="250"
+                                                       TextAlignment="Center"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Text="No morph channels match the current filter, or no decoded facial inventory is loaded.">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="{x:Type TextBlock}">
+                                                        <Setter Property="Visibility" Value="Collapsed" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding FacialFpp.VisibleMorphs.Count}" Value="0">
+                                                                <Setter Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </Grid>
+                                </TabItem>
+
+                                <TabItem Header="FPP">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Margin="10">
+                                            <CheckBox Margin="4"
+                                                      Content="Use FPP camera"
+                                                      IsChecked="{Binding FacialFpp.UseFppCamera}" />
+                                            <CheckBox Margin="4"
+                                                      Content="Request separate DL1 hands projection"
+                                                      ToolTip="Requires captured DL1 FOV axis, aspect, and near-plane state; otherwise the stage is visibly unavailable"
+                                                      IsChecked="{Binding FacialFpp.ShowHands}" />
+                                            <CheckBox Margin="4"
+                                                      Content="Show EyeCamera / RefCamera helpers"
+                                                      IsChecked="{Binding FacialFpp.ShowCameraRig}" />
+                                            <CheckBox Margin="4"
+                                                      Content="Apply DL1 HSpine/HSpine1 basis correction"
+                                                      ToolTip="Preview-only correction matched to the DL1 decompile; enabled by default, but not game validated"
+                                                      IsChecked="{Binding FacialFpp.EnableHSpineBasisCorrection}" />
+                                            <CheckBox Margin="4"
+                                                      Content="Request full DL1 head-position correction"
+                                                      ToolTip="Unavailable without captured movement, look, sprint, edge, landing, controller, and spring state"
+                                                      IsChecked="{Binding FacialFpp.EnableHeadPositionCorrection}" />
+                                            <CheckBox Margin="4"
+                                                      Content="Request DL1 hand inertia"
+                                                      ToolTip="The stage stays unavailable without captured player/camera velocities, controller state, and frame history"
+                                                      IsChecked="{Binding FacialFpp.EnableHandInertia}" />
+
+                                            <Expander Margin="4,12,4,2"
+                                                      Header="User/runtime-capture projection inputs"
+                                                      IsExpanded="True">
+                                                <StackPanel Margin="8,6,4,4">
+                                                    <TextBlock Margin="0,0,0,8"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               TextWrapping="Wrap"
+                                                               Text="Enter values from a specific runtime capture. They are project authoring inputs, not proof of game validation. No DL1 numeric defaults are inferred." />
+                                                    <CheckBox Margin="0,2,0,8"
+                                                              Content="Enable stored capture for FPP preview"
+                                                              IsChecked="{Binding FacialFpp.UseProjectionCapture}" />
+                                                    <TextBlock Text="Capture label / build note (optional)" />
+                                                    <TextBox Margin="0,2,0,10"
+                                                             Text="{Binding FacialFpp.ProjectionCaptureLabel, UpdateSourceTrigger=PropertyChanged}" />
+
+                                                    <TextBlock FontWeight="SemiBold"
+                                                               Text="Scene camera (captured)" />
+                                                    <Grid Margin="0,5,0,10">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Margin="0,0,5,0">
+                                                            <TextBlock Text="Vertical FOV °" />
+                                                            <TextBox Text="{Binding FacialFpp.SceneCaptureFieldOfView, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1"
+                                                                    Margin="0,0,5,0">
+                                                            <TextBlock Text="Aspect" />
+                                                            <TextBox Text="{Binding FacialFpp.SceneCaptureAspectRatio, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="2">
+                                                            <TextBlock Text="Near (m)" />
+                                                            <TextBox Text="{Binding FacialFpp.SceneCaptureNearPlane, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                        </StackPanel>
+                                                    </Grid>
+
+                                                    <TextBlock FontWeight="SemiBold"
+                                                               Text="Hands (captured, separate projection)" />
+                                                    <Grid Margin="0,5,0,4">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Margin="0,0,5,0">
+                                                            <TextBlock Text="FOV °" />
+                                                            <TextBox Text="{Binding FacialFpp.HandsCaptureFieldOfView, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1">
+                                                            <TextBlock Text="FOV axis" />
+                                                            <ComboBox ItemsSource="{Binding FacialFpp.ProjectionFovAxes}"
+                                                                      SelectedItem="{Binding FacialFpp.HandsCaptureFieldOfViewAxis}" />
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <Grid Margin="0,0,0,8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel Margin="0,0,5,0">
+                                                            <TextBlock Text="Aspect" />
+                                                            <TextBox Text="{Binding FacialFpp.HandsCaptureAspectRatio, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                        </StackPanel>
+                                                        <StackPanel Grid.Column="1">
+                                                            <TextBlock Text="Near (m)" />
+                                                            <TextBox Text="{Binding FacialFpp.HandsCaptureNearPlane, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                        </StackPanel>
+                                                    </Grid>
+                                                    <TextBlock Margin="0,0,0,8"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="Hands far plane: Infinite (fixed DL1 projection contract)" />
+                                                    <Button HorizontalAlignment="Left"
+                                                            Padding="10,4"
+                                                            Command="{Binding StoreFppProjectionCaptureCommand}"
+                                                            Content="Store capture inputs in project" />
+                                                    <TextBlock Margin="0,8,0,0"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               TextWrapping="Wrap"
+                                                               Text="{Binding FacialFpp.ProjectionCaptureStatus}" />
+                                                </StackPanel>
+                                            </Expander>
+
+                                            <TextBlock Margin="4,14,4,3"
+                                                       FontWeight="SemiBold"
+                                                       Text="Editor fallback FOV" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="55" />
+                                                </Grid.ColumnDefinitions>
+                                                <Slider Minimum="30"
+                                                        Maximum="120"
+                                                        Value="{Binding FacialFpp.FieldOfView, Mode=TwoWay}" />
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding FacialFpp.FieldOfView, UpdateSourceTrigger=PropertyChanged}" />
+                                            </Grid>
+
+                                            <TextBlock Margin="4,14,4,3"
+                                                       FontWeight="SemiBold"
+                                                       Text="Editor fallback near clip" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="55" />
+                                                </Grid.ColumnDefinitions>
+                                                <Slider Minimum="0.001"
+                                                        Maximum="0.2"
+                                                        Value="{Binding FacialFpp.NearPlane, Mode=TwoWay}" />
+                                                <TextBox Grid.Column="1"
+                                                         Text="{Binding FacialFpp.NearPlane, UpdateSourceTrigger=PropertyChanged}" />
+                                            </Grid>
+
+                                            <Border Margin="0,15,0,0"
+                                                    Padding="9"
+                                                    Background="#3B301D"
+                                                    BorderBrush="#735D2A"
+                                                    BorderThickness="1"
+                                                    CornerRadius="3">
+                                                <TextBlock Foreground="#F3C978"
+                                                           TextWrapping="Wrap"
+                                                           Text="{Binding FacialFpp.PreviewStatus}" />
+                                            </Border>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </TabItem>
+
+                                <TabItem Header="Movie camera">
+                                    <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                        <StackPanel Margin="10">
+                                            <TextBlock Margin="4,0,4,8"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Text="Enter an explicit external DL1 movie IBaseCamera world transform and lens. A skeleton helper named RefCamera is never used as a substitute. These values are authoring input, not trusted game-validation evidence." />
+                                            <CheckBox Margin="4"
+                                                      Content="Use external movie reference camera"
+                                                      IsChecked="{Binding FacialFpp.UseMovieReferenceCameraCapture}" />
+                                            <TextBlock Margin="4,8,4,2"
+                                                       Text="Capture label / build note (optional)" />
+                                            <TextBox Margin="4,0,4,10"
+                                                     Text="{Binding FacialFpp.MovieReferenceCameraCaptureLabel, UpdateSourceTrigger=PropertyChanged}" />
+
+                                            <TextBlock Margin="4,2"
+                                                       FontWeight="SemiBold"
+                                                       Text="World position" />
+                                            <UniformGrid Margin="4,2,4,8"
+                                                         Columns="3">
+                                                <StackPanel Margin="0,0,4,0">
+                                                    <TextBlock Text="X" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraPositionX, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,4,0">
+                                                    <TextBlock Text="Y" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraPositionY, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock Text="Z" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraPositionZ, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                            </UniformGrid>
+
+                                            <TextBlock Margin="4,2"
+                                                       FontWeight="SemiBold"
+                                                       Text="World rotation quaternion (XYZW)" />
+                                            <UniformGrid Margin="4,2,4,8"
+                                                         Columns="4">
+                                                <StackPanel Margin="0,0,4,0">
+                                                    <TextBlock Text="X" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraRotationX, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,4,0">
+                                                    <TextBlock Text="Y" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraRotationY, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,4,0">
+                                                    <TextBlock Text="Z" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraRotationZ, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock Text="W" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraRotationW, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                            </UniformGrid>
+
+                                            <TextBlock Margin="4,2"
+                                                       FontWeight="SemiBold"
+                                                       Text="Captured lens" />
+                                            <UniformGrid Margin="4,2,4,10"
+                                                         Columns="2">
+                                                <StackPanel Margin="0,0,4,5">
+                                                    <TextBlock Text="Vertical FOV" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraVerticalFieldOfView, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,0,5">
+                                                    <TextBlock Text="Aspect" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraAspectRatio, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel Margin="0,0,4,0">
+                                                    <TextBlock Text="Near (m)" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraNearPlane, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                                <StackPanel>
+                                                    <TextBlock Text="Far (m)" />
+                                                    <TextBox Text="{Binding FacialFpp.MovieCameraFarPlane, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                                                </StackPanel>
+                                            </UniformGrid>
+
+                                            <Button Margin="4"
+                                                    HorizontalAlignment="Left"
+                                                    Padding="10,4"
+                                                    Command="{Binding StoreMovieReferenceCameraCaptureCommand}"
+                                                    Content="Store movie camera in project" />
+                                            <TextBlock Margin="4,8,4,0"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Text="{Binding FacialFpp.MovieReferenceCameraStatus}" />
+                                            <Border Margin="4,15,4,0"
+                                                    Padding="9"
+                                                    Background="#3B301D"
+                                                    BorderBrush="#735D2A"
+                                                    BorderThickness="1"
+                                                    CornerRadius="3">
+                                                <TextBlock Foreground="#F3C978"
+                                                           TextWrapping="Wrap"
+                                                           Text="{Binding FacialFpp.PreviewStatus}" />
+                                            </Border>
+                                        </StackPanel>
+                                    </ScrollViewer>
+                                </TabItem>
+                            </TabControl>
+                        </TabItem>
+                    </TabControl>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="3"
+                    Margin="8,0,8,8"
+                    MaxHeight="250"
+                    Style="{StaticResource PaneBorderStyle}"
+                    Visibility="{Binding IsDiagnosticsDrawerOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TabControl>
+                    <TabItem Header="Jobs">
+                        <Grid Margin="6">
+                            <DataGrid AutoGenerateColumns="False"
+                                      CanUserAddRows="False"
+                                      ItemsSource="{Binding Jobs}">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Width="2*" Binding="{Binding Name}" Header="Job" />
+                                    <DataGridTextColumn Width="*" Binding="{Binding Stage}" Header="Stage" />
+                                    <DataGridTemplateColumn Width="2*" Header="Progress">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ProgressBar Height="12"
+                                                             Maximum="100"
+                                                             Value="{Binding Progress}" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTextColumn Width="*" Binding="{Binding State}" Header="State" />
+                                    <DataGridTemplateColumn Width="70">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <Button Command="{Binding CancelCommand}" Content="Cancel" />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="Background import, decode, retarget, and export jobs will appear here.">
+                                <TextBlock.Style>
+                                    <Style TargetType="{x:Type TextBlock}">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Jobs.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Diagnostics">
+                        <ListBox Margin="5" ItemsSource="{Binding Diagnostics}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="3,4">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="75" />
+                                            <ColumnDefinition Width="90" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock FontSize="10"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding Timestamp, StringFormat={}{0:T}}" />
+                                        <TextBlock Grid.Column="1"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding Area}" />
+                                        <StackPanel Grid.Column="2">
+                                            <TextBlock Text="{Binding Message}" />
+                                            <TextBlock FontSize="10"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Text="{Binding Detail}" />
+                                        </StackPanel>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </TabItem>
+
+                    <TabItem Header="Fidelity">
+                        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto">
+                            <ItemsControl Margin="8" ItemsSource="{Binding FidelityBadges}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="3">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="180" />
+                                                <ColumnDefinition Width="110" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding Label}" />
+                                            <TextBlock Grid.Column="1"
+                                                       Foreground="{StaticResource WarningBrush}"
+                                                       Text="{Binding State}" />
+                                            <TextBlock Grid.Column="2"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Text="{Binding Detail}"
+                                                       TextWrapping="Wrap" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                    </TabItem>
+                </TabControl>
+            </Border>
+        </Grid>
+    </DockPanel>
+</Window>

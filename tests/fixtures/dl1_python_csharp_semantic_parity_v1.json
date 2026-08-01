@@ -1,0 +1,2339 @@
+{
+  "animationScr": {
+    "appended": {
+      "parsed": {
+        "declaredSequenceCount": 4,
+        "nameTableOffset": 224,
+        "sequences": [
+          {
+            "blend": 0.25,
+            "enabled": 0,
+            "endFrame": 62.25,
+            "eventCount": 0,
+            "framesPerSecond": 60.0,
+            "name": "idle.upper-01",
+            "nameOffset": 0,
+            "recordOffset": 0,
+            "startFrame": 2.5
+          },
+          {
+            "blend": 0.5,
+            "enabled": 1,
+            "endFrame": 42.5,
+            "eventCount": 0,
+            "framesPerSecond": 24.0,
+            "name": "walk_b",
+            "nameOffset": 14,
+            "recordOffset": 56,
+            "startFrame": 1.5
+          },
+          {
+            "blend": -0.125,
+            "enabled": 0,
+            "endFrame": 18.0,
+            "eventCount": 0,
+            "framesPerSecond": 48.0,
+            "name": "attack_a",
+            "nameOffset": 21,
+            "recordOffset": 112,
+            "startFrame": 3.0
+          },
+          {
+            "blend": 0.75,
+            "enabled": 1,
+            "endFrame": 12.0,
+            "eventCount": 0,
+            "framesPerSecond": 30.0,
+            "name": "attack_z",
+            "nameOffset": 30,
+            "recordOffset": 168,
+            "startFrame": 0.0
+          }
+        ]
+      },
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAMBBAADAPwAAKkIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAAAAvgAAQEIAAEBAAACQQQAAAAAAAAAAAAAAAAAAAAD6fwAAHgAAANcBAAAAAAAAAAAAAAEAAAAAAEA/AADwQQAAAAAAAEBBAAAAAAAAAAAAAAAAAAAAAPp/AABpZGxlLnVwcGVyLTAxAHdhbGtfYgBhdHRhY2tfYQBhdHRhY2tfegA=",
+      "section0Sha256": "882F2F65C5F114DE9525E8EEDF731E85CC83C353716BD9137C066B96CA66D57F",
+      "section1Base64": "BAAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgBhdHRhY2tfYQBhdHRhY2tfegA=",
+      "section1Sha256": "CCCCE29F6EBCC8D07BD34B6905E83D418EB06B1B67B2DB9488C6B8EDE53F823F"
+    },
+    "built": {
+      "parsed": {
+        "declaredSequenceCount": 2,
+        "nameTableOffset": 112,
+        "sequences": [
+          {
+            "blend": 0.25,
+            "enabled": 0,
+            "endFrame": 62.25,
+            "eventCount": 0,
+            "framesPerSecond": 60.0,
+            "name": "idle.upper-01",
+            "nameOffset": 0,
+            "recordOffset": 0,
+            "startFrame": 2.5
+          },
+          {
+            "blend": 0.5,
+            "enabled": 1,
+            "endFrame": 29.0,
+            "eventCount": 0,
+            "framesPerSecond": 30.0,
+            "name": "walk_b",
+            "nameOffset": 14,
+            "recordOffset": 56,
+            "startFrame": 0.0
+          }
+        ]
+      },
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAGlkbGUudXBwZXItMDEAd2Fsa19iAA==",
+      "section0Sha256": "41E2A46EFD276A84F0F1B3D98CD175B539DFF3633FE1AF7D82B307A0DDABDC65",
+      "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA=",
+      "section1Sha256": "0DBF85C6D9481142F73DF5F547F267492B8CCE244CCBEFEDFAAAA1B79983982A"
+    },
+    "invalidMagicAcceptedWithSkippedRecord": {
+      "parsedSequenceNames": [
+        "walk_b"
+      ],
+      "section0Base64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAGlkbGUudXBwZXItMDEAd2Fsa19iAA==",
+      "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA="
+    },
+    "patched": {
+      "parsed": {
+        "declaredSequenceCount": 2,
+        "nameTableOffset": 112,
+        "sequences": [
+          {
+            "blend": 0.25,
+            "enabled": 0,
+            "endFrame": 62.25,
+            "eventCount": 0,
+            "framesPerSecond": 60.0,
+            "name": "idle.upper-01",
+            "nameOffset": 0,
+            "recordOffset": 0,
+            "startFrame": 2.5
+          },
+          {
+            "blend": 0.5,
+            "enabled": 1,
+            "endFrame": 42.5,
+            "eventCount": 0,
+            "framesPerSecond": 24.0,
+            "name": "walk_b",
+            "nameOffset": 14,
+            "recordOffset": 56,
+            "startFrame": 1.5
+          }
+        ]
+      },
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAMBBAADAPwAAKkIAAAAAAAAAAAAAAAAAAAAA+n8AAGlkbGUudXBwZXItMDEAd2Fsa19iAA==",
+      "section0Sha256": "8D8C15C2690941C3A7A30015F18AFCD2F7B81AFF460F2E7F698D2D02403D11DC",
+      "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA=",
+      "section1Sha256": "0DBF85C6D9481142F73DF5F547F267492B8CCE244CCBEFEDFAAAA1B79983982A"
+    },
+    "recipe": "ASCII no-event DL1 records; case-insensitive sort/lookup; exact build, range patch, append, invalid-record skip, and six bounded malformed-input controls",
+    "recordSize": 56,
+    "rejectedInputs": [
+      {
+        "id": "section1-too-small",
+        "operation": "parse",
+        "pythonExceptionType": "ValueError",
+        "pythonMessage": "AnimationScr section 1 is too small to contain a sequence count",
+        "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAGlkbGUudXBwZXItMDEAd2Fsa19iAA==",
+        "section1Base64": "AgAAAAAAAA=="
+      },
+      {
+        "id": "record-table-truncated",
+        "operation": "parse",
+        "pythonExceptionType": "ValueError",
+        "pythonMessage": "AnimationScr section 0 is too small for 2 records: 111 < 112",
+        "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8A",
+        "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA="
+      },
+      {
+        "id": "name-table-missing",
+        "operation": "parse",
+        "pythonExceptionType": "ValueError",
+        "pythonMessage": "could not locate AnimationScr sequence-name table",
+        "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAA==",
+        "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA="
+      },
+      {
+        "id": "patch-missing-sequence",
+        "operation": "patch",
+        "pythonExceptionType": "ValueError",
+        "pythonMessage": "AnimationScr section is missing sequence(s): not_present",
+        "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAGlkbGUudXBwZXItMDEAd2Fsa19iAA==",
+        "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA="
+      },
+      {
+        "id": "append-duplicate-sequence",
+        "operation": "append",
+        "pythonExceptionType": "ValueError",
+        "pythonMessage": "AnimationScr already has sequence(s): walk_b",
+        "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAGlkbGUudXBwZXItMDEAd2Fsa19iAA==",
+        "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA="
+      },
+      {
+        "id": "append-auxiliary-payload",
+        "operation": "append",
+        "pythonExceptionType": "NotImplementedError",
+        "pythonMessage": "Appending to AnimationScr resources with event/aux payloads between records and names is not implemented yet",
+        "section0Base64": "AAAAANcBAAAAAAAAAAAAAAAAAAAAAIA+AABwQgAAIEAAAHlCAAAAAAAAAAAAAAAAAAAAAPp/AAAOAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAPBBAAAAAAAA6EEAAAAAAAAAAAAAAAAAAAAA+n8AAP7t+s4AaWRsZS51cHBlci0wMQB3YWxrX2IA",
+        "section1Base64": "AgAAAAAAAABpZGxlLnVwcGVyLTAxAHdhbGtfYgA="
+      }
+    ],
+    "sourceSequences": [
+      {
+        "anm2Name": "walk_b.anm2",
+        "blend": 0.5,
+        "enabled": 1,
+        "endFrame": 29.0,
+        "framesPerSecond": 30.0,
+        "name": "Walk_B",
+        "startFrame": 0.0
+      },
+      {
+        "anm2Name": "idle_upper.anm2",
+        "blend": 0.25,
+        "enabled": 0,
+        "endFrame": 62.25,
+        "framesPerSecond": 60.0,
+        "name": "Idle.Upper-01",
+        "startFrame": 2.5
+      }
+    ]
+  },
+  "bindBasisRetarget": {
+    "expectedGlobalMatrices": [
+      [
+        [
+          0.9396926207859083,
+          -1.1045769420013746e-18,
+          0.3420201433256688,
+          1.0658182940465408
+        ],
+        [
+          5.364629362306197e-18,
+          1.0000000000000002,
+          -6.788757966752518e-18,
+          1.0000000000000002
+        ],
+        [
+          -0.3420201433256688,
+          -2.984871573135268e-17,
+          0.9396926207859085,
+          -0.45545363951997153
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      [
+        [
+          0.8627824104981096,
+          -0.3899312841623394,
+          0.32180756014516004,
+          1.2880072419254915
+        ],
+        [
+          0.46969581676806,
+          0.8537181527882223,
+          -0.2248358408049088,
+          2.3771106604653256
+        ],
+        [
+          -0.18706242766963338,
+          0.3451360735005459,
+          0.9197220987466644,
+          -0.6163360591176863
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      [
+        [
+          0.9396926207859083,
+          0.017899951255297582,
+          0.3415514166060053,
+          1.0829193012128242
+        ],
+        [
+          5.364629362306197e-18,
+          0.998629534754574,
+          -0.05233595624294386,
+          2.5500000000000007
+        ],
+        [
+          -0.3420201433256688,
+          0.0491797118832685,
+          0.938404804707738,
+          -0.40846900848067613
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    ],
+    "expectedLocalMatrices": [
+      [
+        [
+          0.9396926207859083,
+          -1.1045769420013746e-18,
+          0.3420201433256688,
+          1.0658182940465408
+        ],
+        [
+          5.364629362306197e-18,
+          1.0000000000000002,
+          -6.788757966752518e-18,
+          1.0000000000000002
+        ],
+        [
+          -0.3420201433256688,
+          -2.984871573135268e-17,
+          0.9396926207859085,
+          -0.45545363951997153
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      [
+        [
+          0.8747293828113676,
+          -0.4844590396664388,
+          -0.012163294451594843,
+          0.2638143429514255
+        ],
+        [
+          0.4696958167680599,
+          0.853718152788222,
+          -0.22483584080490873,
+          1.3771106604653252
+        ],
+        [
+          0.11930778078997728,
+          0.19095746773912048,
+          0.9743207372101005,
+          -0.07518692671121648
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.9986295347545738,
+          -0.05233595624294384,
+          1.55
+        ],
+        [
+          0.0,
+          0.05233595624294384,
+          0.9986295347545738,
+          0.05
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    ],
+    "mappings": [
+      {
+        "sourceBoneIndex": 0,
+        "targetBoneIndex": 0
+      },
+      {
+        "sourceBoneIndex": 1,
+        "targetBoneIndex": 1
+      }
+    ],
+    "reviewedTargetBindBoneIndices": [
+      2
+    ],
+    "sourceBones": [
+      {
+        "animated": {
+          "rotationXyzw": [
+            0.08312190921349344,
+            0.29956152315159634,
+            -0.0262082373043233,
+            0.95008776981561
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            1.25,
+            1.2,
+            -1.5
+          ]
+        },
+        "bind": {
+          "rotationXyzw": [
+            0.08715574274765817,
+            0.0,
+            0.0,
+            0.9961946980917455
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.5,
+            1.0,
+            -0.25
+          ]
+        },
+        "kind": "Root",
+        "name": "source_root",
+        "parentIndex": -1
+      },
+      {
+        "animated": {
+          "rotationXyzw": [
+            0.0,
+            0.0,
+            0.21643961393810288,
+            0.9762960071199334
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.1,
+            1.45,
+            0.2
+          ]
+        },
+        "bind": {
+          "rotationXyzw": [
+            -0.0,
+            -0.0,
+            -0.043619387365336,
+            0.9990482215818578
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            1.4,
+            0.1
+          ]
+        },
+        "kind": "Helper",
+        "name": "source_head",
+        "parentIndex": 0
+      }
+    ],
+    "targetBones": [
+      {
+        "bind": {
+          "rotationXyzw": [
+            -0.0,
+            -0.13052619222005157,
+            -0.0,
+            0.9914448613738104
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -0.25,
+            0.8,
+            0.5
+          ]
+        },
+        "kind": "Root",
+        "name": "Bip01",
+        "parentIndex": -1
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.043619387365336,
+            0.0,
+            0.0,
+            0.9990482215818578
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.15,
+            1.65,
+            -0.1
+          ]
+        },
+        "kind": "Camera",
+        "name": "RefCamera",
+        "parentIndex": 0
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.026176948307873153,
+            0.0,
+            0.0,
+            0.9996573249755573
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            1.55,
+            0.05
+          ]
+        },
+        "kind": "Camera",
+        "name": "EyeCamera",
+        "parentIndex": 0
+      }
+    ],
+    "trackOwnership": [
+      {
+        "source": "evaluated",
+        "sourceBoneIndex": 0,
+        "targetBone": "Bip01",
+        "targetBoneIndex": 0
+      },
+      {
+        "source": "evaluated",
+        "sourceBoneIndex": 1,
+        "targetBone": "RefCamera",
+        "targetBoneIndex": 1
+      },
+      {
+        "source": "target_bind",
+        "sourceBoneIndex": null,
+        "targetBone": "EyeCamera",
+        "targetBoneIndex": 2
+      }
+    ]
+  },
+  "canonicalAnimationRpack": {
+    "animationScripts": [
+      {
+        "bodyBase64": "Qk9EWS1BCg==",
+        "headerBase64": "SEVBREVSLUEK",
+        "name": "anims_man_all_DLC60"
+      },
+      {
+        "bodyBase64": "Qk9EWS1CCg==",
+        "headerBase64": "SEVBREVSLUIK",
+        "name": "anims_player_dlc60"
+      }
+    ],
+    "animations": [
+      {
+        "name": "a_clip",
+        "payloadBase64": "QU5NMi1BAAE="
+      },
+      {
+        "name": "z_clip",
+        "payloadBase64": "QU5NMi1a/v8="
+      }
+    ],
+    "byteLength": 593,
+    "containerBase64": "UlA2TAEAAAAAAAAACAAAAAcAAAAGAAAAUQAAAAYAAAABAAAAQAACAOEBAAAIAAAAAAAAAAEAAgBAAAIA6QEAAAgAAAAAAAAAAQACAEIAAgDxAQAACQAAAAAAAAABAAIAQwACAPoBAAAHAAAAAAAAAAEAAgBCAAIAAQIAAAkAAAAAAAAAAQACAEMAAgAKAgAABwAAAAAAAAABAAIA/wAEABECAABAAAAAAAAAAAEAAQAGAAAAAAAAABAAAAAAAAAABgABABAAAAApAAAAAAAAAAAAAgAAAAAACAAAAAAAAAABAAMAAAAAAAgAAAAAAAAAAgAEAAAAAAAJAAAAAAAAAAMABAAAAAAABwAAAAAAAAAEAAUAAAAAAAkAAAAAAAAABQAFAAAAAAAHAAAAAAAAAAEA/4EAAAAAAAAAAAEA/4EBAAAAAQAAAAEAQAECAAAAAgAAAAEAQAEDAAAAAwAAAAIAQgEEAAAABAAAAAIAQgEFAAAABgAAAAAAAAAMAAAAHAAAACMAAAAqAAAAPgAAAF9BTklNQVRJT05fAF9BTklNQVRJT05fU0NSXwBhX2NsaXAAel9jbGlwAGFuaW1zX21hbl9hbGxfRExDNjAAYW5pbXNfcGxheWVyX2RsYzYwAEFOTTItQQABQU5NMi1a/v9IRUFERVItQQpCT0RZLUEKSEVBREVSLUIKQk9EWS1CCithX2NsaXAKK3pfY2xpcAorYW5pbXNfbWFuX2FsbF9ETEM2MAorYW5pbXNfcGxheWVyX2RsYzYwCgAAAAAAAAA=",
+    "manifest": {
+      "chunkCount": 7,
+      "itemCount": 8,
+      "names": [
+        "_ANIMATION_",
+        "_ANIMATION_SCR_",
+        "a_clip",
+        "z_clip",
+        "anims_man_all_DLC60",
+        "anims_player_dlc60"
+      ],
+      "resources": [
+        {
+          "firstItemIndex": 0,
+          "itemCount": 1,
+          "name": "_ANIMATION_",
+          "type": -32257
+        },
+        {
+          "firstItemIndex": 1,
+          "itemCount": 1,
+          "name": "_ANIMATION_SCR_",
+          "type": -32257
+        },
+        {
+          "firstItemIndex": 2,
+          "itemCount": 1,
+          "name": "a_clip",
+          "type": 320
+        },
+        {
+          "firstItemIndex": 3,
+          "itemCount": 1,
+          "name": "z_clip",
+          "type": 320
+        },
+        {
+          "firstItemIndex": 4,
+          "itemCount": 2,
+          "name": "anims_man_all_DLC60",
+          "type": 322
+        },
+        {
+          "firstItemIndex": 6,
+          "itemCount": 2,
+          "name": "anims_player_dlc60",
+          "type": 322
+        }
+      ],
+      "version": 1
+    },
+    "sha256": "A84DEB90BC11B93D763B81DDF2B0E41C08C7E91CB84C407B7380EA769D5B0C9D"
+  },
+  "fbxTransformEvaluation": {
+    "curveCase": {
+      "keyTimes": [
+        -10,
+        0,
+        10,
+        25
+      ],
+      "keyValues": [
+        3.0,
+        5.0,
+        -2.0,
+        8.0
+      ],
+      "sampleTicks": [
+        -20,
+        -10,
+        -5,
+        0,
+        5,
+        10,
+        17,
+        25,
+        30
+      ],
+      "samples": [
+        3.0,
+        3.0,
+        4.0,
+        5.0,
+        1.5,
+        -2.0,
+        2.666666666666667,
+        8.0,
+        8.0
+      ]
+    },
+    "eulerAnglesDegrees": [
+      17.0,
+      -31.0,
+      43.0
+    ],
+    "eulerOrders": [
+      {
+        "matrix": [
+          [
+            0.6268924782754024,
+            -0.7623273879117483,
+            -0.16081907325120054,
+            0.0
+          ],
+          [
+            0.5845866933780391,
+            0.5966999642038264,
+            -0.54973407266103,
+            0.0
+          ],
+          [
+            0.5150380749100542,
+            0.2506114649388633,
+            0.8197131663174273,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "order": 0
+      },
+      {
+        "matrix": [
+          [
+            0.6268924782754024,
+            -0.7096255951086927,
+            -0.3216167524373658,
+            0.0
+          ],
+          [
+            0.6819983600624985,
+            0.6993970231495834,
+            -0.21382712849768062,
+            0.0
+          ],
+          [
+            0.3766750025602797,
+            -0.08529547922448608,
+            0.9224102252631844,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "order": 1
+      },
+      {
+        "matrix": [
+          [
+            0.6268924782754024,
+            -0.6819983600624985,
+            -0.3766750025602797,
+            0.0
+          ],
+          [
+            0.40846047519155443,
+            0.6993970231495834,
+            -0.5865184091022126,
+            0.0
+          ],
+          [
+            0.6634499686396961,
+            0.21382712849768062,
+            0.7170161073716703,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "order": 2
+      },
+      {
+        "matrix": [
+          [
+            0.7295895372211594,
+            -0.652198275286758,
+            -0.20575839445911456,
+            0.0
+          ],
+          [
+            0.47445758075304895,
+            0.6993970231495834,
+            -0.5345407450096439,
+            0.0
+          ],
+          [
+            0.4925333605385309,
+            0.29237170472273677,
+            0.8197131663174273,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "order": 3
+      },
+      {
+        "matrix": [
+          [
+            0.5241954193296454,
+            -0.6947158060030294,
+            -0.4925333605385309,
+            0.0
+          ],
+          [
+            0.652198275286758,
+            0.6993970231495834,
+            -0.29237170472273677,
+            0.0
+          ],
+          [
+            0.5475916106614448,
+            -0.16796949990716256,
+            0.8197131663174273,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "order": 4
+      },
+      {
+        "matrix": [
+          [
+            0.6268924782754024,
+            -0.5845866933780391,
+            -0.5150380749100542,
+            0.0
+          ],
+          [
+            0.5420691626617677,
+            0.8020940820953404,
+            -0.2506114649388633,
+            0.0
+          ],
+          [
+            0.5596131195503675,
+            -0.12207981566566875,
+            0.8197131663174273,
+            0.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "order": 5
+      }
+    ],
+    "hierarchyCase": {
+      "globalMatrices": {
+        "1": [
+          [
+            0.8137976813493738,
+            0.49999999999999994,
+            0.29619813272602386,
+            2.0
+          ],
+          [
+            -0.4033171145852769,
+            0.8528685319524433,
+            -0.33158795558326737,
+            -1.0
+          ],
+          [
+            -0.4184120444167325,
+            0.1503837331804353,
+            0.895720991091381,
+            0.5
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ],
+        "2": [
+          [
+            0.7514486378686603,
+            -0.28638089722461824,
+            0.484860930187245,
+            2.7313008207928253
+          ],
+          [
+            0.3287132675651226,
+            1.0132900053172078,
+            -0.13432333296832819,
+            0.4271644859697963
+          ],
+          [
+            -0.37050308011134714,
+            0.3181655965516634,
+            0.8642147421782617,
+            -0.05081815465206596
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ]
+        ]
+      },
+      "models": [
+        {
+          "name": "parent",
+          "objectId": 1,
+          "parentObjectId": null,
+          "properties": {
+            "Lcl Rotation": [
+              10.0,
+              20.0,
+              -30.0
+            ],
+            "Lcl Scaling": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "Lcl Translation": [
+              2.0,
+              -1.0,
+              0.5
+            ],
+            "RotationOrder": 2
+          },
+          "subtype": "LimbNode"
+        },
+        {
+          "name": "child",
+          "objectId": 2,
+          "parentObjectId": 1,
+          "properties": {
+            "Lcl Rotation": [
+              -15.0,
+              5.0,
+              45.0
+            ],
+            "Lcl Scaling": [
+              0.9,
+              1.1,
+              1.0
+            ],
+            "Lcl Translation": [
+              0.25,
+              1.5,
+              -0.75
+            ],
+            "RotationOrder": 5
+          },
+          "subtype": "LimbNode"
+        }
+      ]
+    },
+    "pivotCase": {
+      "matrix": [
+        [
+          0.5446069281839485,
+          -0.665751889193558,
+          -0.47786266226759266,
+          1.3761145394474643
+        ],
+        [
+          0.7097419937643283,
+          0.43898410236156354,
+          -0.8862451141468932,
+          -4.509369810264069
+        ],
+        [
+          0.7997934708795011,
+          0.06377601358677384,
+          1.1118529010895677,
+          3.509354062348545
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "properties": {
+        "Lcl Rotation": [
+          25.0,
+          -40.0,
+          70.0
+        ],
+        "Lcl Scaling": [
+          1.2,
+          0.8,
+          1.5
+        ],
+        "Lcl Translation": [
+          1.25,
+          -2.5,
+          3.75
+        ],
+        "PostRotation": [
+          -20.0,
+          5.0,
+          12.0
+        ],
+        "PreRotation": [
+          5.0,
+          10.0,
+          -15.0
+        ],
+        "RotationOffset": [
+          0.5,
+          -0.25,
+          0.75
+        ],
+        "RotationOrder": 4,
+        "RotationPivot": [
+          2.0,
+          -1.0,
+          0.5
+        ],
+        "ScalingOffset": [
+          -0.4,
+          0.3,
+          0.2
+        ],
+        "ScalingPivot": [
+          0.6,
+          0.7,
+          -0.8
+        ]
+      }
+    }
+  },
+  "format": "dl-reanimated-python-csharp-semantic-parity-oracle-v1",
+  "helperFanoutRetarget": {
+    "frames": [
+      {
+        "expectedGlobalMatrices": [
+          [
+            [
+              0.9876883405951378,
+              0.0,
+              -0.15643446504023087,
+              -0.15
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.4
+            ],
+            [
+              0.15643446504023087,
+              0.0,
+              0.9876883405951378,
+              0.25
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.987688340595138,
+              -0.01906456554038844,
+              -0.1552684262597501,
+              -0.14374262139839078
+            ],
+            [
+              0.0,
+              0.992546151641322,
+              -0.1218693434051475,
+              2.05
+            ],
+            [
+              0.1564344650402309,
+              0.12036892955724912,
+              0.9803262614787072,
+              0.21049246637619448
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.7967300862237033,
+              -0.015251652432310754,
+              0.07062971615442472,
+              0.0546900236914086
+            ],
+            [
+              0.02358629005764813,
+              0.7940369213130576,
+              -0.09459944245606114,
+              2.287859248305914
+            ],
+            [
+              -0.0682997556898053,
+              0.0962951436457993,
+              0.7912410433508538,
+              0.1082796327494377
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              1.2839948427736794,
+              0.01772441058948805,
+              -0.20259094007346554,
+              -0.225993464040192
+            ],
+            [
+              -2.4208516933110456e-19,
+              1.2950531075192693,
+              0.11330246557195559,
+              2.3442836792342434
+            ],
+            [
+              0.20336480455230016,
+              -0.1119075242061025,
+              1.2791088547482834,
+              0.3462566553991856
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.9802848907830191,
+              -0.1222016722853883,
+              -0.1552684262597501,
+              0.25604306054553516
+            ],
+            [
+              0.10374932395329077,
+              0.9871088799708131,
+              -0.1218693434051475,
+              1.9141845818143235
+            ],
+            [
+              0.168159479904524,
+              0.10335768173397276,
+              0.9803262614787072,
+              0.5629489611321856
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        ],
+        "expectedLocalMatrices": [
+          [
+            [
+              0.9876883405951378,
+              0.0,
+              -0.15643446504023087,
+              -0.15
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.4
+            ],
+            [
+              0.15643446504023087,
+              0.0,
+              0.9876883405951378,
+              0.25
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              1.0000000000000002,
+              -4.188253384720714e-18,
+              -5.098940855432373e-17,
+              -1.3877787807814457e-17
+            ],
+            [
+              0.0,
+              0.992546151641322,
+              -0.1218693434051475,
+              1.65
+            ],
+            [
+              -1.3701825709309575e-17,
+              0.12186934340514749,
+              0.9925461516413219,
+              -0.04000000000000001
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.7762365810207972,
+              0.0,
+              0.19353751647973425,
+              0.18
+            ],
+            [
+              0.0,
+              0.8,
+              0.0,
+              0.21999999999999997
+            ],
+            [
+              -0.19353751647973425,
+              0.0,
+              0.7762365810207972,
+              -0.16
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              1.3,
+              1.2174377591613772e-18,
+              -1.1137761448636592e-17,
+              -0.06
+            ],
+            [
+              1.124836991544448e-18,
+              1.2715918809539475,
+              0.27028519806308715,
+              0.31000000000000005
+            ],
+            [
+              1.1147494181501981e-17,
+              -0.27028519806308715,
+              1.2715918809539475,
+              0.10999999999999999
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.9945218953682733,
+              -0.1045284632676535,
+              0.0,
+              0.45
+            ],
+            [
+              0.1045284632676535,
+              0.9945218953682733,
+              0.0,
+              -0.1
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.3
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        ],
+        "frame": 0,
+        "sourceLocals": [
+          {
+            "rotationXyzw": [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.2,
+              0.1,
+              -0.3
+            ]
+          },
+          {
+            "rotationXyzw": [
+              0.0,
+              0.03489949670250097,
+              0.0,
+              0.9993908270190958
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.0,
+              1.25,
+              0.05
+            ]
+          }
+        ]
+      },
+      {
+        "expectedGlobalMatrices": [
+          [
+            [
+              0.9702957262759965,
+              0.0,
+              0.24192189559966779,
+              0.44272542196074655
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.5
+            ],
+            [
+              -0.24192189559966776,
+              0.0,
+              0.9702957262759965,
+              -0.10696643562991204
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.8566993376438788,
+              -0.44579439870779886,
+              0.25948718458007103,
+              0.17155016019471175
+            ],
+            [
+              0.5018376824169725,
+              0.8366585236098534,
+              -0.219457183471725,
+              1.9868636110199103
+            ],
+            [
+              -0.11926938159855506,
+              0.3182292710479859,
+              0.9404812308926562,
+              -0.2032732903860064
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.6147808595535207,
+              -0.35663551896623913,
+              0.36722690715457645,
+              0.1744205107856334
+            ],
+            [
+              0.43201796508950635,
+              0.6693268188878827,
+              -0.07322627504761917,
+              2.4479017283937594
+            ],
+            [
+              -0.27459965871529535,
+              0.2545834168383887,
+              0.7069528352756883,
+              -0.3932365963855824
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.6367530999503805,
+              -1.1257500992533103,
+              0.13127148865897578,
+              0.04569267429990673
+            ],
+            [
+              1.1331727876845767,
+              0.6294886453353185,
+              -0.0983029940798901,
+              2.4284261040187842
+            ],
+            [
+              0.021562072134803455,
+              0.1625753961245922,
+              1.2896140188522243,
+              -0.1499332182178148
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.805408045604081,
+              -0.5329017555937711,
+              0.25948718458007103,
+              0.6794904573792584
+            ],
+            [
+              0.5865431928372709,
+              0.7796188989236458,
+              -0.219457183471725,
+              2.063187560705045
+            ],
+            [
+              -0.08535199477736528,
+              0.3289530229776872,
+              0.9404812308926562,
+              -0.006623069942357895
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        ],
+        "expectedLocalMatrices": [
+          [
+            [
+              0.9702957262759965,
+              0.0,
+              0.24192189559966779,
+              0.44272542196074655
+            ],
+            [
+              0.0,
+              1.0,
+              0.0,
+              0.5
+            ],
+            [
+              -0.24192189559966776,
+              0.0,
+              0.9702957262759965,
+              -0.10696643562991204
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.8601055809026551,
+              -0.509539028351184,
+              0.02425630406797334,
+              -0.23982146070152197
+            ],
+            [
+              0.5018376824169725,
+              0.8366585236098534,
+              -0.219457183471725,
+              1.4868636110199103
+            ],
+            [
+              0.09152775648112801,
+              0.2009290756906816,
+              0.9753205505553646,
+              -0.1590493629470967
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.7762365810207972,
+              0.0,
+              0.19353751647973425,
+              0.25648213381181123
+            ],
+            [
+              0.0,
+              0.8,
+              0.0,
+              0.32399999999999984
+            ],
+            [
+              -0.19353751647973425,
+              0.0,
+              0.7762365810207972,
+              -0.279090231369295
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              1.1116030695102836,
+              -0.6679185084588858,
+              -0.09068341586736299,
+              0.10740883590328981
+            ],
+            [
+              0.6710793887190758,
+              1.080256379026355,
+              0.26962679690509217,
+              0.4425179580050047
+            ],
+            [
+              -0.06317491505136723,
+              -0.27736442026857994,
+              1.2684943470419279,
+              -0.07939712898481122
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ],
+          [
+            [
+              0.9945218953682733,
+              -0.1045284632676535,
+              0.0,
+              0.45
+            ],
+            [
+              0.1045284632676535,
+              0.9945218953682733,
+              0.0,
+              -0.1
+            ],
+            [
+              0.0,
+              0.0,
+              1.0,
+              0.3
+            ],
+            [
+              0.0,
+              0.0,
+              0.0,
+              1.0
+            ]
+          ]
+        ],
+        "frame": 1,
+        "sourceLocals": [
+          {
+            "rotationXyzw": [
+              0.0,
+              0.1993679344171972,
+              0.0,
+              0.9799247046208296
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.55,
+              0.2,
+              -0.75
+            ]
+          },
+          {
+            "rotationXyzw": [
+              0.0,
+              0.0,
+              0.26723837607825685,
+              0.963630453208623
+            ],
+            "scale": [
+              1.0,
+              1.0,
+              1.0
+            ],
+            "translation": [
+              0.12,
+              1.38,
+              -0.08
+            ]
+          }
+        ]
+      }
+    ],
+    "mappings": [
+      {
+        "componentPolicy": "FullTransform",
+        "mappingKind": "Bone",
+        "sourceBoneIndex": 0,
+        "targetBoneIndex": 0,
+        "transferPolicy": "GlobalBindBasis"
+      },
+      {
+        "componentPolicy": "FullTransform",
+        "mappingKind": "Bone",
+        "sourceBoneIndex": 1,
+        "targetBoneIndex": 1,
+        "transferPolicy": "GlobalBindBasis"
+      },
+      {
+        "componentPolicy": "Translation",
+        "mappingKind": "HelperOverride",
+        "sourceBoneIndex": 1,
+        "targetBoneIndex": 2,
+        "transferPolicy": "RestRelative"
+      },
+      {
+        "componentPolicy": "RotationTranslation",
+        "mappingKind": "HelperOverride",
+        "sourceBoneIndex": 1,
+        "targetBoneIndex": 3,
+        "transferPolicy": "RestRelative"
+      }
+    ],
+    "reviewedTargetBindBoneIndices": [
+      4
+    ],
+    "sourceBones": [
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.2,
+            0.1,
+            -0.3
+          ]
+        },
+        "kind": "Root",
+        "name": "Root",
+        "parentIndex": -1
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.0,
+            0.03489949670250097,
+            0.0,
+            0.9993908270190958
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            1.25,
+            0.05
+          ]
+        },
+        "kind": "Deform",
+        "name": "Head",
+        "parentIndex": 0
+      }
+    ],
+    "targetBones": [
+      {
+        "bind": {
+          "rotationXyzw": [
+            -0.0,
+            -0.07845909572784494,
+            -0.0,
+            0.996917333733128
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            -0.15,
+            0.4,
+            0.25
+          ]
+        },
+        "kind": "Root",
+        "name": "Bip01",
+        "parentIndex": -1
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.06104853953485687,
+            0.0,
+            0.0,
+            0.9981347984218669
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.0,
+            1.65,
+            -0.04
+          ]
+        },
+        "kind": "Deform",
+        "name": "Head",
+        "parentIndex": 0
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.0,
+            0.12186934340514748,
+            0.0,
+            0.992546151641322
+          ],
+          "scale": [
+            0.8,
+            0.8,
+            0.8
+          ],
+          "translation": [
+            0.18,
+            0.22,
+            -0.16
+          ]
+        },
+        "kind": "Camera",
+        "name": "RefCamera",
+        "parentIndex": 1
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            -0.10452846326765347,
+            -0.0,
+            -0.0,
+            0.9945218953682733
+          ],
+          "scale": [
+            1.3,
+            1.3,
+            1.3
+          ],
+          "translation": [
+            -0.06,
+            0.31,
+            0.11
+          ]
+        },
+        "kind": "Camera",
+        "name": "EyeCamera",
+        "parentIndex": 1
+      },
+      {
+        "bind": {
+          "rotationXyzw": [
+            0.0,
+            0.0,
+            0.052335956242943835,
+            0.9986295347545738
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ],
+          "translation": [
+            0.45,
+            -0.1,
+            0.3
+          ]
+        },
+        "kind": "Helper",
+        "name": "UnmappedSocket",
+        "parentIndex": 1
+      }
+    ]
+  },
+  "mimicScalars": {
+    "consolidatedTargets": {
+      "0x11111111": [
+        "jawOpen",
+        "mouthOpen"
+      ]
+    },
+    "decodedTargetValues": [
+      [
+        0.0,
+        0.0
+      ],
+      [
+        0.29998570575844496,
+        0.19999999949504854
+      ],
+      [
+        0.6000124829442939,
+        -0.09999999974752427
+      ],
+      [
+        1.1499999673105776,
+        0.3999999989900971
+      ]
+    ],
+    "frameCount": 4,
+    "frameRate": {
+      "denominator": 1,
+      "numerator": 30
+    },
+    "mappings": [
+      {
+        "sourceChannel": "jawOpen",
+        "targetDescriptor": 286331153,
+        "targetDescriptorHex": "0x11111111",
+        "targetMorph": "jaw",
+        "weight": 1.0
+      },
+      {
+        "sourceChannel": "mouthOpen",
+        "targetDescriptor": 286331153,
+        "targetDescriptorHex": "0x11111111",
+        "targetMorph": "jaw",
+        "weight": 0.5
+      },
+      {
+        "sourceChannel": "smileLeft",
+        "targetDescriptor": 572662306,
+        "targetDescriptorHex": "0x22222222",
+        "targetMorph": "smile",
+        "weight": 1.0
+      }
+    ],
+    "payloadByteLength": 320,
+    "payloadSha256": "CDE809EBA6AEC4FBFCA02FA05B29543E35EC68BD41F278FFD73E96F1C1353ECC",
+    "sourceCurves": [
+      {
+        "name": "jawOpen",
+        "values": [
+          0.0,
+          0.25,
+          0.5,
+          1.0
+        ]
+      },
+      {
+        "name": "mouthOpen",
+        "values": [
+          0.0,
+          0.1,
+          0.2,
+          0.3
+        ]
+      },
+      {
+        "name": "smileLeft",
+        "values": [
+          0.0,
+          0.2,
+          -0.1,
+          0.4
+        ]
+      }
+    ],
+    "targets": [
+      {
+        "descriptor": 286331153,
+        "descriptorHex": "0x11111111",
+        "index": 0,
+        "label": "Jaw",
+        "name": "jaw"
+      },
+      {
+        "descriptor": 572662306,
+        "descriptorHex": "0x22222222",
+        "index": 1,
+        "label": "Smile",
+        "name": "smile"
+      }
+    ],
+    "unmappedAnimatedShapes": []
+  },
+  "rootHelperOwnership": {
+    "inputRootTransforms": [
+      {
+        "rotationXyzw": [
+          0.17364817766693033,
+          0.0,
+          0.0,
+          0.984807753012208
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          0.0,
+          1.0,
+          0.0
+        ]
+      },
+      {
+        "rotationXyzw": [
+          0.1604299972043605,
+          0.3768696111424634,
+          -0.06645228065352383,
+          0.9098437264664095
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          1.0,
+          1.5,
+          -2.0
+        ]
+      },
+      {
+        "rotationXyzw": [
+          0.12278780396897285,
+          0.696364240320019,
+          -0.12278780396897285,
+          0.696364240320019
+        ],
+        "scale": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "translation": [
+          2.0,
+          0.75,
+          -3.0
+        ]
+      }
+    ],
+    "modes": [
+      {
+        "headingOwner": "none",
+        "legacyPolicy": "inplace",
+        "motionAccumulatorValues": [
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        ],
+        "report": {
+          "motionHeadingDegrees": 0.0,
+          "motionPlanarDisplacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "skeletalRootHeadingDegrees": -5.967188610676596e-16,
+          "skeletalRootPlanarDisplacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "sourceHeadingDegrees": 90.00000000000001,
+          "sourcePlanarDisplacement": [
+            2.0,
+            0.0,
+            -3.0
+          ]
+        },
+        "resolvedHeadingMode": "lock_initial",
+        "resolvedMotionMode": "inplace",
+        "rootValues": [
+          [
+            0.08748866352592406,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.9999999999999999,
+            0.9999999999999999
+          ],
+          [
+            0.08748866352592405,
+            8.335963420229721e-17,
+            1.6586754425099836e-17,
+            0.0,
+            1.0,
+            0.0,
+            0.9999999999999999,
+            1.0000000000000002,
+            1.0
+          ],
+          [
+            0.08748866352592403,
+            -2.170513825041022e-19,
+            1.0327853303383977e-17,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            0.9999999999999999
+          ]
+        ],
+        "translationOwner": "none"
+      },
+      {
+        "headingOwner": "skeletal_root",
+        "legacyPolicy": "bip01",
+        "motionAccumulatorValues": [
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        ],
+        "report": {
+          "motionHeadingDegrees": 0.0,
+          "motionPlanarDisplacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "skeletalRootHeadingDegrees": 90.00000000000001,
+          "skeletalRootPlanarDisplacement": [
+            2.0,
+            0.0,
+            -3.0
+          ],
+          "sourceHeadingDegrees": 90.00000000000001,
+          "sourcePlanarDisplacement": [
+            2.0,
+            0.0,
+            -3.0
+          ]
+        },
+        "resolvedHeadingMode": "preserve",
+        "resolvedMotionMode": "skeletal_root",
+        "rootValues": [
+          [
+            0.08748866352592403,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.08400163583079535,
+            0.1973300778068094,
+            -0.03479461682264117,
+            1.0,
+            1.5,
+            -2.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.07238292405044387,
+            0.4105039612180518,
+            -0.07238292405044387,
+            2.0,
+            0.75,
+            -3.0,
+            1.0000000000000002,
+            1.0,
+            1.0
+          ]
+        ],
+        "translationOwner": "skeletal_root"
+      },
+      {
+        "headingOwner": "motion_accumulator",
+        "legacyPolicy": "motion",
+        "motionAccumulatorValues": [
+          [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            0.19891236737965795,
+            0.0,
+            1.0,
+            0.0,
+            -2.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          [
+            0.0,
+            0.4142135623730951,
+            0.0,
+            2.0,
+            0.0,
+            -3.0,
+            1.0,
+            1.0,
+            1.0
+          ]
+        ],
+        "report": {
+          "motionHeadingDegrees": 90.00000000000001,
+          "motionPlanarDisplacement": [
+            2.0,
+            0.0,
+            -3.0
+          ],
+          "skeletalRootHeadingDegrees": -5.967188610676596e-16,
+          "skeletalRootPlanarDisplacement": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "sourceHeadingDegrees": 90.00000000000001,
+          "sourcePlanarDisplacement": [
+            2.0,
+            0.0,
+            -3.0
+          ]
+        },
+        "resolvedHeadingMode": "to_motion_accumulator",
+        "resolvedMotionMode": "motion_accumulator",
+        "rootValues": [
+          [
+            0.08748866352592406,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+            1.0,
+            0.9999999999999999,
+            0.9999999999999999
+          ],
+          [
+            0.08748866352592405,
+            8.335963420229721e-17,
+            1.6586754425099836e-17,
+            0.0,
+            1.5,
+            0.0,
+            0.9999999999999999,
+            1.0000000000000002,
+            1.0
+          ],
+          [
+            0.08748866352592403,
+            -2.170513825041022e-19,
+            1.0327853303383977e-17,
+            0.0,
+            0.75,
+            0.0,
+            1.0,
+            1.0,
+            0.9999999999999999
+          ]
+        ],
+        "translationOwner": "motion_accumulator"
+      }
+    ],
+    "motionAccumulatorDescriptor": "0xCCC3CDDF",
+    "rootBind": {
+      "rotationXyzw": [
+        0.17364817766693033,
+        0.0,
+        0.0,
+        0.984807753012208
+      ],
+      "scale": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "translation": [
+        0.0,
+        1.0,
+        0.0
+      ]
+    },
+    "rootDescriptor": "0x10F2DC54"
+  },
+  "scope": {
+    "game": "Dying Light 1",
+    "matrixAbsoluteTolerance": 1e-09,
+    "maximumOracleBytes": 2097152,
+    "mimicValueAbsoluteTolerance": 0.002,
+    "notes": [
+      "FBX coverage is limited to the listed Euler, pivot, hierarchy, and linear-curve recipes.",
+      "Retarget coverage proves the shared global bind-basis correction and reviewed target-bind fallback, not every mapping heuristic.",
+      "Helper coverage proves two-frame body plus RefCamera/EyeCamera fan-out with target-specific binds and component ownership.",
+      "Root coverage proves the listed three DL1 ownership modes on a root-level synthetic control.",
+      "Mimic coverage compares mapped and consolidated scalar values after each implementation encodes and decodes its own ANM2; bytes are not claimed identical.",
+      "AnimationScr coverage compares exact no-event section bytes plus normalized parse, range patch, append, record skip, and six malformed-input decisions.",
+      "RP6L coverage compares exact bytes only for the canonical sorted uncompressed animation-library recipe.",
+      "No retail or proprietary game payload is embedded."
+    ],
+    "rootValueAbsoluteTolerance": 1e-08
+  }
+}

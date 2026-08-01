@@ -1,0 +1,97 @@
+{
+  "format": "dl-reanimated-renderer-authoring-stage-goldens-v1",
+  "width": 192,
+  "height": 144,
+  "stages": [
+    {
+      "name": "retarget",
+      "pixelSha256": "d76b8240d715cb47a1f5e1aeef3ebfd9856323302d2b346013f0e846258e6bf3",
+      "coverageSha256": "21b512939ee0ec1787e44d09f301d289f466d7fe888ff3417be28c39f35e5c4b",
+      "pixelCount": 1605,
+      "left": 71,
+      "top": 43,
+      "right": 148,
+      "bottom": 92
+    },
+    {
+      "name": "root_motion",
+      "pixelSha256": "7cd13bd0079e9db5eaa48e09c6d91495b3b257afeb22ca7fa5fe9813878ce6fd",
+      "coverageSha256": "f9ee8d1c0e44fcb73fafca309ad585533517545520a485eee7ffe04e499da2a1",
+      "pixelCount": 1630,
+      "left": 58,
+      "top": 46,
+      "right": 135,
+      "bottom": 96
+    },
+    {
+      "name": "bone_edit",
+      "pixelSha256": "b267742ada93995a9761e1fb6b10090b5104fd8f95586d2f0150ea09453206fe",
+      "coverageSha256": "20ef87eb22171945d988b85244c65e2f66f01ba87b3b1813abf23931466d1b46",
+      "pixelCount": 1629,
+      "left": 58,
+      "top": 32,
+      "right": 128,
+      "bottom": 96
+    },
+    {
+      "name": "hand_ik",
+      "pixelSha256": "c73124930325fdd3c9381726fdcc23da62267d952083dbb6aea805ba82cffff6",
+      "coverageSha256": "3395c420b5adcb6b5021e4498607a7540601af1ff34974447cb56390fe07c92d",
+      "pixelCount": 1352,
+      "left": 58,
+      "top": 40,
+      "right": 97,
+      "bottom": 96
+    },
+    {
+      "name": "authored_morph",
+      "pixelSha256": "aa6581f7b8ce0fdef8a207efbe3f5dc7a70cf29c6e9eeeca5629e74702eb5f7d",
+      "coverageSha256": "b3b80bb511e9c091de7e3266a5bd00b1ebf35146896a5857d5d87ccef33bd98c",
+      "pixelCount": 1415,
+      "left": 57,
+      "top": 40,
+      "right": 97,
+      "bottom": 96
+    },
+    {
+      "name": "fed_expression",
+      "pixelSha256": "26fcefee88a604c724ad625e7f5682815456b07ac7bdac78e5cae957d1e8bb8e",
+      "coverageSha256": "fc8b765181eed4f690fa2583ed3fdc92ede6dd9d72d85b2922245236e80724ce",
+      "pixelCount": 1447,
+      "left": 57,
+      "top": 40,
+      "right": 97,
+      "bottom": 96
+    },
+    {
+      "name": "fpp_projection",
+      "pixelSha256": "cde4d5598ef4b0eca35676a11aab0a5a16ddb50532fb7524da06c2a6fa00467a",
+      "coverageSha256": "da3f4a8d48d101ae7f0d797244ba2c3ae23292adc118108e272d3fad6840327c",
+      "pixelCount": 4148,
+      "left": 0,
+      "top": 17,
+      "right": 191,
+      "bottom": 126
+    },
+    {
+      "name": "helper_overlay",
+      "pixelSha256": "8e904c9c08992e750c96d1fc3da26c7d8d5b2ac7aacc16036997cd9b06f17c37",
+      "coverageSha256": "5e3196ec012bf5489a1b201290aeec86895624894765ca5ccc0cb1a26e468583",
+      "pixelCount": 1463,
+      "left": 57,
+      "top": 38,
+      "right": 97,
+      "bottom": 96
+    },
+    {
+      "name": "attachment",
+      "pixelSha256": "064669f8cf65ccada871bf7b3705fff23f186b793f19368fb43f27d8da0e3e40",
+      "coverageSha256": "5c2719a0a6e699f4386c20ed60f6ee4a6f2632413ee7d74a6076eb43dd86b38b",
+      "pixelCount": 1514,
+      "left": 57,
+      "top": 39,
+      "right": 109,
+      "bottom": 96
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ReAnimated.Codecs</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ReAnimated.Core\ReAnimated.Core.csproj" />
+    <ProjectReference Include="..\ReAnimated.Evaluation\ReAnimated.Evaluation.csproj" />
+    <PackageReference Include="SharpCompress" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource
+      Include="Resources\MimicProfiles\human_common46.dlrmimic.json"
+      LogicalName="ReAnimated.Codecs.MimicProfiles.human_common46.dlrmimic.json" />
+  </ItemGroup>
+</Project>

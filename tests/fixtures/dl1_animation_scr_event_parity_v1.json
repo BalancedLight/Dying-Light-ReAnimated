@@ -1,0 +1,167 @@
+{
+  "canonical": {
+    "eventTableBase64": "AwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMA",
+    "eventTableLength": 36,
+    "eventTableOffset": 168,
+    "eventTableSha256": "835BDD2BE99A23578909EB50302F8D2D9E6803E75B5E1F7B5C242D4EFFED157C",
+    "original": {
+      "parsed": {
+        "declaredSequenceCount": 3,
+        "nameTableOffset": 204,
+        "sequences": [
+          {
+            "blend": 0.25,
+            "enabled": 1,
+            "endFrame": 59.0,
+            "eventCount": 2,
+            "framesPerSecond": 30.0,
+            "name": "idle_event",
+            "nameOffset": 0,
+            "recordOffset": 0,
+            "startFrame": 0.0
+          },
+          {
+            "blend": 0.5,
+            "enabled": 1,
+            "endFrame": 125.0,
+            "eventCount": 0,
+            "framesPerSecond": 60.0,
+            "name": "run_event",
+            "nameOffset": 11,
+            "recordOffset": 56,
+            "startFrame": 5.0
+          },
+          {
+            "blend": 0.75,
+            "enabled": 0,
+            "endFrame": 48.5,
+            "eventCount": 1,
+            "framesPerSecond": 24.0,
+            "name": "turn_event",
+            "nameOffset": 21,
+            "recordOffset": 112,
+            "startFrame": 2.5
+          }
+        ]
+      },
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAHBCAACgQAAA+kIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMAaWRsZV9ldmVudABydW5fZXZlbnQAdHVybl9ldmVudAA=",
+      "section0Sha256": "434451E43CE74F793BEBF944EA175431979B1661E88A4EEC5E4EDC01FD989667",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA==",
+      "section1Sha256": "BBDEAA6CB4901EFA32D76DF99B62BAE5A1DB645391C3A1B672F9E0539C278125"
+    },
+    "patchChangedOffsets": [
+      82,
+      86,
+      90
+    ],
+    "patchOverride": {
+      "endFrame": 96.5,
+      "framesPerSecond": 48.0,
+      "name": "RUN_EVENT",
+      "startFrame": 6.25
+    },
+    "patched": {
+      "parsed": {
+        "declaredSequenceCount": 3,
+        "nameTableOffset": 204,
+        "sequences": [
+          {
+            "blend": 0.25,
+            "enabled": 1,
+            "endFrame": 59.0,
+            "eventCount": 2,
+            "framesPerSecond": 30.0,
+            "name": "idle_event",
+            "nameOffset": 0,
+            "recordOffset": 0,
+            "startFrame": 0.0
+          },
+          {
+            "blend": 0.5,
+            "enabled": 1,
+            "endFrame": 96.5,
+            "eventCount": 0,
+            "framesPerSecond": 48.0,
+            "name": "run_event",
+            "nameOffset": 11,
+            "recordOffset": 56,
+            "startFrame": 6.25
+          },
+          {
+            "blend": 0.75,
+            "enabled": 0,
+            "endFrame": 48.5,
+            "eventCount": 1,
+            "framesPerSecond": 24.0,
+            "name": "turn_event",
+            "nameOffset": 21,
+            "recordOffset": 112,
+            "startFrame": 2.5
+          }
+        ]
+      },
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAEBCAADIQAAAwUIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMAaWRsZV9ldmVudABydW5fZXZlbnQAdHVybl9ldmVudAA=",
+      "section0Sha256": "736BF7D0B7AC268FC148151F59874447F8EADF4D3056A1F33CE4FF85520D0542",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA==",
+      "section1Sha256": "BBDEAA6CB4901EFA32D76DF99B62BAE5A1DB645391C3A1B672F9E0539C278125"
+    },
+    "recipe": "Three synthetic stock-layout sequences with event counts 2/0/1 and three opaque 12-byte rows"
+  },
+  "eventRecordSize": 12,
+  "format": "dl-reanimated-python-csharp-animation-scr-event-parity-v1",
+  "recordSize": 56,
+  "rejectedInputs": [
+    {
+      "id": "append-event-layout",
+      "operation": "append",
+      "pythonExceptionType": "NotImplementedError",
+      "pythonMessage": "Appending to AnimationScr resources with event/aux payloads between records and names is not implemented yet",
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAHBCAACgQAAA+kIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMAaWRsZV9ldmVudABydW5fZXZlbnQAdHVybl9ldmVudAA=",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA=="
+    },
+    {
+      "id": "patch-missing-event-sequence",
+      "operation": "patch",
+      "pythonExceptionType": "ValueError",
+      "pythonMessage": "AnimationScr section is missing sequence(s): not_present",
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAHBCAACgQAAA+kIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMAaWRsZV9ldmVudABydW5fZXZlbnQAdHVybl9ldmVudAA=",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA=="
+    },
+    {
+      "id": "event-name-offset-outside",
+      "operation": "parse",
+      "pythonExceptionType": "ValueError",
+      "pythonMessage": "string offset is outside data",
+      "section0Base64": "////f9cBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAHBCAACgQAAA+kIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMAaWRsZV9ldmVudABydW5fZXZlbnQAdHVybl9ldmVudAA=",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA=="
+    },
+    {
+      "id": "event-name-unterminated",
+      "operation": "parse",
+      "pythonExceptionType": "ValueError",
+      "pythonMessage": "unterminated string",
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAHBCAACgQAAA+kIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMAaWRsZV9ldmVudABydW5fZXZlbnQAdHVybl9ldmVudA==",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA=="
+    },
+    {
+      "id": "event-name-table-missing",
+      "operation": "parse",
+      "pythonExceptionType": "ValueError",
+      "pythonMessage": "could not locate AnimationScr sequence-name table",
+      "section0Base64": "AAAAANcBAAAAAAAAAAAAAAEAAAAAAIA+AADwQQAAAAAAAGxCAAAAAAAAAAAAAAAAAgAAAPp/AAALAAAA1wEAAAAAAAAAAAAAAQAAAAAAAD8AAHBCAACgQAAA+kIAAAAAAAAAAAAAAAAAAAAA+n8AABUAAADXAQAAAAAAAAAAAAAAAAAAAABAPwAAwEEAACBAAABCQgAAAAAAAAAAAAAAAAEAAAD6fwAAAwAAABEiM0QAAEA/BwAAAJmId2YAACDACwAAAN6tvu8BAgMA",
+      "section1Base64": "AwAAAAAAAABpZGxlX2V2ZW50AHJ1bl9ldmVudAB0dXJuX2V2ZW50AA=="
+    }
+  ],
+  "scope": {
+    "eventEncodingSupported": false,
+    "eventSemantics": "opaque",
+    "game": "Dying Light 1",
+    "layout": "56-byte sequence records, contiguous opaque 12-byte event rows, then duplicated lowercase ASCII sequence names",
+    "notes": [
+      "The fixture is synthetic and redistributable.",
+      "Python remains unchanged and is invoked through its existing parser, range patcher, and append rejection.",
+      "This proves metadata parsing and byte preservation, not event field semantics or event authoring."
+    ],
+    "retailPayloadEmbedded": false
+  }
+}

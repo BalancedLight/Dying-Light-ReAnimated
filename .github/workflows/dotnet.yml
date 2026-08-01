@@ -1,0 +1,85 @@
+name: C# rewrite
+
+on:
+  push:
+    branches:
+      - main
+      - refactor
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-package:
+    runs-on: windows-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python oracle
+        shell: powershell
+        run: |
+          python -m pip install --disable-pip-version-check -e ".[dev,gui]"
+          if ($LASTEXITCODE -ne 0) {
+            throw "The setup-python interpreter dependency install failed."
+          }
+
+          # validate_dl1_parity.ps1 prefers the Windows py launcher when it
+          # exists. Hosted images can resolve that launcher to a different
+          # Python than the setup-python PATH entry, so make its only external
+          # dependency available there too.
+          $launcher = Get-Command py -ErrorAction SilentlyContinue
+          if ($null -ne $launcher) {
+            $setupPython = ((python -c `
+              "import os,sys; print(os.path.normcase(os.path.realpath(sys.executable)))") `
+              -join "").Trim()
+            $launcherPython = ((& $launcher.Source -3 -c `
+              "import os,sys; print(os.path.normcase(os.path.realpath(sys.executable)))") `
+              -join "").Trim()
+            if ($LASTEXITCODE -ne 0) {
+              throw "The Windows Python launcher could not resolve Python 3."
+            }
+            if ($launcherPython -ne $setupPython) {
+              & $launcher.Source -3 -m pip install `
+                --disable-pip-version-check "numpy>=1.24"
+              if ($LASTEXITCODE -ne 0) {
+                throw "The parity-launcher NumPy install failed."
+              }
+            }
+          }
+
+      - name: Build, test, validate, and package
+        shell: powershell
+        run: .\package_csharp.ps1 -OutputRoot artifacts\csharp
+
+      - name: Upload validated Windows package
+        uses: actions/upload-artifact@v4
+        with:
+          name: DL-ReAnimated-CSharp-win-x64
+          path: |
+            artifacts/csharp/win-x64/DLReAnimated.exe
+            artifacts/csharp/DL-ReAnimated-CSharp-win-x64.zip
+            artifacts/csharp/SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: CSharp-test-results
+          path: tests/ReAnimated.Tests/TestResults
+          if-no-files-found: warn
