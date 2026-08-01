@@ -138,6 +138,7 @@ internal sealed class WpfStartupSmoke
             WindowStartupLocation.Manual;
         window.ShowActivated = false;
         window.ShowInTaskbar = false;
+        ConfigureSmokeWindowBounds(window);
         PositionOffscreen(window);
 
         window.Loaded += OnLoaded;
@@ -368,7 +369,9 @@ internal sealed class WpfStartupSmoke
         IReadOnlyList<WpfResizeTarget> schedule =
             CreateResizeSchedule(
                 window.MinWidth,
-                window.MinHeight);
+                window.MinHeight,
+                window.MaxWidth,
+                window.MaxHeight);
         if (schedule.Count != RequiredResizeStepCount)
         {
             throw new InvalidOperationException(
@@ -436,24 +439,58 @@ internal sealed class WpfStartupSmoke
     internal static IReadOnlyList<WpfResizeTarget>
         CreateResizeSchedule(
             double minimumWidth,
-            double minimumHeight)
+            double minimumHeight,
+            double maximumWidth,
+            double maximumHeight)
     {
-        double width = Math.Ceiling(
+        double minimumWindowWidth = Math.Ceiling(
             Math.Max(1.0, minimumWidth));
-        double height = Math.Ceiling(
+        double minimumWindowHeight = Math.Ceiling(
             Math.Max(1.0, minimumHeight));
+        double maximumWindowWidth = Math.Floor(maximumWidth);
+        double maximumWindowHeight = Math.Floor(maximumHeight);
+        if (maximumWindowWidth <= minimumWindowWidth ||
+            maximumWindowHeight <= minimumWindowHeight)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maximumWidth),
+                "The WPF startup-smoke resize bounds must leave room for both compact and expanded steps.");
+        }
+
+        double widthRange =
+            maximumWindowWidth - minimumWindowWidth;
+        double heightRange =
+            maximumWindowHeight - minimumWindowHeight;
+
+        double WidthAt(double fraction) =>
+            Math.Round(
+                minimumWindowWidth + widthRange * fraction,
+                MidpointRounding.AwayFromZero);
+        double HeightAt(double fraction) =>
+            Math.Round(
+                minimumWindowHeight + heightRange * fraction,
+                MidpointRounding.AwayFromZero);
+
         return
         [
             new(
-                Math.Max(width + 20.0, 1280.0),
-                Math.Max(height + 20.0, 720.0)),
+                WidthAt(0.20),
+                HeightAt(0.20)),
             new(
-                Math.Max(width + 420.0, 1920.0),
-                Math.Max(height + 180.0, 1080.0)),
-            new(width + 80.0, height + 60.0),
-            new(width + 360.0, height + 160.0),
-            new(width + 40.0, height + 100.0),
-            new(width + 300.0, height + 140.0),
+                WidthAt(0.90),
+                HeightAt(0.90)),
+            new(
+                WidthAt(0.35),
+                HeightAt(0.35)),
+            new(
+                WidthAt(0.75),
+                HeightAt(0.75)),
+            new(
+                WidthAt(0.15),
+                HeightAt(0.15)),
+            new(
+                WidthAt(0.65),
+                HeightAt(0.65)),
         ];
     }
 
@@ -515,6 +552,38 @@ internal sealed class WpfStartupSmoke
                 widthTolerance &&
             Math.Abs(actualHeight - target.Height) <=
                 heightTolerance;
+    }
+
+    private static void ConfigureSmokeWindowBounds(
+        Window window)
+    {
+        const double safetyMargin = 20.0;
+        const double requiredWidthRange = 440.0;
+        const double requiredHeightRange = 180.0;
+
+        double maximumWidth = Math.Floor(
+            SystemParameters.WorkArea.Width - safetyMargin);
+        double maximumHeight = Math.Floor(
+            SystemParameters.WorkArea.Height - safetyMargin);
+        double minimumWidth = Math.Min(
+            window.MinWidth,
+            maximumWidth - requiredWidthRange);
+        double minimumHeight = Math.Min(
+            window.MinHeight,
+            maximumHeight - requiredHeightRange);
+        if (minimumWidth < 320.0 ||
+            minimumHeight < 240.0 ||
+            maximumWidth <= minimumWidth ||
+            maximumHeight <= minimumHeight)
+        {
+            throw new InvalidOperationException(
+                $"The WPF startup-smoke desktop work area is too small for bounded resize evidence: {maximumWidth:0.##}x{maximumHeight:0.##}.");
+        }
+
+        window.MinWidth = minimumWidth;
+        window.MinHeight = minimumHeight;
+        window.MaxWidth = maximumWidth;
+        window.MaxHeight = maximumHeight;
     }
 
     private static void ThrowIfAnyViewportFaulted(

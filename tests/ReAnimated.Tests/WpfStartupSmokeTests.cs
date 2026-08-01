@@ -13,23 +13,29 @@ public sealed class WpfStartupSmokeTests
         IReadOnlyList<WpfStartupSmoke.WpfResizeTarget>
             first =
                 WpfStartupSmoke.CreateResizeSchedule(
-                    1180.0,
-                    760.0);
+                    720.0,
+                    520.0,
+                    1160.0,
+                    700.0);
         IReadOnlyList<WpfStartupSmoke.WpfResizeTarget>
             second =
                 WpfStartupSmoke.CreateResizeSchedule(
-                    1180.0,
-                    760.0);
+                    720.0,
+                    520.0,
+                    1160.0,
+                    700.0);
 
         Assert.Equal(
             WpfStartupSmoke.RequiredResizeStepCount,
             first.Count);
         Assert.Equal(first, second);
-        Assert.Contains(
+        Assert.All(
             first,
-            static target =>
-                target.Width >= 1920.0 &&
-                target.Height >= 1080.0);
+            target =>
+            {
+                Assert.InRange(target.Width, 720.0, 1160.0);
+                Assert.InRange(target.Height, 520.0, 700.0);
+            });
         for (int index = 0;
              index < first.Count;
              index += 2)
@@ -40,12 +46,12 @@ public sealed class WpfStartupSmokeTests
                 first[index + 1];
             Assert.InRange(
                 compact.Width,
-                1180.0,
-                1600.0);
+                720.0,
+                1160.0);
             Assert.InRange(
                 compact.Height,
-                760.0,
-                940.0);
+                520.0,
+                700.0);
             Assert.True(
                 expanded.Width > compact.Width);
             Assert.True(
