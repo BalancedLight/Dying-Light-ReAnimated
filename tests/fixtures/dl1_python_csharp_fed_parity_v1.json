@@ -1,0 +1,335 @@
+{
+  "acceptedInputs": [
+    {
+      "id": "canonical-ordered-values",
+      "lookup": {
+        "expressionIndex": 1,
+        "name": "Blink.Mixed",
+        "query": "BLINK.MIXED"
+      },
+      "normalized": {
+        "diagnostics": [],
+        "expressions": [
+          {
+            "name": "_NONE",
+            "weights": []
+          },
+          {
+            "name": "Blink.Mixed",
+            "weights": [
+              {
+                "morphName": "morph_l_eye_close",
+                "weight": 1.25,
+                "weightBitsHex": "3FA00000"
+              },
+              {
+                "morphName": "morph_r_eye_close",
+                "weight": -0.5,
+                "weightBitsHex": "BF000000"
+              },
+              {
+                "morphName": "jaw_open",
+                "weight": -0.0,
+                "weightBitsHex": "80000000"
+              }
+            ]
+          },
+          {
+            "name": "smile",
+            "weights": [
+              {
+                "morphName": "mouth_smile",
+                "weight": 0.75,
+                "weightBitsHex": "3F400000"
+              }
+            ]
+          }
+        ]
+      },
+      "payloadBase64": "AwAAAAUAX05PTkUAAAAACwBCbGluay5NaXhlZAMAAAARAG1vcnBoX2xfZXllX2Nsb3NlAACgPxEAbW9ycGhfcl9leWVfY2xvc2UAAAC/CABqYXdfb3BlbgAAAIAFAHNtaWxlAQAAAAsAbW91dGhfc21pbGUAAEA/",
+      "payloadBytes": 120,
+      "payloadSha256": "27438C196ED25F4E679EF80C31AE7AC3AF013322C5CD1B093FEDED6E2DD490C9",
+      "rejectDuplicateNames": false
+    },
+    {
+      "id": "duplicate-compatibility-and-layer-normalization",
+      "layerNormalization": {
+        "compatibility": {
+          "isComplete": false,
+          "missingSourceMorphNames": [
+            "missing"
+          ],
+          "resolvedTargetCount": 2,
+          "resolvedWeightCount": 3,
+          "sourceWeightCount": 4
+        },
+        "diagnostics": [
+          {
+            "code": "FED101",
+            "expressionIndex": 0,
+            "severity": "Warning",
+            "weightIndex": null
+          }
+        ],
+        "expressionIndex": 0,
+        "mapping": {
+          "source_smile": "smile"
+        },
+        "targetMorphs": [
+          "smile",
+          "blink_l",
+          "unused"
+        ],
+        "tracks": [
+          {
+            "morphName": "smile",
+            "value": 0.6000000238418579
+          },
+          {
+            "morphName": "blink_l",
+            "value": 0.5
+          }
+        ]
+      },
+      "lookup": {
+        "expressionIndex": 0,
+        "name": "mixed",
+        "query": "MiXeD"
+      },
+      "normalized": {
+        "diagnostics": [
+          {
+            "code": "FED002",
+            "expressionIndex": 0,
+            "message": "Expression 'mixed' contains duplicate morph 'BLINK_L'; both ordered weights are preserved.",
+            "severity": "Warning",
+            "weightIndex": 1
+          },
+          {
+            "code": "FED001",
+            "expressionIndex": 1,
+            "message": "Expression 'MIXED' duplicates an earlier expression; source order is preserved and name lookup returns the first occurrence.",
+            "severity": "Warning",
+            "weightIndex": null
+          }
+        ],
+        "expressions": [
+          {
+            "name": "mixed",
+            "weights": [
+              {
+                "morphName": "blink_l",
+                "weight": 0.75,
+                "weightBitsHex": "3F400000"
+              },
+              {
+                "morphName": "BLINK_L",
+                "weight": -0.25,
+                "weightBitsHex": "BE800000"
+              },
+              {
+                "morphName": "source_smile",
+                "weight": 0.6000000238418579,
+                "weightBitsHex": "3F19999A"
+              },
+              {
+                "morphName": "missing",
+                "weight": 0.20000000298023224,
+                "weightBitsHex": "3E4CCCCD"
+              }
+            ]
+          },
+          {
+            "name": "MIXED",
+            "weights": [
+              {
+                "morphName": "blink_l",
+                "weight": 0.125,
+                "weightBitsHex": "3E000000"
+              }
+            ]
+          }
+        ]
+      },
+      "payloadBase64": "AgAAAAUAbWl4ZWQEAAAABwBibGlua19sAABAPwcAQkxJTktfTAAAgL4MAHNvdXJjZV9zbWlsZZqZGT8HAG1pc3NpbmfNzEw+BQBNSVhFRAEAAAAHAGJsaW5rX2wAAAA+",
+      "payloadBytes": 96,
+      "payloadSha256": "F88D0EB62D2B5F25A5CDBC5633CAD04A434CD8B84EF60C14123EB2427B4E3753",
+      "rejectDuplicateNames": false
+    }
+  ],
+  "format": "dl-reanimated-python-csharp-fed-parity-oracle-v1",
+  "rejectedInputs": [
+    {
+      "diagnosticFragment": "ended unexpectedly",
+      "id": "truncated-header",
+      "payloadBase64": "AQAA",
+      "payloadBytes": 3,
+      "payloadSha256": "FB50DC0717FF266CF9BAF82B1CE7A1C2EF6D9247859680B11A19FB7077F5F222",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED payload ended unexpectedly.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "unsafe",
+      "id": "negative-expression-count",
+      "payloadBase64": "/////w==",
+      "payloadBytes": 4,
+      "payloadSha256": "AD95131BC0B799C0B1AF477FB14FCF26A6A9F76079E48BF090ACB7E8367BFD0E",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression count -1 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "unsafe",
+      "id": "excessive-expression-count",
+      "payloadBase64": "oYYBAA==",
+      "payloadBytes": 4,
+      "payloadSha256": "B742EC26AC612CEA77DE3219D5E42AB3A45737FBBAA012D227098FEBF8D0E4FB",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression count 100001 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "length",
+      "id": "empty-expression-name",
+      "payloadBase64": "AQAAAAAA",
+      "payloadBytes": 6,
+      "payloadSha256": "36C159D76B52E03E496363607C5940227F62F4E048DF344B050159BC97BBA3D7",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 name length 0 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "empty name",
+      "id": "whitespace-expression-name",
+      "payloadBase64": "AQAAAAEAIA==",
+      "payloadBytes": 7,
+      "payloadSha256": "CDDEB5167D5F1AF77FAF02BEEA05F0743FABBEC59FE8265BCC809280697EFC3D",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 has an empty name.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "valid UTF-8",
+      "id": "invalid-utf8-expression-name",
+      "payloadBase64": "AQAAAAEA/w==",
+      "payloadBytes": 7,
+      "payloadSha256": "A83D40AAD73B8436CC6A8DAE128EEF96F8DF9FCB570173B79AF9EF8D0272B969",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 name is not valid UTF-8.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "embedded NUL",
+      "id": "nul-expression-name",
+      "payloadBase64": "AQAAAAMAYQBi",
+      "payloadBytes": 9,
+      "payloadSha256": "00350451F8443B50DAB80267B3580172DB30A02402E8DA6649FA708579293747",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 name contains an embedded NUL.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "unsafe",
+      "id": "negative-weight-count",
+      "payloadBase64": "AQAAAAUAYmxpbmv/////",
+      "payloadBytes": 15,
+      "payloadSha256": "87B3785F3ECAFEAC1C62E361717C12BB3BAD52CEB4DAE6FB64B989CDC220809B",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 weight count -1 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "unsafe",
+      "id": "excessive-weight-count",
+      "payloadBase64": "AQAAAAUAYmxpbmuhhgEA",
+      "payloadBytes": 15,
+      "payloadSha256": "92771E9D2B1F65A3DFC898E11265C9E5CFEC94BD067307CB5098F956C38BAB8A",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 weight count 100001 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "length",
+      "id": "empty-morph-name",
+      "payloadBase64": "AQAAAAUAYmxpbmsBAAAAAAA=",
+      "payloadBytes": 17,
+      "payloadSha256": "9E919A44DE396A90CA7B347751545B4D4613F50307B5C545B471A78B1AF26AE1",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 morph 0 name length 0 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "not finite",
+      "id": "nonfinite-weight",
+      "payloadBase64": "AQAAAAUAYmxpbmsBAAAAAwBleWUAAMB/",
+      "payloadBytes": 24,
+      "payloadSha256": "FCB76AA40F31F467458639186A416C748A2E8D24C17C1C007DC0E51C4EEA3E09",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 morph 0 weight is not finite.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "ended unexpectedly",
+      "id": "truncated-weight",
+      "payloadBase64": "AQAAAAUAYmxpbmsBAAAAAwBleWUAAIA=",
+      "payloadBytes": 23,
+      "payloadSha256": "24AA22D6C0C361305058CEC537368CFC2F83A1444AD06155E6D0FF6C57A7FE0B",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED payload ended unexpectedly.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "trailing bytes",
+      "id": "trailing-byte",
+      "payloadBase64": "AQAAAAUAYmxpbmsBAAAAAwBleWUAAIA/pQ==",
+      "payloadBytes": 25,
+      "payloadSha256": "7655EB5EF088C52F62668D3D1A08C63C71561B25289F93110A75ADA3C1E81F0E",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED payload contains trailing bytes.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "length",
+      "id": "excessive-string-length",
+      "payloadBase64": "AQAAAAEQ",
+      "payloadBytes": 6,
+      "payloadSha256": "05F4A2E696D12FF411AB480C6347298D419C4A16A60FAB1AB0D9F5EBFB33CB62",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 0 name length 4097 is unsafe.",
+      "rejectDuplicateNames": false
+    },
+    {
+      "diagnosticFragment": "duplicate expression",
+      "id": "duplicate-expression-strict",
+      "payloadBase64": "AgAAAAUAYmxpbmsBAAAACABsZWZ0X2V5ZQAAgD8FAEJMSU5LAQAAAAkAcmlnaHRfZXllAACAPw==",
+      "payloadBytes": 55,
+      "payloadSha256": "6453FD426B31AE4C279BD9028B79E06C5B5FFD5F362672D0C0B2CF7A87E008E6",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED contains duplicate expression 'BLINK'.",
+      "rejectDuplicateNames": true
+    },
+    {
+      "diagnosticFragment": "duplicate morph",
+      "id": "duplicate-morph-strict",
+      "payloadBase64": "AQAAAAUAYmxpbmsCAAAAAwBleWUAAIA/AwBFWUUAAAA/",
+      "payloadBytes": 33,
+      "payloadSha256": "4B243519EC7FFF74F3E3D289C5EAD133FC70E4E0B2AE54658B151D283FCC8F3F",
+      "pythonExceptionType": "FedOracleError",
+      "pythonMessage": "FED expression 'blink' contains duplicate morph 'EYE'.",
+      "rejectDuplicateNames": true
+    }
+  ],
+  "scope": {
+    "formatContract": "Little-endian Int32 expression count; repeated UInt16 UTF-8 expression name, Int32 weight count, and repeated UInt16 UTF-8 morph name plus IEEE-754 float32 weight.",
+    "game": "Dying Light 1",
+    "maximumOracleBytes": 524288,
+    "notes": [
+      "All FED payloads are generated by this oracle and are safe to redistribute.",
+      "The tracked legacy Python application has no FED parser; this is an independent standard-library review oracle.",
+      "Ordered names and exact float32 bits are compared without clamping authored values.",
+      "ASCII-only duplicate controls avoid claiming full Unicode equivalence between Python casefold and .NET OrdinalIgnoreCase.",
+      "No retail or proprietary game payload is embedded."
+    ]
+  }
+}

@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/ReAnimated.App/ReAnimated.App.csproj" />
+    <Project Path="src/ReAnimated.Cli/ReAnimated.Cli.csproj" />
+    <Project Path="src/ReAnimated.Codecs/ReAnimated.Codecs.csproj" />
+    <Project Path="src/ReAnimated.Core/ReAnimated.Core.csproj" />
+    <Project Path="src/ReAnimated.DL1.Assets/ReAnimated.DL1.Assets.csproj" />
+    <Project Path="src/ReAnimated.Evaluation/ReAnimated.Evaluation.csproj" />
+    <Project Path="src/ReAnimated.Renderer.D3D11/ReAnimated.Renderer.D3D11.csproj" />
+    <Project Path="src/ReAnimated.Retargeting/ReAnimated.Retargeting.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/ReAnimated.Tests/ReAnimated.Tests.csproj" />
+  </Folder>
+</Solution>

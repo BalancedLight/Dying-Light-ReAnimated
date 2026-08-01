@@ -1,0 +1,101 @@
+<UserControl x:Class="ReAnimated.App.Views.ViewportPane"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:renderer="clr-namespace:ReAnimated.Renderer.D3D11;assembly=ReAnimated.Renderer.D3D11"
+             MinWidth="220"
+             MinHeight="180">
+    <Border Style="{StaticResource PaneBorderStyle}">
+        <!-- All WPF controls intentionally sit in rows outside the HwndHost airspace. -->
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="36" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="26" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0" Background="{StaticResource PanelRaisedBrush}">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="9,0" VerticalAlignment="Center">
+                    <TextBlock FontWeight="SemiBold" Text="{Binding Title}" />
+                    <TextBlock FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="{Binding FidelityLabel}" />
+                </StackPanel>
+                <Border Grid.Column="1"
+                        Margin="4"
+                        Padding="7,2"
+                        Background="#3C2F1C"
+                        CornerRadius="9"
+                        ToolTip="Software rendering fallback is active">
+                    <Border.Style>
+                        <Style TargetType="{x:Type Border}">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ElementName=RenderSurface, Path=IsUsingWarp}"
+                                             Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <TextBlock FontSize="10" Foreground="{StaticResource WarningBrush}" Text="WARP" />
+                </Border>
+            </Grid>
+
+            <renderer:D3D11RenderHost x:Name="RenderSurface"
+                                      Grid.Row="1"
+                                      SceneSource="{Binding SceneSource}"
+                                      Focusable="True" />
+
+            <Grid Grid.Row="2" Background="#151A22">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Margin="8,0"
+                           VerticalAlignment="Center"
+                           FontSize="10"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="{Binding ElementName=RenderSurface, Path=StatusText}" />
+                <TextBlock Grid.Column="1"
+                           Margin="5,0"
+                           VerticalAlignment="Center"
+                           FontSize="10"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="L orbit · M pan · wheel zoom"
+                           ToolTip="Left-drag orbits. Middle-drag pans. The mouse wheel zooms. An evaluated FPP or movie camera keeps the target viewport locked." />
+                <TextBlock Grid.Column="2"
+                           Margin="8,0"
+                           VerticalAlignment="Center"
+                           FontSize="10"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="{Binding ElementName=RenderSurface, Path=FramesPerSecond, StringFormat={}{0:F0} fps}" />
+            </Grid>
+
+            <TextBlock Grid.Row="3"
+                       Padding="8,4"
+                       Background="#331A1D"
+                       Foreground="{StaticResource ErrorBrush}"
+                       FontSize="10"
+                       TextWrapping="Wrap"
+                       Text="{Binding ElementName=RenderSurface, Path=Diagnostics[0]}">
+                <TextBlock.Style>
+                    <Style TargetType="{x:Type TextBlock}">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ElementName=RenderSurface, Path=Diagnostics.Count}"
+                                         Value="0">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+        </Grid>
+    </Border>
+</UserControl>

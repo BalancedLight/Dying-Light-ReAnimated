@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>ReAnimated.Cli</RootNamespace>
+    <AssemblyName>DLReAnimated.Cli</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\ReAnimated.Core\ReAnimated.Core.csproj" />
+    <ProjectReference Include="..\ReAnimated.Codecs\ReAnimated.Codecs.csproj" />
+    <ProjectReference Include="..\ReAnimated.DL1.Assets\ReAnimated.DL1.Assets.csproj" />
+    <ProjectReference Include="..\ReAnimated.Evaluation\ReAnimated.Evaluation.csproj" />
+    <ProjectReference Include="..\ReAnimated.Retargeting\ReAnimated.Retargeting.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,25 +1,18 @@
-# Python environments and caches
+# Runtime and test caches
 __pycache__/
 *.py[cod]
-.venv/
-.venv-build/
-venv/
 .pytest_cache/
 .pytest_tmp/
-.mypy_cache/
-.ruff_cache/
-.pyright/
-.coverage
-.coverage.*
-htmlcov/
 
 # Packaging and build output
 build/
 dist/
 wheelhouse/
-*.egg-info/
-*.egg
-pip-wheel-metadata/
+bin/
+obj/
+TestResults/
+*.user
+*.suo
 
 # Local editor and operating-system files
 .idea/
@@ -49,6 +42,9 @@ Desktop.ini
 *.pak
 *.rpack
 *.rpack.dlrmanifest.json
+*.dlrahandoff.json
+*.dlrtracks
+DLR_BaseColor_*.dds
 *.mod
 scratch/
 artifacts/
@@ -58,17 +54,6 @@ out/
 output/
 outputs/
 dl_reanimated_build/
-
-# Bundled release examples and required references
-!/common_anims_sp_pc.rpack
-!/common_anims_sp_pc.rpack.dlrmanifest.json
-!/reference/**/*.anm2
-!/reference/**/*.smd
-!/reference/**/*.crig
-!/examples/**/*.dlraproj
-!/examples/**/*.dlrmap.json
-!/tests/fixtures/**/*.smd
-!/tests/fixtures/**/*.ascii
 
 # Locally extracted game data and large optional dumps
 common_anims_PC/
@@ -80,6 +65,7 @@ test_anm2_PC/
 base assets/
 
 # Local Codex and editor configuration
+/.vs/
 /.codex-remote-attachments/
 /.github/instructions/codacy.instructions.md
 /AGENTS.md

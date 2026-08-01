@@ -1,0 +1,1257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dl-reanimated.local/schemas/dlraproj.schema.json",
+  "title": "DL ReAnimated C# DL1 Project",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "format",
+    "projectId",
+    "name",
+    "game",
+    "assets",
+    "animations",
+    "dl1Settings",
+    "previewProfile"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "format": {
+      "const": "dl-reanimated-csharp-project"
+    },
+    "projectId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "game": {
+      "const": "dying-light-1"
+    },
+    "assets": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "animations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/animation"
+      }
+    },
+    "activeAnimationId": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "dl1Settings": {
+      "type": "object",
+      "required": [
+        "additionalRpackRoots"
+      ],
+      "properties": {
+        "installFingerprint": {
+          "type": "string"
+        },
+        "validatedBuildFingerprint": {
+          "type": "string"
+        },
+        "additionalRpackRoots": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "showCameraHelpers": {
+          "type": "boolean",
+          "default": true
+        },
+        "useFppProjectionCapture": {
+          "type": "boolean"
+        },
+        "fppProjectionCapture": {
+          "$ref": "#/$defs/fppProjectionCapture"
+        },
+        "useMovieReferenceCameraCapture": {
+          "type": "boolean"
+        },
+        "movieReferenceCameraCapture": {
+          "$ref": "#/$defs/movieReferenceCameraCapture"
+        }
+      },
+      "additionalProperties": false
+    },
+    "previewMode": {
+      "enum": [
+        "dl1Profile",
+        "raw"
+      ]
+    },
+    "previewProfile": {
+      "$ref": "#/$defs/previewProfile"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "fppProjectionCapture": {
+      "type": "object",
+      "required": [
+        "sceneVerticalFieldOfViewDegrees",
+        "sceneAspectRatio",
+        "sceneNearClipMeters",
+        "handsFieldOfViewDegrees",
+        "handsFieldOfViewAxis",
+        "handsAspectRatio",
+        "handsNearClipMeters"
+      ],
+      "properties": {
+        "captureLabel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "sceneVerticalFieldOfViewDegrees": {
+          "type": "number",
+          "exclusiveMinimum": 1,
+          "exclusiveMaximum": 179
+        },
+        "sceneAspectRatio": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "sceneNearClipMeters": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "handsFieldOfViewDegrees": {
+          "type": "number",
+          "exclusiveMinimum": 1,
+          "exclusiveMaximum": 179
+        },
+        "handsFieldOfViewAxis": {
+          "enum": [
+            "horizontal",
+            "vertical"
+          ]
+        },
+        "handsAspectRatio": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "handsNearClipMeters": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "movieReferenceCameraCapture": {
+      "type": "object",
+      "required": [
+        "worldTransform",
+        "lens"
+      ],
+      "properties": {
+        "captureLabel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "worldTransform": {
+          "$ref": "#/$defs/transform"
+        },
+        "lens": {
+          "type": "object",
+          "required": [
+            "verticalFieldOfViewDegrees",
+            "aspectRatio",
+            "nearClipMeters",
+            "farClipMeters"
+          ],
+          "properties": {
+            "verticalFieldOfViewDegrees": {
+              "type": "number",
+              "exclusiveMinimum": 1,
+              "exclusiveMaximum": 179
+            },
+            "aspectRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "nearClipMeters": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "farClipMeters": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "required": [
+        "id",
+        "kind",
+        "relativePath"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "kind": {
+          "enum": [
+            "sourceAnimation",
+            "retailGameResource"
+          ]
+        },
+        "relativePath": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resourceId": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "retailIdentity": {
+          "$ref": "#/$defs/retailIdentity"
+        }
+      },
+      "additionalProperties": false
+    },
+    "animation": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "sourceAssetId",
+        "targetRigId",
+        "frameRate",
+        "frameCount",
+        "rootMotionMode",
+        "boneMappings",
+        "targetBindReviews",
+        "editLayers",
+        "morphBindings",
+        "morphEditLayers",
+        "ikLayers",
+        "attachments"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceBinding": {
+          "$ref": "#/$defs/animationSourceBinding"
+        },
+        "mimicAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "facialAnimationSourceBinding": {
+          "$ref": "#/$defs/animationSourceBinding"
+        },
+        "facialSourceAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "facialSourceValueUnit": {
+          "enum": [
+            "normalized",
+            "percent"
+          ]
+        },
+        "facialTiming": {
+          "$ref": "#/$defs/facialClipTiming"
+        },
+        "targetAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "targetRigId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceRigSignature": {
+          "type": "string"
+        },
+        "targetRigSignature": {
+          "type": "string"
+        },
+        "mappingFingerprint": {
+          "type": "string"
+        },
+        "mimicProfileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mimicMappingFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "frameRate": {
+          "$ref": "#/$defs/frameRate"
+        },
+        "frameCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "rootMotionMode": {
+          "enum": [
+            "recorded",
+            "inPlace",
+            "bip01",
+            "motionAccumulator"
+          ]
+        },
+        "previewMotionAccumulationEnabled": {
+          "type": "boolean"
+        },
+        "boneMappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/boneMapping"
+          }
+        },
+        "targetBindReviews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/targetBindReview"
+          }
+        },
+        "editLayers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/editLayer"
+          }
+        },
+        "morphBindings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "sourceChannel",
+              "sourceValueUnit",
+              "targetMorph",
+              "weight",
+              "bias",
+              "enabled",
+              "confidence",
+              "method",
+              "isReviewed",
+              "isLocked"
+            ],
+            "properties": {
+              "sourceChannel": {
+                "type": "string",
+                "minLength": 1
+              },
+              "sourceValueUnit": {
+                "enum": [
+                  "normalized",
+                  "percent"
+                ]
+              },
+              "targetMorph": {
+                "type": "string",
+                "minLength": 1
+              },
+              "targetDescriptorHash": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 4294967295
+              },
+              "weight": {
+                "type": "number"
+              },
+              "bias": {
+                "type": "number"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "method": {
+                "type": "string",
+                "minLength": 1
+              },
+              "isReviewed": {
+                "type": "boolean"
+              },
+              "isLocked": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "morphEditLayers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/morphEditLayer"
+          }
+        },
+        "ikLayers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "id",
+              "name",
+              "chainName",
+              "enabled",
+              "weight",
+              "bakeToEditLayer",
+              "keyframes"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "chainName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "weight": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "bakeToEditLayer": {
+                "type": "boolean"
+              },
+              "keyframes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "frame",
+                    "effector",
+                    "pole"
+                  ],
+                  "properties": {
+                    "frame": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "effector": {
+                      "$ref": "#/$defs/vector"
+                    },
+                    "pole": {
+                      "$ref": "#/$defs/vector"
+                    },
+                    "endOrientation": {
+                      "$ref": "#/$defs/quaternion"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/attachment"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "animationSourceBinding": {
+      "type": "object",
+      "required": [
+        "kind",
+        "assetId",
+        "roles",
+        "sourceRigSignature",
+        "timingProvenance"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "localFbx",
+            "localAnm2",
+            "retailAnm2"
+          ]
+        },
+        "assetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "roles": {
+          "enum": [
+            "body",
+            "facial",
+            "auxiliary",
+            "body, facial",
+            "body, auxiliary",
+            "facial, auxiliary",
+            "body, facial, auxiliary"
+          ]
+        },
+        "sourceRigSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "retailSourceModelAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "timingProvenance": {
+          "enum": [
+            "embeddedFbx",
+            "exactRetailAnimationScript",
+            "userSpecified",
+            "manual30FpsFallback"
+          ]
+        },
+        "sourceRangeStartFrame": {
+          "type": "number",
+          "minimum": 0
+        },
+        "sourceRangeEndFrame": {
+          "type": "number",
+          "minimum": 0
+        },
+        "timingDetail": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "partition": {
+          "$ref": "#/$defs/anm2TrackPartition"
+        }
+      },
+      "additionalProperties": false
+    },
+    "anm2TrackPartition": {
+      "type": "object",
+      "required": [
+        "bodyDescriptors",
+        "morphDescriptors",
+        "auxiliaryDescriptors",
+        "unresolvedDescriptors",
+        "ambiguousDescriptors",
+        "fingerprint",
+        "roles",
+        "requiresReview"
+      ],
+      "properties": {
+        "bodyDescriptors": {
+          "$ref": "#/$defs/descriptorArray"
+        },
+        "morphDescriptors": {
+          "$ref": "#/$defs/descriptorArray"
+        },
+        "auxiliaryDescriptors": {
+          "$ref": "#/$defs/descriptorArray"
+        },
+        "unresolvedDescriptors": {
+          "$ref": "#/$defs/descriptorArray"
+        },
+        "ambiguousDescriptors": {
+          "$ref": "#/$defs/descriptorArray"
+        },
+        "fingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "roles": {
+          "type": "string"
+        },
+        "requiresReview": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "descriptorArray": {
+      "type": "array",
+      "items": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 4294967295
+      },
+      "uniqueItems": true
+    },
+    "facialClipTiming": {
+      "type": "object",
+      "required": [
+        "nativeFrameRate",
+        "sourceStartFrame",
+        "sourceEndFrame",
+        "timelineOffsetFrames",
+        "outsideRangeBehavior"
+      ],
+      "properties": {
+        "nativeFrameRate": {
+          "$ref": "#/$defs/frameRate"
+        },
+        "sourceStartFrame": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceEndFrame": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "timelineOffsetFrames": {
+          "type": "number"
+        },
+        "outsideRangeBehavior": {
+          "enum": [
+            "neutral",
+            "hold",
+            "loop",
+            "stretch"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "frameRate": {
+      "type": "object",
+      "required": [
+        "numerator",
+        "denominator"
+      ],
+      "properties": {
+        "numerator": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "denominator": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "framesPerSecond": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "retailIdentity": {
+      "type": "object",
+      "required": [
+        "installFingerprint",
+        "providerId",
+        "providerPack",
+        "resourceType",
+        "resourceName",
+        "precedence",
+        "contentSha256"
+      ],
+      "properties": {
+        "installFingerprint": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "providerPack": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resourceType": {
+          "type": "integer"
+        },
+        "resourceIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resourceName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "precedence": {
+          "type": "integer"
+        },
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "boneMapping": {
+      "type": "object",
+      "required": [
+        "sourceBoneName",
+        "targetBoneName",
+        "method",
+        "isLocked",
+        "isReviewed"
+      ],
+      "properties": {
+        "sourceBoneName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetBoneName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "isLocked": {
+          "type": "boolean"
+        },
+        "isReviewed": {
+          "type": "boolean"
+        },
+        "mappingKind": {
+          "enum": [
+            "bone",
+            "helperOverride"
+          ]
+        },
+        "transferPolicy": {
+          "enum": [
+            "globalBindBasis",
+            "restRelative",
+            "rotationDelta",
+            "globalRotationDelta",
+            "anatomicalDirection",
+            "copyLocal",
+            "bind"
+          ]
+        },
+        "componentPolicy": {
+          "enum": [
+            "fullTransform",
+            "rotation",
+            "translation",
+            "rotationTranslation",
+            "scale"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "targetBindReview": {
+      "type": "object",
+      "required": [
+        "targetBoneIndex",
+        "targetBoneName"
+      ],
+      "properties": {
+        "targetBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "targetBoneName": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "editLayer": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "blendMode",
+        "scope",
+        "weight",
+        "tracks",
+        "enabled",
+        "boneMask"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blendMode": {
+          "enum": [
+            "override",
+            "additive"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "authoredExportable",
+            "previewOnly"
+          ]
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "boneIndex",
+              "keyframes"
+            ],
+            "properties": {
+              "boneIndex": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "interpolation": {
+                "enum": [
+                  "linear",
+                  "step"
+                ],
+                "default": "linear"
+              },
+              "keyframes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "frame",
+                    "value"
+                  ],
+                  "properties": {
+                    "frame": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "value": {
+                      "$ref": "#/$defs/transform"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "boneMask": {
+          "type": "object",
+          "patternProperties": {
+            "^[0-9]+$": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "morphEditLayer": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "blendMode",
+        "scope",
+        "weight",
+        "tracks",
+        "enabled"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "blendMode": {
+          "enum": [
+            "override",
+            "additive"
+          ]
+        },
+        "scope": {
+          "enum": [
+            "authoredExportable",
+            "previewOnly"
+          ]
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "tracks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "morphName",
+              "keyframes"
+            ],
+            "properties": {
+              "morphName": {
+                "type": "string",
+                "minLength": 1
+              },
+              "keyframes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "frame",
+                    "value"
+                  ],
+                  "properties": {
+                    "frame": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "attachment": {
+      "type": "object",
+      "required": [
+        "id",
+        "assetId",
+        "name",
+        "parentBoneIndex",
+        "localOffset",
+        "scope"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "assetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "parentBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "parentBoneName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "localOffset": {
+          "$ref": "#/$defs/transform"
+        },
+        "scope": {
+          "enum": [
+            "authoredExportable",
+            "previewOnly"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "previewProfile": {
+      "type": "object",
+      "required": [
+        "id",
+        "viewMode",
+        "fidelity",
+        "visualStyle",
+        "cameraLens",
+        "cameraOffset",
+        "fidelityTier",
+        "context",
+        "profileVersion",
+        "proceduralToggles",
+        "morphActivationThreshold",
+        "clampMorphWeightsToRigBounds"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "viewMode": {
+          "enum": [
+            "thirdPerson",
+            "firstPerson",
+            "split"
+          ]
+        },
+        "fidelity": {
+          "type": "string"
+        },
+        "visualStyle": {
+          "enum": [
+            "unlitDiagnostic",
+            "materialApproximation"
+          ]
+        },
+        "cameraBoneName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cameraLens": {
+          "type": "object",
+          "required": [
+            "verticalFieldOfViewDegrees",
+            "aspectRatio",
+            "nearClipMeters",
+            "farClipMeters"
+          ],
+          "properties": {
+            "verticalFieldOfViewDegrees": {
+              "type": "number",
+              "exclusiveMinimum": 1,
+              "exclusiveMaximum": 179
+            },
+            "aspectRatio": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "nearClipMeters": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "farClipMeters": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "cameraOffset": {
+          "$ref": "#/$defs/transform"
+        },
+        "fidelityTier": {
+          "enum": [
+            "raw",
+            "dl1Profile",
+            "gameValidated"
+          ]
+        },
+        "context": {
+          "enum": [
+            "raw",
+            "dl1Body",
+            "dl1Fpp",
+            "dl1Movie"
+          ]
+        },
+        "profileVersion": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "buildFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "captureFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "proceduralToggles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "morphActivationThreshold": {
+          "type": "number",
+          "minimum": 0
+        },
+        "maximumActiveMorphTargets": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "clampMorphWeightsToRigBounds": {
+          "type": "boolean"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "fidelityTier"
+            ],
+            "properties": {
+              "fidelityTier": {
+                "const": "gameValidated"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "buildFingerprint",
+              "captureFingerprint"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "transform": {
+      "type": "object",
+      "required": [
+        "translation",
+        "rotation",
+        "scale",
+        "isFinite"
+      ],
+      "properties": {
+        "translation": {
+          "$ref": "#/$defs/vector"
+        },
+        "rotation": {
+          "$ref": "#/$defs/quaternion"
+        },
+        "scale": {
+          "$ref": "#/$defs/vector"
+        },
+        "isFinite": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "vector": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z",
+        "lengthSquared",
+        "length",
+        "isFinite"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        },
+        "lengthSquared": {
+          "type": "number"
+        },
+        "length": {
+          "type": "number"
+        },
+        "isFinite": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "quaternion": {
+      "type": "object",
+      "required": [
+        "x",
+        "y",
+        "z",
+        "w",
+        "lengthSquared",
+        "isFinite"
+      ],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "z": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number"
+        },
+        "lengthSquared": {
+          "type": "number"
+        },
+        "isFinite": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
