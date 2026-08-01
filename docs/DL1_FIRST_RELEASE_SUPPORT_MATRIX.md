@@ -16,7 +16,7 @@ Status terms:
 - **Validation open**: implemented, but required corpus, capture, hardware, or
   clean-machine evidence is not complete.
 
-The exact Python-oracle inventory currently classifies 616 collected nodes as
+The checked-in historical-suite audit fixture classifies 616 collected nodes as
 92 directly mapped, 317 deliberately excluded by this scope, and 207 still
 pending. A **Supported** row below describes the implemented C# contract; it
 does not erase pending behavioral-parity nodes. See

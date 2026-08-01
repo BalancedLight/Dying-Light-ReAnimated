@@ -1,4 +1,6 @@
-# Bounded DL1 Python/C# parity harness
+# Historical DL1 Python-to-C# fixture provenance
+
+> **Historical background only.** The C# application, package, validation scripts, and GitHub Actions do not install, start, or require Python. The JSON files described here are checked-in static C# compatibility fixtures; the former live differential wrappers were retired.
 
 The Python application remains an archived external regression oracle
 during the C# rewrite. It is not treated as more authoritative than installed
@@ -102,67 +104,12 @@ This is a bounded differential gate, not a full parity certificate:
 - Renderer output, retail-model deformation, and live DL1 behavior are not
   covered by these fixtures.
 
-## Run the live differential gate
+## Current C# validation
 
-From the repository root:
-
-```powershell
-.\tools\validate_dl1_parity.ps1 -Configuration Release
-```
-
-The command:
-
-1. emits fresh ANM2, semantic, and FED oracles from the current Python modules
-   into one unique bounded temporary directory;
-2. requires all three SHA-256 values to match the reviewed checked-in
-   fixtures;
-3. points the focused ANM2, semantic, and FED parity tests at those fresh
-   files;
-4. runs the focused C# differential tests;
-5. restores the caller's environment and removes the temporary directory.
-
-The event-bearing AnimationScr control has its own focused gate because its
-Python probe is deliberately temporary rather than a tracked Python module:
+The Hermetic and Release C# tiers exercise the checked-in ANM2, semantic, FED, and AnimationScr fixtures without launching Python:
 
 ```powershell
-.\tools\validate_dl1_animation_scr_event_parity.ps1 `
-  -Configuration Release
+.\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release
 ```
 
-Add `-InstalledEvidence` to require the exact fingerprinted Windows 1.55 stock
-controls as well.
-
-Use `-NoBuild` only after the selected test configuration has already been
-rebuilt:
-
-```powershell
-.\tools\validate_dl1_parity.ps1 -Configuration Release -NoBuild
-```
-
-The hermetic C# regressions can also run without Python. They consume the
-checked-in fixtures:
-
-```powershell
-dotnet test tests/ReAnimated.Tests/ReAnimated.Tests.csproj `
-  --configuration Release `
-  --filter "Category=PythonParity"
-```
-
-If an intentional Python-oracle change makes a fixture stale, do not blindly
-replace it. Review the semantic and byte differences, then regenerate the
-affected fixture:
-
-```powershell
-.\tools\validate_dl1_parity.ps1 `
-  -PythonOracleRoot "F:\DyingLightTools\ReAnimated - Python"
-```
-
-Update the event-bearing SCR fixture only through:
-
-```powershell
-.\tools\validate_dl1_animation_scr_event_parity.ps1 `
-  -UpdateFixture `
-  -PythonOracleRoot "F:\DyingLightTools\ReAnimated - Python"
-```
-
-Then review its exact byte and rejection changes.
+Fixture changes are ordinary reviewed source changes. The former live generators and refresh wrappers are no longer part of this repository.

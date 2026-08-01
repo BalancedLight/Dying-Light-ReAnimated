@@ -351,9 +351,7 @@ one target skeleton automatically fits every Dying Light character
 
 ## 14. Archived Python reference modules
 
-The former Python decoder/writer is retained outside this repository at
-`F:\DyingLightTools\ReAnimated - Python`. These paths are relative to that
-archive:
+The former Python decoder/writer is historical reference material outside this repository. It is not required by the C# application, package, validation, or GitHub Actions. The paths below identify that historical source material only:
 
 ```
 dlanm2_gui/anm2.py

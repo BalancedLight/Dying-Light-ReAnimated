@@ -243,18 +243,7 @@ the executable and one-entry ZIP are committed, and `SHA256SUMS.txt` records
 the same provenance as comments. Partial, malformed, or invocation-mismatched
 assembly metadata fails closed.
 
-The archived Python behavioral oracle has an independent content-addressed
-receipt under `artifacts\validation`. Its default root is the external sibling
-`F:\DyingLightTools\ReAnimated - Python`; `-PythonOracleRoot` can select a
-different archive. Its identity hashes all Python implementation files,
-Python tests and fixtures, schemas, requirements, the
-Python/pytest/numpy/PySide environment, the selected optional-Blender mode,
-and a versioned test-selection contract. C#-only edits therefore do not
-repeat the roughly twelve-minute Qt-heavy suite, while any relevant input or
-environment change fails closed to a complete rerun. The receipt is written
-atomically only after the main process and the separately isolated Qt
-lifecycle node both pass. `-ForcePythonOracle` remains available for an
-intentional unconditional rerun.
+C# validation receipts are content-addressed from the selected C# gate inputs, C# test assemblies, checked-in compatibility fixtures, renderer identity, installed-DL1 evidence when applicable, and the optional Blender executable. No Python interpreter, external archive, or Python-environment hash participates in packaging or validation.
 
 ## WPF/D3D startup acceptance
 

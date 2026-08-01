@@ -1,15 +1,8 @@
 # C# DL1 rewrite
 
-> **Status:** active Dying Light 1 C# application. The legacy Python/Qt
-> implementation has been retired from this repository and archived at
-> `F:\DyingLightTools\ReAnimated - Python`.
+> **Status:** active Dying Light 1 C# application. The former Python/Qt implementation is historical reference material only. It is not checked out, installed, or executed by the C# application, packaging scripts, validation, or GitHub Actions.
 
-The archived Python implementation remains an external regression reference,
-not the authority for known game behavior. Installed DL1 1.55 assets,
-matching-build decompiles, and captured game behavior take precedence when
-evidence conflicts. The two implementations do not share runtime state and the
-C# app does not modify legacy projects.
-
+Installed DL1 1.55 assets, matching-build decompiles, and captured game behavior take precedence over historical references. The C# application does not modify legacy projects.
 ## Current refactor status
 
 The current C# tree has automated coverage for its own immutable animation
@@ -317,21 +310,7 @@ application host. To create the fully validated Windows candidate:
 .\package_csharp.ps1
 ```
 
-The packaging script performs the Release C# build and tests and requires a
-passing complete external Python behavioral-oracle result before writing exactly one self-contained
-`win-x64\DLReAnimated.exe`, a ZIP containing only that executable, and
-`SHA256SUMS.txt` under `artifacts\csharp`. Native dependencies, WPF resources,
-schemas, license, and DL1 status documentation are embedded in the executable.
-The expensive Python run is content-addressed separately from C# work. By
-default the oracle is loaded from `F:\DyingLightTools\ReAnimated - Python`;
-`-PythonOracleRoot` selects another archive. A passing receipt is reused only
-while every Python source/test/fixture/schema,
-requirements file, interpreter/dependency environment fingerprint, oracle
-contract version, and optional-Blender mode remain identical. Missing,
-malformed, or mismatched receipts rerun the full oracle and are replaced only
-after both the main suite and isolated Qt lifecycle control pass.
-`-ForcePythonOracle` deliberately bypasses the receipt.
-The SDK is pinned by `global.json`. Before compilation, packaging hashes a
+The packaging script performs the Release C# build and tests, WPF/D3D11 startup acceptance, renderer checks, installed-DL1 controls, retained corpus receipt verification, optional Blender handoff, package self-test, ZIP creation, and SHA256 generation before publishing its one self-contained executable. It consumes only the C# repository and its checked-in static compatibility fixtures.The SDK is pinned by `global.json`. Before compilation, packaging hashes a
 deterministically ordered candidate-input set covering the C# solution,
 untracked source files, schemas, relevant status documents, parity fixtures,
 and validation tools. Git HEAD, clean/dirty state, input count, aggregate
@@ -340,25 +319,7 @@ written as comments in `SHA256SUMS.txt`; the packaged executable's fail-closed
 self-test verifies those values against the packaging invocation.
 The same packaged executable opens WPF when no CLI verb is supplied and
 dispatches the 12 supported headless inspection, validation, catalog, RPack,
-and project-export verbs. There is no second shipped CLI executable. The
-bounded cross-implementation ANM2 and semantic-authoring oracles can also be
-refreshed and compared with:
-
-```powershell
-.\tools\validate_dl1_parity.ps1
-```
-
-The separate opaque event-bearing AnimationScr differential gate is:
-
-```powershell
-.\tools\validate_dl1_animation_scr_event_parity.ps1 `
-  -Configuration Release
-```
-
-Add `-InstalledEvidence` to require the exact fingerprinted Windows 1.55
-`common_anims_PC.rpack` controls.
-
-The exact installed Windows 1.55 offline gate is:
+and project-export verbs. There is no second shipped CLI executable. The historical ANM2, semantic, FED, and AnimationScr compatibility fixtures are exercised by the Hermetic and Release C# validation tiers. They are checked-in static inputs; the former live Python differential wrappers have been retired.The exact installed Windows 1.55 offline gate is:
 
 ```powershell
 .\tools\validate_dl1_installed_acceptance.ps1

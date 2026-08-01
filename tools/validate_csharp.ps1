@@ -9,7 +9,6 @@ param(
     [string]$CandidateSourceSha256 = "",
     [string]$ReceiptDirectory = "",
     [string]$BlenderExecutable = "",
-    [string]$PythonOracleRoot = "",
     [switch]$SkipUnavailableOptionalBlender
 )
 
@@ -18,16 +17,6 @@ Set-StrictMode -Version 2.0
 
 $repositoryRoot = [IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot ".."))
-if ([string]::IsNullOrWhiteSpace($PythonOracleRoot)) {
-    $PythonOracleRoot = Join-Path `
-        (Split-Path -Parent $repositoryRoot) `
-        "ReAnimated - Python"
-}
-$script:resolvedPythonOracleRoot = [IO.Path]::GetFullPath(
-    [Environment]::ExpandEnvironmentVariables(
-        $PythonOracleRoot.Trim().Trim('"'))).TrimEnd(
-            [IO.Path]::DirectorySeparatorChar,
-            [IO.Path]::AltDirectorySeparatorChar)
 $testProject = Join-Path $repositoryRoot `
     "tests\ReAnimated.Tests\ReAnimated.Tests.csproj"
 if ([string]::IsNullOrWhiteSpace($ReceiptDirectory)) {
@@ -169,46 +158,6 @@ function Get-GateInputs {
         }
     }
 
-    foreach ($externalRoot in @($Gate.ExternalInputRoots)) {
-        $fullExternalRoot = [IO.Path]::GetFullPath(
-            [Environment]::ExpandEnvironmentVariables(
-                [string]$externalRoot)).TrimEnd(
-                    [IO.Path]::DirectorySeparatorChar,
-                    [IO.Path]::AltDirectorySeparatorChar)
-        if (-not $fullExternalRoot.Equals(
-                $script:resolvedPythonOracleRoot,
-                [StringComparison]::OrdinalIgnoreCase) -or
-            -not (Test-Path -LiteralPath $fullExternalRoot `
-                -PathType Container)) {
-            throw (
-                "Validation gate '$($Gate.Name)' has an invalid external " +
-                "Python input root: $fullExternalRoot")
-        }
-        $externalPrefix =
-            $fullExternalRoot + [IO.Path]::DirectorySeparatorChar
-        foreach ($file in Get-ChildItem `
-                     -LiteralPath $fullExternalRoot `
-                     -File `
-                     -Force `
-                     -Recurse) {
-            $relative = $file.FullName.Substring(
-                $externalPrefix.Length).Replace(
-                    [IO.Path]::DirectorySeparatorChar,
-                    [char]'/')
-            if ($relative -match
-                    '(^|/)(\.venv|venv|build|dist|artifacts|__pycache__|\.pytest_cache|\.pytest_tmp|\.mypy_cache|\.ruff_cache)(/|$)' -or
-                $file.Extension -in @(".pyc", ".pyo")) {
-                continue
-            }
-            $identityPath = "external/python/$relative"
-            if (-not $files.ContainsKey($identityPath)) {
-                $files.Add(
-                    $identityPath,
-                    (Get-FileSha256 $file.FullName))
-            }
-        }
-    }
-
     return @($files.GetEnumerator() |
         Sort-Object Key |
         ForEach-Object {
@@ -255,17 +204,6 @@ function Get-ValidationEnvironment {
         $installedBuild = "unavailable:$($_.Exception.GetType().Name)"
     }
 
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($null -eq $python) {
-        $python = Get-Command py -ErrorAction SilentlyContinue
-    }
-    $pythonIdentity = if ($null -eq $python) {
-        "unavailable"
-    }
-    else {
-        "{0}|{1}" -f $python.Source, (Get-FileSha256 $python.Source)
-    }
-
     return [ordered]@{
         dotnetSdk = (& dotnet --version).Trim()
         runtime = [Environment]::Version.ToString()
@@ -274,7 +212,6 @@ function Get-ValidationEnvironment {
         configuration = $Configuration
         renderer = $renderer
         installedDl1 = $installedBuild
-        python = $pythonIdentity
         blender = if ([string]::IsNullOrWhiteSpace(
                 $script:resolvedBlenderExecutable)) {
             "unavailable"
@@ -353,10 +290,6 @@ function Invoke-ScriptGate {
     $parameters = @{
         Configuration = $Configuration
         NoBuild = $true
-    }
-    if ([bool]$Gate.UsesPythonOracle) {
-        $parameters.PythonOracleRoot =
-            $script:resolvedPythonOracleRoot
     }
     & $scriptPath @parameters
     if ($LASTEXITCODE -ne 0) {
@@ -444,9 +377,7 @@ function New-Gate {
         [string]$Filter = "",
         [string]$Script = "",
         [string[]]$InputRoots = @(),
-        [string[]]$InputFiles = @(),
-        [string[]]$ExternalInputRoots = @(),
-        [bool]$UsesPythonOracle = $false
+        [string[]]$InputFiles = @()
     )
 
     return [pscustomobject]@{
@@ -457,8 +388,6 @@ function New-Gate {
         Script = $Script
         InputRoots = $InputRoots
         InputFiles = $InputFiles
-        ExternalInputRoots = $ExternalInputRoots
-        UsesPythonOracle = $UsesPythonOracle
     }
 }
 
@@ -596,36 +525,6 @@ $releaseGates = @(
                     "tests\ReAnimated.Tests\RendererAuthoringStageGoldenTests.cs",
                     "tests\fixtures\renderer_authoring_stage_goldens_v1.json",
                     "tools\validate_renderer_authoring_goldens.ps1"))),
-        (New-Gate `
-            -Name "python-csharp-parity" `
-            -Category "Python parity" `
-            -Action "script" `
-            -Script "tools\validate_dl1_parity.ps1" `
-            -InputRoots @($codecRoots + @("tests\fixtures")) `
-            -ExternalInputRoots @($script:resolvedPythonOracleRoot) `
-            -UsesPythonOracle $true `
-            -InputFiles @(
-                $testProjectInputs +
-                @(
-                "tests\ReAnimated.Tests\PythonOracleParityTests.cs",
-                "tests\ReAnimated.Tests\PythonSemanticParityTests.cs",
-                "tests\ReAnimated.Tests\PythonFedParityTests.cs",
-                "tests\ReAnimated.Tests\PythonSuiteAuditTests.cs",
-                "tools\validate_dl1_parity.ps1"))),
-        (New-Gate `
-            -Name "animation-scr-parity" `
-            -Category "Python parity" `
-            -Action "script" `
-            -Script "tools\validate_dl1_animation_scr_event_parity.ps1" `
-            -InputRoots @($codecRoots) `
-            -ExternalInputRoots @($script:resolvedPythonOracleRoot) `
-            -UsesPythonOracle $true `
-            -InputFiles @(
-                $testProjectInputs +
-                @(
-                    "tests\ReAnimated.Tests\AnimationScrEventParityTests.cs",
-                    "tests\fixtures\dl1_animation_scr_event_parity_v1.json",
-                    "tools\validate_dl1_animation_scr_event_parity.ps1"))),
         (New-Gate `
             -Name "installed-dl1-animation-controls" `
             -Category "installed DL1" `

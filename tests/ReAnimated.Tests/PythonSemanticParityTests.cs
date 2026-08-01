@@ -950,20 +950,15 @@ public sealed class PythonSemanticParityTests
     private static JsonDocument OpenOracle()
     {
         string repository = FindRepositoryRoot();
-        string? configured = Environment.GetEnvironmentVariable(
-            "DLR_PYTHON_SEMANTIC_PARITY_ORACLE");
-        string path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                repository,
-                "tests",
-                "fixtures",
-                "dl1_python_csharp_semantic_parity_v1.json")
-            : Path.GetFullPath(configured);
+        string path = Path.Combine(
+            repository,
+            "tests",
+            "fixtures",
+            "dl1_python_csharp_semantic_parity_v1.json");
         if (!File.Exists(path))
         {
             throw new FileNotFoundException(
-                "DL1 semantic Python parity oracle was not found. " +
-                "Run tools/validate_dl1_parity.ps1.",
+                "Checked-in semantic compatibility fixture was not found.",
                 path);
         }
 

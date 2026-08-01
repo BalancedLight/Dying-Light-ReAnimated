@@ -364,21 +364,15 @@ public sealed class AnimationScrEventParityTests
     private static JsonDocument OpenOracle()
     {
         string repository = FindRepositoryRoot();
-        string? configured = Environment.GetEnvironmentVariable(
-            "DLR_PYTHON_SCR_EVENT_PARITY_ORACLE");
-        string path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                repository,
-                "tests",
-                "fixtures",
-                "dl1_animation_scr_event_parity_v1.json")
-            : Path.GetFullPath(configured);
+        string path = Path.Combine(
+            repository,
+            "tests",
+            "fixtures",
+            "dl1_animation_scr_event_parity_v1.json");
         if (!File.Exists(path))
         {
             throw new FileNotFoundException(
-                "DL1 AnimationScr event-layout Python parity oracle was " +
-                "not found. Run " +
-                "tools/validate_dl1_animation_scr_event_parity.ps1.",
+                "Checked-in AnimationScr event-layout compatibility fixture was not found.",
                 path);
         }
 

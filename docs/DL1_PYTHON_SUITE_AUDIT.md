@@ -1,4 +1,6 @@
-# DL1 Python suite audit
+# Historical DL1 Python-suite audit fixture provenance
+
+> **Historical background only.** The C# application, package, validation scripts, and GitHub Actions do not install or execute Python. The audit manifest and rules described here are checked-in static C# test inputs; the former live collector and wrapper were retired.
 
 ## Outcome
 
@@ -79,18 +81,9 @@ Root translation nor its reported bake state.
 - `tests/fixtures/dl1_python_suite_audit_v1.json` stores all 616 exact node IDs
   in pytest collection order, their classifications, rule IDs, areas, source
   file identities, and summary counts.
-- `F:\DyingLightTools\ReAnimated - Python\tools\audit_dl1_python_suite.py`
-  recollects the archived suite and compares it with the checked manifest.
-- `PythonSuiteAuditTests` independently checks the manifest, rules, hard-coded
-  reviewed totals, node/rule matches, and collection identity. When
-  `DLR_PYTHON_ORACLE_ROOT` is set by the live parity wrapper it also checks
-  every archived Python test source identity.
+- `PythonSuiteAuditTests` independently checks the manifest, rules, hard-coded reviewed totals, node/rule matches, and collection identity as static data only.
 
-The live audit fails closed when a Python node is added, removed, reordered,
-or reclassified; when any Python test source changes; or when the reviewed
-rules change without deliberate manifest regeneration. A newly collected node
-is reported as unclassified even if the conservative default rule would
-eventually place it in `still_pending`.
+The live collector was historical drift evidence. Current C# validation intentionally checks only the reviewed manifest and rules that are checked into this repository.
 
 The reviewed collection identity is
 `9A2C1B71F098AB29709EF68D7F4AEE3BF5698902656C8FFFA1E1034646E692EF`.
@@ -131,41 +124,12 @@ legacy Python application or packaging surfaces (30), intentionally
 unsupported legacy projects (29), obsolete Python compatibility behavior (5),
 and the deferred legacy SMD target path (4).
 
-## Validation
+## Current validation
 
-Run the live audit alone:
-
-```powershell
-python "F:\DyingLightTools\ReAnimated - Python\tools\audit_dl1_python_suite.py" `
-  --repository-root "F:\DyingLightTools\ReAnimated - Python"
-```
-
-Run the live audit and focused C# integrity test:
+The static manifest and rule integrity checks run with the Hermetic and Release C# tiers:
 
 ```powershell
-.\tools\validate_dl1_python_suite_audit.ps1 `
-  -Configuration Release `
-  -PythonOracleRoot "F:\DyingLightTools\ReAnimated - Python"
+.\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release
 ```
 
-The normal bounded parity gate also runs both checks:
-
-```powershell
-.\tools\validate_dl1_parity.ps1 `
-  -Configuration Release `
-  -PythonOracleRoot "F:\DyingLightTools\ReAnimated - Python"
-```
-
-After intentionally changing the Python suite or reviewing a classification,
-inspect collection and rule changes first, then deliberately replace the
-manifest:
-
-```powershell
-python "F:\DyingLightTools\ReAnimated - Python\tools\audit_dl1_python_suite.py" `
-  --repository-root "F:\DyingLightTools\ReAnimated - Python" `
-  --write-manifest
-```
-
-Manifest regeneration is not proof of parity. Any node moved from pending to
-mapped must name direct C# evidence in the reviewed rules. Any exclusion must
-remain within the documented DL1 first-release boundaries.
+The live collector, Python environment override, and Python-executing wrappers were retired. Updating these fixtures requires an ordinary reviewed C# source change; it is not a runtime or CI operation.

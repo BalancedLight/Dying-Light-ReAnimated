@@ -6,18 +6,7 @@ retail RPack asset browsing, FBX/ANM2 import, retargeting, non-destructive bone
 edits, facial preview, FPP/EyeCamera preview, ANM2 export, and animation-library
 RPack output.
 
-This repository contains the C# application only. The retired Python/Qt
-implementation, its tests, build scripts, fixtures, and reference workspace
-were moved to:
-
-```text
-F:\DyingLightTools\ReAnimated - Python
-```
-
-The archived application is not loaded by the C# program. Release validation
-can still use it as an external behavioral oracle; pass `-PythonOracleRoot` to
-the validation or packaging script when it is stored somewhere other than the
-default sibling path.
+This repository contains the C# application only. It has no Python runtime, packaging, validation, or GitHub Actions dependency. The checked-in JSON compatibility fixtures are static C# test inputs that preserve reviewed historical behavior.
 
 ## Build
 
@@ -50,27 +39,21 @@ Run the hermetic C# gates:
 .\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release
 ```
 
-Release validation additionally checks the installed DL1 controls, renderer
-goldens, Blender handoff when configured, retained corpus receipts, and the
-external Python oracle:
+Release validation additionally checks the installed DL1 controls, renderer goldens, Blender handoff when configured, and retained corpus receipts:
 
 ```powershell
 .\tools\validate_csharp.ps1 `
     -Tier Release `
-    -Configuration Release `
-    -PythonOracleRoot "F:\DyingLightTools\ReAnimated - Python"
+    -Configuration Release
 ```
 
 Create the self-contained release folder and ZIP with:
 
 ```powershell
-.\package_csharp.ps1 `
-    -PythonOracleRoot "F:\DyingLightTools\ReAnimated - Python"
+.\package_csharp.ps1
 ```
 
-Validation is content-addressed and fail-closed. `-ForceAll` on the validation
-script and `-ForceAllValidation` or `-ForcePythonOracle` on the packaging
-script deliberately bypass reusable receipts.
+Validation is content-addressed and fail-closed. `-ForceAll` on the validation script and `-ForceAllValidation` on the packaging script deliberately bypass reusable receipts.
 
 ## Scope
 

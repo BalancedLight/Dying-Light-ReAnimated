@@ -1,11 +1,8 @@
-# DL1 Python-to-C# regression map
+# Historical DL1 Python-to-C# regression map
 
-The Python application remains an archived external regression reference at
-`F:\DyingLightTools\ReAnimated - Python`. Installed DL1 1.55 assets,
-matching-build decompiles, and captured game behavior are authoritative when
-they conflict with Python. This map records where the current C# tests
-exercise the same DL1 concern as a stable Python regression group. It is a
-review aid, not a parity certificate:
+> **Historical background only.** The C# application, package, validation scripts, and GitHub Actions do not install or execute Python. This map records the provenance of checked-in C# regressions and compatibility fixtures; it is not a runtime parity gate.
+
+Installed DL1 1.55 assets, matching-build decompiles, and captured game behavior are authoritative when they conflict with historical Python behavior. This map is a review aid, not a parity certificate:
 
 - **Cross-checked subset** means at least one C# regression uses Python-derived
   expected values or an equivalent format control.
@@ -228,11 +225,7 @@ C# build and tests:
 .\build_csharp.ps1 -Configuration Debug
 ```
 
-Python behavioral oracle:
-
-```powershell
-py -3 -m pytest -q
-```
+Historical note: the former live Python behavioral-oracle command was retired; it is not part of the C# build, package, validation, or CI path.
 
 Self-contained candidate package, which runs both suites:
 
