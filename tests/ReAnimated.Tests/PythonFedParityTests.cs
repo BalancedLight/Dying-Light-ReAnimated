@@ -318,20 +318,15 @@ public sealed class PythonFedParityTests
     private static JsonDocument OpenOracle()
     {
         string repository = FindRepositoryRoot();
-        string? configured = Environment.GetEnvironmentVariable(
-            "DLR_PYTHON_FED_PARITY_ORACLE");
-        string path = string.IsNullOrWhiteSpace(configured)
-            ? Path.Combine(
-                repository,
-                "tests",
-                "fixtures",
-                "dl1_python_csharp_fed_parity_v1.json")
-            : Path.GetFullPath(configured);
+        string path = Path.Combine(
+            repository,
+            "tests",
+            "fixtures",
+            "dl1_python_csharp_fed_parity_v1.json");
         if (!File.Exists(path))
         {
             throw new FileNotFoundException(
-                "DL1 FED Python parity oracle was not found. Run " +
-                "tools/validate_dl1_parity.ps1.",
+                "Checked-in FED compatibility fixture was not found.",
                 path);
         }
 

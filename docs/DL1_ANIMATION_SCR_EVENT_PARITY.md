@@ -1,4 +1,6 @@
-# DL1 AnimationScr event-layout parity
+# Historical DL1 AnimationScr event-layout fixture provenance
+
+> **Historical background only.** The fixture below is a checked-in static C# compatibility input. The C# application, package, validation scripts, and GitHub Actions do not install or execute Python; the former live differential wrapper was retired.
 
 This gate covers the event-bearing layout used by Dying Light 1 animation
 scripts without claiming to understand or author event semantics. The legacy
@@ -97,31 +99,15 @@ marker pair is the exact stock 1.55 pair, the event byte count equals
 event table and second section. No installed payload or derived name list is
 written to the repository.
 
-## Running the gate
+## Current validation
 
-Run the redistributable Python/C# differential and hermetic marker test:
-
-```powershell
-.\tools\validate_dl1_animation_scr_event_parity.ps1 `
-  -Configuration Release
-```
-
-Also run the exact installed Windows 1.55 control:
+The Hermetic and Release C# validation tiers exercise the checked-in event-layout fixture together with the installed-DL1 controls when their local evidence is available:
 
 ```powershell
-.\tools\validate_dl1_animation_scr_event_parity.ps1 `
-  -Configuration Release `
-  -InstalledEvidence
+.\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release
 ```
 
-The tool writes an embedded temporary Python probe into a unique OS temporary
-directory, imports the tracked Python codec without modifying it, regenerates
-the oracle, requires its SHA-256 to match the checked fixture, runs the focused
-C# tests, restores the caller's environment, and removes the temporary
-directory. `-UpdateFixture` performs an atomic fixture replacement for an
-intentional, reviewed oracle change.
-
-## Explicit exclusions
+The former live Python probe and fixture-update command are no longer part of this repository. Changes to this JSON fixture require an ordinary reviewed C# source change.## Explicit exclusions
 
 - Event rows are opaque. Event names, arguments, frame semantics, ordering
   rules, and runtime dispatch are not decoded.

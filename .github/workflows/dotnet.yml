@@ -24,101 +24,15 @@ jobs:
         with:
           path: csharp
 
-      - name: Check out Python oracle
-        uses: actions/checkout@v7
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.event.repository.default_branch }}
-          path: python-oracle
-          persist-credentials: false
-
-      - name: Overlay Python oracle parity tools
-        shell: powershell
-        working-directory: csharp
-        run: |
-          $sourceRoot = ".github\python-oracle-tools"
-          $destinationRoot = "..\python-oracle\tools"
-          $toolNames = @(
-            "audit_dl1_python_suite.py",
-            "dl1_python_parity_oracle.py",
-            "dl1_python_semantic_parity_oracle.py",
-            "dl1_python_fed_parity_oracle.py"
-          )
-          foreach ($name in $toolNames) {
-            $source = Join-Path $sourceRoot $name
-            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-              throw "Missing bundled Python oracle tool: $source"
-            }
-            Copy-Item -LiteralPath $source `
-              -Destination (Join-Path $destinationRoot $name) `
-              -Force
-          }
-          $fixtureSourceRoot = ".github\python-oracle-tools\fixtures"
-          $fixtureDestinationRoot = "..\python-oracle\tests\fixtures"
-          $fixtureNames = @(
-            "dl1_python_suite_audit_rules_v1.json",
-            "dl1_python_suite_audit_v1.json"
-          )
-          New-Item -ItemType Directory -Path $fixtureDestinationRoot -Force | Out-Null
-          foreach ($name in $fixtureNames) {
-            $source = Join-Path $fixtureSourceRoot $name
-            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-              throw "Missing bundled Python oracle fixture: $source"
-            }
-            Copy-Item -LiteralPath $source `
-              -Destination (Join-Path $fixtureDestinationRoot $name) `
-              -Force
-          }
-
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v6
         with:
           global-json-file: csharp/global.json
 
-      - name: Install Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: python-oracle/pyproject.toml
-
-      - name: Install Python oracle
-        shell: powershell
-        working-directory: python-oracle
-        run: |
-          python -m pip install --disable-pip-version-check -e ".[dev,gui]"
-          if ($LASTEXITCODE -ne 0) {
-            throw "The setup-python interpreter dependency install failed."
-          }
-
-          # validate_dl1_parity.ps1 prefers the Windows py launcher when it
-          # exists. Hosted images can resolve that launcher to a different
-          # Python than the setup-python PATH entry, so make its only external
-          # dependency available there too.
-          $launcher = Get-Command py -ErrorAction SilentlyContinue
-          if ($null -ne $launcher) {
-            $setupPython = ((python -c `
-              "import os,sys; print(os.path.normcase(os.path.realpath(sys.executable)))") `
-              -join "").Trim()
-            $launcherPython = ((& $launcher.Source -3 -c `
-              "import os,sys; print(os.path.normcase(os.path.realpath(sys.executable)))") `
-              -join "").Trim()
-            if ($LASTEXITCODE -ne 0) {
-              throw "The Windows Python launcher could not resolve Python 3."
-            }
-            if ($launcherPython -ne $setupPython) {
-              & $launcher.Source -3 -m pip install `
-                --disable-pip-version-check "numpy>=1.24"
-              if ($LASTEXITCODE -ne 0) {
-                throw "The parity-launcher NumPy install failed."
-              }
-            }
-          }
-
       - name: Build, test, validate, and package
         shell: powershell
         working-directory: csharp
-        run: .\package_csharp.ps1 -OutputRoot artifacts\csharp -PythonOracleRoot ..\python-oracle -SkipUnavailableOptionalBlenderOracle
+        run: .\package_csharp.ps1 -OutputRoot artifacts\csharp -SkipUnavailableOptionalBlenderOracle
 
       - name: Upload WPF validation diagnostics on failure
         if: failure()
