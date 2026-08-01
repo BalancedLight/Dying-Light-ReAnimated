@@ -32,6 +32,44 @@ jobs:
           path: python-oracle
           persist-credentials: false
 
+      - name: Overlay Python oracle parity tools
+        shell: powershell
+        working-directory: csharp
+        run: |
+          $sourceRoot = ".github\python-oracle-tools"
+          $destinationRoot = "..\python-oracle\tools"
+          $toolNames = @(
+            "audit_dl1_python_suite.py",
+            "dl1_python_parity_oracle.py",
+            "dl1_python_semantic_parity_oracle.py",
+            "dl1_python_fed_parity_oracle.py"
+          )
+          foreach ($name in $toolNames) {
+            $source = Join-Path $sourceRoot $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Missing bundled Python oracle tool: $source"
+            }
+            Copy-Item -LiteralPath $source `
+              -Destination (Join-Path $destinationRoot $name) `
+              -Force
+          }
+          $fixtureSourceRoot = ".github\python-oracle-tools\fixtures"
+          $fixtureDestinationRoot = "..\python-oracle\tests\fixtures"
+          $fixtureNames = @(
+            "dl1_python_suite_audit_rules_v1.json",
+            "dl1_python_suite_audit_v1.json"
+          )
+          New-Item -ItemType Directory -Path $fixtureDestinationRoot -Force | Out-Null
+          foreach ($name in $fixtureNames) {
+            $source = Join-Path $fixtureSourceRoot $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+              throw "Missing bundled Python oracle fixture: $source"
+            }
+            Copy-Item -LiteralPath $source `
+              -Destination (Join-Path $fixtureDestinationRoot $name) `
+              -Force
+          }
+
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v6
         with:
