@@ -148,7 +148,7 @@ public sealed class EditorUsabilitySurfaceTests
 
         string[] labels =
         [
-            "Preview Asset",
+            "Preview now",
             "Use as Source",
             "Use as Target",
         ];
@@ -171,6 +171,16 @@ public sealed class EditorUsabilitySurfaceTests
                 string.Equals(
                     (string?)element.Attribute("IsChecked"),
                     "{Binding IsRetargetWorkspace, Mode=OneWay}",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            document.Descendants(Presentation + "ToggleButton"),
+            static element => string.Equals(
+                    (string?)element.Attribute("Content"),
+                    "Animate",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("IsEnabled"),
+                    "{Binding CanOpenAnimateWorkspace}",
                     StringComparison.Ordinal));
     }
 
@@ -243,6 +253,111 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)element.Attribute("Content"),
                 "Compare",
                 StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void ViewportContextAndCatalogStatusUseNonOverlappingClearLayout()
+    {
+        XDocument document = XDocument.Load(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "MainWindow.xaml"));
+        XElement contextStrip = Assert.Single(
+            document.Descendants(Presentation + "Border"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "AnimationContextStrip",
+                StringComparison.Ordinal));
+        Assert.Equal("0", (string?)contextStrip.Attribute("Grid.Row"));
+        Assert.Null(contextStrip.Attribute("Panel.ZIndex"));
+        XElement layoutGrid = Assert.IsType<XElement>(
+            contextStrip.Parent);
+        XElement[] viewportPanes = layoutGrid
+            .Elements()
+            .Where(static element => string.Equals(
+                element.Name.LocalName,
+                "ViewportPane",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(2, viewportPanes.Length);
+        Assert.All(
+            viewportPanes,
+            static pane => Assert.Equal(
+                "1",
+                (string?)pane.Attribute("Grid.Row")));
+
+        XElement sourceColumn = Assert.Single(
+            layoutGrid
+                .Element(Presentation + "Grid.ColumnDefinitions")!
+                .Elements(Presentation + "ColumnDefinition"),
+            static column => string.Equals(
+                (string?)column.Attribute(Xaml + "Name"),
+                "SourceViewportColumn",
+                StringComparison.Ordinal));
+        XElement hiddenSourceTrigger = Assert.Single(
+            sourceColumn.Descendants(Presentation + "DataTrigger"),
+            static trigger => string.Equals(
+                    (string?)trigger.Attribute("Binding"),
+                    "{Binding IsSourceViewportVisible}",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)trigger.Attribute("Value"),
+                    "False",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            hiddenSourceTrigger.Elements(Presentation + "Setter"),
+            static setter => string.Equals(
+                    (string?)setter.Attribute("Property"),
+                    "Width",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)setter.Attribute("Value"),
+                    "0",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            hiddenSourceTrigger.Elements(Presentation + "Setter"),
+            static setter => string.Equals(
+                    (string?)setter.Attribute("Property"),
+                    "MaxWidth",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)setter.Attribute("Value"),
+                    "0",
+                    StringComparison.Ordinal));
+
+        XElement catalogButton = Assert.Single(
+            document.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding AssetBrowser.IndexGameCommand}",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "{Binding AssetBrowser.CatalogActionLabel}",
+            (string?)catalogButton.Attribute("Content"));
+        Assert.DoesNotContain(
+            document.Root!.DescendantsAndSelf()
+                .Attributes()
+                .Select(static attribute => attribute.Value),
+            static value => value.Contains(
+                "Index the Dying Light",
+                StringComparison.OrdinalIgnoreCase));
+
+        string applicationStartup = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "App.xaml.cs"));
+        Assert.Contains(
+            "_ = InitializeAssetCatalogAsync(viewModel);",
+            applicationStartup,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "if (_startupSmoke is null)",
+            applicationStartup,
+            StringComparison.Ordinal);
     }
 
     [Fact]

@@ -43,7 +43,7 @@
                     <MenuItem Command="{Binding ExportBodyAndMimicCommand}" Header="Body + _mimic..." />
                 </MenuItem>
                 <Separator />
-                <MenuItem Command="{Binding AssetBrowser.IndexGameCommand}" Header="Index _Dying Light 1…" />
+                <MenuItem Command="{Binding AssetBrowser.IndexGameCommand}" Header="_Refresh asset catalog…" />
                 <MenuItem Header="Project R_Pack roots">
                     <MenuItem Command="{Binding AddAdditionalRpackRootCommand}"
                               Header="_Add project-relative folder…" />
@@ -113,7 +113,7 @@
             <Separator />
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Foreground="{StaticResource MutedTextBrush}"
-                           Text="{Binding AssetBrowser.IndexedAssetCount, StringFormat={}{0:N0} indexed assets}" />
+                           Text="{Binding AssetBrowser.IndexedAssetCount, StringFormat={}{0:N0} catalog assets}" />
             </StatusBarItem>
             <Separator />
             <StatusBarItem HorizontalAlignment="Right">
@@ -157,6 +157,8 @@
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Animate"
                                       Content="Animate"
+                                      IsEnabled="{Binding CanOpenAnimateWorkspace}"
+                                      ToolTip="{Binding AnimateWorkspaceHint}"
                                       IsChecked="{Binding IsAnimateWorkspace, Mode=OneWay}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Retarget/Edit"
@@ -313,16 +315,20 @@
                                 <StackPanel Grid.Row="1" Margin="0,4">
                                     <DockPanel LastChildFill="True">
                                         <Button DockPanel.Dock="Right"
+                                                MinWidth="96"
                                                 Command="{Binding AssetBrowser.IndexGameCommand}"
-                                                Content="Index DL1..." />
+                                                Content="{Binding AssetBrowser.CatalogActionLabel}"
+                                                ToolTip="Load or validate the cached Dying Light 1 retail asset catalog. A full scan only runs when the cache is absent or stale." />
                                         <TextBlock VerticalAlignment="Center"
+                                                   Margin="0,0,6,0"
                                                    Foreground="{StaticResource MutedTextBrush}"
+                                                   TextTrimming="CharacterEllipsis"
                                                    Text="{Binding AssetBrowser.ResultSummary}" />
                                     </DockPanel>
                                     <WrapPanel Margin="0,4,0,0">
                                         <Button Command="{Binding PreviewSelectedAssetCommand}"
-                                                Content="Preview Asset"
-                                                ToolTip="Isolated Browse preview; no animation or project state changes." />
+                                                Content="Preview now"
+                                                ToolTip="Mesh selections preview automatically after a short pause. Use this to reload immediately; project and animation state remain unchanged." />
                                         <Button Command="{Binding UseSelectedAssetAsSourceCommand}"
                                                 Content="Use as Source"
                                                 ToolTip="Use this exact retail model fingerprint as the immutable source." />
@@ -554,6 +560,7 @@
                                                VerticalAlignment="Center"
                                                MaxWidth="220"
                                                TextAlignment="Center"
+                                               TextWrapping="Wrap"
                                                Foreground="{StaticResource MutedTextBrush}"
                                                Text="{Binding AssetBrowser.EmptyResultMessage}">
                                         <TextBlock.Style>
@@ -749,20 +756,29 @@
                         <RowDefinition Height="245" />
                     </Grid.RowDefinitions>
                     <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition>
+                            <ColumnDefinition x:Name="SourceViewportColumn">
                                 <ColumnDefinition.Style>
                                     <Style TargetType="{x:Type ColumnDefinition}">
                                         <Setter Property="Width" Value="*" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding IsSourceViewportVisible}" Value="False">
                                                 <Setter Property="Width" Value="0" />
+                                                <!-- GridSplitter writes a local Width value after a dual-pane
+                                                     resize. MaxWidth still wins over that local value, so a
+                                                     later single-pane workspace cannot retain a blue source
+                                                     viewport sliver. -->
+                                                <Setter Property="MaxWidth" Value="0" />
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </ColumnDefinition.Style>
                             </ColumnDefinition>
-                            <ColumnDefinition>
+                            <ColumnDefinition x:Name="ViewportSplitterColumn">
                                 <ColumnDefinition.Style>
                                     <Style TargetType="{x:Type ColumnDefinition}">
                                         <Setter Property="Width" Value="6" />
@@ -776,24 +792,26 @@
                             </ColumnDefinition>
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Border Grid.ColumnSpan="3"
-                                Panel.ZIndex="20"
-                                Margin="8"
+                        <Border x:Name="AnimationContextStrip"
+                                Grid.Row="0"
+                                Grid.ColumnSpan="3"
+                                Margin="0,0,0,5"
                                 Padding="8,5"
-                                HorizontalAlignment="Left"
-                                VerticalAlignment="Top"
-                                Background="#D9171D25"
+                                HorizontalAlignment="Stretch"
+                                Background="#171D25"
                                 BorderBrush="{StaticResource BorderBrush}"
                                 BorderThickness="1"
                                 CornerRadius="3">
                             <StackPanel>
-                                <TextBlock FontWeight="SemiBold">
+                                <TextBlock FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis">
                                     <Run Text="{Binding ActiveAnimationLabel, Mode=OneWay}" />
                                     <Run Text="  |  " />
                                     <Run Text="{Binding TargetBindingStatusText, Mode=OneWay}" />
                                 </TextBlock>
                                 <TextBlock FontSize="10"
-                                           Foreground="{StaticResource MutedTextBrush}">
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           TextWrapping="Wrap">
                                     <Run Text="Source: " />
                                     <Run Text="{Binding ActiveSourceModelLabel, Mode=OneWay}" />
                                     <Run Text="  →  Target: " />
@@ -801,15 +819,19 @@
                                 </TextBlock>
                             </StackPanel>
                         </Border>
-                        <views:ViewportPane DataContext="{Binding SourceViewport}"
+                        <views:ViewportPane Grid.Row="1"
+                                            DataContext="{Binding SourceViewport}"
                                             Visibility="{Binding IsSourceViewportVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <GridSplitter Grid.Column="1"
+                        <GridSplitter Grid.Row="1"
+                                      Grid.Column="1"
                                       HorizontalAlignment="Stretch"
                                       Background="#2D3541"
                                       Visibility="{Binding IsSourceViewportVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <views:ViewportPane Grid.Column="2"
+                        <views:ViewportPane Grid.Row="1"
+                                            Grid.Column="2"
                                             DataContext="{Binding TargetViewport}" />
-                        <Border Grid.Column="2"
+                        <Border Grid.Row="1"
+                                Grid.Column="2"
                                 Panel.ZIndex="25"
                                 Width="300"
                                 Padding="12"

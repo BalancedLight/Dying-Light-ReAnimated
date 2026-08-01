@@ -218,6 +218,9 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         Assert.Equal("manual-preview-morph", mirroredMorph.Name);
         Assert.Equal(0.6f, mirroredMorph.Weight);
 
+        RenderCamera evaluatedCameraBeforeLayoutChange =
+            viewModel.TargetViewport.SceneSource.CaptureFrame().Camera;
+
         viewModel.ActiveWorkspaceMode = "Retarget";
 
         RenderFrameSnapshot restored =
@@ -243,6 +246,47 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
             restored.AuthoringOverlays.Options);
         Assert.Equal("Source / Authored", viewModel.SourceViewport.Title);
         Assert.Equal("DL1 Target", viewModel.TargetViewport.Title);
+        RenderFrameSnapshot targetOrbit =
+            viewModel.TargetViewport.SceneSource.CaptureFrame();
+        Assert.NotEqual(
+            evaluatedCameraBeforeLayoutChange,
+            targetOrbit.Camera);
+        Assert.Null(targetOrbit.FppProjectionState);
+        Assert.Equal(
+            RenderCameraNavigationResult.Applied,
+            viewModel.TargetViewport.SceneSource.NavigateCamera(
+                RenderCameraNavigationInput.Pan(
+                    6.0f,
+                    -3.0f,
+                    800,
+                    600)));
+
+        viewModel.ActiveWorkspaceMode = workspaceMode;
+
+        RenderFrameSnapshot restoredTargetCamera =
+            viewModel.TargetViewport.SceneSource.CaptureFrame();
+        Assert.True(
+            viewModel.SourceViewport.SceneSource
+                .HasExternalPreviewScene);
+        Assert.Equal(
+            evaluatedCameraBeforeLayoutChange,
+            restoredTargetCamera.Camera);
+        Assert.Equal(
+            RenderCameraNavigationResult.PreviewCameraLocked,
+            viewModel.TargetViewport.SceneSource.NavigateCamera(
+                RenderCameraNavigationInput.Orbit(
+                    6.0f,
+                    -3.0f,
+                    800,
+                    600)));
+        if (workspaceMode == "FPP")
+        {
+            Assert.NotNull(restoredTargetCamera.FppProjectionState);
+        }
+        else
+        {
+            Assert.Null(restoredTargetCamera.FppProjectionState);
+        }
     }
 
     public void Dispose()
