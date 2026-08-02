@@ -525,6 +525,77 @@ public sealed class TransactionalPlaybackTests : IDisposable
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
+    public void SavedLocalFbxTargetCanBeRehydratedFromExactCatalogIdentity()
+    {
+        AssetItemViewModel targetRow = CreateMeshRow("player_11_tpp");
+        RetailAssetRecord retail = Assert.IsType<RetailAssetRecord>(
+            targetRow.RetailAsset);
+        Guid targetId = Guid.NewGuid();
+        var target = new ProjectAssetReference
+        {
+            Id = targetId,
+            Kind = ProjectAssetKind.RetailGameResource,
+            RelativePath = $"retail/{retail.Id.ResourceType}/{targetId:N}",
+            ResourceId = retail.DisplayName,
+            ContentSha256 = new string('b', 64),
+            RetailIdentity = new ProjectRetailAssetIdentity
+            {
+                InstallFingerprint = retail.Id.InstallId,
+                ProviderId = retail.Id.ProviderId,
+                ProviderPack = "DW/common.mesh.rpack",
+                ResourceType = retail.Id.ResourceType,
+                ResourceIndex = retail.Source.ResourceIndex,
+                ResourceName = retail.DisplayName,
+                Precedence = retail.Id.Precedence,
+                ContentSha256 = new string('b', 64),
+            },
+        };
+        Guid sourceId = Guid.NewGuid();
+        var source = new ProjectAssetReference
+        {
+            Id = sourceId,
+            Kind = ProjectAssetKind.SourceAnimation,
+            RelativePath = "Sources/clip.fbx",
+            ContentSha256 = new string('a', 64),
+        };
+        var animation = new ProjectAnimation
+        {
+            Name = "clip",
+            SourceAssetId = sourceId,
+            TargetAssetId = targetId,
+            FrameRate = new FrameRate(30, 1),
+            FrameCount = 2,
+            SourceBinding = new ProjectAnimationSourceBinding
+            {
+                Kind = AnimationSourceKind.LocalFbx,
+                AssetId = sourceId,
+                Roles = AnimationSourceRoles.Body,
+                SourceRigSignature = new string('c', 64),
+                TimingProvenance =
+                    AnimationTimingProvenance.EmbeddedFbx,
+            },
+        };
+
+        Assert.True(
+            MainWindowViewModel.CanRestoreAnimationFromLoadedCatalog(
+                animation,
+                [source, target],
+                [targetRow]));
+        Assert.False(
+            MainWindowViewModel.CanRestoreAnimationFromLoadedCatalog(
+                animation with { TargetAssetId = null },
+                [source, target],
+                [targetRow]));
+        Assert.False(
+            MainWindowViewModel.CanRestoreAnimationFromLoadedCatalog(
+                animation,
+                [source, target],
+                [CreateMeshRow("armored")]));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
     public async Task GuidedDrawersRemainMutuallyExclusive()
     {
         Directory.CreateDirectory(_temporaryDirectory);

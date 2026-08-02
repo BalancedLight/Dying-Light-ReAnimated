@@ -151,7 +151,7 @@ public sealed class ViewModelTimelineTests
             point =>
             {
                 Assert.True(double.IsFinite(point.PixelX));
-                Assert.InRange(point.PixelY, 16.0, 142.0);
+                Assert.InRange(point.PixelY, 32.0, 166.0);
             });
         Assert.Equal(120.0, timeline.CurvePoints[2].PixelX);
         Assert.True(
@@ -179,5 +179,119 @@ public sealed class ViewModelTimelineTests
                         0.0,
                         double.NaN),
                 ]));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void LongClipFitsWithoutCreatingAnUnboundedTimelineCanvas()
+    {
+        TimelineViewModel timeline = new(
+            startFrame: 0,
+            endFrame: 3_342);
+
+        Assert.InRange(timeline.CanvasWidth, 720.0, 1_121.0);
+        Assert.InRange(timeline.FrameMarkers.Count, 2, 20);
+        Assert.True(timeline.PixelsPerFrame < 1.0);
+
+        timeline.ZoomInCommand.Execute(null);
+
+        Assert.True(timeline.CanvasWidth > 1_120.0);
+        Assert.True(timeline.FrameMarkers.Count < 40);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void ChannelSelectionAndSearchShowOnlyOwnedCurves()
+    {
+        TimelineViewModel timeline = new();
+        var hips = new TimelineTrackViewModel(
+            "source-transform:0",
+            "mixamorig:Hips",
+            "Transform | 120 source keys",
+            "Source animation",
+            isReadOnly: true);
+        var jaw = new TimelineTrackViewModel(
+            "source-scalar:jaw_open",
+            "jaw_open",
+            "Scalar | 12 source keys",
+            "Facial",
+            isReadOnly: true);
+        timeline.ReplaceTracks([hips, jaw]);
+        timeline.ReplaceCurves(
+        [
+            new TimelineCurveTrackViewModel(
+                "Translation X",
+                "#F26C6C",
+                [new TimelineCurveKeyViewModel(0, 0)],
+                hips.Id),
+            new TimelineCurveTrackViewModel(
+                "Value",
+                "#E599F7",
+                [new TimelineCurveKeyViewModel(0, 1)],
+                jaw.Id),
+        ]);
+
+        Assert.Same(hips, timeline.SelectedTrack);
+        Assert.Equal("Translation X", Assert.Single(timeline.Curves).Name);
+
+        timeline.TrackSearchText = "jaw";
+
+        Assert.Same(jaw, timeline.SelectedTrack);
+        Assert.Equal("Value", Assert.Single(timeline.Curves).Name);
+        Assert.Equal("1 of 2 tracks", timeline.VisibleTrackCountLabel);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void LongSourceTracksReportRealCountsAndDeemphasizeUnselectedKeys()
+    {
+        var hips = new TimelineTrackViewModel(
+            "source-transform:0",
+            "mixamorig:Hips",
+            "Transform | 3,343 source keys",
+            "Source animation",
+            isReadOnly: true,
+            totalKeyCount: 3_343);
+        var spine = new TimelineTrackViewModel(
+            "source-transform:1",
+            "mixamorig:Spine",
+            "Transform | 3,343 source keys",
+            "Source animation",
+            isReadOnly: true,
+            totalKeyCount: 3_343);
+        for (var index = 0; index < 48; index++)
+        {
+            hips.Keyframes.Add(new TimelineKeyframeViewModel(
+                hips.Name,
+                index * 70,
+                0,
+                0));
+            spine.Keyframes.Add(new TimelineKeyframeViewModel(
+                spine.Name,
+                index * 70,
+                0,
+                0));
+        }
+
+        TimelineViewModel timeline = new(0, 3_342);
+        timeline.ReplaceTracks([hips, spine]);
+
+        Assert.Equal("3,343", hips.KeyCountLabel);
+        Assert.Contains(
+            "48 representative markers",
+            hips.KeyPresentationLabel,
+            StringComparison.Ordinal);
+        Assert.Equal(60, timeline.VisibleKeyframes.Count);
+        Assert.Equal(
+            48,
+            timeline.VisibleKeyframes.Count(static key =>
+                key.IsSelectedTrack));
+        Assert.Equal(
+            12,
+            timeline.VisibleKeyframes.Count(static key =>
+                !key.IsSelectedTrack));
     }
 }

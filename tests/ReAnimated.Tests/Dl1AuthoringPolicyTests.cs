@@ -188,6 +188,122 @@ public sealed class Dl1AuthoringPolicyTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void CrossRigBip01TransfersSourcePelvisTravelToSelectedDl1Root()
+    {
+        TransformTRS sourceBind = new(
+            new Vector3D(0.0, 1.0, 0.0),
+            QuaternionD.Identity,
+            Vector3D.One);
+        var source = new RigDefinition(
+            "mixamo-root-motion",
+            "Mixamo root motion",
+            [
+                new BoneDefinition(
+                    0,
+                    "mixamorig:Hips",
+                    -1,
+                    sourceBind,
+                    BoneKind.Root,
+                    descriptorHash: 0x01010101,
+                    semanticRole: "body.pelvis"),
+            ]);
+        var target = new RigDefinition(
+            "dl1-bip01-root-motion",
+            "DL1 Bip01 root motion",
+            [
+                new BoneDefinition(
+                    0,
+                    "Bip01",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: 0x10101010,
+                    semanticRole: "root.skeletal"),
+                new BoneDefinition(
+                    1,
+                    "pelvis",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitY,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: 0x20202020,
+                    semanticRole: "body.pelvis"),
+            ]);
+        QuaternionD heading = QuaternionD.FromAxisAngle(
+            Vector3D.UnitY,
+            35.0 * Math.PI / 180.0);
+        var clip = new AnimationClip(
+            "travelling-mixamo",
+            new FrameRate(1, 1),
+            2,
+            [
+                new TransformTrack(
+                    0,
+                    [
+                        new TransformKeyframe(0, sourceBind),
+                        new TransformKeyframe(
+                            1,
+                            sourceBind with
+                            {
+                                Translation = new Vector3D(3.0, 1.0, 2.0),
+                                Rotation = heading,
+                            }),
+                    ]),
+            ]);
+        var map = new RetargetMap(
+            source.Id,
+            target.Id,
+            [
+                new BoneMapEntry(
+                    0,
+                    1,
+                    BoneMappingMethod.Manual,
+                    1.0,
+                    isReviewed: true,
+                    transferPolicy: RetargetTransferPolicy.CopyLocal,
+                    componentPolicy: RetargetComponentPolicy.Rotation),
+            ],
+            reviewedTargetBindBoneIndices: [0]);
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source,
+            target,
+            map,
+            AnimationRootMode.Bip01,
+            targetRootBoneName: "Bip01");
+
+        EvaluationFrame frame = new AnimationEvaluator().Evaluate(
+            new EvaluationRequest(
+                source,
+                target,
+                clip,
+                1.0,
+                PreviewProfile.RawAuthoring,
+                map,
+                purpose: EvaluationPurpose.Export,
+                dl1AuthoringPolicy: policy));
+
+        Assert.Equal(0, policy.RootMotion.SourceMotionBoneIndex);
+        Assert.Equal(1, policy.RootMotion.TargetPoseMotionBoneIndex);
+        Assert.False(policy.RootMotion.TargetPoseOwnsTranslation);
+        AssertVectorNear(
+            new Vector3D(3.0, 0.0, 2.0),
+            frame.AuthoredPose.LocalTransforms[0].Translation);
+        AssertRotationNear(
+            heading,
+            frame.AuthoredPose.LocalTransforms[0].Rotation);
+        AssertVectorNear(
+            Vector3D.UnitY,
+            frame.AuthoredPose.LocalTransforms[1].Translation);
+        AssertVectorNear(
+            new Vector3D(3.0, 1.0, 2.0),
+            frame.AuthoredPose.GlobalMatrices[1].Translation);
+    }
+
+    [Fact]
     public void BatchAuthoredPoseSamplingMatchesIndividualEvaluation()
     {
         RootPolicyFixture fixture = CreateRootPolicyFixture();

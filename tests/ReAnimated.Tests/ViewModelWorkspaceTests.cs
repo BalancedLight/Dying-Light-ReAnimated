@@ -1159,9 +1159,14 @@ public sealed class ViewModelWorkspaceTests : IDisposable
             item => item.Channel.Contains("Morph", StringComparison.Ordinal));
         TimelineCurveTrackViewModel curve = Assert.Single(
             viewModel.Timeline.Curves,
-            item => item.Name.StartsWith(
-                "Editor Facial Adjustments / smile",
-                StringComparison.Ordinal));
+            item => string.Equals(
+                item.Name,
+                "Value",
+                StringComparison.Ordinal) &&
+                string.Equals(
+                    item.OwnerLabel,
+                    "Editor Facial Adjustments / smile",
+                    StringComparison.Ordinal));
         TimelineCurveKeyViewModel curveKey = Assert.Single(curve.Keys);
         Assert.Equal(2.0, curveKey.Frame);
         Assert.Equal(0.75, curveKey.Value, 5);

@@ -56,16 +56,26 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
             out SkeletonPose sourcePose);
         if (request.Dl1AuthoringPolicy is not null)
         {
-            SkeletonPose firstAuthoredPose = sampleFrame == 0.0
-                ? authoredPose
-                : EvaluateBeforeDl1Policy(
+            SkeletonPose firstSourcePose;
+            SkeletonPose firstAuthoredPose;
+            if (sampleFrame == 0.0)
+            {
+                firstAuthoredPose = authoredPose;
+                firstSourcePose = sourcePose;
+            }
+            else
+            {
+                firstAuthoredPose = EvaluateBeforeDl1Policy(
                     request,
                     0.0,
                     PlaybackMode.Clamp,
                     out _,
-                    out _);
+                    out firstSourcePose);
+            }
             authoredPose = ApplyDl1AuthoringPolicy(
                 request,
+                sourcePose,
+                firstSourcePose,
                 authoredPose,
                 firstAuthoredPose);
         }
@@ -217,6 +227,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
 
         cancellationToken.ThrowIfCancellationRequested();
         SkeletonPose? firstAuthoredPose = null;
+        SkeletonPose? firstSourcePose = null;
         if (request.Dl1AuthoringPolicy is not null)
         {
             firstAuthoredPose = EvaluateBeforeDl1Policy(
@@ -224,7 +235,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 0.0,
                 PlaybackMode.Clamp,
                 out _,
-                out _);
+                out firstSourcePose);
         }
 
         for (int index = 0; index < sampleTimesSeconds.Count; index++)
@@ -240,10 +251,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 sampleFrame == 0.0)
             {
                 authoredPose = firstAuthoredPose;
-                sourcePose = request.Clip.SamplePose(
-                    request.SourceRig,
-                    timeSeconds,
-                    request.PlaybackMode);
+                sourcePose = firstSourcePose!;
             }
             else
             {
@@ -259,6 +267,8 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
             {
                 authoredPose = ApplyDl1AuthoringPolicy(
                     request,
+                    sourcePose,
+                    firstSourcePose!,
                     authoredPose,
                     firstAuthoredPose!);
             }
@@ -273,10 +283,14 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
 
     private static SkeletonPose ApplyDl1AuthoringPolicy(
         EvaluationRequest request,
+        SkeletonPose sourcePose,
+        SkeletonPose firstSourcePose,
         SkeletonPose authoredPose,
         SkeletonPose firstAuthoredPose) =>
         Dl1AuthoringPolicyEvaluator.Apply(
             request.SourceRig,
+            sourcePose,
+            firstSourcePose,
             authoredPose,
             firstAuthoredPose,
             request.Dl1AuthoringPolicy!).ExportablePose;

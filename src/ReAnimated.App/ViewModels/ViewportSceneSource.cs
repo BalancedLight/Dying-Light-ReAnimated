@@ -46,10 +46,6 @@ public sealed class LinkedViewportCoordinator
                 }
 
                 _isLinked = value;
-                if (value)
-                {
-                    _targetCamera = _sourceCamera;
-                }
             }
         }
     }
@@ -207,7 +203,34 @@ public sealed class LinkedViewportCoordinator
                 return RenderCameraNavigationResult.NoChange;
             }
 
-            UpdateCameraCore(side, updated);
+            if (_isLinked)
+            {
+                RenderCamera other = side == ViewportSide.Source
+                    ? _targetCamera
+                    : _sourceCamera;
+                if (!RenderCameraNavigation.TryApply(
+                        other,
+                        input,
+                        out RenderCamera updatedOther))
+                {
+                    return RenderCameraNavigationResult.InvalidCamera;
+                }
+
+                if (side == ViewportSide.Source)
+                {
+                    _sourceCamera = updated;
+                    _targetCamera = updatedOther;
+                }
+                else
+                {
+                    _targetCamera = updated;
+                    _sourceCamera = updatedOther;
+                }
+            }
+            else
+            {
+                UpdateCameraCore(side, updated);
+            }
             return RenderCameraNavigationResult.Applied;
         }
     }
@@ -228,7 +251,11 @@ public sealed class LinkedViewportCoordinator
             };
             if (_isLinked)
             {
-                _targetCamera = _sourceCamera;
+                _targetCamera = _targetCamera with
+                {
+                    VerticalFieldOfViewDegrees = fieldOfViewDegrees,
+                    NearPlane = nearPlane,
+                };
             }
             else
             {

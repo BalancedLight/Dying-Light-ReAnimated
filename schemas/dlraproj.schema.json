@@ -330,6 +330,13 @@
             "motionAccumulator"
           ]
         },
+        "rootBoneName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
         "previewMotionAccumulationEnabled": {
           "type": "boolean"
         },

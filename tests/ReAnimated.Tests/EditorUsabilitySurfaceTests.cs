@@ -220,10 +220,66 @@ public sealed class EditorUsabilitySurfaceTests
                     label,
                     StringComparison.Ordinal));
         }
+
+        Assert.Contains(
+            document.Descendants(Presentation + "ComboBox"),
+            static element => string.Equals(
+                (string?)element.Attribute("ItemsSource"),
+                "{Binding RootBoneCandidates}",
+                StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("SelectedItem"),
+                    "{Binding SelectedRootBoneName}",
+                    StringComparison.Ordinal));
     }
 
     [Fact]
-    [Trait("ValidationTier", "Hermetic")]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void TimelineExposesChannelFilteringSelectionAndBoundedZoom()
+    {
+        XDocument document = XDocument.Load(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "Views",
+                "TimelinePanel.xaml"));
+
+        Assert.Contains(
+            document.Descendants(Presentation + "TextBox"),
+            static element => string.Equals(
+                (string?)element.Attribute("Text"),
+                "{Binding TrackSearchText, UpdateSourceTrigger=PropertyChanged}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            document.Descendants(Presentation + "ListBox"),
+            static element => string.Equals(
+                (string?)element.Attribute("ItemsSource"),
+                "{Binding VisibleTracks}",
+                StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("SelectedItem"),
+                    "{Binding SelectedTrack}",
+                    StringComparison.Ordinal));
+        string[] commands =
+        [
+            "{Binding FitTimelineCommand}",
+            "{Binding ZoomOutCommand}",
+            "{Binding ZoomInCommand}",
+        ];
+        foreach (string command in commands)
+        {
+            Assert.Contains(
+                document.Descendants(Presentation + "Button"),
+                element => string.Equals(
+                    (string?)element.Attribute("Command"),
+                    command,
+                    StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
     public void ExplorerAndLibraryExposeExplicitAnimationPlayback()
     {
@@ -457,6 +513,37 @@ public sealed class EditorUsabilitySurfaceTests
         Assert.Contains(
             "if (_startupSmoke is null)",
             applicationStartup,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void TimelineUsesAnApplicationThemeResourceForItsPanelBackground()
+    {
+        string timelineXaml = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "Views",
+                "TimelinePanel.xaml"));
+        string applicationXaml = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "App.xaml"));
+
+        Assert.DoesNotContain(
+            "{StaticResource PanelBrush}",
+            timelineXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "{StaticResource PanelBackgroundBrush}",
+            timelineXaml,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "x:Key=\"PanelBackgroundBrush\"",
+            applicationXaml,
             StringComparison.Ordinal);
     }
 
