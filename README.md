@@ -39,7 +39,7 @@ Run the hermetic C# gates:
 .\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release
 ```
 
-Release validation additionally checks the installed DL1 controls, renderer goldens, Blender handoff when configured, and retained corpus receipts:
+Release validation runs portable C# gates: renderer goldens and, when supplied, the optional Blender handoff:
 
 ```powershell
 .\tools\validate_csharp.ps1 `
