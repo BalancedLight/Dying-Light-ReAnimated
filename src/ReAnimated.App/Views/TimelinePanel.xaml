@@ -153,7 +153,7 @@
                                            Margin="8,4"
                                            FontSize="10"
                                            Foreground="{StaticResource MutedTextBrush}"
-                                           Text="AUTHORED CURVES" />
+                                           Text="SOURCE + AUTHORED CURVES" />
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <ItemsControl ItemsSource="{Binding Curves}">
                                         <ItemsControl.ItemTemplate>

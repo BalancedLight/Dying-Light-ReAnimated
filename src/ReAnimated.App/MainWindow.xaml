@@ -157,7 +157,6 @@
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Animate"
                                       Content="Animate"
-                                      IsEnabled="{Binding CanOpenAnimateWorkspace}"
                                       ToolTip="{Binding AnimateWorkspaceHint}"
                                       IsChecked="{Binding IsAnimateWorkspace, Mode=OneWay}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
@@ -209,16 +208,25 @@
                         <ToggleButton Content="Show bones"
                                       IsChecked="{Binding ShowSkeletonOverlay}"
                                       ToolTip="Show or hide the complete skeleton overlay while retaining the individual bone/helper filters." />
+                        <Button Command="{Binding OpenBoneEditorCommand}"
+                                Content="Edit bones"
+                                ToolTip="Open Retarget/Edit, select the Skeleton tree and Inspector, and choose the first editable deform bone." />
+                        <ToggleButton Content="Helpers"
+                                      IsChecked="{Binding ShowHelpers}"
+                                      ToolTip="Show ordinary DL1 helpers in yellow. Select a helper in the Skeleton tab to highlight it." />
+                        <ToggleButton Content="Camera helpers"
+                                      IsChecked="{Binding ShowCameraHelpers}"
+                                      ToolTip="Show EyeCamera and RefCamera helpers in orange." />
+                        <ToggleButton Content="Prop helpers"
+                                      IsChecked="{Binding ShowPropHelpers}"
+                                      ToolTip="Show PropHolder and other prop or pivot helpers in gold." />
                         <Button Command="{Binding ToggleDiagnosticsDrawerCommand}"
                                 Content="Jobs / diagnostics" />
                     </StackPanel>
-                    <Border Margin="10,2"
+                    <Button Margin="10,2"
                             Padding="9,4"
-                            Background="#171D25"
-                            BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="3"
-                            ToolTip="Raw, DL1 profile, installed-build, and validation details are listed in the Fidelity tab at the bottom of the window.">
+                            Command="{Binding ShowFidelityDetailsCommand}"
+                            ToolTip="Open the Fidelity drawer with the exact preview tier, installed-build state, and renderer feature limits.">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock FontSize="10"
                                        FontWeight="SemiBold"
@@ -230,9 +238,9 @@
                             <TextBlock Margin="5,0,0,0"
                                        FontSize="10"
                                        Foreground="{StaticResource MutedTextBrush}"
-                                       Text="· details below" />
+                                       Text="· open details" />
                         </StackPanel>
-                    </Border>
+                    </Button>
                     <StackPanel Orientation="Horizontal"
                                 Margin="4,2"
                                 Visibility="{Binding IsAnimationAuthoringWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -287,7 +295,8 @@
                 </Grid.ColumnDefinitions>
 
                 <Border Grid.Column="0" Style="{StaticResource PaneBorderStyle}">
-                    <TabControl x:Name="ExplorerTabControl">
+                    <TabControl x:Name="ExplorerTabControl"
+                                SelectedIndex="{Binding SelectedExplorerTabIndex}">
                         <TabItem Header="Assets">
                             <Grid Margin="6">
                                 <Grid.RowDefinitions>
@@ -529,6 +538,15 @@
                                              Tag="{Binding}">
                                         <ListBox.ContextMenu>
                                             <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Command="{Binding PreviewSelectedAssetCommand}"
+                                                          Header="Preview selected asset" />
+                                                <MenuItem Command="{Binding UseSelectedAssetAsSourceCommand}"
+                                                          Header="Use selected mesh as source" />
+                                                <MenuItem Command="{Binding UseSelectedAssetAsTargetCommand}"
+                                                          Header="Use selected mesh as target" />
+                                                <MenuItem Command="{Binding PlaySelectedExplorerAnimationCommand}"
+                                                          Header="Play selected animation" />
+                                                <Separator />
                                                 <MenuItem Command="{Binding ExportSelectedBrowserMeshToFbxCommand}"
                                                           Header="Export to FBX…"
                                                           ToolTip="Create a self-contained FBX for this decoded retail mesh. Skinned meshes include their bind skeleton and weights; each decoded base-color texture is embedded." />
@@ -681,6 +699,7 @@
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="*" />
                                 </Grid.RowDefinitions>
                                 <TextBlock Margin="4"
@@ -701,7 +720,7 @@
                                     <CheckBox Margin="3,1"
                                               Content="Helpers"
                                               IsChecked="{Binding ShowHelpers}"
-                                              ToolTip="Ordinary non-deforming helpers are hidden by default." />
+                                              ToolTip="Ordinary non-deforming helpers are yellow." />
                                     <CheckBox Margin="3,1"
                                               Content="Cameras"
                                               IsChecked="{Binding ShowCameraHelpers}"
@@ -711,7 +730,13 @@
                                               IsChecked="{Binding ShowPropHelpers}"
                                               ToolTip="Animated prop pivots, such as the slums door rig, are separate from deform bones." />
                                 </WrapPanel>
-                                <Grid Grid.Row="2">
+                                <TextBlock Grid.Row="2"
+                                           Margin="4,0,4,5"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           FontSize="9"
+                                           Text="Select EyeCamera, PropHolder, or another helper below to highlight it orange in the viewport."
+                                           TextWrapping="Wrap" />
+                                <Grid Grid.Row="3">
                                     <TreeView ItemsSource="{Binding SkeletonRoots}"
                                               behaviors:TreeViewSelection.IsEnabled="True"
                                               behaviors:TreeViewSelection.SelectedItem="{Binding SelectedBone}">
@@ -764,41 +789,16 @@
                         <RowDefinition Height="5" />
                         <RowDefinition Height="245" />
                     </Grid.RowDefinitions>
-                    <Grid>
+                    <Grid x:Name="ViewportGrid">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition x:Name="SourceViewportColumn">
-                                <ColumnDefinition.Style>
-                                    <Style TargetType="{x:Type ColumnDefinition}">
-                                        <Setter Property="Width" Value="*" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsSourceViewportVisible}" Value="False">
-                                                <Setter Property="Width" Value="0" />
-                                                <!-- GridSplitter writes a local Width value after a dual-pane
-                                                     resize. MaxWidth still wins over that local value, so a
-                                                     later single-pane workspace cannot retain a blue source
-                                                     viewport sliver. -->
-                                                <Setter Property="MaxWidth" Value="0" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ColumnDefinition.Style>
-                            </ColumnDefinition>
-                            <ColumnDefinition x:Name="ViewportSplitterColumn">
-                                <ColumnDefinition.Style>
-                                    <Style TargetType="{x:Type ColumnDefinition}">
-                                        <Setter Property="Width" Value="6" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsSourceViewportVisible}" Value="False">
-                                                <Setter Property="Width" Value="0" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ColumnDefinition.Style>
-                            </ColumnDefinition>
+                            <!-- ColumnDefinition does not inherit DataContext. MainWindow owns
+                                 these D3D airspace widths explicitly when workspace layout changes. -->
+                            <ColumnDefinition x:Name="SourceViewportColumn" Width="*" />
+                            <ColumnDefinition x:Name="ViewportSplitterColumn" Width="6" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Border x:Name="AnimationContextStrip"
@@ -826,9 +826,33 @@
                                     <Run Text="  →  Target: " />
                                     <Run Text="{Binding ActiveTargetModelLabel, Mode=OneWay}" />
                                 </TextBlock>
+                                <Border Margin="0,5,0,0"
+                                        Padding="7,5"
+                                        Background="#3A2D18"
+                                        BorderBrush="{StaticResource WarningBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="3"
+                                        Visibility="{Binding IsTargetPlaybackBlocked, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <DockPanel LastChildFill="True">
+                                        <WrapPanel DockPanel.Dock="Right"
+                                                   Margin="8,0,0,0">
+                                            <Button Command="{Binding SelectWorkspaceCommand}"
+                                                    CommandParameter="Retarget/Edit"
+                                                    Content="Open retarget setup" />
+                                            <Button Command="{Binding AcceptMappingProposalCommand}"
+                                                    Content="Accept proposal &amp; play"
+                                                    ToolTip="Explicitly review every visible proposed mapping and required bind fallback, save that decision, then start target playback." />
+                                        </WrapPanel>
+                                        <TextBlock VerticalAlignment="Center"
+                                                   Foreground="#F3C978"
+                                                   Text="{Binding TargetPlaybackMessage}"
+                                                   TextWrapping="Wrap" />
+                                    </DockPanel>
+                                </Border>
                             </StackPanel>
                         </Border>
-                        <views:ViewportPane Grid.Row="1"
+                        <views:ViewportPane x:Name="SourceViewportPane"
+                                            Grid.Row="1"
                                             DataContext="{Binding SourceViewport}"
                                             Visibility="{Binding IsSourceViewportVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         <GridSplitter Grid.Row="1"
@@ -880,7 +904,7 @@
                 <Border Grid.Column="4"
                         Style="{StaticResource PaneBorderStyle}"
                         Visibility="{Binding IsInspectorPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <TabControl>
+                    <TabControl SelectedIndex="{Binding SelectedInspectorTabIndex}">
                         <TabItem Header="Mapping"
                                  Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <Grid Margin="6">
@@ -890,6 +914,42 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
+                                <Border Grid.RowSpan="4"
+                                        Panel.ZIndex="50"
+                                        Padding="14"
+                                        Background="{StaticResource PanelBackgroundBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="3"
+                                        Visibility="{Binding IsRetargetSetupVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <StackPanel VerticalAlignment="Top">
+                                        <TextBlock FontSize="16"
+                                                   FontWeight="SemiBold"
+                                                   Text="Retarget setup" />
+                                        <TextBlock Margin="0,8,0,0"
+                                                   Foreground="{StaticResource AccentBrush}"
+                                                   FontWeight="SemiBold"
+                                                   Text="{Binding RetargetSetupSelectionLabel}"
+                                                   TextWrapping="Wrap" />
+                                        <TextBlock Margin="0,8,0,12"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding RetargetSetupInstructions}"
+                                                   TextWrapping="Wrap" />
+                                        <Button Command="{Binding PreviewSelectedAssetCommand}"
+                                                Content="Preview selected model" />
+                                        <Button Command="{Binding UseSelectedAssetAsSourceCommand}"
+                                                Content="Use selected model as source" />
+                                        <Button Command="{Binding UseSelectedAssetAsTargetCommand}"
+                                                Content="Use selected model as target" />
+                                        <Button Margin="2,10,2,2"
+                                                Command="{Binding ImportAnimationCommand}"
+                                                Content="Import FBX / ANM2 animation…" />
+                                        <TextBlock Margin="2,12,2,0"
+                                                   Foreground="{StaticResource WarningBrush}"
+                                                   Text="The mapping table appears after an animation has an immutable source model and a target model. Catalog selection alone never rewrites a project."
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
                                 <StackPanel>
                                     <WrapPanel>
                                         <Button Command="{Binding AutoMapCommand}" Content="Auto-map" />
@@ -899,6 +959,9 @@
                                         <Button Command="{Binding SaveMappingProfileCommand}"
                                                 Content="Save selections"
                                                 ToolTip="Persist only the individually checked mapping and required target-bind review rows. This action never accepts every row automatically." />
+                                        <Button Command="{Binding AcceptMappingProposalCommand}"
+                                                Content="Accept proposal &amp; play"
+                                                ToolTip="Explicitly review every proposed row and required bind fallback, save the mapping, reset to frame zero, and start target playback." />
                                     </WrapPanel>
                                     <TextBlock Margin="4,7,4,3"
                                                FontSize="10"
@@ -1927,7 +1990,7 @@
                     MaxHeight="250"
                     Style="{StaticResource PaneBorderStyle}"
                     Visibility="{Binding IsDiagnosticsDrawerOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
-                <TabControl>
+                <TabControl SelectedIndex="{Binding SelectedDiagnosticsTabIndex}">
                     <TabItem Header="Jobs">
                         <Grid Margin="6">
                             <DataGrid AutoGenerateColumns="False"

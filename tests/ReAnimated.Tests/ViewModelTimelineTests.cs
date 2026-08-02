@@ -43,6 +43,30 @@ public sealed class ViewModelTimelineTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void PlaybackLockPausesAndRejectsThePlayCommand()
+    {
+        TimelineViewModel timeline = new()
+        {
+            IsPlaying = true,
+        };
+
+        timeline.IsPlaybackEnabled = false;
+
+        Assert.False(timeline.IsPlaying);
+        Assert.False(timeline.TogglePlaybackCommand.CanExecute(null));
+        Assert.Equal("Playback locked", timeline.PlaybackLabel);
+
+        timeline.TogglePlaybackCommand.Execute(null);
+        Assert.False(timeline.IsPlaying);
+
+        timeline.IsPlaybackEnabled = true;
+        Assert.True(timeline.TogglePlaybackCommand.CanExecute(null));
+        Assert.Equal("Play", timeline.PlaybackLabel);
+    }
+
+    [Fact]
     public void HighRefreshPlaybackAccumulatesSubFrameElapsedTime()
     {
         TimelineViewModel timeline = new()

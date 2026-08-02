@@ -304,15 +304,18 @@ public sealed partial class MainWindowViewModel :
     private JobViewModel? _ikBakeJob;
     private Task? _assetCatalogLoadTask;
     private bool _isViewportsLinked = true;
-    private bool _isSourceViewportVisible = true;
+    private bool _isSourceViewportVisible;
     private bool _isTargetSwitching;
     private bool _isDiagnosticsDrawerOpen;
+    private int _selectedDiagnosticsTabIndex;
+    private int _selectedExplorerTabIndex;
+    private int _selectedInspectorTabIndex;
     private bool _showMeshes = true;
     private bool _showSkeletonOverlay = true;
     private bool _showDeformBones = true;
-    private bool _showHelpers;
+    private bool _showHelpers = true;
     private bool _showCameraHelpers = true;
-    private bool _showPropHelpers;
+    private bool _showPropHelpers = true;
     private bool _showRootMotionTrail;
     private bool _showDeformedBounds;
     private bool _showBoneLocalAxes;
@@ -355,6 +358,7 @@ public sealed partial class MainWindowViewModel :
     private FedDocument? _fedDocument;
     private bool _synchronizingMorphWeights;
     private bool _synchronizingProjectBindings;
+    private bool _batchReviewingMapping;
     private bool _synchronizingPreviewMode;
     private bool _synchronizingFppProjectionCapture;
     private bool _synchronizingMovieReferenceCameraCapture;
@@ -385,6 +389,7 @@ public sealed partial class MainWindowViewModel :
     private PreviewFramePair? _lastPreviewFramePair;
     private RenderFppProjectionState? _suspendedTargetProjection;
     private RenderFrameSnapshot? _isolatedBrowsePreviewFrame;
+    private DecodedRetailModelSession? _isolatedBrowsePreviewModel;
     private string? _isolatedBrowsePreviewTitle;
     private string? _isolatedBrowsePreviewFidelity;
     private ViewportOrbitCameraPair? _authoringOrbitCameras;
@@ -501,6 +506,12 @@ public sealed partial class MainWindowViewModel :
         ToggleDiagnosticsDrawerCommand = new RelayCommand(
             () => IsDiagnosticsDrawerOpen =
                 !IsDiagnosticsDrawerOpen);
+        ShowFidelityDetailsCommand = new RelayCommand(() =>
+        {
+            SelectedDiagnosticsTabIndex = 2;
+            IsDiagnosticsDrawerOpen = true;
+        });
+        OpenBoneEditorCommand = new RelayCommand(OpenBoneEditor);
         CancelExplorerSourceModelPickerCommand = new RelayCommand(
             CancelExplorerSourceModelPicker,
             () => IsExplorerSourceModelPickerActive);
@@ -614,6 +625,9 @@ public sealed partial class MainWindowViewModel :
         SaveMappingProfileCommand = new RelayCommand(
             SaveReviewedMapping,
             CanReviewMapping);
+        AcceptMappingProposalCommand = new RelayCommand(
+            AcceptMappingProposalAndPlay,
+            CanReviewMapping);
         AddHelperOverrideCommand = new RelayCommand(
             AddHelperOverride,
             CanAddHelperOverride);
@@ -639,6 +653,10 @@ public sealed partial class MainWindowViewModel :
         AttachmentEditor.PropertyChanged +=
             OnAttachmentEditorPropertyChanged;
 
+        // Make holder, camera, and prop helper roles visible on the first
+        // decoded model. ViewportSceneSource otherwise inherits the renderer
+        // record defaults, which intentionally hide ordinary helpers/props.
+        ApplySkeletonVisibility();
         BuildFidelityBadges();
         TryLoadRecoveryMetadata();
         AddDiagnostic(
@@ -813,6 +831,10 @@ public sealed partial class MainWindowViewModel :
 
     public RelayCommand ToggleDiagnosticsDrawerCommand { get; }
 
+    public RelayCommand ShowFidelityDetailsCommand { get; }
+
+    public RelayCommand OpenBoneEditorCommand { get; }
+
     public RelayCommand CancelExplorerSourceModelPickerCommand { get; }
 
     public bool IsExplorerSourceModelPickerActive =>
@@ -930,6 +952,8 @@ public sealed partial class MainWindowViewModel :
     public RelayCommand ValidateMappingCommand { get; }
 
     public RelayCommand SaveMappingProfileCommand { get; }
+
+    public RelayCommand AcceptMappingProposalCommand { get; }
 
     public RelayCommand AddHelperOverrideCommand { get; }
 
@@ -1153,6 +1177,27 @@ public sealed partial class MainWindowViewModel :
         !IsDiagnosticsDrawerOpen &&
         (IsRetargetWorkspace || IsFaceOrFppWorkspace);
 
+    public bool IsRetargetSetupVisible =>
+        IsRetargetWorkspace && GetActiveAnimation() is null;
+
+    public string RetargetSetupSelectionLabel =>
+        AssetBrowser.SelectedAsset is
+        {
+            Kind: AssetKind.Mesh,
+            RetailAsset: not null,
+        } selected
+            ? $"Selected model: {selected.Name}"
+            : "No retail model selected";
+
+    public string RetargetSetupInstructions =>
+        AssetBrowser.SelectedAsset is
+        {
+            Kind: AssetKind.Mesh,
+            RetailAsset: not null,
+        }
+            ? "The selected model is shown in bind pose without changing the project. Use it as the source for the next retail ANM2, or load an animation first and then choose its target."
+            : "Select a skinned model in Assets. Then preview it, bind it as the source for a retail ANM2, or import an animation. Retarget mapping needs both a source animation and target rig.";
+
     public bool IsLinkedCameraControlVisible =>
         PreviewLayout is PreviewLayoutMode.RetargetComparison or
             PreviewLayoutMode.FacialComparison;
@@ -1182,6 +1227,30 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    public int SelectedDiagnosticsTabIndex
+    {
+        get => _selectedDiagnosticsTabIndex;
+        set => SetProperty(
+            ref _selectedDiagnosticsTabIndex,
+            Math.Clamp(value, 0, 2));
+    }
+
+    public int SelectedExplorerTabIndex
+    {
+        get => _selectedExplorerTabIndex;
+        set => SetProperty(
+            ref _selectedExplorerTabIndex,
+            Math.Clamp(value, 0, 2));
+    }
+
+    public int SelectedInspectorTabIndex
+    {
+        get => _selectedInspectorTabIndex;
+        set => SetProperty(
+            ref _selectedInspectorTabIndex,
+            Math.Clamp(value, 0, 4));
+    }
+
     public TargetBindingStatus ActiveTargetBindingStatus =>
         _targetBindingStatus;
 
@@ -1198,7 +1267,7 @@ public sealed partial class MainWindowViewModel :
     public string TargetPlaybackMessage => IsTargetSwitching
         ? "The last valid frame is frozen while the selected target is decoded."
         : ActiveTargetBindingStatus == TargetBindingStatus.NeedsReview
-            ? "Target animation is locked. Review the proposed mapping; the target remains in bind pose."
+            ? "Target playback is paused in bind pose. Open Retarget/Edit to inspect the map, then choose Accept proposal & play."
             : ActiveTargetBindingStatus == TargetBindingStatus.Invalid
                 ? "Choose an explicit source and target before target playback."
                 : "The target is admitted to the authoritative preview pipeline.";
@@ -1211,12 +1280,9 @@ public sealed partial class MainWindowViewModel :
     public string ActiveAnimationLabel =>
         GetActiveAnimation()?.Name ?? "No animation";
 
-    public bool CanOpenAnimateWorkspace =>
-        GetActiveAnimation() is not null;
-
-    public string AnimateWorkspaceHint => CanOpenAnimateWorkspace
+    public string AnimateWorkspaceHint => GetActiveAnimation() is not null
         ? "Open the active animation and its authoritative target preview."
-        : "Play or import an animation before opening Animate.";
+        : "Open animation setup. An isolated retail preview remains visible until a clip is imported or played.";
 
     public string ActiveSourceModelLabel
     {
@@ -1228,7 +1294,9 @@ public sealed partial class MainWindowViewModel :
                 ? FindProjectAsset(id)
                 : _sourceModelContext?.ProjectAsset;
             return source?.RetailIdentity?.ResourceName ??
-                (_sourceAnimation?.SourceKind ?? "No source model");
+                (_sourceAnimation is { } animationSource
+                    ? $"{animationSource.SourceKind} rig ({animationSource.Rig.BoneCount:N0} bones)"
+                    : "No source model");
         }
     }
 
@@ -1430,17 +1498,6 @@ public sealed partial class MainWindowViewModel :
 
     private void SelectWorkspace(string? value)
     {
-        if (string.Equals(
-                value,
-                "Animate",
-                StringComparison.Ordinal) &&
-            !CanOpenAnimateWorkspace)
-        {
-            StatusText =
-                "Animate needs an active animation. The Browse preview remains unchanged.";
-            return;
-        }
-
         ActiveWorkspaceMode = value ?? "Browse";
     }
 
@@ -1448,9 +1505,24 @@ public sealed partial class MainWindowViewModel :
         EditorWorkspaceMode workspace,
         bool preserveLegacyCutscene)
     {
-        EditorWorkspaceMode previousWorkspace = _activeWorkspace;
         string previousLegacyName = _activeWorkspaceMode;
         bool usedLinkedTargetView = UsesLinkedTargetExternalView();
+        bool hasActiveAnimation = GetActiveAnimation() is not null;
+        bool hasLoadedComparison = hasActiveAnimation &&
+            _sourceAnimation is not null &&
+            _targetRig is not null;
+        bool hasPlayableComparison = hasLoadedComparison &&
+            ActiveTargetBindingStatus is
+                TargetBindingStatus.Direct or
+                TargetBindingStatus.Ready;
+        bool wasShowingIsolatedPreview =
+            _isolatedBrowsePreviewFrame is not null &&
+            TargetViewport.SceneSource.HasExternalPreviewScene;
+        bool shouldShowIsolatedPreview =
+            workspace == EditorWorkspaceMode.Browse ||
+            (!hasActiveAnimation &&
+             (workspace == EditorWorkspaceMode.Animate ||
+              workspace == EditorWorkspaceMode.RetargetEdit));
         string legacyName = preserveLegacyCutscene
             ? "Cutscene"
             : workspace switch
@@ -1470,6 +1542,16 @@ public sealed partial class MainWindowViewModel :
             ref _activeWorkspaceMode,
             legacyName,
             nameof(ActiveWorkspaceMode));
+        if (workspace is EditorWorkspaceMode.Face or
+            EditorWorkspaceMode.Fpp)
+        {
+            SelectedInspectorTabIndex = 4;
+        }
+        else if (workspace == EditorWorkspaceMode.RetargetEdit &&
+                 SelectedInspectorTabIndex == 4)
+        {
+            SelectedInspectorTabIndex = 0;
+        }
         PreviewLayoutMode layout = workspace switch
         {
             EditorWorkspaceMode.Browse =>
@@ -1477,27 +1559,35 @@ public sealed partial class MainWindowViewModel :
             EditorWorkspaceMode.Animate =>
                 PreviewLayoutMode.SingleAuthoritative,
             EditorWorkspaceMode.RetargetEdit =>
-                PreviewLayoutMode.RetargetComparison,
+                hasLoadedComparison
+                    ? PreviewLayoutMode.RetargetComparison
+                    : PreviewLayoutMode.SingleAuthoritative,
             EditorWorkspaceMode.Face =>
-                PreviewLayoutMode.FacialComparison,
+                hasPlayableComparison
+                    ? PreviewLayoutMode.FacialComparison
+                    : PreviewLayoutMode.SingleAuthoritative,
             EditorWorkspaceMode.Fpp =>
-                PreviewLayoutMode.FppDualView,
+                hasPlayableComparison
+                    ? PreviewLayoutMode.FppDualView
+                    : PreviewLayoutMode.SingleAuthoritative,
             _ => PreviewLayoutMode.IsolatedBrowse,
         };
-        if (_previewLayout != layout)
+        bool layoutChanged = _previewLayout != layout;
+        if (layoutChanged)
         {
             _previewLayout = layout;
             OnPropertyChanged(nameof(PreviewLayout));
+            OnPropertyChanged(nameof(IsLinkedCameraControlVisible));
         }
 
         IsSourceViewportVisible = layout is
             PreviewLayoutMode.RetargetComparison or
             PreviewLayoutMode.FacialComparison or
             PreviewLayoutMode.FppDualView;
-        if (workspaceChanged || legacyChanged)
+        if (workspaceChanged || legacyChanged || layoutChanged)
         {
-            if (previousWorkspace == EditorWorkspaceMode.Browse &&
-                workspace != EditorWorkspaceMode.Browse)
+            if (wasShowingIsolatedPreview &&
+                !shouldShowIsolatedPreview)
             {
                 SuspendIsolatedBrowsePreview();
             }
@@ -1545,10 +1635,15 @@ public sealed partial class MainWindowViewModel :
                 RestoreLinkedTargetExternalViewFromCurrentScene();
             }
 
-            if (workspace == EditorWorkspaceMode.Browse &&
-                previousWorkspace != EditorWorkspaceMode.Browse)
+            if (!wasShowingIsolatedPreview &&
+                shouldShowIsolatedPreview)
             {
                 RestoreIsolatedBrowsePreview();
+            }
+            else if (wasShowingIsolatedPreview &&
+                     shouldShowIsolatedPreview)
+            {
+                UpdateIsolatedPreviewPresentation();
             }
             OnPropertyChanged(nameof(IsBrowseWorkspace));
             OnPropertyChanged(nameof(IsAnimateWorkspace));
@@ -1558,13 +1653,18 @@ public sealed partial class MainWindowViewModel :
             OnPropertyChanged(nameof(IsAnimationAuthoringWorkspace));
             OnPropertyChanged(nameof(IsFaceOrFppWorkspace));
             OnPropertyChanged(nameof(IsInspectorPanelVisible));
+            OnPropertyChanged(nameof(IsRetargetSetupVisible));
+            OnPropertyChanged(nameof(RetargetSetupSelectionLabel));
+            OnPropertyChanged(nameof(RetargetSetupInstructions));
             OnPropertyChanged(nameof(IsLinkedCameraControlVisible));
             OnPropertyChanged(nameof(ActivePreviewProfile));
             UpdateFidelityStatusBadges();
             if (_sourceAnimation is null)
             {
                 UpdateUnevaluatedPreviewStatus(
-                    "Load or activate an animation to evaluate this workspace.");
+                    workspace == EditorWorkspaceMode.RetargetEdit
+                        ? "Retarget setup is waiting for an animation; the selected model preview remains isolated."
+                        : "Load or activate an animation to evaluate this workspace.");
             }
         }
     }
@@ -1603,16 +1703,46 @@ public sealed partial class MainWindowViewModel :
 
         TargetViewport.SceneSource.SetExternalPreviewScene(
             _isolatedBrowsePreviewFrame);
+        UpdateIsolatedPreviewPresentation();
+    }
+
+    private void UpdateIsolatedPreviewPresentation()
+    {
+        if (_isolatedBrowsePreviewFrame is null)
+        {
+            return;
+        }
+
+        bool isAnimationSetup =
+            ActiveWorkspace == EditorWorkspaceMode.Animate &&
+            GetActiveAnimation() is null;
+        bool isRetargetSetup =
+            ActiveWorkspace == EditorWorkspaceMode.RetargetEdit &&
+            GetActiveAnimation() is null;
+        string setupTitle = isRetargetSetup
+            ? "Retarget Setup"
+            : "Animation Setup";
         TargetViewport.SetPresentation(
-            _isolatedBrowsePreviewTitle ?? "Asset Preview",
-            _isolatedBrowsePreviewFidelity ??
-                "Isolated retail asset; project state unchanged");
+            isAnimationSetup || isRetargetSetup
+                ? (_isolatedBrowsePreviewTitle ?? "Asset Preview")
+                    .Replace(
+                        "Asset Preview",
+                        setupTitle,
+                        StringComparison.Ordinal)
+                : _isolatedBrowsePreviewTitle ?? "Asset Preview",
+            isRetargetSetup
+                ? "Bind-pose retail model selected; load an animation to create source and target bindings"
+                : isAnimationSetup
+                    ? "Bind-pose retail model ready; import or play an animation to begin authoring"
+                : _isolatedBrowsePreviewFidelity ??
+                    "Isolated retail asset; project state unchanged");
     }
 
     private void ClearIsolatedBrowsePreview()
     {
         TargetViewport.SceneSource.SetExternalPreviewScene(null);
         _isolatedBrowsePreviewFrame = null;
+        _isolatedBrowsePreviewModel = null;
         _isolatedBrowsePreviewTitle = null;
         _isolatedBrowsePreviewFidelity = null;
         _authoringOrbitCameras = null;
@@ -1622,6 +1752,8 @@ public sealed partial class MainWindowViewModel :
     private void SetTargetBindingStatus(TargetBindingStatus status)
     {
         _editorSessionCoordinator.UpdateTargetStatus(status);
+        Timeline.IsPlaybackEnabled =
+            status != TargetBindingStatus.NeedsReview;
         if (_targetBindingStatus == status)
         {
             return;
@@ -1632,6 +1764,15 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(TargetBindingStatusText));
         OnPropertyChanged(nameof(TargetPlaybackMessage));
         OnPropertyChanged(nameof(IsTargetPlaybackBlocked));
+        if (ActiveWorkspace is
+            EditorWorkspaceMode.RetargetEdit or
+            EditorWorkspaceMode.Face or
+            EditorWorkspaceMode.Fpp)
+        {
+            SetWorkspace(
+                ActiveWorkspace,
+                preserveLegacyCutscene: false);
+        }
     }
 
     public string SelectedPreviewMode
@@ -3174,14 +3315,19 @@ public sealed partial class MainWindowViewModel :
                 ContentSha256 = projectSource.Sha256,
             };
 
+            DecodedRetailModelSession? selectedPreviewTarget =
+                session.SourceKindContract == AnimationSourceKind.LocalAnm2
+                    ? _sourceModelContext
+                    : _isolatedBrowsePreviewModel is
+                        {
+                            Payload.Source.Rig: not null,
+                        } previewModel
+                        ? previewModel
+                        : null;
             RigDefinition? initialTargetRig =
-                session.SourceKindContract == AnimationSourceKind.LocalAnm2
-                    ? _sourceModelContext?.Payload.Source.Rig
-                    : _targetRig;
+                selectedPreviewTarget?.Payload.Source.Rig ?? _targetRig;
             ProjectAssetReference? initialTargetAsset =
-                session.SourceKindContract == AnimationSourceKind.LocalAnm2
-                    ? _sourceModelContext?.ProjectAsset
-                    : _targetProjectAsset;
+                selectedPreviewTarget?.ProjectAsset ?? _targetProjectAsset;
             RetargetMap? proposal = initialTargetRig is null ||
                 HasSameRigContract(session.Rig, initialTargetRig)
                 ? null
@@ -3228,29 +3374,35 @@ public sealed partial class MainWindowViewModel :
                 Animations = _project.Animations.Add(animation),
             });
 
-            if (session.SourceKindContract == AnimationSourceKind.LocalAnm2 &&
-                _sourceModelContext is { } localAnm2Model)
+            if (selectedPreviewTarget is { } decodedTarget)
             {
                 PublishDecodedMesh(
-                    localAnm2Model.Payload,
-                    localAnm2Model.RetailAsset,
-                    localAnm2Model.ProjectAsset,
-                    restoreRetargetMap: false);
-                _activeRetargetMap = null;
-                SetTargetBindingStatus(TargetBindingStatus.Direct);
+                    decodedTarget.Payload,
+                    decodedTarget.RetailAsset,
+                    decodedTarget.ProjectAsset,
+                    restoreRetargetMap: false,
+                    animationContext: animation);
+                _activeRetargetMap = proposal;
+                RefreshProjectBindings();
             }
 
             Timeline.CurrentFrame = 0;
             _editorSessionCoordinator.Reset(
                 animation.Id,
                 frame: 0);
-            SetTargetBindingStatus(
+            TargetBindingStatus initialBindingStatus =
                 initialTargetRig is null
                     ? TargetBindingStatus.Invalid
                     : ResolveTargetBindingStatus(
                         session.Rig,
                         initialTargetRig,
-                        proposal));
+                        proposal);
+            SetTargetBindingStatus(initialBindingStatus);
+            SetWorkspace(
+                initialBindingStatus == TargetBindingStatus.NeedsReview
+                    ? EditorWorkspaceMode.RetargetEdit
+                    : EditorWorkspaceMode.Animate,
+                preserveLegacyCutscene: false);
             RefreshAnimationPreview();
             if (proposal is not null)
             {
@@ -6131,10 +6283,53 @@ public sealed partial class MainWindowViewModel :
                 reviewed);
         PublishMappingReviewDiagnostics(report);
         MappingReviewStatus = FormatMappingReviewStatus(report);
+        SetTargetBindingStatus(
+            report.IsReady
+                ? TargetBindingStatus.Ready
+                : TargetBindingStatus.NeedsReview);
+        RefreshAnimationPreview();
         StatusText = report.IsReady
             ? "Reviewed mapping saved in project"
             : "Mapping saved, but validation still reports blockers";
         NotifyMappingCommands();
+    }
+
+    private void AcceptMappingProposalAndPlay()
+    {
+        _batchReviewingMapping = true;
+        try
+        {
+            foreach (BoneMappingViewModel row in BoneMappings.Where(
+                         static row =>
+                             !string.IsNullOrWhiteSpace(row.TargetBone)))
+            {
+                row.IsReviewed = true;
+            }
+
+            foreach (TargetBindReviewViewModel row in
+                     RequiredTargetBindReviews)
+            {
+                row.IsReviewed = true;
+            }
+        }
+        finally
+        {
+            _batchReviewingMapping = false;
+        }
+
+        SaveReviewedMapping();
+        if (ActiveTargetBindingStatus != TargetBindingStatus.Ready)
+        {
+            return;
+        }
+
+        Timeline.CurrentFrame = 0;
+        SetWorkspace(
+            EditorWorkspaceMode.Animate,
+            preserveLegacyCutscene: false);
+        Timeline.IsPlaying = true;
+        StatusText =
+            "Mapping proposal explicitly accepted; target playback started";
     }
 
     internal static RetargetMap ApplyExplicitReviewSelections(
@@ -6331,6 +6526,7 @@ public sealed partial class MainWindowViewModel :
         AutoMapCommand.NotifyCanExecuteChanged();
         ValidateMappingCommand.NotifyCanExecuteChanged();
         SaveMappingProfileCommand.NotifyCanExecuteChanged();
+        AcceptMappingProposalCommand.NotifyCanExecuteChanged();
         AddHelperOverrideCommand.NotifyCanExecuteChanged();
         RemoveHelperOverrideCommand.NotifyCanExecuteChanged();
         NotifyExportCommands();
@@ -7499,6 +7695,11 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         System.ComponentModel.PropertyChangedEventArgs args)
     {
+        if (_batchReviewingMapping)
+        {
+            return;
+        }
+
         bool targetChanged = args.PropertyName ==
             nameof(BoneMappingViewModel.TargetBone);
         bool policyChanged = args.PropertyName is
@@ -7523,7 +7724,8 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         System.ComponentModel.PropertyChangedEventArgs args)
     {
-        if (sender is not TargetBindReviewViewModel ||
+        if (_batchReviewingMapping ||
+            sender is not TargetBindReviewViewModel ||
             args.PropertyName !=
                 nameof(TargetBindReviewViewModel.IsReviewed))
         {
@@ -7773,11 +7975,35 @@ public sealed partial class MainWindowViewModel :
 
     private void NotifyProjectChanged()
     {
+        bool isSetupCapableWorkspace =
+            ActiveWorkspace == EditorWorkspaceMode.Animate ||
+            ActiveWorkspace == EditorWorkspaceMode.RetargetEdit;
+        if (isSetupCapableWorkspace &&
+            GetActiveAnimation() is not null &&
+            TargetViewport.SceneSource.HasExternalPreviewScene)
+        {
+            SuspendIsolatedBrowsePreview();
+        }
+
+        if (isSetupCapableWorkspace)
+        {
+            // Adding or removing the active clip changes Animate/Retarget from
+            // setup presentation to authoritative comparison (or back) even
+            // though the selected workspace itself did not change.
+            SetWorkspace(
+                ActiveWorkspace,
+                preserveLegacyCutscene: false);
+        }
+
         OnPropertyChanged(nameof(CurrentProject));
         OnPropertyChanged(nameof(WindowTitle));
         OnPropertyChanged(nameof(ActiveAnimationLabel));
-        OnPropertyChanged(nameof(CanOpenAnimateWorkspace));
+        OnPropertyChanged(nameof(ActiveSourceModelLabel));
+        OnPropertyChanged(nameof(ActiveTargetModelLabel));
         OnPropertyChanged(nameof(AnimateWorkspaceHint));
+        OnPropertyChanged(nameof(IsRetargetSetupVisible));
+        OnPropertyChanged(nameof(RetargetSetupSelectionLabel));
+        OnPropertyChanged(nameof(RetargetSetupInstructions));
         UpdateFidelityStatusBadges();
         UndoCommand.NotifyCanExecuteChanged();
         RedoCommand.NotifyCanExecuteChanged();
@@ -8265,6 +8491,35 @@ public sealed partial class MainWindowViewModel :
                 MidpointRounding.AwayFromZero)),
             0,
             sampleCount - 1);
+    }
+
+    private void OpenBoneEditor()
+    {
+        if (GetActiveAnimation() is null || _targetRig is null)
+        {
+            StatusText =
+                "Bone editing needs an active animation and decoded target model";
+            return;
+        }
+
+        SetWorkspace(
+            EditorWorkspaceMode.RetargetEdit,
+            preserveLegacyCutscene: false);
+        SelectedExplorerTabIndex = 2;
+        SelectedInspectorTabIndex = 1;
+        SelectedBone ??= EnumerateSkeletonNodes().FirstOrDefault(
+            static node => node.Role == BoneRenderRole.Deform);
+        if (SelectedBone is null)
+        {
+            StatusText =
+                "The target model has no selectable decoded deform bones";
+            return;
+        }
+
+        ShowSkeletonOverlay = true;
+        ShowDeformBones = true;
+        StatusText =
+            $"Editing {SelectedBone.Name}; select another bone in the Skeleton tree or viewport";
     }
 
     private void ResetCamera()
@@ -8912,9 +9167,17 @@ public sealed partial class MainWindowViewModel :
             job.Progress = 85.0;
             long generation = Interlocked.Increment(
                 ref _previewGeneration);
-            SetWorkspace(
-                EditorWorkspaceMode.Browse,
-                preserveLegacyCutscene: false);
+            bool retainCurrentSetupWorkspace =
+                GetActiveAnimation() is null &&
+                (ActiveWorkspace == EditorWorkspaceMode.Browse ||
+                 ActiveWorkspace == EditorWorkspaceMode.Animate ||
+                 ActiveWorkspace == EditorWorkspaceMode.RetargetEdit);
+            if (!retainCurrentSetupWorkspace)
+            {
+                SetWorkspace(
+                    EditorWorkspaceMode.Browse,
+                    preserveLegacyCutscene: false);
+            }
             if (_isolatedBrowsePreviewFrame is null)
             {
                 _authoringOrbitCameras = _viewportCoordinator
@@ -8934,6 +9197,7 @@ public sealed partial class MainWindowViewModel :
                 AuthoringOverlays =
                     RenderAuthoringOverlayState.Disabled,
             };
+            _isolatedBrowsePreviewModel = model;
             _isolatedBrowsePreviewTitle =
                 $"Asset Preview - {selected.Name}";
             _isolatedBrowsePreviewFidelity =
@@ -8943,6 +9207,7 @@ public sealed partial class MainWindowViewModel :
             TargetViewport.SetPresentation(
                 _isolatedBrowsePreviewTitle,
                 _isolatedBrowsePreviewFidelity);
+            UpdateIsolatedPreviewPresentation();
             FrameIsolatedBrowsePreview();
             SetBlenderExportTarget(
                 model.Payload,
@@ -9629,6 +9894,8 @@ public sealed partial class MainWindowViewModel :
         UseSelectedAssetAsTargetCommand.NotifyCanExecuteChanged();
         ExportSelectedBrowserMeshToFbxCommand
             .NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(RetargetSetupSelectionLabel));
+        OnPropertyChanged(nameof(RetargetSetupInstructions));
         if (_disposed || selected is null)
         {
             return;
@@ -9636,10 +9903,13 @@ public sealed partial class MainWindowViewModel :
 
         if (selected.Kind == AssetKind.Mesh &&
             selected.RetailAsset is not null &&
-            ActiveWorkspace == EditorWorkspaceMode.Browse)
+            (ActiveWorkspace == EditorWorkspaceMode.Browse ||
+             (GetActiveAnimation() is null &&
+              (ActiveWorkspace == EditorWorkspaceMode.Animate ||
+            ActiveWorkspace == EditorWorkspaceMode.RetargetEdit))))
         {
             StatusText =
-                $"Selected {selected.Name}; loading an isolated Browse preview";
+                $"Selected {selected.Name}; loading an isolated model preview";
             ScheduleAutomaticAssetPreview(selected);
             return;
         }
@@ -11903,6 +12173,29 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        bool directTarget = HasSameRigContract(source.Rig, target);
+        if (!directTarget &&
+            ResolveTargetBindingStatus(
+                source.Rig,
+                target,
+                _activeRetargetMap) != TargetBindingStatus.Ready)
+        {
+            Timeline.IsPlaying = false;
+            PublishBlockedTargetPreview(
+                source,
+                sourcePose,
+                target,
+                "Retarget review required");
+            SetTargetBindingStatus(TargetBindingStatus.NeedsReview);
+            _viewportCoordinator.SetTargetPreviewCameraOverride(null);
+            TargetViewport.SceneSource.SetFppProjectionState(null);
+            ClearLinkedTargetExternalView(
+                evaluationUnavailable: true);
+            UpdateUnevaluatedPreviewStatus(
+                "Target playback is paused. Open Retarget/Edit, review the proposed mapping, then choose Accept proposal & play.");
+            return;
+        }
+
         if (HasSavedFacialSource(projectAnimation) &&
             !IsActiveFacialSourceResolved(projectAnimation))
         {
@@ -12192,7 +12485,10 @@ public sealed partial class MainWindowViewModel :
                     ? $"{source.SourceKind} | skeleton only (source file has no geometry)"
                     : $"{source.SourceKind} | exact bound retail source mesh and pose");
         }
-        IsSourceViewportVisible = true;
+        IsSourceViewportVisible = PreviewLayout is
+            PreviewLayoutMode.RetargetComparison or
+            PreviewLayoutMode.FacialComparison or
+            PreviewLayoutMode.FppDualView;
     }
 
     internal void PublishAuthoredSourcePreview(
@@ -13385,6 +13681,90 @@ public sealed partial class MainWindowViewModel :
 
         List<TimelineTrackViewModel> viewModels = [];
         List<TimelineCurveTrackViewModel> curveModels = [];
+        if (_sourceAnimation is { } source)
+        {
+            int? sourceCurveBoneIndex = ResolveSourceCurveBoneIndex(
+                source,
+                animation);
+            foreach (TransformTrack track in
+                     source.Clip.TransformTracks)
+            {
+                string boneName = (uint)track.BoneIndex <
+                        (uint)source.Rig.BoneCount
+                    ? source.Rig.Bones[track.BoneIndex].Name
+                    : $"Bone {track.BoneIndex}";
+                var sourceTrack = new TimelineTrackViewModel(
+                    boneName,
+                    $"Source clip / Transform / {track.Keyframes.Length:N0} keys (read only)");
+                foreach (TransformKeyframe keyframe in
+                         SelectTimelineTransformKeys(
+                             track.Keyframes,
+                             maximumCount: 48))
+                {
+                    int frame = checked((int)Math.Round(
+                        keyframe.Frame));
+                    sourceTrack.Keyframes.Add(
+                        new TimelineKeyframeViewModel(
+                            sourceTrack.Name,
+                            frame,
+                            frame * 6.0,
+                            12.0));
+                }
+
+                viewModels.Add(sourceTrack);
+                if (track.BoneIndex == sourceCurveBoneIndex)
+                {
+                    AddTransformCurves(
+                        curveModels,
+                        $"Source clip / {boneName}",
+                        SelectTimelineTransformKeys(
+                                track.Keyframes,
+                                maximumCount: 512)
+                            .ToImmutableArray());
+                }
+            }
+
+            var scalarCurveCount = 0;
+            foreach (ScalarTrack track in source.Clip.ScalarTracks)
+            {
+                var sourceTrack = new TimelineTrackViewModel(
+                    track.ChannelName,
+                    $"Source clip / Scalar / {track.Keyframes.Length:N0} keys (read only)");
+                foreach (ScalarKeyframe keyframe in
+                         SelectTimelineScalarKeys(
+                             track.Keyframes,
+                             maximumCount: 48))
+                {
+                    int frame = checked((int)Math.Round(
+                        keyframe.Frame));
+                    sourceTrack.Keyframes.Add(
+                        new TimelineKeyframeViewModel(
+                            sourceTrack.Name,
+                            frame,
+                            frame * 6.0,
+                            12.0));
+                }
+
+                viewModels.Add(sourceTrack);
+                if (sourceCurveBoneIndex is null &&
+                    scalarCurveCount < 8)
+                {
+                    curveModels.Add(
+                        new TimelineCurveTrackViewModel(
+                            $"Source clip / {track.ChannelName}",
+                            "#E599F7",
+                            SelectTimelineScalarKeys(
+                                    track.Keyframes,
+                                    maximumCount: 512)
+                                .Select(static key =>
+                                    new TimelineCurveKeyViewModel(
+                                        key.Frame,
+                                        key.Value))));
+                    scalarCurveCount++;
+                }
+            }
+        }
+
         foreach (BoneEditLayer layer in animation.EditLayers)
         {
             foreach (BoneEditTrack track in layer.Tracks)
@@ -13496,6 +13876,87 @@ public sealed partial class MainWindowViewModel :
 
         Timeline.ReplaceTracks(viewModels);
         Timeline.ReplaceCurves(curveModels);
+    }
+
+    private int? ResolveSourceCurveBoneIndex(
+        ImportedAnimationSession source,
+        ProjectAnimation animation)
+    {
+        if (SelectedBone is { } selected)
+        {
+            if (string.Equals(
+                    animation.SourceRigSignature,
+                    animation.TargetRigSignature,
+                    StringComparison.OrdinalIgnoreCase) &&
+                source.Clip.TransformTracks.Any(track =>
+                    track.BoneIndex == selected.Index))
+            {
+                return selected.Index;
+            }
+
+            BoneMapEntry? mapped = _activeRetargetMap?.Entries
+                .FirstOrDefault(entry =>
+                    entry.TargetBoneIndex == selected.Index &&
+                    entry.MappingKind == RetargetMappingKind.Bone);
+            if (mapped is not null)
+            {
+                return mapped.SourceBoneIndex;
+            }
+        }
+
+        return source.Clip.TransformTracks
+            .FirstOrDefault()?.BoneIndex;
+    }
+
+    private static IEnumerable<TransformKeyframe>
+        SelectTimelineTransformKeys(
+            ImmutableArray<TransformKeyframe> keys,
+            int maximumCount) =>
+        SelectTimelineKeys(
+            keys,
+            maximumCount,
+            static key => key.Frame);
+
+    private static IEnumerable<ScalarKeyframe>
+        SelectTimelineScalarKeys(
+            ImmutableArray<ScalarKeyframe> keys,
+            int maximumCount) =>
+        SelectTimelineKeys(
+            keys,
+            maximumCount,
+            static key => key.Frame);
+
+    private static IEnumerable<T> SelectTimelineKeys<T>(
+        ImmutableArray<T> keys,
+        int maximumCount,
+        Func<T, double> getFrame)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(
+            maximumCount);
+        if (keys.Length <= maximumCount)
+        {
+            return keys;
+        }
+
+        var selected = new List<T>(maximumCount);
+        double denominator = maximumCount - 1.0;
+        var previousIndex = -1;
+        for (var slot = 0; slot < maximumCount; slot++)
+        {
+            int index = checked((int)Math.Round(
+                slot * (keys.Length - 1) / denominator));
+            if (index == previousIndex)
+            {
+                continue;
+            }
+
+            T key = keys[index];
+            _ = getFrame(key);
+            selected.Add(key);
+            previousIndex = index;
+        }
+
+        return selected;
     }
 
     private static void AddTransformCurves(
