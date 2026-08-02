@@ -77,9 +77,16 @@ public sealed record Dl1RootMotionPolicy
         AnimationRootMode mode,
         int targetRootBoneIndex,
         int? motionAccumulatorBoneIndex,
-        Vector3D worldUpAxis)
+        Vector3D worldUpAxis,
+        int sourceMotionBoneIndex,
+        int targetPoseMotionBoneIndex,
+        bool targetPoseOwnsTranslation,
+        bool targetPoseOwnsRotation,
+        bool isDirectRigEvaluation)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(targetRootBoneIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(sourceMotionBoneIndex);
+        ArgumentOutOfRangeException.ThrowIfNegative(targetPoseMotionBoneIndex);
         if (motionAccumulatorBoneIndex < 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -105,6 +112,11 @@ public sealed record Dl1RootMotionPolicy
         TargetRootBoneIndex = targetRootBoneIndex;
         MotionAccumulatorBoneIndex = motionAccumulatorBoneIndex;
         WorldUpAxis = normalized;
+        SourceMotionBoneIndex = sourceMotionBoneIndex;
+        TargetPoseMotionBoneIndex = targetPoseMotionBoneIndex;
+        TargetPoseOwnsTranslation = targetPoseOwnsTranslation;
+        TargetPoseOwnsRotation = targetPoseOwnsRotation;
+        IsDirectRigEvaluation = isDirectRigEvaluation;
     }
 
     public AnimationRootMode Mode { get; }
@@ -114,6 +126,16 @@ public sealed record Dl1RootMotionPolicy
     public int? MotionAccumulatorBoneIndex { get; }
 
     public Vector3D WorldUpAxis { get; }
+
+    public int SourceMotionBoneIndex { get; }
+
+    public int TargetPoseMotionBoneIndex { get; }
+
+    public bool TargetPoseOwnsTranslation { get; }
+
+    public bool TargetPoseOwnsRotation { get; }
+
+    public bool IsDirectRigEvaluation { get; }
 }
 
 /// <summary>
@@ -214,6 +236,14 @@ public sealed class Dl1AuthoringPolicy
                 static entry => entry.TargetBoneIndex) ??
             ImmutableDictionary<int, BoneMapEntry>.Empty;
         bool directRigEvaluation = retargetMap is null;
+        (int sourceMotionBoneIndex,
+         int targetPoseMotionBoneIndex,
+         bool targetPoseOwnsTranslation,
+         bool targetPoseOwnsRotation) = ResolveMotionOwnership(
+            sourceRig,
+            targetRig,
+            retargetMap,
+            targetRootBoneIndex);
         var tracks = ImmutableArray.CreateBuilder<Dl1TargetTrackPolicy>(
             targetRig.BoneCount);
         foreach (BoneDefinition targetBone in targetRig.Bones)
@@ -274,8 +304,13 @@ public sealed class Dl1AuthoringPolicy
             new Dl1RootMotionPolicy(
                 rootMode,
                 targetRootBoneIndex,
-                accumulatorBoneIndex,
-                worldUpAxis ?? Vector3D.UnitY),
+                 accumulatorBoneIndex,
+                 worldUpAxis ?? Vector3D.UnitY,
+                 sourceMotionBoneIndex,
+                 targetPoseMotionBoneIndex,
+                 targetPoseOwnsTranslation,
+                 targetPoseOwnsRotation,
+                 directRigEvaluation),
             tracks.MoveToImmutable());
     }
 
@@ -310,7 +345,9 @@ public sealed class Dl1AuthoringPolicy
         }
 
         if (RootMotion.TargetRootBoneIndex >= targetRig.BoneCount ||
-            RootMotion.MotionAccumulatorBoneIndex >= targetRig.BoneCount)
+            RootMotion.MotionAccumulatorBoneIndex >= targetRig.BoneCount ||
+            RootMotion.SourceMotionBoneIndex >= sourceRig.BoneCount ||
+            RootMotion.TargetPoseMotionBoneIndex >= targetRig.BoneCount)
         {
             throw new InvalidOperationException(
                 "The DL1 root-motion policy refers outside the target rig.");
@@ -413,6 +450,112 @@ public sealed class Dl1AuthoringPolicy
         };
     }
 
+    private static (
+        int SourceMotionBoneIndex,
+        int TargetPoseMotionBoneIndex,
+        bool TargetPoseOwnsTranslation,
+        bool TargetPoseOwnsRotation) ResolveMotionOwnership(
+            RigDefinition sourceRig,
+            RigDefinition targetRig,
+            RetargetMap? retargetMap,
+            int targetRootBoneIndex)
+    {
+        if (retargetMap is null)
+        {
+            return (
+                targetRootBoneIndex,
+                targetRootBoneIndex,
+                true,
+                true);
+        }
+
+        BoneMapEntry? pelvis = retargetMap.Entries
+            .Where(static entry =>
+                entry.MappingKind == RetargetMappingKind.Bone)
+            .Where(entry =>
+                HasSemanticRole(
+                    sourceRig.Bones[entry.SourceBoneIndex],
+                    "body.pelvis") &&
+                HasSemanticRole(
+                    targetRig.Bones[entry.TargetBoneIndex],
+                    "body.pelvis"))
+            .OrderByDescending(static entry => entry.Confidence)
+            .ThenBy(static entry => entry.TargetBoneIndex)
+            .FirstOrDefault();
+        if (pelvis is null)
+        {
+            BoneDefinition? sourcePelvis = sourceRig.Bones.FirstOrDefault(
+                static bone => HasSemanticRole(bone, "body.pelvis"));
+            BoneDefinition? targetPelvis = targetRig.Bones.FirstOrDefault(
+                static bone => HasSemanticRole(bone, "body.pelvis"));
+            if (sourcePelvis is not null && targetPelvis is not null)
+            {
+                return (
+                    sourcePelvis.Index,
+                    targetPelvis.Index,
+                    false,
+                    false);
+            }
+
+            int sourceRoot = ResolveSourceRoot(sourceRig);
+            return (
+                sourceRoot,
+                targetRootBoneIndex,
+                false,
+                false);
+        }
+
+        bool ownsTranslation = pelvis.ComponentPolicy is
+            RetargetComponentPolicy.FullTransform or
+            RetargetComponentPolicy.Translation or
+            RetargetComponentPolicy.RotationTranslation;
+        bool ownsRotation = pelvis.ComponentPolicy is
+            RetargetComponentPolicy.FullTransform or
+            RetargetComponentPolicy.Rotation or
+            RetargetComponentPolicy.RotationTranslation;
+        return (
+            pelvis.SourceBoneIndex,
+            pelvis.TargetBoneIndex,
+            ownsTranslation,
+            ownsRotation);
+    }
+
+    private static int ResolveSourceRoot(RigDefinition rig)
+    {
+        BoneDefinition? semantic = rig.Bones.FirstOrDefault(
+            static bone =>
+                HasSemanticRole(bone, "body.root") ||
+                string.Equals(
+                    bone.SemanticRole,
+                    "root.skeletal",
+                    StringComparison.OrdinalIgnoreCase));
+        if (semantic is not null)
+        {
+            return semantic.Index;
+        }
+
+        BoneDefinition[] roots = rig.Bones
+            .Where(static bone => bone.ParentIndex < 0)
+            .ToArray();
+        return roots.Length == 1
+            ? roots[0].Index
+            : throw new InvalidOperationException(
+                $"Source rig '{rig.Id}' has no unique locomotion root or pelvis.");
+    }
+
+    private static bool HasSemanticRole(
+        BoneDefinition bone,
+        string role) =>
+        string.Equals(
+            bone.SemanticRole,
+            role,
+            StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(
+            HumanoidBoneSemanticClassifier.Classify(
+                bone.SemanticRole ?? bone.Name)?.Role,
+            role,
+            StringComparison.OrdinalIgnoreCase);
+
     private static void ValidateMotionAccumulator(
         RigDefinition rig,
         int rootBoneIndex,
@@ -452,13 +595,31 @@ public static class Dl1AuthoringPolicyEvaluator
         RigDefinition sourceRig,
         SkeletonPose authoredPose,
         SkeletonPose firstAuthoredPose,
+        Dl1AuthoringPolicy policy) =>
+        Apply(
+            sourceRig,
+            authoredPose,
+            firstAuthoredPose,
+            authoredPose,
+            firstAuthoredPose,
+            policy);
+
+    public static Dl1AuthoringPolicyResult Apply(
+        RigDefinition sourceRig,
+        SkeletonPose sourcePose,
+        SkeletonPose firstSourcePose,
+        SkeletonPose authoredPose,
+        SkeletonPose firstAuthoredPose,
         Dl1AuthoringPolicy policy)
     {
         ArgumentNullException.ThrowIfNull(sourceRig);
+        ArgumentNullException.ThrowIfNull(sourcePose);
+        ArgumentNullException.ThrowIfNull(firstSourcePose);
         ArgumentNullException.ThrowIfNull(authoredPose);
         ArgumentNullException.ThrowIfNull(firstAuthoredPose);
         ArgumentNullException.ThrowIfNull(policy);
         policy.ValidateFor(sourceRig, authoredPose.Rig);
+        EnsureSameRig(sourcePose.Rig, firstSourcePose.Rig);
         EnsureSameRig(authoredPose.Rig, firstAuthoredPose.Rig);
 
         ImmutableArray<int> targetBindIndices =
@@ -474,7 +635,12 @@ public static class Dl1AuthoringPolicyEvaluator
         {
             AnimationRootMode.Recorded => current,
             AnimationRootMode.Bip01 =>
-                HoldAccumulatorAtBind(current, rootMotion),
+                ApplyBip01(
+                    sourcePose,
+                    firstSourcePose,
+                    current,
+                    first,
+                    rootMotion),
             AnimationRootMode.InPlace =>
                 ApplyInPlace(current, first, rootMotion),
             AnimationRootMode.MotionAccumulator =>
@@ -510,6 +676,116 @@ public static class Dl1AuthoringPolicyEvaluator
                 accumulatorBoneIndex,
                 pose.Rig.Bones[accumulatorBoneIndex].LocalBindPose)
             : pose;
+
+    private static SkeletonPose ApplyBip01(
+        SkeletonPose sourcePose,
+        SkeletonPose firstSourcePose,
+        SkeletonPose pose,
+        SkeletonPose firstPose,
+        Dl1RootMotionPolicy policy)
+    {
+        SkeletonPose held = HoldAccumulatorAtBind(pose, policy);
+        if (policy.IsDirectRigEvaluation)
+        {
+            // A direct DL1/ANM2 source already records locomotion on the
+            // selected skeletal root. Rewriting it would only introduce a
+            // second decomposition and jeopardize byte-level parity.
+            return held;
+        }
+
+        int sourceMotionBoneIndex = policy.SourceMotionBoneIndex;
+        Vector3D sourcePosition =
+            sourcePose.GlobalMatrices[sourceMotionBoneIndex].Translation;
+        Vector3D firstSourcePosition =
+            firstSourcePose.GlobalMatrices[sourceMotionBoneIndex].Translation;
+        Vector3D sourceDisplacement =
+            sourcePosition - firstSourcePosition;
+        QuaternionD sourceRotation =
+            ComputeGlobalRotation(sourcePose, sourceMotionBoneIndex);
+        QuaternionD firstSourceRotation =
+            ComputeGlobalRotation(firstSourcePose, sourceMotionBoneIndex);
+        QuaternionD sourceDelta =
+            (sourceRotation * firstSourceRotation.Inverse()).Normalized();
+        QuaternionD heading = ExtractHeadingTwist(
+            sourceDelta,
+            policy.WorldUpAxis);
+
+        int rootBoneIndex = policy.TargetRootBoneIndex;
+        Vector3D firstRootPosition =
+            firstPose.GlobalMatrices[rootBoneIndex].Translation;
+        QuaternionD firstRootRotation =
+            ComputeGlobalRotation(firstPose, rootBoneIndex);
+        SkeletonPose rooted = SetGlobalTranslationRotation(
+            held,
+            rootBoneIndex,
+            firstRootPosition + sourceDisplacement,
+            (heading * firstRootRotation).Normalized());
+
+        int poseOwnerIndex = policy.TargetPoseMotionBoneIndex;
+        if (poseOwnerIndex == rootBoneIndex)
+        {
+            return rooted;
+        }
+
+        Vector3D currentPosePosition =
+            pose.GlobalMatrices[poseOwnerIndex].Translation;
+        Vector3D firstPosePosition =
+            firstPose.GlobalMatrices[poseOwnerIndex].Translation;
+        Vector3D authoredPoseDelta =
+            currentPosePosition - firstPosePosition;
+        if (policy.TargetPoseOwnsTranslation)
+        {
+            authoredPoseDelta -= sourceDisplacement;
+        }
+
+        Vector3D desiredPosePosition =
+            firstPosePosition + authoredPoseDelta + sourceDisplacement;
+        QuaternionD currentPoseRotation =
+            ComputeGlobalRotation(pose, poseOwnerIndex);
+        QuaternionD desiredPoseRotation = policy.TargetPoseOwnsRotation
+            ? currentPoseRotation
+            : (heading * currentPoseRotation).Normalized();
+        return SetGlobalTranslationRotation(
+            rooted,
+            poseOwnerIndex,
+            desiredPosePosition,
+            desiredPoseRotation);
+    }
+
+    private static SkeletonPose SetGlobalTranslationRotation(
+        SkeletonPose pose,
+        int boneIndex,
+        Vector3D globalPosition,
+        QuaternionD globalRotation)
+    {
+        int parentIndex = pose.Rig.Bones[boneIndex].ParentIndex;
+        Vector3D localPosition;
+        QuaternionD localRotation;
+        if (parentIndex < 0)
+        {
+            localPosition = globalPosition;
+            localRotation = globalRotation;
+        }
+        else
+        {
+            localPosition = pose.GlobalMatrices[parentIndex]
+                .InvertedAffine()
+                .TransformPoint(globalPosition);
+            QuaternionD parentRotation =
+                ComputeGlobalRotation(pose, parentIndex);
+            localRotation =
+                (parentRotation.Inverse() * globalRotation).Normalized();
+        }
+
+        TransformTRS current = pose.LocalTransforms[boneIndex];
+        return pose.WithLocalTransform(
+            boneIndex,
+            current with
+            {
+                Translation = localPosition,
+                Rotation = localRotation,
+            });
+    }
 
     private static SkeletonPose ApplyInPlace(
         SkeletonPose pose,

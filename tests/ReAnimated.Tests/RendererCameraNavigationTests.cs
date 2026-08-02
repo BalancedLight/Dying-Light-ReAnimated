@@ -214,6 +214,50 @@ public sealed class RendererCameraNavigationTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "Renderer")]
+    public void LinkedNavigationPreservesIndependentlyFramedComparisonPanes()
+    {
+        LinkedViewportCoordinator coordinator = new();
+        RenderCamera sourceFraming = CreateCamera() with
+        {
+            Eye = new Vector3(2.0f, 3.0f, 12.0f),
+            Target = new Vector3(0.0f, 1.0f, 0.0f),
+        };
+        RenderCamera targetFraming = CreateCamera() with
+        {
+            Eye = new Vector3(20.0f, 30.0f, 120.0f),
+            Target = new Vector3(0.0f, 10.0f, 0.0f),
+        };
+        coordinator.RestoreOrbitCameras(
+            new ViewportOrbitCameraPair(
+                sourceFraming,
+                targetFraming));
+
+        Assert.Equal(
+            RenderCameraNavigationResult.Applied,
+            coordinator.NavigateCamera(
+                ViewportSide.Source,
+                RenderCameraNavigationInput.Orbit(
+                    24.0f,
+                    -12.0f,
+                    800,
+                    600)));
+
+        RenderCamera source = coordinator.GetCamera(ViewportSide.Source);
+        RenderCamera target = coordinator.GetCamera(ViewportSide.Target);
+        Assert.NotEqual(sourceFraming, source);
+        Assert.NotEqual(targetFraming, target);
+        Assert.NotEqual(source, target);
+        Assert.Equal(
+            sourceFraming.Target,
+            source.Target);
+        Assert.Equal(
+            targetFraming.Target,
+            target.Target);
+    }
+
+    [Fact]
     public void TargetPreviewOverrideBlocksTargetNavigation()
     {
         LinkedViewportCoordinator coordinator = new()

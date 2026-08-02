@@ -486,7 +486,8 @@ internal static class ProjectExportCommand
             sourceRig,
             targetRig,
             mapping,
-            rootMode);
+            rootMode,
+            animation.RootBoneName);
         var evaluation = new EvaluationRequest(
             sourceRig,
             targetRig,

@@ -129,6 +129,7 @@ public sealed class CoreAnimationProjectTests : IDisposable
                     FrameRate = new FrameRate(30, 1),
                     FrameCount = 2,
                     RootMotionMode = Dl1RootMotionMode.Bip01,
+                    RootBoneName = "bip01",
                     BoneMappings =
                     [
                         new ProjectBoneMapping
@@ -255,6 +256,8 @@ public sealed class CoreAnimationProjectTests : IDisposable
         Assert.True(
             Assert.Single(loaded.Animations[0].MorphBindings).IsLocked);
         Assert.True(Assert.Single(loaded.Animations[0].IkLayers).BakeToEditLayer);
+        Assert.Equal("bip01", loaded.Animations[0].RootBoneName);
+        Assert.Contains("\"rootBoneName\": \"bip01\"", json, StringComparison.Ordinal);
         ProjectBoneMapping loadedMapping =
             Assert.Single(loaded.Animations[0].BoneMappings);
         Assert.True(loadedMapping.IsLocked);

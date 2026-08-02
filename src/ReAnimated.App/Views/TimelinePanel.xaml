@@ -4,7 +4,8 @@
     <Border Style="{StaticResource PaneBorderStyle}">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="42" />
+                <RowDefinition Height="40" />
+                <RowDefinition Height="38" />
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
@@ -15,13 +16,21 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" Margin="4,0">
-                    <Button Command="{Binding StepBackwardCommand}" Content="◀|" ToolTip="Previous frame" />
+                    <Button Command="{Binding StepBackwardCommand}"
+                            Content="|&lt;"
+                            ToolTip="Previous frame" />
                     <Button Command="{Binding TogglePlaybackCommand}"
                             Content="{Binding PlaybackLabel}"
-                            MinWidth="58" />
-                    <Button Command="{Binding StopCommand}" Content="■" ToolTip="Stop" />
-                    <Button Command="{Binding StepForwardCommand}" Content="|▶" ToolTip="Next frame" />
-                    <Button Command="{Binding AddKeyframeCommand}" Content="+ Key" />
+                            MinWidth="76" />
+                    <Button Command="{Binding StopCommand}"
+                            Content="Stop"
+                            ToolTip="Stop and return to the first frame" />
+                    <Button Command="{Binding StepForwardCommand}"
+                            Content="&gt;|"
+                            ToolTip="Next frame" />
+                    <Button Command="{Binding AddKeyframeCommand}"
+                            Content="+ Key"
+                            ToolTip="Key the selected editable channel" />
                 </StackPanel>
                 <Slider Grid.Column="1"
                         Margin="10,0"
@@ -29,10 +38,17 @@
                         Minimum="{Binding StartFrame}"
                         Maximum="{Binding EndFrame}"
                         Value="{Binding CurrentFrame, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center" Margin="8,0">
+                <StackPanel Grid.Column="2"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="8,0">
                     <TextBlock VerticalAlignment="Center" Text="Frame " />
-                    <TextBox Width="54"
+                    <TextBox Width="62"
                              Text="{Binding CurrentFrame, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="4,0,0,0"
+                               VerticalAlignment="Center"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="{Binding EndFrame, StringFormat=/ {0:N0}}" />
                     <CheckBox Margin="10,0,0,0"
                               VerticalAlignment="Center"
                               Content="Loop"
@@ -40,139 +56,257 @@
                 </StackPanel>
             </Grid>
 
-            <TabControl Grid.Row="1">
-                <TabItem Header="Dope sheet">
-            <Grid>
+            <Grid Grid.Row="1"
+                  Background="{StaticResource PanelBackgroundBrush}"
+                  Margin="0,1,0,0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="170" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="220" />
+                    <ColumnDefinition Width="158" />
                     <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
-                    <DockPanel>
-                        <TextBlock DockPanel.Dock="Top"
-                                   Margin="8,4"
-                                   FontSize="10"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="DOPE SHEET / CHANNELS" />
-                        <ItemsControl ItemsSource="{Binding Tracks}">
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid Height="24">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Margin="8,0"
-                                                   VerticalAlignment="Center"
-                                                   Text="{Binding Name}" />
-                                        <TextBlock Grid.Column="1"
-                                                   Margin="4,0,8,0"
-                                                   VerticalAlignment="Center"
-                                                   FontSize="10"
-                                                   Foreground="{StaticResource MutedTextBrush}"
-                                                   Text="{Binding Channel}" />
-                                    </Grid>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </DockPanel>
-                </Border>
-
-                <ScrollViewer Grid.Column="1"
-                              HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Auto">
-                    <Canvas Width="{Binding CanvasWidth}" Height="160" Background="#11161E">
-                        <ItemsControl Width="{Binding CanvasWidth}"
-                                      Height="22"
-                                      ItemsSource="{Binding FrameMarkers}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <Canvas />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemContainerStyle>
-                                <Style TargetType="{x:Type ContentPresenter}">
-                                    <Setter Property="Canvas.Left" Value="{Binding PixelX}" />
-                                </Style>
-                            </ItemsControl.ItemContainerStyle>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel>
-                                        <TextBlock FontSize="9"
-                                                   Foreground="{StaticResource MutedTextBrush}"
-                                                   Text="{Binding Frame}" />
-                                        <Border Width="1" Height="138" Background="#27313D" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <ItemsControl Width="{Binding CanvasWidth}"
-                                      Height="160"
-                                      ItemsSource="{Binding VisibleKeyframes}">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <Canvas />
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemContainerStyle>
-                                <Style TargetType="{x:Type ContentPresenter}">
-                                    <Setter Property="Canvas.Left" Value="{Binding PixelX}" />
-                                    <Setter Property="Canvas.Top" Value="{Binding TrackY}" />
-                                </Style>
-                            </ItemsControl.ItemContainerStyle>
-                            <ItemsControl.ItemTemplate>
-                                <DataTemplate>
-                                    <Polygon Width="10"
-                                             Height="10"
-                                             Fill="{StaticResource AccentBrush}"
-                                             Points="5,0 10,5 5,10 0,5"
-                                             ToolTip="{Binding Track, StringFormat=Key: {0}}" />
-                                </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-
-                        <Border Canvas.Left="{Binding CurrentFramePixelX}"
-                                Width="2"
-                                Height="160"
-                                Background="{StaticResource ErrorBrush}" />
-                    </Canvas>
-                </ScrollViewer>
+                <TextBlock Margin="8,0,6,0"
+                           VerticalAlignment="Center"
+                           Text="Tracks" />
+                <TextBox Grid.Column="1"
+                         Margin="0,5,6,5"
+                         ToolTip="Filter by bone, morph, layer, or channel name"
+                         Text="{Binding TrackSearchText, UpdateSourceTrigger=PropertyChanged}" />
+                <ComboBox Grid.Column="2"
+                          Margin="0,5,6,5"
+                          ItemsSource="{Binding TrackScopeOptions}"
+                          SelectedItem="{Binding SelectedTrackScope}" />
+                <TextBlock Grid.Column="3"
+                           Margin="4,0"
+                           VerticalAlignment="Center"
+                           Foreground="{StaticResource MutedTextBrush}"
+                           Text="{Binding VisibleTrackCountLabel}" />
+                <StackPanel Grid.Column="4"
+                            Margin="4,0"
+                            Orientation="Horizontal">
+                    <Button Command="{Binding FitTimelineCommand}"
+                            Content="Fit"
+                            ToolTip="Fit the complete clip into the timeline" />
+                    <Button Command="{Binding ZoomOutCommand}"
+                            Content="-"
+                            Width="30"
+                            ToolTip="Zoom out" />
+                    <Button Command="{Binding ZoomInCommand}"
+                            Content="+"
+                            Width="30"
+                            ToolTip="Zoom in" />
+                    <TextBlock Width="82"
+                               Margin="5,0,3,0"
+                               VerticalAlignment="Center"
+                               TextAlignment="Right"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="{Binding ZoomLabel}" />
+                </StackPanel>
             </Grid>
+
+            <TabControl Grid.Row="2">
+                <TabItem Header="Dope sheet">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="300" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <Grid Background="{StaticResource PanelBackgroundBrush}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="24" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Border BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="0,0,1,1">
+                                <Grid Margin="8,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock VerticalAlignment="Center"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="CHANNEL" />
+                                    <TextBlock Grid.Column="1"
+                                               VerticalAlignment="Center"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="KEYS" />
+                                </Grid>
+                            </Border>
+                            <ListBox x:Name="DopeChannelList"
+                                     Grid.Row="1"
+                                     BorderThickness="0,0,1,0"
+                                     ItemsSource="{Binding VisibleTracks}"
+                                     SelectedItem="{Binding SelectedTrack}"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     ScrollViewer.ScrollChanged="DopeChannelList_OnScrollChanged">
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="Height" Value="28" />
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                        <Setter Property="Padding" Value="0" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="8,0,7,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Name}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Name}" />
+                                                <TextBlock FontSize="9"
+                                                           Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding Channel}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Group}" />
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1"
+                                                       Margin="8,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       FontSize="10"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Text="{Binding KeyCountLabel}"
+                                                       ToolTip="{Binding KeyPresentationLabel}" />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+
+                        <ScrollViewer x:Name="DopeSheetScroll"
+                                      Grid.Column="1"
+                                      HorizontalScrollBarVisibility="Auto"
+                                      VerticalScrollBarVisibility="Auto"
+                                      ScrollChanged="DopeSheetScroll_OnScrollChanged">
+                            <Canvas Width="{Binding CanvasWidth}"
+                                    Height="{Binding DopeSheetCanvasHeight}"
+                                    Background="#11161E">
+                                <ItemsControl Width="{Binding CanvasWidth}"
+                                              Height="{Binding DopeSheetCanvasHeight}"
+                                              ItemsSource="{Binding FrameMarkers}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemContainerStyle>
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="Canvas.Left" Value="{Binding PixelX}" />
+                                        </Style>
+                                    </ItemsControl.ItemContainerStyle>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel>
+                                                <TextBlock Height="24"
+                                                           FontSize="9"
+                                                           Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding Frame}" />
+                                                <Border Width="1"
+                                                        Height="{Binding DataContext.TimelineGridHeight, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        Background="#27313D" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <ItemsControl Width="{Binding CanvasWidth}"
+                                              Height="{Binding DopeSheetCanvasHeight}"
+                                              ItemsSource="{Binding VisibleKeyframes}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemContainerStyle>
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="Canvas.Left" Value="{Binding PixelX}" />
+                                            <Setter Property="Canvas.Top" Value="{Binding TrackY}" />
+                                        </Style>
+                                    </ItemsControl.ItemContainerStyle>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Polygon Points="5,0 10,5 5,10 0,5">
+                                                <Polygon.Style>
+                                                    <Style TargetType="Polygon">
+                                                        <Setter Property="Width" Value="5" />
+                                                        <Setter Property="Height" Value="5" />
+                                                        <Setter Property="Margin" Value="-2.5" />
+                                                        <Setter Property="Fill" Value="#6F8298" />
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelectedTrack}"
+                                                                         Value="True">
+                                                                <Setter Property="Width" Value="10" />
+                                                                <Setter Property="Height" Value="10" />
+                                                                <Setter Property="Margin" Value="-5" />
+                                                                <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Polygon.Style>
+                                                <Polygon.ToolTip>
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding Track}" />
+                                                        <TextBlock Text="{Binding Frame, StringFormat=Frame {0:N0}}" />
+                                                    </StackPanel>
+                                                </Polygon.ToolTip>
+                                            </Polygon>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Border Canvas.Left="{Binding CurrentFramePixelX}"
+                                        Width="2"
+                                        Height="{Binding DopeSheetCanvasHeight}"
+                                        Background="{StaticResource ErrorBrush}" />
+                            </Canvas>
+                        </ScrollViewer>
+                    </Grid>
                 </TabItem>
+
                 <TabItem Header="Curves">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="170" />
+                            <ColumnDefinition Width="300" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Border BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="0,0,1,0">
+                                BorderThickness="0,0,1,0"
+                                Background="{StaticResource PanelBackgroundBrush}">
                             <DockPanel>
-                                <TextBlock DockPanel.Dock="Top"
-                                           Margin="8,4"
-                                           FontSize="10"
-                                           Foreground="{StaticResource MutedTextBrush}"
-                                           Text="SOURCE + AUTHORED CURVES" />
+                                <StackPanel DockPanel.Dock="Top" Margin="8,6">
+                                    <TextBlock FontWeight="SemiBold"
+                                               Text="{Binding SelectedTrackLabel}"
+                                               TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding SelectedTrackLabel}" />
+                                    <TextBlock Margin="0,3,0,0"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="{Binding CurveStatusLabel}" />
+                                </StackPanel>
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <ItemsControl ItemsSource="{Binding Curves}">
                                         <ItemsControl.ItemTemplate>
                                             <DataTemplate>
-                                                <Grid Height="22">
+                                                <Grid Height="25" Margin="8,0">
                                                     <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="12" />
+                                                        <ColumnDefinition Width="14" />
                                                         <ColumnDefinition Width="*" />
                                                     </Grid.ColumnDefinitions>
-                                                    <Border Width="8"
-                                                            Height="8"
-                                                            Margin="4,0,0,0"
+                                                    <Border Width="9"
+                                                            Height="9"
+                                                            VerticalAlignment="Center"
                                                             Background="{Binding Color}"
-                                                            CornerRadius="4" />
+                                                            CornerRadius="5" />
                                                     <TextBlock Grid.Column="1"
-                                                               Margin="6,0"
+                                                               Margin="5,0,0,0"
                                                                VerticalAlignment="Center"
-                                                               FontSize="10"
-                                                               Text="{Binding Name}" />
+                                                               Text="{Binding Name}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               ToolTip="{Binding OwnerLabel}" />
                                                 </Grid>
                                             </DataTemplate>
                                         </ItemsControl.ItemTemplate>
@@ -183,45 +317,39 @@
 
                         <ScrollViewer Grid.Column="1"
                                       HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Auto">
+                                      VerticalScrollBarVisibility="Disabled">
                             <Canvas Width="{Binding CanvasWidth}"
-                                    Height="160"
+                                    Height="180"
                                     Background="#11161E">
                                 <ItemsControl Width="{Binding CanvasWidth}"
-                                              Height="22"
+                                              Height="180"
                                               ItemsSource="{Binding FrameMarkers}">
                                     <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <Canvas />
-                                        </ItemsPanelTemplate>
+                                        <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemContainerStyle>
-                                        <Style TargetType="{x:Type ContentPresenter}">
-                                            <Setter Property="Canvas.Left"
-                                                    Value="{Binding PixelX}" />
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="Canvas.Left" Value="{Binding PixelX}" />
                                         </Style>
                                     </ItemsControl.ItemContainerStyle>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel>
-                                                <TextBlock FontSize="9"
+                                                <TextBlock Height="24"
+                                                           FontSize="9"
                                                            Foreground="{StaticResource MutedTextBrush}"
                                                            Text="{Binding Frame}" />
-                                                <Border Width="1"
-                                                        Height="138"
-                                                        Background="#27313D" />
+                                                <Border Width="1" Height="156" Background="#27313D" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
                                 <ItemsControl Width="{Binding CanvasWidth}"
-                                              Height="160"
+                                              Height="180"
                                               ItemsSource="{Binding CurveSegments}">
                                     <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <Canvas />
-                                        </ItemsPanelTemplate>
+                                        <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
@@ -237,19 +365,15 @@
                                 </ItemsControl>
 
                                 <ItemsControl Width="{Binding CanvasWidth}"
-                                              Height="160"
+                                              Height="180"
                                               ItemsSource="{Binding CurvePoints}">
                                     <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <Canvas />
-                                        </ItemsPanelTemplate>
+                                        <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
                                     </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemContainerStyle>
-                                        <Style TargetType="{x:Type ContentPresenter}">
-                                            <Setter Property="Canvas.Left"
-                                                    Value="{Binding PixelX}" />
-                                            <Setter Property="Canvas.Top"
-                                                    Value="{Binding PixelY}" />
+                                        <Style TargetType="ContentPresenter">
+                                            <Setter Property="Canvas.Left" Value="{Binding PixelX}" />
+                                            <Setter Property="Canvas.Top" Value="{Binding PixelY}" />
                                         </Style>
                                     </ItemsControl.ItemContainerStyle>
                                     <ItemsControl.ItemTemplate>
@@ -272,7 +396,7 @@
 
                                 <Border Canvas.Left="{Binding CurrentFramePixelX}"
                                         Width="2"
-                                        Height="160"
+                                        Height="180"
                                         Background="{StaticResource ErrorBrush}" />
                             </Canvas>
                         </ScrollViewer>

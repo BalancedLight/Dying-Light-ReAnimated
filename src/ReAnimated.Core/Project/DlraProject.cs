@@ -417,6 +417,14 @@ public sealed record ProjectAnimation
         Dl1RootMotionMode.Recorded;
 
     /// <summary>
+    /// Optional explicit skeletal-root track for this target variant. A null
+    /// value uses the target rig's versioned DL1 root-role resolution. The
+    /// value belongs to the animation variant because different retail rigs
+    /// may expose different root track names.
+    /// </summary>
+    public string? RootBoneName { get; init; }
+
+    /// <summary>
     /// Preview-only actor/world accumulation. This is deliberately separate
     /// from the exportable root policy above.
     /// </summary>
@@ -582,6 +590,13 @@ public sealed record ProjectAnimation
             throw new ArgumentOutOfRangeException(
                 parameterName,
                 $"Animation '{Name}' contains an unsupported DL1 root-motion mode.");
+        }
+
+        if (RootBoneName is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                RootBoneName,
+                parameterName);
         }
 
         if (FacialSourceAssetId is not null &&

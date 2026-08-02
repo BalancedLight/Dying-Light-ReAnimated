@@ -367,6 +367,7 @@ public sealed partial class MainWindowViewModel :
     private ImmutableArray<string> _facialFbxUnmappedChannels = [];
     private Dl1RootMotionMode _selectedRootMotionMode =
         Dl1RootMotionMode.Recorded;
+    private string? _selectedRootBoneName;
     private Dl1InstalledBuildFingerprint? _installedBuildFingerprint;
     private string? _installedBuildFingerprintError;
     private bool _isReadingInstalledBuildFingerprint;
@@ -394,6 +395,7 @@ public sealed partial class MainWindowViewModel :
     private string? _isolatedBrowsePreviewFidelity;
     private ViewportOrbitCameraPair? _authoringOrbitCameras;
     private ViewportOrbitCameraPair? _browseOrbitCameras;
+    private string? _lastComparisonFramingKey;
 
     public MainWindowViewModel(JsonWorkspaceStateStore recoveryStore)
         : this(
@@ -807,6 +809,8 @@ public sealed partial class MainWindowViewModel :
     public IReadOnlyList<Dl1RootMotionMode> RootMotionModes { get; } =
         Enum.GetValues<Dl1RootMotionMode>();
 
+    public ObservableCollection<string> RootBoneCandidates { get; } = [];
+
     public ViewportPaneViewModel SourceViewport { get; }
 
     public ViewportPaneViewModel TargetViewport { get; }
@@ -993,6 +997,22 @@ public sealed partial class MainWindowViewModel :
                 !_synchronizingProjectBindings)
             {
                 UpdateRootMotionMode(value);
+            }
+        }
+    }
+
+    public string? SelectedRootBoneName
+    {
+        get => _selectedRootBoneName;
+        set
+        {
+            string? normalized = string.IsNullOrWhiteSpace(value)
+                ? null
+                : value.Trim();
+            if (SetProperty(ref _selectedRootBoneName, normalized) &&
+                !_synchronizingProjectBindings)
+            {
+                UpdateRootBoneName(normalized);
             }
         }
     }
@@ -1261,7 +1281,9 @@ public sealed partial class MainWindowViewModel :
             TargetBindingStatus.Direct => "Direct same-rig playback",
             TargetBindingStatus.Ready => "Reviewed retarget ready",
             TargetBindingStatus.NeedsReview => "Retarget review required",
-            _ => "No playable target",
+            _ => GetActiveAnimation()?.TargetAssetId is not null
+                ? "Saved target unavailable"
+                : "No playable target",
         };
 
     public string TargetPlaybackMessage => IsTargetSwitching
@@ -1269,7 +1291,9 @@ public sealed partial class MainWindowViewModel :
         : ActiveTargetBindingStatus == TargetBindingStatus.NeedsReview
             ? "Target playback is paused in bind pose. Open Retarget/Edit to inspect the map, then choose Accept proposal & play."
             : ActiveTargetBindingStatus == TargetBindingStatus.Invalid
-                ? "Choose an explicit source and target before target playback."
+                ? GetActiveAnimation()?.TargetAssetId is not null
+                    ? "The project already identifies an exact target. It is being restored from the saved catalog, or its failure is recorded in Diagnostics. Do not select a replacement mesh."
+                    : "Choose an explicit source and target before target playback."
                 : "The target is admitted to the authoritative preview pipeline.";
 
     public bool IsTargetPlaybackBlocked =>
@@ -1310,6 +1334,23 @@ public sealed partial class MainWindowViewModel :
         private set => SetProperty(
             ref _isSourceViewportVisible,
             value);
+    }
+
+    /// <summary>
+    /// Materializes both native viewport hosts for the opt-in packaged WPF
+    /// startup smoke. Normal empty Browse, Animate, Face, and FPP workspaces
+    /// remain genuinely single-pane until an authoring comparison exists.
+    /// </summary>
+    internal void ConfigureStartupSmokeDualViewport()
+    {
+        if (_previewLayout != PreviewLayoutMode.FppDualView)
+        {
+            _previewLayout = PreviewLayoutMode.FppDualView;
+            OnPropertyChanged(nameof(PreviewLayout));
+            OnPropertyChanged(nameof(IsLinkedCameraControlVisible));
+        }
+
+        IsSourceViewportVisible = true;
     }
 
     public bool ShowDeformBones
@@ -1659,6 +1700,13 @@ public sealed partial class MainWindowViewModel :
             OnPropertyChanged(nameof(IsLinkedCameraControlVisible));
             OnPropertyChanged(nameof(ActivePreviewProfile));
             UpdateFidelityStatusBadges();
+            if (workspace == EditorWorkspaceMode.RetargetEdit)
+            {
+                // Retarget/Edit owns two differently scaled scenes. Reframe
+                // both when the workspace opens so a single-pane target
+                // camera can never leave the raw FBX skeleton off-screen.
+                FrameComparisonPanes(force: true);
+            }
             if (_sourceAnimation is null)
             {
                 UpdateUnevaluatedPreviewStatus(
@@ -2603,8 +2651,30 @@ public sealed partial class MainWindowViewModel :
                 clearPreview: true);
             ProjectPath = path;
             AddRecentProjectPath(path);
-            await LoadActiveSourceAsync(path);
-            StatusText = $"Opened DL1 project {loaded.Name}";
+            ProjectAnimation? activeAnimation = GetActiveAnimation();
+            if (activeAnimation is not null &&
+                CanRestoreAnimationFromLoadedCatalog(
+                    activeAnimation,
+                    _project.Assets,
+                    _indexedAssetItems))
+            {
+                await ActivateAnimationAsync(
+                    activeAnimation.Id,
+                    beginPlayback: false,
+                    persistActivation: false);
+            }
+            else
+            {
+                // A local FBX can be restored before the retail catalog is
+                // available. If the document also has a saved retail target,
+                // LoadAssetCatalogAsync completes the exact target restore as
+                // soon as its fingerprint is available.
+                await LoadActiveSourceAsync(path);
+            }
+            if (activeAnimation is null || _sourceAnimation is not null)
+            {
+                StatusText = $"Opened DL1 project {loaded.Name}";
+            }
         }
         catch (LegacyProjectFormatException exception)
         {
@@ -2871,6 +2941,7 @@ public sealed partial class MainWindowViewModel :
                     imported.Rig.CreateBindPose()),
                 []);
             RefreshProjectBindings();
+            OnPropertyChanged(nameof(ActiveSourceModelLabel));
             AutoMapCommand.NotifyCanExecuteChanged();
             return;
         }
@@ -5529,6 +5600,13 @@ public sealed partial class MainWindowViewModel :
                     MorphEditLayers = layers,
                 }),
         });
+        string? keyedMorphName = FacialFpp.Morphs
+            .FirstOrDefault()?.Name;
+        if (!string.IsNullOrWhiteSpace(keyedMorphName))
+        {
+            Timeline.SelectTrack(
+                $"morph:{updatedLayer.Id:N}:{keyedMorphName}");
+        }
         AddDiagnostic(
             "Info",
             "Facial editor",
@@ -5990,6 +6068,89 @@ public sealed partial class MainWindowViewModel :
             $"Root policy changed to {mode}",
             "Preview and export use the same authored root/helper policy.");
         RefreshAnimationPreview();
+    }
+
+    private void UpdateRootBoneName(string? rootBoneName)
+    {
+        if (rootBoneName is null ||
+            _targetRig is not { } targetRig ||
+            targetRig.GetBoneIndex(rootBoneName) < 0 ||
+            !TryGetActiveAnimation(
+                out ProjectAnimation animation,
+                out int animationIndex) ||
+            string.Equals(
+                animation.RootBoneName,
+                rootBoneName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        CommitProject(_project with
+        {
+            Animations = _project.Animations.SetItem(
+                animationIndex,
+                animation with
+                {
+                    RootBoneName = rootBoneName,
+                }),
+        });
+        AddDiagnostic(
+            "Info",
+            "Root motion",
+            $"Root track changed to {rootBoneName}",
+            "This target variant now uses the selected skeletal root for both preview and export.");
+        RefreshAnimationPreview();
+    }
+
+    private void RefreshRootBoneCandidates(ProjectAnimation? animation)
+    {
+        RootBoneCandidates.Clear();
+        if (_targetRig is not { } targetRig)
+        {
+            SelectedRootBoneName = null;
+            return;
+        }
+
+        IEnumerable<BoneDefinition> candidates = targetRig.Bones
+            .Where(static bone =>
+                bone.DescriptorHash !=
+                    Dl1RootMotionPolicy.MotionAccumulatorDescriptor &&
+                (bone.ParentIndex < 0 ||
+                 bone.Kind == BoneKind.Root ||
+                 string.Equals(
+                     bone.SemanticRole,
+                     "root.skeletal",
+                     StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(
+                     bone.Name,
+                     "Bip01",
+                     StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(static bone =>
+                string.Equals(
+                    bone.SemanticRole,
+                    "root.skeletal",
+                    StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(static bone =>
+                string.Equals(
+                    bone.Name,
+                    "Bip01",
+                    StringComparison.OrdinalIgnoreCase))
+            .ThenBy(static bone => bone.Index);
+        foreach (string name in candidates
+                     .Select(static bone => bone.Name)
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            RootBoneCandidates.Add(name);
+        }
+
+        string? selected = animation?.RootBoneName;
+        if (selected is null || targetRig.GetBoneIndex(selected) < 0)
+        {
+            selected = RootBoneCandidates.FirstOrDefault();
+        }
+
+        SelectedRootBoneName = selected;
     }
 
     private bool CanAddHelperOverride()
@@ -6742,6 +6903,7 @@ public sealed partial class MainWindowViewModel :
             _targetRig = null;
             _activeRetargetMap = null;
             _targetProjectAsset = null;
+            _sourceModelContext = null;
             _pendingAnm2SourcePath = null;
             _pendingMimicSourcePath = null;
             _pendingMimicAssetId = null;
@@ -6750,12 +6912,15 @@ public sealed partial class MainWindowViewModel :
             _fedDocument = null;
             _targetBaseMeshes = [];
             _sourceBaseMeshes = [];
-            _indexedAssetItems = [];
+            _lastPreviewFramePair = null;
+            _editorSessionCoordinator.Reset(
+                _activeAnimationId,
+                frame: 0);
+            SetTargetBindingStatus(TargetBindingStatus.Invalid);
             _attachmentRenderAssets.Clear();
             _attachmentStatuses.Clear();
             _lastAttachmentDiagnosticSignature = null;
             AssetBrowser.SelectedAsset = null;
-            AttachmentEditor.ReplaceCatalogAssets([]);
             AttachmentEditor.ReplaceParentBones(null);
             AttachmentEditor.ReplaceBindings(
                 [],
@@ -7010,6 +7175,7 @@ public sealed partial class MainWindowViewModel :
             SelectedRootMotionMode =
                 animation?.RootMotionMode ??
                 Dl1RootMotionMode.Recorded;
+            RefreshRootBoneCandidates(animation);
         }
         finally
         {
@@ -8000,6 +8166,9 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(ActiveAnimationLabel));
         OnPropertyChanged(nameof(ActiveSourceModelLabel));
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
+        OnPropertyChanged(nameof(TargetBindingStatusText));
+        OnPropertyChanged(nameof(TargetPlaybackMessage));
+        OnPropertyChanged(nameof(IsTargetPlaybackBlocked));
         OnPropertyChanged(nameof(AnimateWorkspaceHint));
         OnPropertyChanged(nameof(IsRetargetSetupVisible));
         OnPropertyChanged(nameof(RetargetSetupSelectionLabel));
@@ -8242,7 +8411,8 @@ public sealed partial class MainWindowViewModel :
                     AnimationRootMode.MotionAccumulator,
                 _ => throw new InvalidDataException(
                     "The project contains an unknown DL1 root-motion mode."),
-            });
+            },
+            animation.RootBoneName);
         var cacheKey = new RootMotionTrailCacheKey(
             _activeAnimationId,
             source,
@@ -8618,6 +8788,12 @@ public sealed partial class MainWindowViewModel :
 
     private void FrameSelection()
     {
+        if (FrameComparisonPanes(force: true))
+        {
+            StatusText = "Framed the raw source and DL1 target independently";
+            return;
+        }
+
         bool targetCameraLocked =
             _viewportCoordinator.HasTargetPreviewCameraOverride;
         RenderFrameSnapshot targetFrame =
@@ -8656,6 +8832,50 @@ public sealed partial class MainWindowViewModel :
                 "Framed the external view of the evaluated DL1 target",
             _ => "Framed the authored source",
         };
+    }
+
+    private bool FrameComparisonPanes(bool force)
+    {
+        if (!IsSourceViewportVisible ||
+            PreviewLayout != PreviewLayoutMode.RetargetComparison ||
+            _viewportCoordinator.HasTargetPreviewCameraOverride)
+        {
+            return false;
+        }
+
+        string key = string.Join(
+            '|',
+            _activeAnimationId?.ToString("N") ?? "no-animation",
+            _sourceAnimation?.Rig.Id ?? "no-source",
+            _targetRig?.Id ?? "no-target");
+        if (!force && string.Equals(
+                key,
+                _lastComparisonFramingKey,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        RenderFrameSnapshot sourceFrame =
+            SourceViewport.SceneSource.CaptureFrame();
+        RenderFrameSnapshot targetFrame =
+            TargetViewport.SceneSource.CaptureFrame();
+        if (!RenderCameraFraming.TryFrame(
+                sourceFrame,
+                out RenderCamera sourceCamera) ||
+            !RenderCameraFraming.TryFrame(
+                targetFrame,
+                out RenderCamera targetCamera))
+        {
+            return false;
+        }
+
+        _viewportCoordinator.RestoreOrbitCameras(
+            new ViewportOrbitCameraPair(
+                sourceCamera,
+                targetCamera));
+        _lastComparisonFramingKey = key;
+        return true;
     }
 
     private void FrameSelectedAttachment()
@@ -8812,14 +9032,17 @@ public sealed partial class MainWindowViewModel :
             AssetBrowser.ReplaceAssets(assets);
             AttachmentEditor.ReplaceCatalogAssets(assets);
             ProjectAnimation? activeAnimation = GetActiveAnimation();
-            bool hasBoundAnm2 = activeAnimation?.SourceBinding?.Kind is
-                AnimationSourceKind.LocalAnm2 or
-                AnimationSourceKind.RetailAnm2;
-            if (hasBoundAnm2)
+            bool restoreActiveAnimation =
+                activeAnimation is not null &&
+                CanRestoreAnimationFromLoadedCatalog(
+                    activeAnimation,
+                    _project.Assets,
+                    assets);
+            if (restoreActiveAnimation)
             {
                 job.Stage = "Animation source";
                 job.State =
-                    "Resolving the active ANM2's immutable source model";
+                    "Restoring the active animation's saved source and target";
                 await ActivateAnimationAsync(
                     activeAnimation!.Id,
                     beginPlayback: false,
@@ -8840,8 +9063,10 @@ public sealed partial class MainWindowViewModel :
                 result.Catalog.WasRestoredFromPersistentIndex
                     ? "the validated local cache"
                     : "a fresh retail scan";
-            StatusText =
-                $"Loaded {assets.Length:N0} Dying Light 1 assets from {catalogSource}";
+            StatusText = restoreActiveAnimation &&
+                         _sourceAnimation is null
+                ? "Loaded the asset catalog, but the active animation could not be restored; see Diagnostics"
+                : $"Loaded {assets.Length:N0} Dying Light 1 assets from {catalogSource}";
             AddDiagnostic(
                 "Info",
                 "Assets",
@@ -9784,6 +10009,7 @@ public sealed partial class MainWindowViewModel :
             TargetAssetId = targetAsset.Id,
             TargetRigId = targetRig.Id,
             TargetRigSignature = targetSignature,
+            RootBoneName = null,
             MappingFingerprint = proposal is null
                 ? null
                 : RetargetMapFingerprint.Compute(
@@ -11064,6 +11290,73 @@ public sealed partial class MainWindowViewModel :
                 identity.Precedence);
     }
 
+    internal static bool CanRestoreAnimationFromLoadedCatalog(
+        ProjectAnimation animation,
+        IReadOnlyList<ProjectAssetReference> projectAssets,
+        IReadOnlyList<AssetItemViewModel> catalogAssets)
+    {
+        ArgumentNullException.ThrowIfNull(animation);
+        ArgumentNullException.ThrowIfNull(projectAssets);
+        ArgumentNullException.ThrowIfNull(catalogAssets);
+        if (animation.SourceBinding is not { } binding ||
+            catalogAssets.Count == 0)
+        {
+            return false;
+        }
+
+        Dictionary<Guid, ProjectAssetReference> assets = projectAssets
+            .ToDictionary(static asset => asset.Id);
+        List<ProjectAssetReference> requiredRetailAssets = [];
+        if (binding.Kind == AnimationSourceKind.RetailAnm2)
+        {
+            if (!assets.TryGetValue(
+                    animation.SourceAssetId,
+                    out ProjectAssetReference? retailAnimation))
+            {
+                return false;
+            }
+
+            requiredRetailAssets.Add(retailAnimation);
+        }
+
+        if (binding.Kind is
+                AnimationSourceKind.LocalAnm2 or
+                AnimationSourceKind.RetailAnm2)
+        {
+            if (binding.RetailSourceModelAssetId is not { } modelId ||
+                !assets.TryGetValue(
+                    modelId,
+                    out ProjectAssetReference? sourceModel))
+            {
+                return false;
+            }
+
+            requiredRetailAssets.Add(sourceModel);
+        }
+
+        if (animation.TargetAssetId is { } targetId)
+        {
+            if (!assets.TryGetValue(
+                    targetId,
+                    out ProjectAssetReference? target))
+            {
+                return false;
+            }
+
+            requiredRetailAssets.Add(target);
+        }
+
+        // A local FBX with no target needs no retail lookup and is restored by
+        // LoadActiveSourceAsync. Everything listed here must resolve by exact
+        // retail identity; names and the currently selected browser row are
+        // never accepted as substitutes.
+        return requiredRetailAssets.Count > 0 &&
+               requiredRetailAssets.All(asset =>
+                   FindRetailCatalogAsset(
+                       asset,
+                       catalogAssets) is not null);
+    }
+
     private ProjectAssetReference? FindProjectAsset(Guid assetId) =>
         _project.Assets.FirstOrDefault(asset => asset.Id == assetId);
 
@@ -12320,6 +12613,7 @@ public sealed partial class MainWindowViewModel :
                 source,
                 projectAnimation,
                 frame);
+            FrameComparisonPanes(force: false);
             SetTargetBindingStatus(
                 HasSameRigContract(source.Rig, target)
                     ? TargetBindingStatus.Direct
@@ -12459,6 +12753,7 @@ public sealed partial class MainWindowViewModel :
         TargetViewport.SetPresentation(
             "DL1 Target",
             $"{message}; bind pose is held to prevent unsafe deformation");
+        FrameComparisonPanes(force: false);
     }
 
     private void PublishSourceSkeletonFallback(
@@ -12763,7 +13058,8 @@ public sealed partial class MainWindowViewModel :
                     AnimationRootMode.MotionAccumulator,
                 _ => throw new InvalidDataException(
                     "The project contains an unknown DL1 root-motion mode."),
-            });
+            },
+            animation.RootBoneName);
         ImmutableArray<MorphChannelBinding> morphBindings =
             ProjectMorphBindingResolver.Resolve(
                 animation.MorphBindings,
@@ -13681,6 +13977,7 @@ public sealed partial class MainWindowViewModel :
 
         List<TimelineTrackViewModel> viewModels = [];
         List<TimelineCurveTrackViewModel> curveModels = [];
+        string? preferredTrackId = null;
         if (_sourceAnimation is { } source)
         {
             int? sourceCurveBoneIndex = ResolveSourceCurveBoneIndex(
@@ -13693,9 +13990,14 @@ public sealed partial class MainWindowViewModel :
                         (uint)source.Rig.BoneCount
                     ? source.Rig.Bones[track.BoneIndex].Name
                     : $"Bone {track.BoneIndex}";
+                string trackId = $"source-transform:{track.BoneIndex}";
                 var sourceTrack = new TimelineTrackViewModel(
+                    trackId,
                     boneName,
-                    $"Source clip / Transform / {track.Keyframes.Length:N0} keys (read only)");
+                    $"Transform | {track.Keyframes.Length:N0} source keys",
+                    "Source animation",
+                    isReadOnly: true,
+                    totalKeyCount: track.Keyframes.Length);
                 foreach (TransformKeyframe keyframe in
                          SelectTimelineTransformKeys(
                              track.Keyframes,
@@ -13712,24 +14014,31 @@ public sealed partial class MainWindowViewModel :
                 }
 
                 viewModels.Add(sourceTrack);
+                AddTransformCurves(
+                    curveModels,
+                    trackId,
+                    $"Source clip / {boneName}",
+                    SelectTimelineTransformKeys(
+                            track.Keyframes,
+                            maximumCount: 256)
+                        .ToImmutableArray());
                 if (track.BoneIndex == sourceCurveBoneIndex)
                 {
-                    AddTransformCurves(
-                        curveModels,
-                        $"Source clip / {boneName}",
-                        SelectTimelineTransformKeys(
-                                track.Keyframes,
-                                maximumCount: 512)
-                            .ToImmutableArray());
+                    preferredTrackId = trackId;
                 }
             }
 
-            var scalarCurveCount = 0;
             foreach (ScalarTrack track in source.Clip.ScalarTracks)
             {
+                string trackId =
+                    $"source-scalar:{track.ChannelName}";
                 var sourceTrack = new TimelineTrackViewModel(
+                    trackId,
                     track.ChannelName,
-                    $"Source clip / Scalar / {track.Keyframes.Length:N0} keys (read only)");
+                    $"Scalar | {track.Keyframes.Length:N0} source keys",
+                    "Facial",
+                    isReadOnly: true,
+                    totalKeyCount: track.Keyframes.Length);
                 foreach (ScalarKeyframe keyframe in
                          SelectTimelineScalarKeys(
                              track.Keyframes,
@@ -13746,22 +14055,20 @@ public sealed partial class MainWindowViewModel :
                 }
 
                 viewModels.Add(sourceTrack);
-                if (sourceCurveBoneIndex is null &&
-                    scalarCurveCount < 8)
-                {
-                    curveModels.Add(
-                        new TimelineCurveTrackViewModel(
-                            $"Source clip / {track.ChannelName}",
-                            "#E599F7",
-                            SelectTimelineScalarKeys(
-                                    track.Keyframes,
-                                    maximumCount: 512)
-                                .Select(static key =>
-                                    new TimelineCurveKeyViewModel(
-                                        key.Frame,
-                                        key.Value))));
-                    scalarCurveCount++;
-                }
+                curveModels.Add(
+                    new TimelineCurveTrackViewModel(
+                        "Value",
+                        "#E599F7",
+                        SelectTimelineScalarKeys(
+                                track.Keyframes,
+                                maximumCount: 256)
+                            .Select(static key =>
+                                new TimelineCurveKeyViewModel(
+                                    key.Frame,
+                                    key.Value)),
+                        trackId,
+                        $"Source clip / {track.ChannelName}"));
+                preferredTrackId ??= trackId;
             }
         }
 
@@ -13770,9 +14077,14 @@ public sealed partial class MainWindowViewModel :
             foreach (BoneEditTrack track in layer.Tracks)
             {
                 SkeletonNodeViewModel? bone = FindBone(track.BoneIndex);
+                string trackId =
+                    $"edit:{layer.Id:N}:{track.BoneIndex}";
                 var viewModel = new TimelineTrackViewModel(
+                    trackId,
                     bone?.Path ?? $"Bone {track.BoneIndex}",
-                    $"{layer.Name} / Transform");
+                    $"{layer.Name} | Transform",
+                    "Authored edits",
+                    isReadOnly: false);
                 foreach (TransformKeyframe keyframe in track.Keyframes)
                 {
                     int frame = checked((int)Math.Round(keyframe.Frame));
@@ -13787,8 +14099,13 @@ public sealed partial class MainWindowViewModel :
                 viewModels.Add(viewModel);
                 AddTransformCurves(
                     curveModels,
+                    trackId,
                     $"{layer.Name} / {viewModel.Name}",
                     track.Keyframes);
+                if (SelectedBone?.Index == track.BoneIndex)
+                {
+                    preferredTrackId ??= trackId;
+                }
             }
         }
 
@@ -13796,9 +14113,14 @@ public sealed partial class MainWindowViewModel :
         {
             foreach (MorphEditTrack track in layer.Tracks)
             {
+                string trackId =
+                    $"morph:{layer.Id:N}:{track.MorphName}";
                 var viewModel = new TimelineTrackViewModel(
+                    trackId,
                     track.MorphName,
-                    $"{layer.Name} / Morph");
+                    $"{layer.Name} | Morph",
+                    "Facial",
+                    isReadOnly: false);
                 foreach (ScalarKeyframe keyframe in track.Keyframes)
                 {
                     int frame = checked((int)Math.Round(keyframe.Frame));
@@ -13812,20 +14134,26 @@ public sealed partial class MainWindowViewModel :
 
                 viewModels.Add(viewModel);
                 curveModels.Add(new TimelineCurveTrackViewModel(
-                    $"{layer.Name} / {track.MorphName}",
+                    "Value",
                     "#E599F7",
                     track.Keyframes.Select(static key =>
                         new TimelineCurveKeyViewModel(
                             key.Frame,
-                            key.Value))));
+                            key.Value)),
+                    trackId,
+                    $"{layer.Name} / {track.MorphName}"));
             }
         }
 
         foreach (ProjectIkLayer layer in animation.IkLayers)
         {
+            string trackId = $"ik:{layer.Id:N}";
             var viewModel = new TimelineTrackViewModel(
+                trackId,
                 layer.ChainName,
-                $"{layer.Name} / IK");
+                $"{layer.Name} | Two-bone IK",
+                "IK",
+                isReadOnly: false);
             foreach (ProjectIkKeyframe keyframe in layer.Keyframes)
             {
                 int frame = checked((int)Math.Round(keyframe.Frame));
@@ -13840,11 +14168,13 @@ public sealed partial class MainWindowViewModel :
             viewModels.Add(viewModel);
             AddVectorCurves(
                 curveModels,
+                trackId,
                 $"{layer.Name} / {layer.ChainName} / Effector",
                 layer.Keyframes.Select(static key =>
                     (key.Frame, key.Effector)));
             AddVectorCurves(
                 curveModels,
+                trackId,
                 $"{layer.Name} / {layer.ChainName} / Pole",
                 layer.Keyframes.Select(static key =>
                     (key.Frame, key.Pole)));
@@ -13856,9 +14186,13 @@ public sealed partial class MainWindowViewModel :
             string parent =
                 attachment.ParentBoneName
                 ?? $"Bone {attachment.ParentBoneIndex}";
+            string trackId = $"attachment:{attachment.Id:N}";
             var viewModel = new TimelineTrackViewModel(
+                trackId,
                 attachment.Name,
-                $"Attachment / {parent}");
+                $"Parent: {parent}",
+                "Attachments",
+                isReadOnly: false);
             viewModel.Keyframes.Add(
                 new TimelineKeyframeViewModel(
                     viewModel.Name,
@@ -13868,6 +14202,7 @@ public sealed partial class MainWindowViewModel :
             viewModels.Add(viewModel);
             AddTransformCurves(
                 curveModels,
+                trackId,
                 $"Attachment / {attachment.Name}",
                 [new TransformKeyframe(
                     0.0,
@@ -13875,6 +14210,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         Timeline.ReplaceTracks(viewModels);
+        Timeline.SelectTrack(preferredTrackId);
         Timeline.ReplaceCurves(curveModels);
     }
 
@@ -13961,12 +14297,15 @@ public sealed partial class MainWindowViewModel :
 
     private static void AddTransformCurves(
         List<TimelineCurveTrackViewModel> curves,
+        string ownerTrackId,
         string prefix,
         ImmutableArray<TransformKeyframe> keyframes)
     {
         AddCurve(
             curves,
-            $"{prefix} / Translation X",
+            ownerTrackId,
+            prefix,
+            "Translation X",
             "#F26C6C",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -13974,7 +14313,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Translation.X)));
         AddCurve(
             curves,
-            $"{prefix} / Translation Y",
+            ownerTrackId,
+            prefix,
+            "Translation Y",
             "#6BCB77",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -13982,7 +14323,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Translation.Y)));
         AddCurve(
             curves,
-            $"{prefix} / Translation Z",
+            ownerTrackId,
+            prefix,
+            "Translation Z",
             "#5C7CFA",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -13990,7 +14333,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Translation.Z)));
         AddCurve(
             curves,
-            $"{prefix} / Rotation X",
+            ownerTrackId,
+            prefix,
+            "Rotation X",
             "#FFA94D",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -13998,7 +14343,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Rotation.X)));
         AddCurve(
             curves,
-            $"{prefix} / Rotation Y",
+            ownerTrackId,
+            prefix,
+            "Rotation Y",
             "#38D9A9",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14006,7 +14353,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Rotation.Y)));
         AddCurve(
             curves,
-            $"{prefix} / Rotation Z",
+            ownerTrackId,
+            prefix,
+            "Rotation Z",
             "#9775FA",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14014,7 +14363,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Rotation.Z)));
         AddCurve(
             curves,
-            $"{prefix} / Rotation W",
+            ownerTrackId,
+            prefix,
+            "Rotation W",
             "#CED4DA",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14022,7 +14373,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Rotation.W)));
         AddCurve(
             curves,
-            $"{prefix} / Scale X",
+            ownerTrackId,
+            prefix,
+            "Scale X",
             "#FF8787",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14030,7 +14383,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Scale.X)));
         AddCurve(
             curves,
-            $"{prefix} / Scale Y",
+            ownerTrackId,
+            prefix,
+            "Scale Y",
             "#8CE99A",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14038,7 +14393,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Scale.Y)));
         AddCurve(
             curves,
-            $"{prefix} / Scale Z",
+            ownerTrackId,
+            prefix,
+            "Scale Z",
             "#91A7FF",
             keyframes.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14048,13 +14405,20 @@ public sealed partial class MainWindowViewModel :
 
     private static void AddVectorCurves(
         List<TimelineCurveTrackViewModel> curves,
+        string ownerTrackId,
         string prefix,
         IEnumerable<(double Frame, Vector3D Value)> keys)
     {
         (double Frame, Vector3D Value)[] rows = keys.ToArray();
+        string component = prefix
+            .Split('/')
+            .Last()
+            .Trim();
         AddCurve(
             curves,
-            $"{prefix} X",
+            ownerTrackId,
+            prefix,
+            $"{component} X",
             "#F26C6C",
             rows.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14062,7 +14426,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.X)));
         AddCurve(
             curves,
-            $"{prefix} Y",
+            ownerTrackId,
+            prefix,
+            $"{component} Y",
             "#6BCB77",
             rows.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14070,7 +14436,9 @@ public sealed partial class MainWindowViewModel :
                     key.Value.Y)));
         AddCurve(
             curves,
-            $"{prefix} Z",
+            ownerTrackId,
+            prefix,
+            $"{component} Z",
             "#5C7CFA",
             rows.Select(static key =>
                 new TimelineCurveKeyViewModel(
@@ -14080,13 +14448,17 @@ public sealed partial class MainWindowViewModel :
 
     private static void AddCurve(
         List<TimelineCurveTrackViewModel> curves,
+        string ownerTrackId,
+        string ownerLabel,
         string name,
         string color,
         IEnumerable<TimelineCurveKeyViewModel> keys) =>
         curves.Add(new TimelineCurveTrackViewModel(
             name,
             color,
-            keys));
+            keys,
+            ownerTrackId,
+            ownerLabel));
 
     private ProjectAnimation? GetActiveAnimation()
     {
