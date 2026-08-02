@@ -25,9 +25,15 @@ public interface IProjectFileDialogService
         string suggestedName,
         string? initialPath) => null;
 
+    string? ShowSaveRetailMeshFbxDialog(
+        string suggestedName,
+        string? initialPath) => null;
+
     bool ConfirmRetailFbxExport(
         string assetName,
         int clipCount) => false;
+
+    bool ConfirmRetailMeshFbxExport(string assetName) => false;
 
     string? ShowSelectExportDirectoryDialog(string? initialPath) => null;
 
@@ -220,12 +226,42 @@ public sealed class WindowsProjectFileDialogService :
             : null;
     }
 
+    public string? ShowSaveRetailMeshFbxDialog(
+        string suggestedName,
+        string? initialPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(suggestedName);
+        SaveFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".fbx",
+            FileName = $"{MakeSafeFileName(suggestedName)}.fbx",
+            Filter = FbxFilter,
+            OverwritePrompt = true,
+            Title = "Export DL1 retail mesh to FBX",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return dialog.ShowDialog() == true
+            ? dialog.FileName
+            : null;
+    }
+
     public bool ConfirmRetailFbxExport(
         string assetName,
         int clipCount) =>
         System.Windows.MessageBox.Show(
             $"This creates an FBX and colocated DDS textures containing decoded Dying Light 1 retail data for '{assetName}' and {clipCount:N0} animation clip(s).\n\nKeep these files local. Do not upload, publish, bundle, or redistribute them. Only the decoded base-color texture is exported; DL1 shader techniques are not reproduced.\n\nContinue?",
             "Local retail-asset export",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No) ==
+        System.Windows.MessageBoxResult.Yes;
+
+    public bool ConfirmRetailMeshFbxExport(string assetName) =>
+        System.Windows.MessageBox.Show(
+            $"This creates one self-contained FBX containing decoded Dying Light 1 retail mesh data for '{assetName}'. Decoded base-color textures are embedded in the FBX. Skinned meshes retain their complete bind skeleton and vertex weights.\n\nKeep this local. Do not upload, publish, bundle, or redistribute it. Only the decoded base-color material is exported; DL1 shader techniques and other map types are not reproduced.\n\nContinue?",
+            "Local retail-mesh FBX export",
             System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning,
             System.Windows.MessageBoxResult.No) ==

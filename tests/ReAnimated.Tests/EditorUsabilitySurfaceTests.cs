@@ -203,6 +203,20 @@ public sealed class EditorUsabilitySurfaceTests
         Assert.Equal(
             "OnAssetExplorerDoubleClick",
             (string?)explorer.Attribute("MouseDoubleClick"));
+        Assert.Equal(
+            "OnAssetExplorerPreviewMouseRightButtonDown",
+            (string?)explorer.Attribute(
+                "PreviewMouseRightButtonDown"));
+
+        XElement exportToFbx = Assert.Single(
+            explorer.Descendants(Presentation + "MenuItem"),
+            static element => string.Equals(
+                (string?)element.Attribute("Header"),
+                "Export to FBX…",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "{Binding ExportSelectedBrowserMeshToFbxCommand}",
+            (string?)exportToFbx.Attribute("Command"));
 
         XElement play = Assert.Single(
             document.Descendants(Presentation + "Button"),

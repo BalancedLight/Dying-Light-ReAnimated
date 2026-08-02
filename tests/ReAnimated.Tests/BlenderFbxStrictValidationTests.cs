@@ -269,6 +269,71 @@ public sealed class BlenderFbxStrictValidationTests :
 
     [Fact]
     public async Task
+        AcceptsEmbeddedBaseColorVideoContent()
+    {
+        string path = await WriteFixtureAsync(
+            FixtureCorruption.EmbeddedVideo);
+        FbxStrictExportInspection inspection =
+            await FbxStrictExportInspector
+                .InspectFileAsync(path);
+        var validator =
+            new BlenderFbxOutputValidator();
+        BlenderFbxJobTexture[] expectedTextures =
+            ExpectedTextures()
+                .Select(static texture => texture with
+                {
+                    EmbeddedInFbx = true,
+                })
+                .ToArray();
+
+        await validator.ValidateAsync(
+            path,
+            ExpectedBones(),
+            ExpectedClips(),
+            ExpectedMeshes(),
+            expectedTextures,
+            CancellationToken.None);
+
+        FbxEmbeddedVideoInspection embedded = Assert.Single(
+            inspection.EmbeddedVideos);
+        Assert.Equal(42L, embedded.ObjectId);
+        Assert.Equal(4, embedded.ContentByteCount);
+    }
+
+    [Fact]
+    public async Task
+        RejectsEmbeddedTextureRequestWithoutVideoContent()
+    {
+        string path = await WriteFixtureAsync(
+            FixtureCorruption.None);
+        var validator =
+            new BlenderFbxOutputValidator();
+        BlenderFbxJobTexture[] expectedTextures =
+            ExpectedTextures()
+                .Select(static texture => texture with
+                {
+                    EmbeddedInFbx = true,
+                })
+                .ToArray();
+
+        InvalidDataException error =
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => validator.ValidateAsync(
+                    path,
+                    ExpectedBones(),
+                    ExpectedClips(),
+                    ExpectedMeshes(),
+                    expectedTextures,
+                    CancellationToken.None));
+
+        Assert.Contains(
+            "embedded image bytes",
+            error.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task
         RejectsAbsoluteOnlyTextureReferenceWithMatchingBasename()
     {
         InvalidDataException error =
@@ -469,6 +534,20 @@ public sealed class BlenderFbxStrictValidationTests :
                 [41L, "Texture::DL1_BaseColor_tex", string.Empty]);
         FbxNode video = corruption switch
         {
+            FixtureCorruption.EmbeddedVideo =>
+                Node(
+                    "Video",
+                    [42L, $"Video::{TextureFileName}", "Clip"],
+                    Node(
+                        "RelativeFilename",
+                        [TextureFileName]),
+                    Node(
+                        "Content",
+                        [ImmutableArray.Create<byte>(
+                            0x44,
+                            0x44,
+                            0x53,
+                            0x20)])),
             FixtureCorruption.TextureRelativeFilenameOnly =>
                 Node(
                     "Video",
@@ -987,6 +1066,7 @@ public sealed class BlenderFbxStrictValidationTests :
                 ImmutableArray<int> => 'i',
                 ImmutableArray<double> => 'd',
                 ImmutableArray<float> => 'f',
+                ImmutableArray<byte> => 'R',
                 _ => throw new InvalidDataException(
                     $"Unsupported synthetic FBX value type '{value.GetType().Name}'."),
             },
@@ -1107,6 +1187,12 @@ public sealed class BlenderFbxStrictValidationTests :
                     stream,
                     checked((uint)bytes.Length));
                 stream.Write(bytes);
+                break;
+            case ImmutableArray<byte> value:
+                WriteUInt32(
+                    stream,
+                    checked((uint)value.Length));
+                stream.Write(value.AsSpan());
                 break;
             case ImmutableArray<int> values:
                 WriteArray(
@@ -1234,6 +1320,7 @@ public sealed class BlenderFbxStrictValidationTests :
         DisconnectedVideo,
         LongAnimation,
         NoBoneCurves,
+        EmbeddedVideo,
         TextureRelativeFilenameOnly,
         AbsoluteTexturePath,
         AbsoluteAndRelativeTexturePaths,

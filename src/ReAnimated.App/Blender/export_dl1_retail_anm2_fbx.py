@@ -888,6 +888,10 @@ def build_meshes(job, armature):
             )
 
         if bool(row.get("skinned", False)):
+            if armature is None:
+                raise ValueError(
+                    "Decoded skinned retail mesh requires a decoded armature"
+                )
             influences = []
             active_bone_indices = set()
             for vertex_index in range(len(vertices)):
@@ -1051,8 +1055,10 @@ def main(argv=None):
         or int(job.get("schema_version", 0)) != JOB_SCHEMA
     ):
         raise ValueError("Unsupported DL ReAnimated C# Blender job")
-    if not job.get("clips") or not job.get("meshes"):
-        raise ValueError("The Blender handoff needs mesh and ANM2 data")
+    if not job.get("meshes"):
+        raise ValueError("The Blender handoff needs mesh data")
+    if job.get("clips") and not job.get("bones"):
+        raise ValueError("ANM2 Actions require a decoded retail armature")
 
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
@@ -1068,55 +1074,89 @@ def main(argv=None):
     scene.render.fps_base = fps_numerator / output_fps
     scene.frame_start = 0
     scene.frame_end = max(
-        int(row["fbx_frame_count"]) - 1
-        for row in job["clips"]
+        (
+            int(row["fbx_frame_count"]) - 1
+            for row in job["clips"]
+        ),
+        default=0,
     )
 
-    (
-        armature,
-        bind_local,
-        _bind_global,
-        display_rest_globals,
-        display_parent_indices,
-        display_basis_corrections,
-        bind_heads,
-    ) = build_armature(job)
-    actions, expected_roots, root_index = install_actions(
-        job,
-        armature,
-        bind_local,
-        display_rest_globals,
-        display_parent_indices,
-        display_basis_corrections,
-    )
-    mesh_objects = build_meshes(job, armature)
-    guard = create_roundtrip_guard(job, armature, bind_heads)
-    audit_root_parity(
-        scene,
-        armature,
-        actions,
-        expected_roots,
-        root_index,
-        job["bones"],
-    )
+    armature = None
+    guard = None
+    actions = []
+    if job.get("bones"):
+        (
+            armature,
+            bind_local,
+            _bind_global,
+            display_rest_globals,
+            display_parent_indices,
+            display_basis_corrections,
+            bind_heads,
+        ) = build_armature(job)
+        if job.get("clips"):
+            actions, expected_roots, root_index = install_actions(
+                job,
+                armature,
+                bind_local,
+                display_rest_globals,
+                display_parent_indices,
+                display_basis_corrections,
+            )
+            audit_root_parity(
+                scene,
+                armature,
+                actions,
+                expected_roots,
+                root_index,
+                job["bones"],
+            )
+        mesh_objects = build_meshes(job, armature)
+        guard = create_roundtrip_guard(job, armature, bind_heads)
+    else:
+        mesh_objects = build_meshes(job, None)
+
+    if not actions:
+        print(
+            "DLR_ROOT_PARITY:"
+            + json.dumps(
+                {
+                    "max_angular_error_degrees": 0.0,
+                    "max_translation_error_m": 0.0,
+                },
+                separators=(",", ":"),
+            ),
+            flush=True,
+        )
 
     bpy.ops.object.select_all(action="DESELECT")
-    armature.select_set(True)
+    if armature is not None:
+        armature.select_set(True)
     for mesh_object in mesh_objects:
         mesh_object.select_set(True)
-    guard.select_set(True)
-    bpy.context.view_layer.objects.active = armature
-    install_armature_only_bind_pose_export()
+    if guard is not None:
+        guard.select_set(True)
+    bpy.context.view_layer.objects.active = (
+        armature
+        if armature is not None
+        else mesh_objects[0]
+    )
+    if armature is not None:
+        install_armature_only_bind_pose_export()
     output = Path(job["output_path"])
     output.parent.mkdir(parents=True, exist_ok=True)
     report("Writing FBX", 0, 1)
     bpy.ops.export_scene.fbx(
         filepath=str(output),
         use_selection=True,
-        object_types={"ARMATURE", "MESH"},
+        object_types=(
+            {"ARMATURE", "MESH"}
+            if armature is not None
+            else {"MESH"}
+        ),
         use_mesh_modifiers=False,
         add_leaf_bones=False,
-        bake_anim=True,
+        bake_anim=bool(actions),
         bake_anim_use_all_bones=False,
         bake_anim_use_nla_strips=False,
         bake_anim_use_all_actions=True,
@@ -1129,8 +1169,12 @@ def main(argv=None):
         primary_bone_axis="Y",
         secondary_bone_axis="X",
         use_custom_props=True,
-        path_mode="RELATIVE",
-        embed_textures=False,
+        path_mode=(
+            "COPY"
+            if bool(job.get("embed_textures", False))
+            else "RELATIVE"
+        ),
+        embed_textures=bool(job.get("embed_textures", False)),
     )
     report("Writing FBX", 1, 1)
     print(
@@ -1145,7 +1189,7 @@ def main(argv=None):
         "DLR_BIND_POSE:"
         + json.dumps(
             {
-                "exported": True,
+                "exported": armature is not None,
                 "bone_count": len(job["bones"]),
             },
             separators=(",", ":"),

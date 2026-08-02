@@ -1046,6 +1046,8 @@ public sealed partial class MainWindowViewModel :
                 RemoveAdditionalRpackRootCommand.NotifyCanExecuteChanged();
                 ExportSelectedMeshToBlenderFbxCommand
                     .NotifyCanExecuteChanged();
+                ExportSelectedBrowserMeshToFbxCommand
+                    .NotifyCanExecuteChanged();
                 PlaySelectedExplorerAnimationCommand
                     .NotifyCanExecuteChanged();
                 ConfirmExplorerAnimationTimingCommand
@@ -9625,6 +9627,8 @@ public sealed partial class MainWindowViewModel :
         PreviewSelectedAssetCommand.NotifyCanExecuteChanged();
         UseSelectedAssetAsSourceCommand.NotifyCanExecuteChanged();
         UseSelectedAssetAsTargetCommand.NotifyCanExecuteChanged();
+        ExportSelectedBrowserMeshToFbxCommand
+            .NotifyCanExecuteChanged();
         if (_disposed || selected is null)
         {
             return;

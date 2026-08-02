@@ -36,6 +36,10 @@ public sealed record FbxExternalFileReferenceInspection(
     string PropertyName,
     string Value);
 
+public sealed record FbxEmbeddedVideoInspection(
+    long ObjectId,
+    int ContentByteCount);
+
 public sealed record FbxMeshGeometryInspection(
     long ObjectId,
     string Name,
@@ -71,6 +75,7 @@ public sealed record FbxStrictExportInspection(
         MeshGeometries,
     int TextureObjectCount,
     int VideoObjectCount,
+    ImmutableArray<FbxEmbeddedVideoInspection> EmbeddedVideos,
     ImmutableArray<FbxExternalFileReferenceInspection>
         ExternalFileReferences,
     ImmutableHashSet<string> ReferencedFileNames);
@@ -123,6 +128,10 @@ public static class FbxStrictExportInspector
                 CollectExternalFileReferences(
                     objects,
                     cancellationToken);
+        ImmutableArray<FbxEmbeddedVideoInspection> embeddedVideos =
+            CollectEmbeddedVideos(
+                objects,
+                cancellationToken);
         ImmutableDictionary<string, long> limbIds =
             ReadUniqueLimbIds(scene);
         ImmutableArray<FbxBindPoseInspection> bindPoses =
@@ -234,6 +243,7 @@ public static class FbxStrictExportInspector
             meshGeometries,
             objects.FindChildren("Texture").Count(),
             objects.FindChildren("Video").Count(),
+            embeddedVideos,
             externalFileReferences,
             referencedFiles.ToImmutable());
     }
@@ -1072,6 +1082,78 @@ public static class FbxStrictExportInspector
             a3 * b2 -
             a4 * b1 +
             a5 * b0;
+    }
+
+    private static ImmutableArray<
+        FbxEmbeddedVideoInspection>
+        CollectEmbeddedVideos(
+            FbxNode objects,
+            CancellationToken cancellationToken)
+    {
+        const int maximumVideos = 65_536;
+        var result = ImmutableArray.CreateBuilder<
+            FbxEmbeddedVideoInspection>();
+        foreach (FbxNode objectNode in objects.Children)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!string.Equals(
+                    objectNode.Name,
+                    "Video",
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            long objectId = ReadObjectId(objectNode, "Video");
+            int contentByteCount = 0;
+            var nodes = new Stack<FbxNode>();
+            foreach (FbxNode child in objectNode.Children)
+            {
+                nodes.Push(child);
+            }
+
+            while (nodes.TryPop(out FbxNode? node))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (string.Equals(
+                        node.Name,
+                        "Content",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (FbxProperty property in node.Properties)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (property.Value is ImmutableArray<byte> content)
+                        {
+                            contentByteCount = checked(
+                                contentByteCount + content.Length);
+                        }
+                    }
+                }
+
+                foreach (FbxNode child in node.Children)
+                {
+                    nodes.Push(child);
+                }
+            }
+
+            if (contentByteCount == 0)
+            {
+                continue;
+            }
+
+            if (result.Count >= maximumVideos)
+            {
+                throw new InvalidDataException(
+                    $"FBX contains more than {maximumVideos:N0} Video objects with embedded content.");
+            }
+
+            result.Add(new FbxEmbeddedVideoInspection(
+                objectId,
+                contentByteCount));
+        }
+
+        return result.ToImmutable();
     }
 
     private static ImmutableArray<

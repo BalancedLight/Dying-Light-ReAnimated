@@ -152,21 +152,36 @@ public sealed class BlenderFbxExportService :
         bool preserveStageDirectory = false;
         try
         {
-            progress?.Report(new BlenderFbxExportProgress(
-                "Reading ANM2",
-                3.0,
-                "Hash-checking clips and timing provenance"));
-            PreparedClipInfo[] clipInfo =
-                await InspectClipsAsync(
-                    request.Anm2Paths,
-                    request.Rig,
-                    warnings,
-                    cancellationToken)
+            bool hasAnimations = request.Anm2Paths.Count > 0;
+            PreparedClipInfo[] clipInfo;
+            if (hasAnimations)
+            {
+                progress?.Report(new BlenderFbxExportProgress(
+                    "Reading ANM2",
+                    3.0,
+                    "Hash-checking clips and timing provenance"));
+                clipInfo = await InspectClipsAsync(
+                        request.Anm2Paths,
+                        request.Rig!,
+                        warnings,
+                        cancellationToken)
                     .ConfigureAwait(false);
-            double outputFps =
-                clipInfo[0].Timing.SourceFbxFps;
-            BlenderFbxJobBone[] bones =
-                BuildJobBones(request.Rig);
+            }
+            else
+            {
+                progress?.Report(new BlenderFbxExportProgress(
+                    "Preparing mesh",
+                    3.0,
+                    "Preparing a mesh-only FBX with no ANM2 Actions"));
+                clipInfo = [];
+            }
+
+            double outputFps = hasAnimations
+                ? clipInfo[0].Timing.SourceFbxFps
+                : 30.0;
+            BlenderFbxJobBone[] bones = request.Rig is { } rig
+                ? BuildJobBones(rig)
+                : [];
             HashSet<uint> rigDescriptors = bones
                 .Where(static bone =>
                     bone.Descriptor.HasValue)
@@ -203,11 +218,15 @@ public sealed class BlenderFbxExportService :
             string stageFbxPath = Path.Combine(
                 stageDirectory,
                 Path.GetFileName(outputPath));
-            BlenderFbxJobTexture[] textures =
-                WriteTextures(
+            BlenderFbxJobTexture[] textures = WriteTextures(
                     request.Meshes,
                     stageDirectory,
-                    cancellationToken);
+                    cancellationToken)
+                .Select(texture => texture with
+                {
+                    EmbeddedInFbx = request.EmbedTextures,
+                })
+                .ToArray();
             BlenderFbxJobMesh[] meshes =
                 WriteMeshes(
                     request.Meshes,
@@ -215,22 +234,31 @@ public sealed class BlenderFbxExportService :
                     workDirectory,
                     cancellationToken);
             progress?.Report(new BlenderFbxExportProgress(
-                "Preparing actions",
+                hasAnimations ? "Preparing actions" : "Preparing mesh",
                 28.0,
-                $"Decoding {clipInfo.Length:N0} ANM2 clip(s)"));
-            IReadOnlyList<BlenderFbxJobClip> clips =
-                await WriteClipsAsync(
-                    clipInfo,
-                    request.Rig,
-                    bones,
-                    outputFps,
-                    workDirectory,
-                    stageDirectory,
-                    Path.GetFileName(stageFbxPath),
-                    progress,
-                    warnings,
-                    cancellationToken)
+                hasAnimations
+                    ? $"Decoding {clipInfo.Length:N0} ANM2 clip(s)"
+                    : "Writing rig, geometry, skin weights, and textures"));
+            IReadOnlyList<BlenderFbxJobClip> clips;
+            if (hasAnimations)
+            {
+                clips = await WriteClipsAsync(
+                        clipInfo,
+                        request.Rig!,
+                        bones,
+                        outputFps,
+                        workDirectory,
+                        stageDirectory,
+                        Path.GetFileName(stageFbxPath),
+                        progress,
+                        warnings,
+                        cancellationToken)
                     .ConfigureAwait(false);
+            }
+            else
+            {
+                clips = [];
+            }
             string helperPath =
                 await _helperResource.ExtractAsync(
                     workDirectory,
@@ -251,7 +279,10 @@ public sealed class BlenderFbxExportService :
                 meshes,
                 textures,
                 clips,
-                warnings.ToArray());
+                warnings.ToArray())
+            {
+                EmbedTextures = request.EmbedTextures,
+            };
             string jobPath = Path.Combine(
                 workDirectory,
                 "blender-fbx-job.json");
@@ -265,7 +296,15 @@ public sealed class BlenderFbxExportService :
             progress?.Report(new BlenderFbxExportProgress(
                 "Starting Blender",
                 55.0,
-                "Creating retail mesh, BindPose, and animation Actions"));
+                hasAnimations
+                    ? "Creating retail mesh, BindPose, and animation Actions"
+                    : request.Rig is null
+                        ? request.EmbedTextures
+                            ? "Creating a static retail mesh with embedded textures"
+                            : "Creating a static retail mesh"
+                        : request.EmbedTextures
+                            ? "Creating retail mesh and BindPose with embedded textures"
+                            : "Creating retail mesh and BindPose"));
             BlenderProcessResult processResult =
                 await _processRunner.RunAsync(
                     new BlenderProcessRequest(
@@ -304,6 +343,27 @@ public sealed class BlenderFbxExportService :
             string stageManifestPath = Path.Combine(
                 stageDirectory,
                 manifestFileName);
+            string[] textureFileNames = textures
+                .Select(static texture => texture.FileName)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            IReadOnlyList<string> externalTextureFiles =
+                request.EmbedTextures
+                    ? []
+                    : textureFileNames;
+            string[] limitations =
+            [
+                hasAnimations
+                    ? "Each Action is an inspection/editing take. A multi-action FBX cannot use the legacy one-clip .fbx.dlrroundtrip.json contract."
+                    : "This mesh-only FBX contains no ANM2 Actions.",
+                hasAnimations
+                    ? "Unresolved transform tracks are preserved in hash-validated, frame-major .dlrtracks sidecars referenced by this manifest. Blender does not expose those unresolved tracks as editable armature bones."
+                    : "No animation-track sidecars are present in a mesh-only FBX.",
+                request.EmbedTextures
+                    ? "Each decoded base-color texture is embedded in the binary FBX; no loose DDS texture dependencies are committed."
+                    : "Only the decoded base-color texture is emitted; DL1 shader techniques, normal/specular/mask maps, cloth, and physics are not reproduced.",
+                "Morph targets are not exported in this first Blender handoff.",
+            ];
             var manifest = new BlenderFbxHandoffManifest(
                 HandoffFormat,
                 HandoffSchemaVersion,
@@ -311,12 +371,7 @@ public sealed class BlenderFbxExportService :
                 RedistributionWarning,
                 job.Asset,
                 Path.GetFileName(outputPath),
-                textures
-                    .Select(static texture =>
-                        texture.FileName)
-                    .Distinct(
-                        StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
+                externalTextureFiles,
                 clips.Select(static clip =>
                     new BlenderFbxHandoffClip(
                         clip.ActionName,
@@ -333,12 +388,13 @@ public sealed class BlenderFbxExportService :
                     .ToArray(),
                 "child_pivot_display_v1",
                 "armature_edit_rest_with_roundtrip_guard",
-                [
-                    "Each Action is an inspection/editing take. A multi-action FBX cannot use the legacy one-clip .fbx.dlrroundtrip.json contract.",
-                    "Unresolved transform tracks are preserved in hash-validated, frame-major .dlrtracks sidecars referenced by this manifest. Blender does not expose those unresolved tracks as editable armature bones.",
-                    "Only the decoded base-color texture is emitted; DL1 shader techniques, normal/specular/mask maps, cloth, and physics are not reproduced.",
-                    "Morph targets are not exported in this first Blender handoff.",
-                ]);
+                limitations)
+            {
+                TexturesEmbedded = request.EmbedTextures,
+                EmbeddedTextureFiles = request.EmbedTextures
+                    ? textureFileNames
+                    : [],
+            };
             await WriteJsonAsync(
                     stageManifestPath,
                     manifest,
@@ -348,11 +404,17 @@ public sealed class BlenderFbxExportService :
             progress?.Report(new BlenderFbxExportProgress(
                 "Committing output",
                 96.0,
-                "Moving the validated FBX bundle into place"));
+                request.EmbedTextures
+                    ? "Moving the validated self-contained FBX into place"
+                    : "Moving the validated FBX bundle into place"));
+            IReadOnlyList<BlenderFbxJobTexture> bundleTextures =
+                request.EmbedTextures
+                    ? []
+                    : textures;
             CommitBundle(
                 stageFbxPath,
                 stageManifestPath,
-                textures,
+                bundleTextures,
                 GetHelperSidecarFiles(clips),
                 outputPath,
                 _bundleFileSystem,
@@ -362,16 +424,18 @@ public sealed class BlenderFbxExportService :
                 manifestFileName);
             string[] sidecarFiles =
                 GetHelperSidecarFiles(clips);
+            string[] outputTexturePaths = request.EmbedTextures
+                ? []
+                : textureFileNames
+                    .Select(file =>
+                        Path.Combine(
+                            outputDirectory,
+                            file))
+                    .ToArray();
             completedResult = new BlenderFbxExportResult(
                 outputPath,
                 finalManifestPath,
-                textures.Select(texture =>
-                        Path.Combine(
-                            outputDirectory,
-                            texture.FileName))
-                    .Distinct(
-                        StringComparer.OrdinalIgnoreCase)
-                    .ToArray(),
+                outputTexturePaths,
                 clips.Select(static clip =>
                         clip.ActionName)
                     .ToArray(),
@@ -386,6 +450,10 @@ public sealed class BlenderFbxExportService :
                             outputDirectory,
                             file))
                     .ToArray(),
+                TexturesEmbedded = request.EmbedTextures,
+                EmbeddedTextureFileNames = request.EmbedTextures
+                    ? textureFileNames
+                    : [],
             };
         }
         catch (BlenderBundleRecoveryException)
@@ -442,7 +510,6 @@ public sealed class BlenderFbxExportService :
         }
 
         ArgumentNullException.ThrowIfNull(request.Asset);
-        ArgumentNullException.ThrowIfNull(request.Rig);
         ArgumentNullException.ThrowIfNull(request.Meshes);
         ArgumentNullException.ThrowIfNull(request.Anm2Paths);
         if (request.Meshes.Count == 0 ||
@@ -453,12 +520,27 @@ public sealed class BlenderFbxExportService :
                 $"Select between 1 and {MaximumMeshCount:N0} decoded mesh parts.");
         }
 
-        if (request.Anm2Paths.Count == 0 ||
-            request.Anm2Paths.Count > MaximumClipCount)
+        if (request.Anm2Paths.Count > MaximumClipCount)
         {
             throw new ArgumentOutOfRangeException(
                 nameof(request),
-                $"Select between 1 and {MaximumClipCount:N0} ANM2 clips.");
+                $"Select at most {MaximumClipCount:N0} ANM2 clips.");
+        }
+
+        if (request.Anm2Paths.Count > 0 &&
+            request.Rig is null)
+        {
+            throw new ArgumentException(
+                "ANM2 Actions require a decoded retail rig.",
+                nameof(request));
+        }
+
+        if (request.Rig is null &&
+            request.Meshes.Any(static mesh => mesh.IsSkinned))
+        {
+            throw new ArgumentException(
+                "A skinned retail mesh requires its decoded skeleton.",
+                nameof(request));
         }
     }
 
@@ -2673,8 +2755,16 @@ public sealed class BlenderFbxExportService :
             BindPoseConfirmation>(
             log,
             "DLR_BIND_POSE:");
-        if (!bind.Exported ||
-            bind.BoneCount != boneCount)
+        if (boneCount == 0)
+        {
+            if (bind.Exported || bind.BoneCount != 0)
+            {
+                throw new InvalidOperationException(
+                    "Blender unexpectedly reported an armature BindPose for a static mesh export.");
+            }
+        }
+        else if (!bind.Exported ||
+                 bind.BoneCount != boneCount)
         {
             throw new InvalidOperationException(
                 "Blender did not confirm a complete armature BindPose.");
