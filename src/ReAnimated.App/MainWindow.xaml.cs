@@ -12,6 +12,8 @@ public partial class MainWindow : Window
 {
     private readonly MainWindowViewModel _viewModel;
     private readonly WorkspaceAutosaveService _autosave;
+    private GridLength _visibleSourceViewportWidth =
+        new(1.0, GridUnitType.Star);
     private bool _isLoaded;
 
     public MainWindow(
@@ -22,6 +24,8 @@ public partial class MainWindow : Window
         _autosave = autosave ?? throw new ArgumentNullException(nameof(autosave));
         InitializeComponent();
         DataContext = _viewModel;
+        _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        ApplyViewportColumnLayout();
         Loaded += OnWindowLoaded;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
@@ -56,10 +60,73 @@ public partial class MainWindow : Window
     {
         CompositionTarget.Rendering -= OnCompositionRendering;
         _autosave.AutosaveCompleted -= OnAutosaveCompleted;
+        _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
         _autosave.Dispose();
         Loaded -= OnWindowLoaded;
         Closing -= OnWindowClosing;
         Closed -= OnWindowClosed;
+    }
+
+    private void OnViewModelPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (!string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsSourceViewportVisible),
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!Dispatcher.CheckAccess())
+        {
+            _ = Dispatcher.BeginInvoke(ApplyViewportColumnLayout);
+            return;
+        }
+
+        ApplyViewportColumnLayout();
+    }
+
+    private void ApplyViewportColumnLayout()
+    {
+        if (_viewModel.IsSourceViewportVisible)
+        {
+            SourceViewportColumn.MinWidth = 0.0;
+            SourceViewportColumn.MaxWidth = double.PositiveInfinity;
+            SourceViewportColumn.Width =
+                _visibleSourceViewportWidth.Value > 0.0
+                    ? _visibleSourceViewportWidth
+                    : new GridLength(1.0, GridUnitType.Star);
+            ViewportSplitterColumn.Width = new GridLength(6.0);
+            if (!ViewportGrid.Children.Contains(SourceViewportPane))
+            {
+                Grid.SetRow(SourceViewportPane, 1);
+                Grid.SetColumn(SourceViewportPane, 0);
+                ViewportGrid.Children.Add(SourceViewportPane);
+            }
+
+            ViewportGrid.InvalidateMeasure();
+            ViewportGrid.InvalidateArrange();
+            return;
+        }
+
+        if (SourceViewportColumn.Width.Value > 0.0)
+        {
+            _visibleSourceViewportWidth = SourceViewportColumn.Width;
+        }
+
+        // A collapsed HwndHost can retain its native child window and stale
+        // Direct3D airspace even when WPF reports a zero-width column. Remove
+        // the source pane from the visual tree in every single-pane layout so
+        // the HWND is destroyed instead of leaving a blue strip behind.
+        ViewportGrid.Children.Remove(SourceViewportPane);
+        SourceViewportColumn.MinWidth = 0.0;
+        SourceViewportColumn.MaxWidth = 0.0;
+        SourceViewportColumn.Width = new GridLength(0.0);
+        ViewportSplitterColumn.Width = new GridLength(0.0);
+        ViewportGrid.InvalidateMeasure();
+        ViewportGrid.InvalidateArrange();
     }
 
     private void OnCompositionRendering(

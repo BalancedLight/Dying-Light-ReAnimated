@@ -16,6 +16,7 @@ public sealed class TimelineViewModel : ObservableObject
     private double _framesPerSecond = 30.0;
     private double _playbackFrameRemainder;
     private bool _isPlaying;
+    private bool _isPlaybackEnabled = true;
     private bool _isLooping = true;
     private bool _settingFrameFromPlayback;
     private DateTimeOffset? _lastTick;
@@ -26,7 +27,8 @@ public sealed class TimelineViewModel : ObservableObject
         _currentFrame = startFrame;
         _endFrame = Math.Max(startFrame + 1, endFrame);
         TogglePlaybackCommand = new RelayCommand(
-            () => IsPlaying = !IsPlaying);
+            () => IsPlaying = !IsPlaying,
+            () => IsPlaybackEnabled);
         StopCommand = new RelayCommand(Stop);
         StepBackwardCommand = new RelayCommand(
             () => CurrentFrame = Math.Max(StartFrame, CurrentFrame - 1));
@@ -124,11 +126,32 @@ public sealed class TimelineViewModel : ObservableObject
         get => _isPlaying;
         set
         {
-            if (SetProperty(ref _isPlaying, value))
+            bool normalized = value && IsPlaybackEnabled;
+            if (SetProperty(ref _isPlaying, normalized))
             {
                 ResetPlaybackClock();
                 OnPropertyChanged(nameof(PlaybackLabel));
             }
+        }
+    }
+
+    public bool IsPlaybackEnabled
+    {
+        get => _isPlaybackEnabled;
+        set
+        {
+            if (!SetProperty(ref _isPlaybackEnabled, value))
+            {
+                return;
+            }
+
+            if (!value)
+            {
+                IsPlaying = false;
+            }
+
+            TogglePlaybackCommand.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(PlaybackLabel));
         }
     }
 
@@ -138,7 +161,11 @@ public sealed class TimelineViewModel : ObservableObject
         set => SetProperty(ref _isLooping, value);
     }
 
-    public string PlaybackLabel => IsPlaying ? "Pause" : "Play";
+    public string PlaybackLabel => !IsPlaybackEnabled
+        ? "Playback locked"
+        : IsPlaying
+            ? "Pause"
+            : "Play";
 
     public double CanvasWidth => Math.Max(720.0, (EndFrame + 10) * PixelsPerFrame);
 

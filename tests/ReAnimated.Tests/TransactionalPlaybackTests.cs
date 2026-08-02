@@ -407,18 +407,52 @@ public sealed class TransactionalPlaybackTests : IDisposable
         Assert.True(browse.Camera.Target.X > 20.0f);
         RenderCamera browseCamera = browse.Camera;
 
-        viewModel.ActiveWorkspaceMode = "Animate";
+        viewModel.SelectWorkspaceCommand.Execute("Animate");
+
+        Assert.Equal("Animate", viewModel.ActiveWorkspaceMode);
+        Assert.True(viewModel.TargetViewport.SceneSource
+            .HasExternalPreviewScene);
+        RenderFrameSnapshot setup = viewModel.TargetViewport.SceneSource
+            .CaptureFrame();
+        Assert.Equal(
+            "armored/preview",
+            Assert.Single(setup.Meshes).Id);
+        Assert.Equal(browseCamera, setup.Camera);
+        Assert.StartsWith(
+            "Animation Setup",
+            viewModel.TargetViewport.Title,
+            StringComparison.Ordinal);
+
+        viewModel.SelectWorkspaceCommand.Execute("Retarget/Edit");
+
+        Assert.Equal("Retarget", viewModel.ActiveWorkspaceMode);
+        Assert.True(viewModel.IsRetargetSetupVisible);
+        Assert.False(viewModel.IsSourceViewportVisible);
+        Assert.True(viewModel.TargetViewport.SceneSource
+            .HasExternalPreviewScene);
+        RenderFrameSnapshot retargetSetup = viewModel.TargetViewport.SceneSource
+            .CaptureFrame();
+        Assert.Equal(
+            "armored/preview",
+            Assert.Single(retargetSetup.Meshes).Id);
+        Assert.Equal(browseCamera, retargetSetup.Camera);
+        Assert.StartsWith(
+            "Retarget Setup",
+            viewModel.TargetViewport.Title,
+            StringComparison.Ordinal);
+
+        viewModel.SelectWorkspaceCommand.Execute("Face");
 
         Assert.False(viewModel.TargetViewport.SceneSource
             .HasExternalPreviewScene);
-        RenderFrameSnapshot animate = viewModel.TargetViewport.SceneSource
+        RenderFrameSnapshot face = viewModel.TargetViewport.SceneSource
             .CaptureFrame();
         Assert.Equal(
             authoritative.Id,
-            Assert.Single(animate.Meshes).Id);
-        Assert.Equal(authoringCamera, animate.Camera);
+            Assert.Single(face.Meshes).Id);
+        Assert.Equal(authoringCamera, face.Camera);
 
-        viewModel.ActiveWorkspaceMode = "Browse";
+        viewModel.SelectWorkspaceCommand.Execute("Browse");
 
         Assert.True(viewModel.TargetViewport.SceneSource
             .HasExternalPreviewScene);

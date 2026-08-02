@@ -877,8 +877,18 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         Assert.Equal(
             BoneRenderRole.Helper,
             Assert.Single(initial.Bones).Role);
-        Assert.False(initial.ShowHelpers);
-        Assert.False(initial.IsVisible(initial.Bones[0]));
+        Assert.True(initial.ShowHelpers);
+        Assert.True(initial.IsVisible(initial.Bones[0]));
+
+        viewModel.ShowHelpers = false;
+
+        SkeletonRenderData hidden =
+            Assert.IsType<SkeletonRenderData>(
+                viewModel.TargetViewport.SceneSource
+                    .CaptureFrame()
+                    .Skeleton);
+        Assert.False(hidden.ShowHelpers);
+        Assert.False(hidden.IsVisible(hidden.Bones[0]));
 
         viewModel.ShowHelpers = true;
 

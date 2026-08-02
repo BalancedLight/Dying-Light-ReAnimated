@@ -59,6 +59,32 @@
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
         </Style>
 
+        <!-- ContextMenu is hosted in a separate popup window and therefore
+             does not inherit the dark Menu surface. Give it an explicit
+             template so right-click commands cannot become white-on-white. -->
+        <Style TargetType="{x:Type ContextMenu}">
+            <Setter Property="Background" Value="{StaticResource PanelBackgroundBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="2" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ContextMenu}">
+                        <Border Padding="{TemplateBinding Padding}"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
+                            <ScrollViewer CanContentScroll="True">
+                                <StackPanel IsItemsHost="True"
+                                            KeyboardNavigation.DirectionalNavigation="Cycle" />
+                            </ScrollViewer>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="{x:Static MenuItem.SeparatorStyleKey}"
                TargetType="{x:Type Separator}">
             <Setter Property="Margin" Value="26,4,7,4" />

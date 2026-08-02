@@ -59,6 +59,19 @@ public sealed class EditorUsabilitySurfaceTests
                         "Color"),
                     "#E7ECF3",
                     StringComparison.Ordinal));
+
+        XElement contextMenuStyle = Assert.Single(
+            document.Descendants(Presentation + "Style"),
+            static element => string.Equals(
+                (string?)element.Attribute("TargetType"),
+                "{x:Type ContextMenu}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            contextMenuStyle.Descendants(Presentation + "Border"),
+            static border => string.Equals(
+                (string?)border.Attribute("Background"),
+                "{TemplateBinding Background}",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -120,6 +133,12 @@ public sealed class EditorUsabilitySurfaceTests
                     (string?)element.Attribute("Text"),
                     "Fidelity:",
                     StringComparison.Ordinal));
+        Assert.Contains(
+            document.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding ShowFidelityDetailsCommand}",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -151,6 +170,8 @@ public sealed class EditorUsabilitySurfaceTests
             "Preview now",
             "Use as Source",
             "Use as Target",
+            "Edit bones",
+            "Accept proposal & play",
         ];
         foreach (string label in labels)
         {
@@ -178,10 +199,27 @@ public sealed class EditorUsabilitySurfaceTests
                     (string?)element.Attribute("Content"),
                     "Animate",
                     StringComparison.Ordinal) &&
+                element.Attribute("IsEnabled") is null &&
                 string.Equals(
-                    (string?)element.Attribute("IsEnabled"),
-                    "{Binding CanOpenAnimateWorkspace}",
+                    (string?)element.Attribute("ToolTip"),
+                    "{Binding AnimateWorkspaceHint}",
                     StringComparison.Ordinal));
+
+        string[] visibleRigControls =
+        [
+            "Helpers",
+            "Camera helpers",
+            "Prop helpers",
+        ];
+        foreach (string label in visibleRigControls)
+        {
+            Assert.Contains(
+                document.Descendants(Presentation + "ToggleButton"),
+                element => string.Equals(
+                    (string?)element.Attribute("Content"),
+                    label,
+                    StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -217,6 +255,22 @@ public sealed class EditorUsabilitySurfaceTests
         Assert.Equal(
             "{Binding ExportSelectedBrowserMeshToFbxCommand}",
             (string?)exportToFbx.Attribute("Command"));
+        string[] contextCommands =
+        [
+            "{Binding PreviewSelectedAssetCommand}",
+            "{Binding UseSelectedAssetAsSourceCommand}",
+            "{Binding UseSelectedAssetAsTargetCommand}",
+            "{Binding PlaySelectedExplorerAnimationCommand}",
+        ];
+        foreach (string command in contextCommands)
+        {
+            Assert.Contains(
+                explorer.Descendants(Presentation + "MenuItem"),
+                element => string.Equals(
+                    (string?)element.Attribute("Command"),
+                    command,
+                    StringComparison.Ordinal));
+        }
 
         XElement play = Assert.Single(
             document.Descendants(Presentation + "Button"),
@@ -302,6 +356,12 @@ public sealed class EditorUsabilitySurfaceTests
             static pane => Assert.Equal(
                 "1",
                 (string?)pane.Attribute("Grid.Row")));
+        Assert.Contains(
+            viewportPanes,
+            static pane => string.Equals(
+                (string?)pane.Attribute(Xaml + "Name"),
+                "SourceViewportPane",
+                StringComparison.Ordinal));
 
         XElement sourceColumn = Assert.Single(
             layoutGrid
@@ -311,36 +371,55 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)column.Attribute(Xaml + "Name"),
                 "SourceViewportColumn",
                 StringComparison.Ordinal));
-        XElement hiddenSourceTrigger = Assert.Single(
-            sourceColumn.Descendants(Presentation + "DataTrigger"),
-            static trigger => string.Equals(
-                    (string?)trigger.Attribute("Binding"),
-                    "{Binding IsSourceViewportVisible}",
-                    StringComparison.Ordinal) &&
-                string.Equals(
-                    (string?)trigger.Attribute("Value"),
-                    "False",
-                    StringComparison.Ordinal));
+        Assert.Equal("*", (string?)sourceColumn.Attribute("Width"));
+        Assert.Empty(sourceColumn.Descendants(Presentation + "DataTrigger"));
+        XElement splitterColumn = Assert.Single(
+            layoutGrid
+                .Element(Presentation + "Grid.ColumnDefinitions")!
+                .Elements(Presentation + "ColumnDefinition"),
+            static column => string.Equals(
+                (string?)column.Attribute(Xaml + "Name"),
+                "ViewportSplitterColumn",
+                StringComparison.Ordinal));
+        Assert.Equal("6", (string?)splitterColumn.Attribute("Width"));
+
+        string windowCode = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "MainWindow.xaml.cs"));
         Assert.Contains(
-            hiddenSourceTrigger.Elements(Presentation + "Setter"),
-            static setter => string.Equals(
-                    (string?)setter.Attribute("Property"),
-                    "Width",
-                    StringComparison.Ordinal) &&
-                string.Equals(
-                    (string?)setter.Attribute("Value"),
-                    "0",
-                    StringComparison.Ordinal));
+            "_viewModel.PropertyChanged += OnViewModelPropertyChanged;",
+            windowCode,
+            StringComparison.Ordinal);
         Assert.Contains(
-            hiddenSourceTrigger.Elements(Presentation + "Setter"),
-            static setter => string.Equals(
-                    (string?)setter.Attribute("Property"),
-                    "MaxWidth",
-                    StringComparison.Ordinal) &&
-                string.Equals(
-                    (string?)setter.Attribute("Value"),
-                    "0",
-                    StringComparison.Ordinal));
+            "nameof(MainWindowViewModel.IsSourceViewportVisible)",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SourceViewportColumn.MaxWidth = 0.0;",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SourceViewportColumn.Width = new GridLength(0.0);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ViewportSplitterColumn.Width = new GridLength(0.0);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ViewportGrid.Children.Remove(SourceViewportPane)",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ViewportGrid.Children.Add(SourceViewportPane);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_viewModel.PropertyChanged -= OnViewModelPropertyChanged;",
+            windowCode,
+            StringComparison.Ordinal);
 
         XElement catalogButton = Assert.Single(
             document.Descendants(Presentation + "Button"),
@@ -358,6 +437,13 @@ public sealed class EditorUsabilitySurfaceTests
             static value => value.Contains(
                 "Index the Dying Light",
                 StringComparison.OrdinalIgnoreCase));
+
+        Assert.Contains(
+            document.Descendants(Presentation + "Border"),
+            static element => string.Equals(
+                (string?)element.Attribute("Visibility"),
+                "{Binding IsRetargetSetupVisible, Converter={StaticResource BooleanToVisibilityConverter}}",
+                StringComparison.Ordinal));
 
         string applicationStartup = File.ReadAllText(
             FindRepositoryFile(

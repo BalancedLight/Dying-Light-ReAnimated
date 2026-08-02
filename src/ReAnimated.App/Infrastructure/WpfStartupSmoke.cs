@@ -133,6 +133,10 @@ internal sealed class WpfStartupSmoke
         ArgumentNullException.ThrowIfNull(viewModel);
 
         SeedAnimationLibrary(viewModel);
+        // Normal Browse startup physically detaches the hidden source
+        // HwndHost to guarantee true single-pane airspace. The package smoke
+        // deliberately opens FPP so it still exercises both native hosts.
+        viewModel.ActiveWorkspaceMode = "FPP";
 
         window.WindowStartupLocation =
             WindowStartupLocation.Manual;
