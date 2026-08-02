@@ -13,9 +13,16 @@ public sealed record BlenderFbxExportRequest(
     string BlenderExecutablePath,
     string OutputFbxPath,
     BlenderFbxAssetIdentity Asset,
-    RigDefinition Rig,
+    RigDefinition? Rig,
     IReadOnlyList<MeshRenderData> Meshes,
-    IReadOnlyList<string> Anm2Paths);
+    IReadOnlyList<string> Anm2Paths)
+{
+    /// <summary>
+    /// Embeds decoded base-color images in the binary FBX instead of
+    /// committing loose DDS dependencies next to it.
+    /// </summary>
+    public bool EmbedTextures { get; init; }
+}
 
 public sealed record BlenderFbxExportProgress(
     string Stage,
@@ -33,6 +40,11 @@ public sealed record BlenderFbxExportResult(
     string BlenderLog)
 {
     public IReadOnlyList<string> HelperSidecarPaths { get; init; } =
+        Array.Empty<string>();
+
+    public bool TexturesEmbedded { get; init; }
+
+    public IReadOnlyList<string> EmbeddedTextureFileNames { get; init; } =
         Array.Empty<string>();
 }
 
@@ -93,7 +105,10 @@ public sealed record BlenderFbxJob(
     IReadOnlyList<BlenderFbxJobMesh> Meshes,
     IReadOnlyList<BlenderFbxJobTexture> Textures,
     IReadOnlyList<BlenderFbxJobClip> Clips,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public bool EmbedTextures { get; init; }
+}
 
 public sealed record BlenderFbxJobAsset(
     string StableKey,
@@ -131,7 +146,8 @@ public sealed record BlenderFbxJobTexture(
     string FileName,
     int Width,
     int Height,
-    string Format);
+    string Format,
+    bool EmbeddedInFbx = false);
 
 public sealed record BlenderFbxJobClip(
     string ActionName,
@@ -175,7 +191,13 @@ public sealed record BlenderFbxHandoffManifest(
     IReadOnlyList<BlenderFbxHandoffClip> Clips,
     string BasisMode,
     string BindPoseMode,
-    IReadOnlyList<string> Limitations);
+    IReadOnlyList<string> Limitations)
+{
+    public bool TexturesEmbedded { get; init; }
+
+    public IReadOnlyList<string> EmbeddedTextureFiles { get; init; } =
+        Array.Empty<string>();
+}
 
 public sealed record BlenderFbxHandoffClip(
     string ActionName,

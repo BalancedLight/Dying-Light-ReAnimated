@@ -81,8 +81,18 @@ public sealed class BlenderFbxOutputValidator :
             .Select(static clip =>
                 clip.ActionName)
             .ToArray();
-        if (expected.Length == 0 ||
-            expected.Any(
+        if (expected.Length == 0)
+        {
+            if (inspection.AnimationStackNames.Length != 0)
+            {
+                throw new InvalidDataException(
+                    "Written mesh-only FBX unexpectedly contains AnimationStacks.");
+            }
+
+            return;
+        }
+
+        if (expected.Any(
                 string.IsNullOrWhiteSpace) ||
             expected.Distinct(
                     StringComparer.Ordinal)
@@ -197,8 +207,18 @@ public sealed class BlenderFbxOutputValidator :
             .Select(static bone =>
                 bone.Name)
             .ToArray();
-        if (expectedNames.Length == 0 ||
-            expectedNames.Any(
+        if (expectedNames.Length == 0)
+        {
+            if (inspection.LimbModelIds.Count != 0)
+            {
+                throw new InvalidDataException(
+                    "Written static FBX unexpectedly contains LimbNode bones.");
+            }
+
+            return;
+        }
+
+        if (expectedNames.Any(
                 string.IsNullOrWhiteSpace) ||
             expectedNames.Distinct(
                     StringComparer.Ordinal)
@@ -311,16 +331,22 @@ public sealed class BlenderFbxOutputValidator :
         IReadOnlyList<BlenderFbxJobBone> expectedBones,
         IReadOnlyList<BlenderFbxJobTexture> expectedTextures)
     {
-        string[] expectedModels = expectedMeshes
-            .Select(static mesh =>
-                mesh.Name)
-            .Append("DLR_BindPoseGuard")
-            .ToArray();
-        string[] expectedGeometry = expectedMeshes
-            .Select(static mesh =>
-                mesh.Name + "_Mesh")
-            .Append("DLR_BindPoseGuard_Mesh")
-            .ToArray();
+        string[] expectedModels = expectedBones.Count == 0
+            ? expectedMeshes
+                .Select(static mesh => mesh.Name)
+                .ToArray()
+            : expectedMeshes
+                .Select(static mesh => mesh.Name)
+                .Append("DLR_BindPoseGuard")
+                .ToArray();
+        string[] expectedGeometry = expectedBones.Count == 0
+            ? expectedMeshes
+                .Select(static mesh => mesh.Name + "_Mesh")
+                .ToArray()
+            : expectedMeshes
+                .Select(static mesh => mesh.Name + "_Mesh")
+                .Append("DLR_BindPoseGuard_Mesh")
+                .ToArray();
         if (inspection.MeshModelCount !=
                 expectedModels.Length ||
             inspection.MeshGeometryCount !=
@@ -405,7 +431,8 @@ public sealed class BlenderFbxOutputValidator :
             ValidateMeshTexture(
                 geometry,
                 expectedMesh,
-                texturesByKey);
+                texturesByKey,
+                inspection);
         }
     }
 
@@ -456,7 +483,8 @@ public sealed class BlenderFbxOutputValidator :
         BlenderFbxJobMesh expectedMesh,
         Dictionary<
             string,
-            BlenderFbxJobTexture> texturesByKey)
+            BlenderFbxJobTexture> texturesByKey,
+        FbxStrictExportInspection inspection)
     {
         if (expectedMesh.TextureKey is not
             { } textureKey)
@@ -480,10 +508,21 @@ public sealed class BlenderFbxOutputValidator :
                 $"Written FBX Geometry '{geometry.Name}' has no connected Material/Texture/Video chain for decoded base color '{expectedTexture.FileName}'.");
         }
 
-        ValidatePortableTextureReference(
-            geometry.ExternalFileReferences,
-            expectedTexture.FileName,
-            $"FBX Geometry '{geometry.Name}' Material/Texture/Video chain");
+        if (expectedTexture.EmbeddedInFbx)
+        {
+            ValidateEmbeddedTexture(
+                geometry.ExternalFileReferences,
+                inspection.EmbeddedVideos,
+                expectedTexture.FileName,
+                $"FBX Geometry '{geometry.Name}' Material/Texture/Video chain");
+        }
+        else
+        {
+            ValidatePortableTextureReference(
+                geometry.ExternalFileReferences,
+                expectedTexture.FileName,
+                $"FBX Geometry '{geometry.Name}' Material/Texture/Video chain");
+        }
     }
 
     private static void ValidateTextures(
@@ -506,6 +545,15 @@ public sealed class BlenderFbxOutputValidator :
                 "Requested decoded base-color texture keys are not unique.");
         }
 
+        bool expectEmbeddedTextures = expectedTextures[0]
+            .EmbeddedInFbx;
+        if (expectedTextures.Any(texture =>
+                texture.EmbeddedInFbx != expectEmbeddedTextures))
+        {
+            throw new InvalidDataException(
+                "An FBX export cannot mix embedded and external decoded base-color textures.");
+        }
+
         if (inspection.TextureObjectCount <
                 expectedTextures.Count ||
             inspection.VideoObjectCount <
@@ -518,10 +566,52 @@ public sealed class BlenderFbxOutputValidator :
         foreach (BlenderFbxJobTexture texture in
                  expectedTextures)
         {
-            ValidatePortableTextureReference(
-                inspection.ExternalFileReferences,
-                texture.FileName,
-                "Written FBX Texture/Video objects");
+            if (expectEmbeddedTextures)
+            {
+                ValidateEmbeddedTexture(
+                    inspection.ExternalFileReferences,
+                    inspection.EmbeddedVideos,
+                    texture.FileName,
+                    "Written FBX Texture/Video objects");
+            }
+            else
+            {
+                ValidatePortableTextureReference(
+                    inspection.ExternalFileReferences,
+                    texture.FileName,
+                    "Written FBX Texture/Video objects");
+            }
+        }
+    }
+
+    private static void ValidateEmbeddedTexture(
+        IReadOnlyList<FbxExternalFileReferenceInspection>
+            references,
+        IReadOnlyList<FbxEmbeddedVideoInspection> embeddedVideos,
+        string expectedFileName,
+        string context)
+    {
+        long[] matchingVideoIds = references
+            .Where(reference =>
+                string.Equals(
+                    GetPortableFileName(reference.Value),
+                    expectedFileName,
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(static reference => reference.ObjectId)
+            .Distinct()
+            .ToArray();
+        if (matchingVideoIds.Length == 0)
+        {
+            throw new InvalidDataException(
+                $"{context} does not identify decoded base-color file '{expectedFileName}' for embedding.");
+        }
+
+        if (!embeddedVideos.Any(video =>
+                video.ContentByteCount > 0 &&
+                matchingVideoIds.Contains(video.ObjectId)))
+        {
+            throw new InvalidDataException(
+                $"{context} does not contain embedded image bytes for decoded base-color file '{expectedFileName}'.");
         }
     }
 

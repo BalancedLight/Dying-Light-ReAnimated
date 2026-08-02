@@ -53,6 +53,14 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             helper,
             StringComparison.Ordinal);
         Assert.Contains(
+            "embed_textures=bool(job.get(\"embed_textures\", False))",
+            helper,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"COPY\"",
+            helper,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "DLR_ACTION_STACKS:",
             helper,
             StringComparison.Ordinal);
@@ -325,6 +333,96 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             "legacy one-clip .fbx.dlrroundtrip.json",
             manifestJson,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ServiceCommitsSelfContainedMeshOnlyFbx()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        RigDefinition rig = CreateRig();
+        MeshRenderData mesh = CreateTexturedMesh();
+        string blenderPath = Path.Combine(
+            _temporaryDirectory,
+            "blender.exe");
+        File.WriteAllBytes(blenderPath, []);
+        string outputPath = Path.Combine(
+            _temporaryDirectory,
+            "Output",
+            "retail-player.fbx");
+        var runner = new RecordingBlenderRunner();
+        var service = new BlenderFbxExportService(
+            runner,
+            outputValidator:
+                new AcceptingFbxOutputValidator(),
+            timeout: TimeSpan.FromSeconds(5));
+
+        BlenderFbxExportResult result = await service.ExportAsync(
+            new BlenderFbxExportRequest(
+                blenderPath,
+                outputPath,
+                new BlenderFbxAssetIdentity(
+                    "retail:player",
+                    "Data0.pak",
+                    "player_1_tpp.msh",
+                    new string('a', 64)),
+                rig,
+                [mesh],
+                [])
+            {
+                EmbedTextures = true,
+            },
+            cancellationToken:
+                CancellationToken.None);
+
+        Assert.Equal(outputPath, result.OutputFbxPath);
+        Assert.Empty(result.AnimationStacks);
+        Assert.Equal(rig.BoneCount, result.BoneCount);
+        Assert.Equal(1, result.MeshCount);
+        Assert.True(result.TexturesEmbedded);
+        Assert.Empty(result.TexturePaths);
+        Assert.Single(result.EmbeddedTextureFileNames);
+        Assert.True(File.Exists(outputPath));
+        Assert.Empty(
+            Directory.EnumerateFiles(
+                Path.GetDirectoryName(outputPath)!,
+                "*.dds"));
+
+        Assert.NotNull(runner.JobJson);
+        using JsonDocument jobDocument =
+            JsonDocument.Parse(runner.JobJson);
+        JsonElement job = jobDocument.RootElement;
+        Assert.True(
+            job.GetProperty("embed_textures")
+                .GetBoolean());
+        Assert.Equal(
+            0,
+            job.GetProperty("clips")
+                .GetArrayLength());
+        Assert.Equal(
+            rig.BoneCount,
+            job.GetProperty("bones")
+                .GetArrayLength());
+        Assert.True(
+            job.GetProperty("textures")[0]
+                .GetProperty("embedded_in_fbx")
+                .GetBoolean());
+
+        string manifestJson = await File.ReadAllTextAsync(
+            result.HandoffManifestPath,
+            CancellationToken.None);
+        using JsonDocument manifestDocument =
+            JsonDocument.Parse(manifestJson);
+        JsonElement manifest = manifestDocument.RootElement;
+        Assert.True(
+            manifest.GetProperty("textures_embedded")
+                .GetBoolean());
+        Assert.Equal(
+            0,
+            manifest.GetProperty("texture_files")
+                .GetArrayLength());
+        Assert.Single(
+            manifest.GetProperty("embedded_texture_files")
+                .EnumerateArray());
     }
 
     [Fact]
@@ -2193,8 +2291,9 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             StagedClipCount = clips.Length;
             StagedMeshCount = meshes.Length;
             StagedTextureCount = textures.Length;
-            FirstStagedClipBinary =
-                await File.ReadAllBytesAsync(
+            FirstStagedClipBinary = clips.Length == 0
+                ? null
+                : await File.ReadAllBytesAsync(
                     clips[0]
                         .GetProperty("binary_path")
                         .GetString()!,
@@ -2302,7 +2401,6 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             cancellationToken.ThrowIfCancellationRequested();
             Assert.True(File.Exists(outputFbxPath));
             Assert.NotEmpty(expectedBones);
-            Assert.NotEmpty(expectedClips);
             Assert.NotEmpty(expectedMeshes);
             Assert.NotEmpty(expectedTextures);
             return Task.CompletedTask;

@@ -524,7 +524,16 @@
                                     <ListBox x:Name="AssetExplorerList"
                                              ItemsSource="{Binding AssetBrowser.VisibleAssets}"
                                              MouseDoubleClick="OnAssetExplorerDoubleClick"
-                                             SelectedItem="{Binding AssetBrowser.SelectedAsset}">
+                                             PreviewMouseRightButtonDown="OnAssetExplorerPreviewMouseRightButtonDown"
+                                             SelectedItem="{Binding AssetBrowser.SelectedAsset}"
+                                             Tag="{Binding}">
+                                        <ListBox.ContextMenu>
+                                            <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Command="{Binding ExportSelectedBrowserMeshToFbxCommand}"
+                                                          Header="Export to FBX…"
+                                                          ToolTip="Create a self-contained FBX for this decoded retail mesh. Skinned meshes include their bind skeleton and weights; each decoded base-color texture is embedded." />
+                                            </ContextMenu>
+                                        </ListBox.ContextMenu>
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Margin="3,4">

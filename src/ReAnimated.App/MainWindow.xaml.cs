@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using ReAnimated.App.Infrastructure;
@@ -107,6 +108,23 @@ public partial class MainWindow : Window
         args.Handled = true;
         await _viewModel.PlaySelectedExplorerAnimationCommand
             .ExecuteAsync(null);
+    }
+
+    private void OnAssetExplorerPreviewMouseRightButtonDown(
+        object sender,
+        MouseButtonEventArgs args)
+    {
+        if (sender is not ListBox listBox ||
+            ItemsControl.ContainerFromElement(
+                listBox,
+                args.OriginalSource as DependencyObject) is not
+            ListBoxItem item)
+        {
+            return;
+        }
+
+        item.IsSelected = true;
+        item.Focus();
     }
 
     private async void OnAnimationLibraryDoubleClick(
