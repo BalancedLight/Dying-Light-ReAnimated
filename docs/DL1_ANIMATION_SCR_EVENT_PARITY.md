@@ -101,7 +101,7 @@ written to the repository.
 
 ## Current validation
 
-The Hermetic and Release C# validation tiers exercise the checked-in event-layout fixture together with the installed-DL1 controls when their local evidence is available:
+The Hermetic and Release C# validation tiers exercise the checked-in event-layout fixture without requiring installed DL1 data:
 
 ```powershell
 .\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release

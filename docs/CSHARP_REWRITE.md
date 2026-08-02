@@ -288,17 +288,7 @@ unrelated acceptance suites:
   -SkipUnavailableOptionalBlender
 ```
 
-`Focused` covers the changed playback, ViewModel, and renderer surfaces;
-`Hermetic` expands to local codec/evaluation, WPF, and renderer controls; and
-`Release` adds renderer goldens, Python parity, AnimationScr parity, installed
-DL1 1.55 named animation controls, the existing mesh-corpus evidence check, and
-the optional Blender handoff. Each gate writes an atomic passing receipt keyed
-to its exact source/test inputs, fixtures, dependencies, environment, and
-relevant game/renderer identity. A candidate-identical gate runs at most once
-and reports whether it ran or was reused. `-ForceAll` deliberately invalidates
-all tier receipts. Missing Blender can be explicitly skipped, but no passing
-Blender receipt is written. The unchanged 8,738-mesh corpus is verified from
-its build-bound receipt for animation-only changes and is not executed again.
+`Focused` covers the changed playback, ViewModel, and renderer surfaces; `Hermetic` expands to local codec/evaluation, WPF, and renderer controls; and `Release` adds renderer goldens plus the optional Blender handoff. Every automatic tier is portable: a public checkout, package, or GitHub Actions runner does not need Dying Light installed. Installed-DL1 corpus and playback checks remain explicit local evidence commands, not package or CI gates. Each automatic gate writes an atomic passing receipt keyed to its exact source/test inputs, fixtures, and relevant portable environment identity. A candidate-identical gate runs at most once and reports whether it ran or was reused. `-ForceAll` deliberately invalidates all tier receipts. Missing Blender can be explicitly skipped, but no passing Blender receipt is written.
 
 Every solution build produces the ordinary framework-dependent WPF build and
 also publishes exactly one self-contained file at
@@ -310,7 +300,7 @@ application host. To create the fully validated Windows candidate:
 .\package_csharp.ps1
 ```
 
-The packaging script performs the Release C# build and tests, WPF/D3D11 startup acceptance, renderer checks, installed-DL1 controls, retained corpus receipt verification, optional Blender handoff, package self-test, ZIP creation, and SHA256 generation before publishing its one self-contained executable. It consumes only the C# repository and its checked-in static compatibility fixtures.The SDK is pinned by `global.json`. Before compilation, packaging hashes a
+The packaging script performs the Release C# build and tests, WPF/D3D11 startup acceptance, portable renderer checks, optional Blender handoff, package self-test, ZIP creation, and SHA256 generation before publishing its one self-contained executable. It consumes only the C# repository and its checked-in static compatibility fixtures.The SDK is pinned by `global.json`. Before compilation, packaging hashes a
 deterministically ordered candidate-input set covering the C# solution,
 untracked source files, schemas, relevant status documents, parity fixtures,
 and validation tools. Git HEAD, clean/dirty state, input count, aggregate
@@ -319,7 +309,11 @@ written as comments in `SHA256SUMS.txt`; the packaged executable's fail-closed
 self-test verifies those values against the packaging invocation.
 The same packaged executable opens WPF when no CLI verb is supplied and
 dispatches the 12 supported headless inspection, validation, catalog, RPack,
-and project-export verbs. There is no second shipped CLI executable. The historical ANM2, semantic, FED, and AnimationScr compatibility fixtures are exercised by the Hermetic and Release C# validation tiers. They are checked-in static inputs; the former live Python differential wrappers have been retired.The exact installed Windows 1.55 offline gate is:
+and project-export verbs. There is no second shipped CLI executable.
+
+The historical ANM2, semantic, FED, and AnimationScr compatibility fixtures are exercised by the Hermetic and Release C# validation tiers. They are checked-in static inputs; the former live Python differential wrappers have been retired.
+
+The exact installed Windows 1.55 offline gate is an explicit local-only acceptance command. It is never run by the package script or GitHub Actions:
 
 ```powershell
 .\tools\validate_dl1_installed_acceptance.ps1

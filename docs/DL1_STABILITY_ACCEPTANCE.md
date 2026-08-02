@@ -197,9 +197,7 @@ retail-animation values across Blender versions or model families.
 
 ## Fail-closed installed DL1 1.55 receipt
 
-`tools\validate_dl1_installed_acceptance.ps1` is the release-required,
-read-only installed gate. An ordinary green test run is not equivalent because
-the relevant tests are deliberately opt-in outside this runner.
+`tools\validate_dl1_installed_acceptance.ps1` is an explicit local-only, read-only installed acceptance command. It is deliberately excluded from package validation and GitHub Actions because public runners do not have a Dying Light installation. An ordinary green portable C# test run is not equivalent to this separate evidence.
 
 The runner requires Release configuration and the exact validated Windows 1.55
 build fingerprint. It also verifies the required base/DLC files, then runs 19

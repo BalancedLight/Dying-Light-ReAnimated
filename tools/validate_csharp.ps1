@@ -185,25 +185,6 @@ function Get-ValidationEnvironment {
         $renderer = "unavailable:$($_.Exception.GetType().Name)"
     }
 
-    $installedBuild = "unavailable"
-    $corpusPath = Join-Path $repositoryRoot `
-        "artifacts\validation\dl1-mesh-corpus-1.55.json"
-    try {
-        if (Test-Path -LiteralPath $corpusPath -PathType Leaf) {
-            $corpus = Get-Content -LiteralPath $corpusPath -Raw |
-                ConvertFrom-Json
-            $executable = [string]$corpus.build.executablePath
-            if (Test-Path -LiteralPath $executable -PathType Leaf) {
-                $installedBuild = "{0}|{1}" -f
-                    [string]$corpus.build.buildFingerprint,
-                    (Get-FileSha256 $executable)
-            }
-        }
-    }
-    catch {
-        $installedBuild = "unavailable:$($_.Exception.GetType().Name)"
-    }
-
     return [ordered]@{
         dotnetSdk = (& dotnet --version).Trim()
         runtime = [Environment]::Version.ToString()
@@ -211,7 +192,6 @@ function Get-ValidationEnvironment {
         processArchitecture = [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString()
         configuration = $Configuration
         renderer = $renderer
-        installedDl1 = $installedBuild
         blender = if ([string]::IsNullOrWhiteSpace(
                 $script:resolvedBlenderExecutable)) {
             "unavailable"
@@ -339,34 +319,6 @@ function Invoke-BlenderGate {
     if ($LASTEXITCODE -ne 0) {
         throw "Gate '$($Gate.Name)' failed with exit code $LASTEXITCODE."
     }
-}
-
-function Invoke-MeshCorpusReceiptGate {
-    $corpusPath = Join-Path $repositoryRoot `
-        "artifacts\validation\dl1-mesh-corpus-1.55.json"
-    $acceptancePath = Join-Path $repositoryRoot `
-        "artifacts\validation\dl1-installed-acceptance-1.55.json"
-    if (-not (Test-Path -LiteralPath $corpusPath -PathType Leaf) -or
-        -not (Test-Path -LiteralPath $acceptancePath -PathType Leaf)) {
-        throw "The unchanged 8,738-mesh corpus cannot be reused because its local evidence is missing."
-    }
-    $corpus = Get-Content -LiteralPath $corpusPath -Raw |
-        ConvertFrom-Json
-    $acceptance = Get-Content -LiteralPath $acceptancePath -Raw |
-        ConvertFrom-Json
-    $corpusHash = Get-FileSha256 $corpusPath
-    if ($corpus.format -ne "dl-reanimated-dl1-type272-corpus-v2" -or
-        -not [bool]$corpus.complete -or
-        [int]$corpus.summary.descriptorMeshResourceCount -ne 8738 -or
-        [int]$corpus.summary.blockedCount -ne 0 -or
-        $acceptance.corpus.reportSha256 -ne $corpusHash -or
-        $acceptance.installedBuild.buildFingerprint -ne
-            $corpus.build.buildFingerprint) {
-        throw "The local mesh-corpus evidence is malformed, incomplete, changed, or for a different DL1 build."
-    }
-    Write-Host (
-        "Verified and reused the unchanged 8,738-mesh corpus report; " +
-        "this animation pass did not execute the corpus.")
 }
 
 function New-Gate {
@@ -526,26 +478,6 @@ $releaseGates = @(
                     "tests\fixtures\renderer_authoring_stage_goldens_v1.json",
                     "tools\validate_renderer_authoring_goldens.ps1"))),
         (New-Gate `
-            -Name "installed-dl1-animation-controls" `
-            -Category "installed DL1" `
-            -Action "script" `
-            -Script "tools\validate_dl1_animation_playback.ps1" `
-            -InputRoots @($codecRoots + $rendererRoots) `
-            -InputFiles @(
-                $testProjectInputs +
-                @(
-                    "tests\ReAnimated.Tests\InstalledDl1AnimationPlaybackControlTests.cs",
-                    "tests\ReAnimated.Tests\RpackTestData.cs",
-                    "tools\validate_dl1_animation_playback.ps1"))),
-        (New-Gate `
-            -Name "reuse-mesh-corpus" `
-            -Category "installed DL1" `
-            -Action "mesh-receipt" `
-            -InputRoots @(
-                "src\ReAnimated.Codecs\CompactMesh",
-                "src\ReAnimated.DL1.Assets\Meshes") `
-            -InputFiles @("tools\validate_dl1_mesh_corpus.ps1")),
-        (New-Gate `
             -Name "blender-handoff" `
             -Category "Blender" `
             -Action "blender" `
@@ -628,7 +560,6 @@ foreach ($gate in $gates) {
             "test" { Invoke-TestGate $gate; break }
             "script" { Invoke-ScriptGate $gate; break }
             "blender" { Invoke-BlenderGate $gate; break }
-            "mesh-receipt" { Invoke-MeshCorpusReceiptGate; break }
             default { throw "Unknown gate action '$($gate.Action)'." }
         }
         $completed = [DateTimeOffset]::UtcNow
