@@ -1,12 +1,15 @@
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
+using ReAnimated.App.ViewModels;
 
 namespace ReAnimated.App.Views;
 
 public partial class TimelinePanel : UserControl
 {
     private bool _synchronizingVerticalScroll;
+    private Canvas? _activeScrubCanvas;
 
     public TimelinePanel()
     {
@@ -61,6 +64,62 @@ public partial class TimelinePanel : UserControl
         {
             _synchronizingVerticalScroll = false;
         }
+    }
+
+    private void TimelineCanvas_OnMouseLeftButtonDown(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (sender is not Canvas canvas ||
+            DataContext is not TimelineViewModel timeline)
+        {
+            return;
+        }
+
+        _activeScrubCanvas = canvas;
+        canvas.CaptureMouse();
+        Point point = e.GetPosition(canvas);
+        if (ReferenceEquals(canvas, DopeSheetCanvas))
+        {
+            timeline.SelectTrackFromCanvasY(point.Y);
+        }
+        timeline.ScrubToPixel(point.X);
+        e.Handled = true;
+    }
+
+    private void TimelineCanvas_OnMouseMove(
+        object sender,
+        MouseEventArgs e)
+    {
+        if (sender is not Canvas canvas ||
+            !ReferenceEquals(canvas, _activeScrubCanvas) ||
+            e.LeftButton != MouseButtonState.Pressed ||
+            DataContext is not TimelineViewModel timeline)
+        {
+            return;
+        }
+
+        timeline.ScrubToPixel(e.GetPosition(canvas).X);
+        e.Handled = true;
+    }
+
+    private void TimelineCanvas_OnMouseLeftButtonUp(
+        object sender,
+        MouseButtonEventArgs e)
+    {
+        if (sender is not Canvas canvas ||
+            !ReferenceEquals(canvas, _activeScrubCanvas))
+        {
+            return;
+        }
+
+        if (DataContext is TimelineViewModel timeline)
+        {
+            timeline.ScrubToPixel(e.GetPosition(canvas).X);
+        }
+        canvas.ReleaseMouseCapture();
+        _activeScrubCanvas = null;
+        e.Handled = true;
     }
 
     private static T? FindVisualChild<T>(DependencyObject parent)

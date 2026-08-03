@@ -51,6 +51,70 @@
                                       SceneSource="{Binding SceneSource}"
                                       Focusable="True" />
 
+            <Border Grid.Row="1"
+                    MaxWidth="520"
+                    Margin="24"
+                    Padding="14,10"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    Background="#DD331A1D"
+                    BorderBrush="{StaticResource ErrorBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    IsHitTestVisible="False">
+                <Border.Style>
+                    <Style TargetType="{x:Type Border}">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DiagnosticOverlay}"
+                                         Value="{x:Null}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
+                <TextBlock Foreground="{StaticResource ErrorBrush}"
+                           FontWeight="SemiBold"
+                           Text="{Binding DiagnosticOverlay}"
+                           TextWrapping="Wrap" />
+            </Border>
+
+            <Grid Grid.Row="1"
+                  IsHitTestVisible="False">
+                <Grid.Style>
+                    <Style TargetType="{x:Type Grid}">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsCameraViewActive}"
+                                         Value="True">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <Border HorizontalAlignment="Right"
+                        VerticalAlignment="Top"
+                        Margin="12"
+                        Padding="7,3"
+                        Background="#99151A22"
+                        BorderBrush="{StaticResource AccentBrush}"
+                        BorderThickness="1"
+                        CornerRadius="3">
+                    <TextBlock Foreground="{StaticResource AccentBrush}"
+                               FontSize="10"
+                               FontWeight="SemiBold"
+                               Text="EYE CAMERA" />
+                </Border>
+                <Grid Width="26" Height="26"
+                      HorizontalAlignment="Center"
+                      VerticalAlignment="Center">
+                    <Border Width="1" Height="26"
+                            Background="#99DDE8F0" />
+                    <Border Width="26" Height="1"
+                            Background="#99DDE8F0" />
+                </Grid>
+            </Grid>
+
             <Grid Grid.Row="2" Background="#151A22">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -68,7 +132,7 @@
                            FontSize="10"
                            Foreground="{StaticResource MutedTextBrush}"
                            Text="L orbit · M pan · wheel zoom"
-                           ToolTip="Left-drag orbits. Middle-drag pans. The mouse wheel zooms. An evaluated FPP or movie camera keeps the target viewport locked." />
+                           ToolTip="Left-drag orbits. Middle-drag pans. The mouse wheel zooms. An evaluated EyeCamera or movie camera locks only the pane that uses it." />
                 <TextBlock Grid.Column="2"
                            Margin="8,0"
                            VerticalAlignment="Center"

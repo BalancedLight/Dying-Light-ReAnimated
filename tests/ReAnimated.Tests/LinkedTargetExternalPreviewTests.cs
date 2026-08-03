@@ -47,6 +47,54 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         Assert.Equal(0, targetGizmo.BeginCount);
     }
 
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task MissingEyeCameraShowsLeftOverlayAndLeavesRightOrbitUsable()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "missing-eye-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "missing-eye-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "missing-eye.json")),
+            new TestProjectFileDialogs(
+                Path.Combine(_temporaryDirectory, "missing-eye.dlraproj")),
+            assets);
+        SkeletonRenderData skeleton = CreateSkeleton(
+            "RootWithoutEyeCamera",
+            Matrix4x4.Identity,
+            isSelected: false);
+        viewModel.TargetViewport.SceneSource.SetScene(
+            [CreateMesh("target", MeshProjectionRole.Scene, false)],
+            skeleton,
+            []);
+        viewModel.ActiveWorkspaceMode = "FPP";
+
+        viewModel.ApplyEvaluatedPreviewCamera(
+            CreateFrame(
+                "FPP",
+                skeleton,
+                includeCamera: false));
+
+        Assert.Contains(
+            "EyeCamera helper",
+            viewModel.SourceViewport.DiagnosticOverlay,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "FPP EyeCamera unavailable",
+            viewModel.SourceViewport.Title);
+        Assert.Equal(
+            RenderCameraNavigationResult.Applied,
+            viewModel.TargetViewport.SceneSource.NavigateCamera(
+                RenderCameraNavigationInput.Orbit(
+                    8.0f,
+                    -4.0f,
+                    800,
+                    600)));
+    }
+
     [Theory]
     [InlineData("FPP")]
     [InlineData("Cutscene")]
@@ -146,52 +194,84 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         Assert.Equal(
             target.Meshes.Select(static mesh => mesh.IsSelected),
             external.Meshes.Select(static mesh => mesh.IsSelected));
-        Assert.Equal(
-            target.Skeleton!.Bones,
-            external.Skeleton!.Bones);
-        Assert.Equal(target.Gizmos, external.Gizmos);
-        Assert.Equal(target.MorphWeights, external.MorphWeights);
-        Assert.Null(external.FppProjectionState);
-        Assert.NotEqual(target.Camera, external.Camera);
-        Assert.Equal(
-            RenderCameraNavigationResult.Applied,
-            viewModel.SourceViewport.SceneSource.NavigateCamera(
-                RenderCameraNavigationInput.Pan(
-                    20.0f,
-                    -10.0f,
-                    800,
-                    600)));
-        Assert.Equal(
-            RenderCameraNavigationResult.PreviewCameraLocked,
-            viewModel.TargetViewport.SceneSource.NavigateCamera(
-                RenderCameraNavigationInput.Orbit(
-                    20.0f,
-                    -10.0f,
-                    800,
-                    600)));
-        Assert.Equal(
-            "DL1 Target / External",
-            viewModel.SourceViewport.Title);
-        Assert.Contains(
-            "Same evaluated target",
-            viewModel.SourceViewport.FidelityLabel,
-            StringComparison.Ordinal);
         if (workspaceMode == "FPP")
         {
-            Assert.NotNull(target.FppProjectionState);
+            Assert.Equal(
+                evaluatedSkeleton.Bones,
+                external.Skeleton!.Bones);
+            Assert.NotEqual(
+                external.Skeleton.Bones,
+                target.Skeleton!.Bones);
+            Assert.Null(target.FppProjectionState);
+        }
+        else
+        {
+            Assert.Equal(
+                target.Skeleton!.Bones,
+                external.Skeleton!.Bones);
+            Assert.Equal(target.Gizmos, external.Gizmos);
+            Assert.Equal(target.MorphWeights, external.MorphWeights);
+        }
+        Assert.NotEqual(target.Camera, external.Camera);
+        if (workspaceMode == "FPP")
+        {
+            Assert.NotNull(external.FppProjectionState);
             Assert.NotNull(
-                target.FppProjectionState!.HandsProjection);
+                external.FppProjectionState!.HandsProjection);
             Assert.Contains(
-                "hands projection disabled",
+                "separate hands projections",
                 viewModel.SourceViewport.FidelityLabel,
                 StringComparison.OrdinalIgnoreCase);
             Assert.Equal(
                 "DL1 Target / EyeCamera",
+                viewModel.SourceViewport.Title);
+            Assert.Equal(
+                "DL1 Target / External Orbit",
                 viewModel.TargetViewport.Title);
+            Assert.Equal(
+                RenderCameraNavigationResult.PreviewCameraLocked,
+                viewModel.SourceViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Pan(
+                        20.0f,
+                        -10.0f,
+                        800,
+                        600)));
+            Assert.Equal(
+                RenderCameraNavigationResult.Applied,
+                viewModel.TargetViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Orbit(
+                        20.0f,
+                        -10.0f,
+                        800,
+                        600)));
         }
         else
         {
+            Assert.Null(external.FppProjectionState);
             Assert.Null(target.FppProjectionState);
+            Assert.Equal(
+                RenderCameraNavigationResult.Applied,
+                viewModel.SourceViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Pan(
+                        20.0f,
+                        -10.0f,
+                        800,
+                        600)));
+            Assert.Equal(
+                RenderCameraNavigationResult.PreviewCameraLocked,
+                viewModel.TargetViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Orbit(
+                        20.0f,
+                        -10.0f,
+                        800,
+                        600)));
+            Assert.Equal(
+                "DL1 Target / External",
+                viewModel.SourceViewport.Title);
+            Assert.Contains(
+                "Same evaluated target",
+                viewModel.SourceViewport.FidelityLabel,
+                StringComparison.Ordinal);
             Assert.Equal(
                 "DL1 Target / Movie Camera",
                 viewModel.TargetViewport.Title);
@@ -219,7 +299,10 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         Assert.Equal(0.6f, mirroredMorph.Weight);
 
         RenderCamera evaluatedCameraBeforeLayoutChange =
-            viewModel.TargetViewport.SceneSource.CaptureFrame().Camera;
+            (workspaceMode == "FPP"
+                ? viewModel.SourceViewport
+                : viewModel.TargetViewport)
+            .SceneSource.CaptureFrame().Camera;
 
         viewModel.ActiveWorkspaceMode = "Retarget";
 
@@ -264,28 +347,47 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         viewModel.ActiveWorkspaceMode = workspaceMode;
 
         RenderFrameSnapshot restoredTargetCamera =
-            viewModel.TargetViewport.SceneSource.CaptureFrame();
+            (workspaceMode == "FPP"
+                ? viewModel.SourceViewport
+                : viewModel.TargetViewport)
+            .SceneSource.CaptureFrame();
         Assert.True(
             viewModel.SourceViewport.SceneSource
                 .HasExternalPreviewScene);
         Assert.Equal(
             evaluatedCameraBeforeLayoutChange,
             restoredTargetCamera.Camera);
-        Assert.Equal(
-            RenderCameraNavigationResult.PreviewCameraLocked,
-            viewModel.TargetViewport.SceneSource.NavigateCamera(
-                RenderCameraNavigationInput.Orbit(
-                    6.0f,
-                    -3.0f,
-                    800,
-                    600)));
         if (workspaceMode == "FPP")
         {
             Assert.NotNull(restoredTargetCamera.FppProjectionState);
+            Assert.Equal(
+                RenderCameraNavigationResult.PreviewCameraLocked,
+                viewModel.SourceViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Orbit(
+                        6.0f,
+                        -3.0f,
+                        800,
+                        600)));
+            Assert.Equal(
+                RenderCameraNavigationResult.Applied,
+                viewModel.TargetViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Pan(
+                        6.0f,
+                        -3.0f,
+                        800,
+                        600)));
         }
         else
         {
             Assert.Null(restoredTargetCamera.FppProjectionState);
+            Assert.Equal(
+                RenderCameraNavigationResult.PreviewCameraLocked,
+                viewModel.TargetViewport.SceneSource.NavigateCamera(
+                    RenderCameraNavigationInput.Orbit(
+                        6.0f,
+                        -3.0f,
+                        800,
+                        600)));
         }
     }
 
@@ -301,7 +403,8 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
 
     private static EvaluationFrame CreateFrame(
         string workspaceMode,
-        SkeletonRenderData skeleton)
+        SkeletonRenderData skeleton,
+        bool includeCamera = true)
     {
         var rig = new RigDefinition(
             "linked-target-rig",
@@ -329,15 +432,17 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
                 0.01,
                 Dl1ProjectionFarPlane.Infinite)
             : null;
-        var camera = new EvaluatedCamera(
-            TransformMatrix.CreateTranslation(
-                new Vector3D(4.0, 5.0, 6.0)),
-            lens,
-            isFpp,
-            isFpp
-                ? EvaluatedCameraSource.Dl1FppEyeCamera
-                : EvaluatedCameraSource.Dl1MovieReferenceCamera,
-            handsProjection);
+        EvaluatedCamera? camera = includeCamera
+            ? new EvaluatedCamera(
+                TransformMatrix.CreateTranslation(
+                    new Vector3D(4.0, 5.0, 6.0)),
+                lens,
+                isFpp,
+                isFpp
+                    ? EvaluatedCameraSource.Dl1FppEyeCamera
+                    : EvaluatedCameraSource.Dl1MovieReferenceCamera,
+                handsProjection)
+            : null;
         return new EvaluationFrame(
             0.0,
             pose,

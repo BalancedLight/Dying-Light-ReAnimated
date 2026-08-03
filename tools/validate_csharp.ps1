@@ -396,7 +396,7 @@ $focusedCodecTests = @(Select-TestInputFiles (
     "Anm2Codec|EvaluationPipeline)Tests$"))
 $focusedViewModelTests = @(Select-TestInputFiles (
     "^(AnimationExplorerViewModel|ViewModelTimeline|" +
-    "CoreAnimationProject)Tests$"))
+    "CoreAnimationProject|TransactionalPlayback)Tests$"))
 $focusedRendererTests = @(Select-TestInputFiles (
     "^(RendererSceneSource|LinkedTargetExternalPreview|" +
     "RendererCpuReference|RendererGpuSkinning)Tests$"))
@@ -424,7 +424,7 @@ $focusedGates = @(
         -Name "focused-viewmodel-wpf" `
         -Category "ViewModel/WPF" `
         -Action "test" `
-        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModelTimelineTests|FullyQualifiedName~CoreAnimationProjectTests" `
+        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModelTimelineTests|FullyQualifiedName~CoreAnimationProjectTests|FullyQualifiedName~TransactionalPlaybackTests" `
         -InputRoots @($viewModelRoots) `
         -InputFiles @($testProjectInputs + $focusedViewModelTests)),
     (New-Gate `

@@ -174,7 +174,7 @@ public sealed class TimelineViewModel : ObservableObject
 
     public string CurveStatusLabel => Curves.Count == 0
         ? "No numeric curves are available for the selected channel."
-        : $"{Curves.Count:N0} components | shared value scale";
+        : $"{Curves.Count:N0} components | shared value scale | source values are read-only";
 
     public int CurrentFrame
     {
@@ -194,6 +194,43 @@ public sealed class TimelineViewModel : ObservableObject
                 CurrentFrameChanged?.Invoke(this, EventArgs.Empty);
             }
         }
+    }
+
+    public int FrameFromPixel(double pixelX)
+    {
+        if (!double.IsFinite(pixelX))
+        {
+            throw new ArgumentOutOfRangeException(nameof(pixelX));
+        }
+
+        double frame = StartFrame +
+                       (Math.Max(0.0, pixelX) / PixelsPerFrame);
+        double clamped = Math.Clamp(frame, StartFrame, EndFrame);
+        return checked((int)Math.Round(clamped));
+    }
+
+    public void ScrubToPixel(double pixelX)
+    {
+        IsPlaying = false;
+        CurrentFrame = FrameFromPixel(pixelX);
+    }
+
+    public TimelineTrackViewModel? SelectTrackFromCanvasY(double pixelY)
+    {
+        if (!double.IsFinite(pixelY))
+        {
+            throw new ArgumentOutOfRangeException(nameof(pixelY));
+        }
+
+        int index = checked((int)Math.Floor(
+            (pixelY - TrackHeaderHeight) / TrackRowHeight));
+        if ((uint)index >= (uint)VisibleTracks.Count)
+        {
+            return null;
+        }
+
+        SelectedTrack = VisibleTracks[index];
+        return SelectedTrack;
     }
 
     public int EndFrame
@@ -569,12 +606,29 @@ public sealed class TimelineViewModel : ObservableObject
         {
             TimelineTrackViewModel track = VisibleTracks[trackIndex];
             bool isSelected = ReferenceEquals(track, SelectedTrack);
-            IEnumerable<TimelineKeyframeViewModel> presentationKeys =
-                isSelected || !track.IsReadOnly
+            IEnumerable<TimelineKeyframeViewModel> presentationKeys;
+            if (track.ExactKeyFrames.Count > 0)
+            {
+                IEnumerable<int> exactFrames = isSelected
+                    ? track.ExactKeyFrames
+                    : SelectEvenlySpacedPresentationFrames(
+                        track.ExactKeyFrames,
+                        maximumCount: 12);
+                presentationKeys = exactFrames.Select(frame =>
+                    new TimelineKeyframeViewModel(
+                        track.Name,
+                        frame,
+                        ToPixel(frame),
+                        0.0));
+            }
+            else
+            {
+                presentationKeys = isSelected || !track.IsReadOnly
                     ? track.Keyframes
                     : SelectEvenlySpacedPresentationKeys(
                         track.Keyframes,
                         maximumCount: 12);
+            }
             foreach (TimelineKeyframeViewModel keyframe in
                      presentationKeys)
             {
@@ -606,6 +660,27 @@ public sealed class TimelineViewModel : ObservableObject
                 index * (keys.Count - 1.0) /
                 (maximumCount - 1.0)));
             selected[index] = keys[sourceIndex];
+        }
+
+        return selected;
+    }
+
+    private static IEnumerable<int> SelectEvenlySpacedPresentationFrames(
+        IReadOnlyList<int> frames,
+        int maximumCount)
+    {
+        if (frames.Count <= maximumCount)
+        {
+            return frames;
+        }
+
+        var selected = new int[maximumCount];
+        for (var index = 0; index < maximumCount; index++)
+        {
+            int sourceIndex = checked((int)Math.Round(
+                index * (frames.Count - 1.0) /
+                (maximumCount - 1.0)));
+            selected[index] = frames[sourceIndex];
         }
 
         return selected;
@@ -716,7 +791,8 @@ public sealed class TimelineTrackViewModel : ObservableObject
         string channel,
         string group,
         bool isReadOnly,
-        int? totalKeyCount = null)
+        int? totalKeyCount = null,
+        IEnumerable<int>? exactKeyFrames = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -727,7 +803,14 @@ public sealed class TimelineTrackViewModel : ObservableObject
         Channel = channel;
         Group = group;
         IsReadOnly = isReadOnly;
-        TotalKeyCount = totalKeyCount;
+        ExactKeyFrames = exactKeyFrames?
+            .Distinct()
+            .Order()
+            .ToArray() ?? [];
+        TotalKeyCount = totalKeyCount ??
+            (ExactKeyFrames.Count > 0
+                ? ExactKeyFrames.Count
+                : null);
         Keyframes.CollectionChanged += (_, _) =>
         {
             OnPropertyChanged(nameof(KeyCountLabel));
@@ -747,12 +830,16 @@ public sealed class TimelineTrackViewModel : ObservableObject
 
     public int? TotalKeyCount { get; }
 
+    public IReadOnlyList<int> ExactKeyFrames { get; }
+
     public int EffectiveKeyCount => TotalKeyCount ?? Keyframes.Count;
 
     public string KeyCountLabel => $"{EffectiveKeyCount:N0}";
 
     public string KeyPresentationLabel =>
-        EffectiveKeyCount > Keyframes.Count
+        ExactKeyFrames.Count > 0
+            ? $"{ExactKeyFrames.Count:N0} exact source keys. The selected row draws every key; unselected dense rows use representative markers."
+            : EffectiveKeyCount > Keyframes.Count
             ? $"{EffectiveKeyCount:N0} source keys; {Keyframes.Count:N0} representative markers are drawn for responsive navigation."
             : $"{EffectiveKeyCount:N0} keys";
 

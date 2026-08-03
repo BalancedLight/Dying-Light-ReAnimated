@@ -29,11 +29,13 @@ public partial class App : Application, IDisposable
         AppPaths paths = AppPaths.CreateDefault();
         JsonWorkspaceStateStore recoveryStore =
             new(paths.AutosaveFile);
-        MainWindowViewModel viewModel = new(recoveryStore);
+        _logger = new StructuredFileLogger(paths.LogDirectory);
+        MainWindowViewModel viewModel = new(
+            recoveryStore,
+            _logger);
         _viewModel = viewModel;
         _autosave = new WorkspaceAutosaveService(viewModel, recoveryStore);
         _crashReporter = new CrashReporter(paths.CrashDirectory);
-        _logger = new StructuredFileLogger(paths.LogDirectory);
         _logger.Write(
             AppLogLevel.Information,
             "application_start",

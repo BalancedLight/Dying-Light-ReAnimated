@@ -73,6 +73,48 @@ public sealed partial class MainWindowViewModel :
         ProjectAssetReference ProjectAsset,
         MeshRenderData[] PreviewMeshes);
 
+    private sealed record PreparedRetailTarget(
+        Dl1MeshPreviewPayload Payload,
+        RetailAssetRecord RetailAsset,
+        ProjectAssetReference ProjectAsset);
+
+    private sealed record PreparedAnimationTransition(
+        long Generation,
+        ProjectAnimation Animation,
+        ImportedAnimationSession Source,
+        MeshRenderData[] SourceMeshes,
+        DecodedRetailModelSession? SourceModel,
+        PreparedRetailTarget? Target,
+        ImportedMimicSession? Mimic,
+        AnimationClip SynchronizedClip,
+        RetargetMap? Mapping,
+        TargetBindingStatus BindingStatus);
+
+    private sealed record AnimationRuntimeSnapshot(
+        DlraProject Project,
+        DlraProject? SavedProject,
+        Guid? ActiveAnimationId,
+        ImportedAnimationSession? SourceAnimation,
+        ImportedMimicSession? MimicAnimation,
+        ImportedFacialFbxSession? FacialFbxAnimation,
+        AnimationClip? SynchronizedAnimation,
+        RigDefinition? TargetRig,
+        RetargetMap? ActiveRetargetMap,
+        ProjectAssetReference? TargetProjectAsset,
+        DecodedRetailModelSession? SourceModelContext,
+        MeshRenderData[] SourceMeshes,
+        MeshRenderData[] TargetMeshes,
+        TargetBindingStatus TargetBindingStatus,
+        int Frame,
+        bool IsPlaying,
+        bool IsPlaybackEnabled,
+        EditorWorkspaceMode Workspace,
+        string LegacyWorkspace,
+        ViewportOrbitCameraPair OrbitCameras,
+        PreviewFramePair? LastPreviewFramePair,
+        DlraProject[] UndoProjects,
+        DlraProject[] RedoProjects);
+
     private sealed record RootMotionTrailCacheKey(
         Guid? ActiveAnimationId,
         ImportedAnimationSession Source,
@@ -276,6 +318,7 @@ public sealed partial class MainWindowViewModel :
         _installedBuildFingerprintService;
     private readonly IFacialFbxProjectReviewImporter
         _facialFbxProjectReviewImporter;
+    private readonly StructuredFileLogger? _structuredLogger;
     private readonly CancellationTokenSource _lifetimeSource = new();
     private readonly object _rootMotionTrailWorkerGate = new();
     private readonly HashSet<Task<Vector3[]>>
@@ -295,6 +338,7 @@ public sealed partial class MainWindowViewModel :
     private AnimationLibraryItemViewModel?
         _selectedAnimationLibraryItem;
     private AssetItemViewModel? _pendingExplorerAnimationSourceChoice;
+    private string? _pendingLocalAnm2ImportPath;
     private AssetItemViewModel? _pendingExplorerAnimationTimingChoice;
     private Dl1RetailAnimationTiming? _selectedExplorerAnimationTiming;
     private JobViewModel? _assetDecodeJob;
@@ -387,8 +431,11 @@ public sealed partial class MainWindowViewModel :
     private Task<Vector3[]>? _rootMotionTrailWorkerTask;
     private int _rootMotionTrailGeneration;
     private long _previewGeneration;
+    private long _animationTransitionGeneration;
     private PreviewFramePair? _lastPreviewFramePair;
+    private string? _animationOperationFailureMessage;
     private RenderFppProjectionState? _suspendedTargetProjection;
+    private RenderFrameSnapshot? _lastFppExternalOrbitFrame;
     private RenderFrameSnapshot? _isolatedBrowsePreviewFrame;
     private DecodedRetailModelSession? _isolatedBrowsePreviewModel;
     private string? _isolatedBrowsePreviewTitle;
@@ -403,6 +450,18 @@ public sealed partial class MainWindowViewModel :
             new WindowsProjectFileDialogService(),
             CreateDefaultAssetWorkspace(),
             new Dl1InstalledBuildFingerprintService())
+    {
+    }
+
+    public MainWindowViewModel(
+        JsonWorkspaceStateStore recoveryStore,
+        StructuredFileLogger? structuredLogger)
+        : this(
+            recoveryStore,
+            new WindowsProjectFileDialogService(),
+            CreateDefaultAssetWorkspace(),
+            new Dl1InstalledBuildFingerprintService(),
+            structuredLogger: structuredLogger)
     {
     }
 
@@ -425,7 +484,8 @@ public sealed partial class MainWindowViewModel :
         IDl1InstalledBuildFingerprintService installedBuildFingerprintService,
         IFacialFbxProjectReviewImporter?
             facialFbxProjectReviewImporter = null,
-        IRetailMeshDecodeService? retailMeshDecodeService = null)
+        IRetailMeshDecodeService? retailMeshDecodeService = null,
+        StructuredFileLogger? structuredLogger = null)
     {
         _recoveryStore = recoveryStore
             ?? throw new ArgumentNullException(nameof(recoveryStore));
@@ -442,6 +502,7 @@ public sealed partial class MainWindowViewModel :
         _facialFbxProjectReviewImporter =
             facialFbxProjectReviewImporter ??
             new FacialFbxProjectReviewImporter();
+        _structuredLogger = structuredLogger;
         _savedProject = _project;
 
         SourceViewport = new ViewportPaneViewModel(
@@ -508,6 +569,11 @@ public sealed partial class MainWindowViewModel :
         ToggleDiagnosticsDrawerCommand = new RelayCommand(
             () => IsDiagnosticsDrawerOpen =
                 !IsDiagnosticsDrawerOpen);
+        ShowAnimationOperationDiagnosticsCommand = new RelayCommand(() =>
+        {
+            SelectedDiagnosticsTabIndex = 1;
+            IsDiagnosticsDrawerOpen = true;
+        });
         ShowFidelityDetailsCommand = new RelayCommand(() =>
         {
             SelectedDiagnosticsTabIndex = 2;
@@ -594,8 +660,8 @@ public sealed partial class MainWindowViewModel :
             AttachmentEditor.ResetOffset);
         UndoCommand = new RelayCommand(Undo, () => _undoProjects.Count > 0);
         RedoCommand = new RelayCommand(Redo, () => _redoProjects.Count > 0);
-        RestoreRecoveryCommand = new RelayCommand(
-            RestoreRecovery,
+        RestoreRecoveryCommand = new AsyncRelayCommand(
+            RestoreRecoveryAsync,
             () => HasRecoverySnapshot);
         DismissRecoveryCommand = new RelayCommand(
             DismissRecovery,
@@ -835,6 +901,14 @@ public sealed partial class MainWindowViewModel :
 
     public RelayCommand ToggleDiagnosticsDrawerCommand { get; }
 
+    public RelayCommand ShowAnimationOperationDiagnosticsCommand { get; }
+
+    public bool HasAnimationOperationFailure =>
+        !string.IsNullOrWhiteSpace(_animationOperationFailureMessage);
+
+    public string AnimationOperationFailureMessage =>
+        _animationOperationFailureMessage ?? string.Empty;
+
     public RelayCommand ShowFidelityDetailsCommand { get; }
 
     public RelayCommand OpenBoneEditorCommand { get; }
@@ -842,11 +916,14 @@ public sealed partial class MainWindowViewModel :
     public RelayCommand CancelExplorerSourceModelPickerCommand { get; }
 
     public bool IsExplorerSourceModelPickerActive =>
-        _pendingExplorerAnimationSourceChoice is not null;
+        _pendingExplorerAnimationSourceChoice is not null ||
+        _pendingLocalAnm2ImportPath is not null;
 
     public string ExplorerSourceModelPickerPrompt =>
         _pendingExplorerAnimationSourceChoice is { } animation
             ? $"Choose the exact retail source model for '{animation.Name}'. Selecting a skinned mesh decodes it, binds this clip to its fingerprint, and starts playback."
+            : _pendingLocalAnm2ImportPath is { } localPath
+                ? $"Choose the exact retail source model for '{Path.GetFileName(localPath)}'. Use as Source will show descriptor coverage and require confirmation before anything changes."
             : string.Empty;
 
     public ObservableCollection<Dl1RetailAnimationTiming>
@@ -933,7 +1010,7 @@ public sealed partial class MainWindowViewModel :
 
     public RelayCommand RedoCommand { get; }
 
-    public RelayCommand RestoreRecoveryCommand { get; }
+    public AsyncRelayCommand RestoreRecoveryCommand { get; }
 
     public RelayCommand DismissRecoveryCommand { get; }
 
@@ -1641,25 +1718,37 @@ public sealed partial class MainWindowViewModel :
                 // source scene without evaluating or mutating the project.
                 if (usedLinkedTargetView)
                 {
-                    _suspendedTargetProjection = TargetViewport.SceneSource
-                        .CaptureFrame()
-                        .FppProjectionState;
+                    _suspendedTargetProjection =
+                        previousLegacyName == "FPP"
+                            ? SourceViewport.SceneSource
+                                .CaptureFrame()
+                                .FppProjectionState
+                            : TargetViewport.SceneSource
+                                .CaptureFrame()
+                                .FppProjectionState;
                 }
 
                 _viewportCoordinator
                     .SetTargetPreviewCameraOverrideActive(false);
+                _viewportCoordinator.SetPreviewCameraOverrideActive(
+                    ViewportSide.Source,
+                    false);
                 TargetViewport.SceneSource.SetFppProjectionState(null);
                 ClearLinkedTargetExternalView();
             }
             else if (!usedLinkedTargetView)
             {
-                bool restoredPreviewCamera = _viewportCoordinator
-                    .SetTargetPreviewCameraOverrideActive(true);
-                TargetViewport.SceneSource.SetFppProjectionState(
-                    restoredPreviewCamera
-                        ? _suspendedTargetProjection
-                        : null);
-                _suspendedTargetProjection = null;
+                bool restoredPreviewCamera = legacyName == "FPP"
+                    ? _viewportCoordinator.SetPreviewCameraOverrideActive(
+                        ViewportSide.Source,
+                        true)
+                    : _viewportCoordinator
+                        .SetTargetPreviewCameraOverrideActive(true);
+                TargetViewport.SceneSource.SetFppProjectionState(null);
+                if (!restoredPreviewCamera)
+                {
+                    _suspendedTargetProjection = null;
+                }
                 RestoreLinkedTargetExternalViewFromCurrentScene();
             }
             else if (!string.Equals(
@@ -1671,6 +1760,9 @@ public sealed partial class MainWindowViewModel :
                 // A context switch waits for its own evaluated camera rather
                 // than reusing the other context's override.
                 _viewportCoordinator.SetTargetPreviewCameraOverride(null);
+                _viewportCoordinator.SetPreviewCameraOverride(
+                    ViewportSide.Source,
+                    null);
                 _suspendedTargetProjection = null;
                 TargetViewport.SceneSource.SetFppProjectionState(null);
                 RestoreLinkedTargetExternalViewFromCurrentScene();
@@ -2431,13 +2523,16 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
-    private void RestoreRecovery()
+    private async Task RestoreRecoveryAsync()
     {
         if (_recoverySnapshot is null)
         {
             return;
         }
 
+        AnimationRuntimeSnapshot previous =
+            CaptureAnimationRuntimeSnapshot();
+        string? previousProjectPath = ProjectPath;
         try
         {
             WorkspaceSnapshot snapshot = _recoverySnapshot;
@@ -2459,6 +2554,35 @@ public sealed partial class MainWindowViewModel :
             }
 
             RestoreSnapshot(snapshot);
+            ProjectAnimation? activeAnimation = GetActiveAnimation();
+            if (activeAnimation is not null)
+            {
+                if (CanRestoreAnimationFromLoadedCatalog(
+                        activeAnimation,
+                        _project.Assets,
+                        _indexedAssetItems))
+                {
+                    await ActivateAnimationAsync(
+                        activeAnimation.Id,
+                        beginPlayback: false,
+                        persistActivation: false);
+                }
+                else
+                {
+                    await LoadActiveSourceAsync(
+                        snapshot.ProjectPath ?? string.Empty);
+                }
+
+                if (_sourceAnimation is null ||
+                    (activeAnimation.TargetAssetId is not null &&
+                     (_targetRig is null ||
+                      _targetProjectAsset is null)))
+                {
+                    throw new InvalidOperationException(
+                        "The saved animation and its exact retail target could not be restored as a playable session. The recovery snapshot was retained.");
+                }
+            }
+
             if (normalization is { WasRepaired: true })
             {
                 foreach (ProjectVariantRecoveryRepair repair in
@@ -2484,12 +2608,16 @@ public sealed partial class MainWindowViewModel :
             IOException or
             UnauthorizedAccessException)
         {
+            ProjectPath = previousProjectPath;
+            RestoreAnimationRuntimeSnapshot(previous);
+            NotifyProjectChanged();
             AddDiagnostic(
                 "Error",
                 "Recovery",
-                "Recovery could not be restored transactionally",
-                exception.Message);
-            StatusText = "Recovery restore failed; the original snapshot was retained";
+                "Recovery could not be restored transactionally; previous session retained",
+                exception.ToString());
+            StatusText =
+                "Recovery restore failed; the previous session and original snapshot were retained";
         }
     }
 
@@ -2638,6 +2766,9 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        AnimationRuntimeSnapshot previous =
+            CaptureAnimationRuntimeSnapshot();
+        string? previousProjectPath = ProjectPath;
         IsBusy = true;
         StatusText = $"Opening {Path.GetFileName(path)}…";
         try
@@ -2662,6 +2793,11 @@ public sealed partial class MainWindowViewModel :
                     activeAnimation.Id,
                     beginPlayback: false,
                     persistActivation: false);
+                if (_sourceAnimation is null)
+                {
+                    throw new InvalidOperationException(
+                        "The saved animation could not be prepared as a playable session.");
+                }
             }
             else
             {
@@ -2678,6 +2814,9 @@ public sealed partial class MainWindowViewModel :
         }
         catch (LegacyProjectFormatException exception)
         {
+            ProjectPath = previousProjectPath;
+            RestoreAnimationRuntimeSnapshot(previous);
+            NotifyProjectChanged();
             AddDiagnostic(
                 "Error",
                 "Project",
@@ -2692,6 +2831,9 @@ public sealed partial class MainWindowViewModel :
             or IOException
             or UnauthorizedAccessException)
         {
+            ProjectPath = previousProjectPath;
+            RestoreAnimationRuntimeSnapshot(previous);
+            NotifyProjectChanged();
             AddDiagnostic(
                 "Error",
                 "Project",
@@ -3276,6 +3418,21 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        await ImportAnimationPathAsync(
+            selectedPath,
+            confirmedAnm2SourceModel: null);
+    }
+
+    private async Task ImportAnimationPathAsync(
+        string selectedPath,
+        DecodedRetailModelSession? confirmedAnm2SourceModel)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedPath);
+
+        long generation = Interlocked.Increment(
+            ref _animationTransitionGeneration);
+        AnimationRuntimeSnapshot previous =
+            CaptureAnimationRuntimeSnapshot();
         IsBusy = true;
         JobViewModel job = AddJob(
             $"Import {Path.GetFileName(selectedPath)}",
@@ -3284,6 +3441,7 @@ public sealed partial class MainWindowViewModel :
         try
         {
             ImportedAnimationSession session;
+            DecodedRetailModelSession? sourceModel = null;
             string extension = Path.GetExtension(selectedPath)
                 .ToLowerInvariant();
             if (extension == ".fbx")
@@ -3307,9 +3465,18 @@ public sealed partial class MainWindowViewModel :
             }
             else if (extension == ".anm2")
             {
-                RigDefinition rig = _sourceModelContext?.Payload.Source.Rig
-                    ?? throw new InvalidOperationException(
-                        "Use a matching retail DL1 model as Source before importing an ANM2 file.");
+                job.Stage = "Source-model preflight";
+                job.Progress = 15.0;
+                sourceModel = confirmedAnm2SourceModel ??
+                    await ResolveSuggestedLocalAnm2SourceModelAsync(
+                        job.CancellationToken);
+                if (sourceModel?.Payload.Source.Rig is not { } rig)
+                {
+                    BeginLocalAnm2SourceModelPicker(selectedPath);
+                    job.Complete("Source model required");
+                    return;
+                }
+
                 var decoder = new Anm2Decoder();
                 Anm2Clip source = await decoder.DecodeFileAsync(
                     selectedPath,
@@ -3320,7 +3487,33 @@ public sealed partial class MainWindowViewModel :
                         rig,
                         new FrameRate(30, 1),
                         job.CancellationToken);
-                if (imported.Partition.RequiresReview)
+
+                LocalAnm2ImportPreflight preflight =
+                    CreateLocalAnm2ImportPreflight(
+                        selectedPath,
+                        sourceModel,
+                        imported.Partition);
+                LocalAnm2SourceBindingDecision decision =
+                    _fileDialogs.ConfirmLocalAnm2SourceBinding(
+                        preflight);
+                if (decision ==
+                    LocalAnm2SourceBindingDecision.ChooseAnother)
+                {
+                    BeginLocalAnm2SourceModelPicker(selectedPath);
+                    job.Complete("Choose another source model");
+                    return;
+                }
+
+                if (decision == LocalAnm2SourceBindingDecision.Cancel)
+                {
+                    job.Complete("Canceled; previous session retained");
+                    StatusText =
+                        "ANM2 import canceled; previous animation retained";
+                    return;
+                }
+
+                if (preflight.IsBlocked ||
+                    imported.Partition.RequiresReview)
                 {
                     throw new InvalidDataException(
                         "ANM2 contains duplicated or bone/morph-colliding descriptors that require review before playback: " +
@@ -3329,9 +3522,7 @@ public sealed partial class MainWindowViewModel :
                         ".");
                 }
 
-                Guid sourceModelAssetId = _sourceModelContext?.ProjectAsset.Id
-                    ?? throw new InvalidOperationException(
-                        "The explicit retail source model has no physical identity.");
+                Guid sourceModelAssetId = sourceModel.ProjectAsset.Id;
                 session = new ImportedAnimationSession(
                     rig,
                     imported.CombinedClip,
@@ -3345,8 +3536,6 @@ public sealed partial class MainWindowViewModel :
                         AnimationTimingProvenance.Manual30FpsFallback,
                     FacialClip = imported.FacialClip,
                 };
-                _sourceBaseMeshes =
-                    _sourceModelContext?.PreviewMeshes ?? [];
                 if (imported.Partition.UnresolvedDescriptors.Length > 0)
                 {
                     AddDiagnostic(
@@ -3372,12 +3561,17 @@ public sealed partial class MainWindowViewModel :
                     "Only binary FBX and Dying Light 1 ANM2 animation sources are supported.");
             }
 
+
+            EnsureCurrentAnimationTransition(
+                generation,
+                job.CancellationToken);
+
             job.Stage = "Project source";
             job.Progress = 55.0;
             ImportedProjectSource projectSource =
                 await ProjectSourceImporter.ImportAsync(
                     selectedPath,
-                    ProjectPath,
+                    ProjectPath!,
                     job.CancellationToken);
             ProjectAssetReference asset = new()
             {
@@ -3388,7 +3582,7 @@ public sealed partial class MainWindowViewModel :
 
             DecodedRetailModelSession? selectedPreviewTarget =
                 session.SourceKindContract == AnimationSourceKind.LocalAnm2
-                    ? _sourceModelContext
+                    ? sourceModel
                     : _isolatedBrowsePreviewModel is
                         {
                             Payload.Source.Rig: not null,
@@ -3412,24 +3606,6 @@ public sealed partial class MainWindowViewModel :
                 initialTargetAsset?.Id,
                 initialTargetAsset?.ContentSha256,
                 proposal);
-            _sourceAnimation = session with
-            {
-                SourcePath = projectSource.AbsolutePath,
-            };
-            if (session.SourceKindContract == AnimationSourceKind.LocalFbx)
-            {
-                _sourceBaseMeshes = [];
-            }
-            _mimicAnimation = null;
-            _facialFbxAnimation = null;
-            _synchronizedAnimation = session.Clip;
-            _pendingAnm2SourcePath = null;
-            _pendingMimicSourcePath = null;
-            _pendingMimicAssetId = null;
-            _pendingFacialFbxSourcePath = null;
-            _pendingFacialFbxAssetId = null;
-            _activeRetargetMap = proposal;
-            _activeAnimationId = animation.Id;
             ImmutableArray<ProjectAssetReference> importedAssets =
                 _project.Assets.Add(asset);
             if (initialTargetAsset is not null &&
@@ -3439,28 +3615,12 @@ public sealed partial class MainWindowViewModel :
                 importedAssets = importedAssets.Add(
                     initialTargetAsset);
             }
-            CommitProject(_project with
+            DlraProject preparedProject = _project with
             {
                 Assets = importedAssets,
                 Animations = _project.Animations.Add(animation),
-            });
-
-            if (selectedPreviewTarget is { } decodedTarget)
-            {
-                PublishDecodedMesh(
-                    decodedTarget.Payload,
-                    decodedTarget.RetailAsset,
-                    decodedTarget.ProjectAsset,
-                    restoreRetargetMap: false,
-                    animationContext: animation);
-                _activeRetargetMap = proposal;
-                RefreshProjectBindings();
-            }
-
-            Timeline.CurrentFrame = 0;
-            _editorSessionCoordinator.Reset(
-                animation.Id,
-                frame: 0);
+                ActiveAnimationId = animation.Id,
+            };
             TargetBindingStatus initialBindingStatus =
                 initialTargetRig is null
                     ? TargetBindingStatus.Invalid
@@ -3468,20 +3628,39 @@ public sealed partial class MainWindowViewModel :
                         session.Rig,
                         initialTargetRig,
                         proposal);
-            SetTargetBindingStatus(initialBindingStatus);
-            SetWorkspace(
-                initialBindingStatus == TargetBindingStatus.NeedsReview
-                    ? EditorWorkspaceMode.RetargetEdit
-                    : EditorWorkspaceMode.Animate,
-                preserveLegacyCutscene: false);
-            RefreshAnimationPreview();
-            if (proposal is not null)
-            {
-                PublishMappingProposal(proposal);
-            }
+            var prepared = new PreparedAnimationTransition(
+                generation,
+                animation,
+                session with
+                {
+                    SourcePath = projectSource.AbsolutePath,
+                },
+                session.SourceKindContract == AnimationSourceKind.LocalFbx
+                    ? []
+                    : sourceModel?.PreviewMeshes ?? [],
+                sourceModel,
+                selectedPreviewTarget is null
+                    ? null
+                    : new PreparedRetailTarget(
+                        selectedPreviewTarget.Payload,
+                        selectedPreviewTarget.RetailAsset,
+                        selectedPreviewTarget.ProjectAsset),
+                Mimic: null,
+                session.Clip,
+                proposal,
+                initialBindingStatus);
+            EnsureCurrentAnimationTransition(
+                generation,
+                job.CancellationToken);
+            CommitPreparedAnimationTransition(
+                prepared,
+                preparedProject,
+                beginPlayback: false,
+                persistProject: true);
 
             job.Progress = 100.0;
             job.Complete("Complete");
+            ClearAnimationOperationFailure();
             StatusText =
                 $"Imported {Path.GetFileName(selectedPath)} ({session.Clip.FrameCount:N0} frames at {session.Clip.FrameRate.Numerator}/{session.Clip.FrameRate.Denominator} fps)";
             AddDiagnostic(
@@ -3492,8 +3671,10 @@ public sealed partial class MainWindowViewModel :
         }
         catch (OperationCanceledException)
         {
+            RestoreAnimationRuntimeSnapshot(previous);
             job.Complete("Canceled");
-            StatusText = "Animation import canceled";
+            StatusText =
+                "Animation import canceled; previous animation retained";
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -3503,13 +3684,14 @@ public sealed partial class MainWindowViewModel :
             UnauthorizedAccessException or
             OverflowException)
         {
+            RestoreAnimationRuntimeSnapshot(previous);
             job.Complete("Failed");
-            AddDiagnostic(
-                "Error",
-                "Animation",
-                "Animation import failed",
-                exception.Message);
-            StatusText = "Animation import failed";
+            ReportAnimationOperationFailure(
+                "Import",
+                job.Stage,
+                selectedPath,
+                generation,
+                exception);
         }
         finally
         {
@@ -3524,6 +3706,69 @@ public sealed partial class MainWindowViewModel :
             Kind: AssetKind.Animation,
             RetailAsset: not null,
         };
+
+    private async Task<DecodedRetailModelSession?>
+        ResolveSuggestedLocalAnm2SourceModelAsync(
+            CancellationToken cancellationToken)
+    {
+        if (_targetProjectAsset is { } targetAsset)
+        {
+            if (_sourceModelContext is { } sourceModel &&
+                ProjectRetailAssetsMatch(
+                    sourceModel.ProjectAsset,
+                    targetAsset))
+            {
+                return sourceModel;
+            }
+
+            if (_isolatedBrowsePreviewModel is { } browseModel &&
+                ProjectRetailAssetsMatch(
+                    browseModel.ProjectAsset,
+                    targetAsset))
+            {
+                return browseModel;
+            }
+
+            (Dl1MeshPreviewPayload payload, RetailAssetRecord retail) =
+                await DecodeProjectModelAsync(
+                    targetAsset,
+                    cancellationToken);
+            return new DecodedRetailModelSession(
+                payload,
+                retail,
+                targetAsset,
+                CreatePreviewMeshes(payload));
+        }
+
+        return _sourceModelContext ?? _isolatedBrowsePreviewModel;
+    }
+
+    private static LocalAnm2ImportPreflight
+        CreateLocalAnm2ImportPreflight(
+            string sourcePath,
+            DecodedRetailModelSession sourceModel,
+            Anm2TrackPartition partition)
+    {
+        ProjectRetailAssetIdentity? identity =
+            sourceModel.ProjectAsset.RetailIdentity;
+        string exactIdentity = identity is null
+            ? sourceModel.ProjectAsset.RelativePath
+            : $"{identity.ProviderPack} | type {identity.ResourceType} | index {identity.ResourceIndex?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "n/a"} | precedence {identity.Precedence}";
+        string fingerprint = sourceModel.ProjectAsset.ContentSha256 ??
+            sourceModel.Payload.ResourceSha256 ??
+            throw new InvalidDataException(
+                "The proposed retail source model has no content fingerprint.");
+        return new LocalAnm2ImportPreflight(
+            Path.GetFileName(sourcePath),
+            identity?.ResourceName ?? sourceModel.RetailAsset.DisplayName,
+            exactIdentity,
+            fingerprint,
+            partition.BodyDescriptors.Length,
+            partition.MorphDescriptors.Length,
+            partition.AuxiliaryDescriptors.Length,
+            partition.UnresolvedDescriptors.Length,
+            partition.AmbiguousDescriptors.Length);
+    }
 
     private Task PlaySelectedExplorerAnimationAsync()
     {
@@ -3853,9 +4098,27 @@ public sealed partial class MainWindowViewModel :
         StatusText = $"Choose the source model for {animation.Name}";
     }
 
+    private void BeginLocalAnm2SourceModelPicker(string sourcePath)
+    {
+        _pendingLocalAnm2ImportPath = Path.GetFullPath(sourcePath);
+        OnPropertyChanged(nameof(IsExplorerSourceModelPickerActive));
+        OnPropertyChanged(nameof(ExplorerSourceModelPickerPrompt));
+        CancelExplorerSourceModelPickerCommand.NotifyCanExecuteChanged();
+        AssetBrowser.SearchText = string.Empty;
+        AssetBrowser.SelectedKindFilter = nameof(AssetKind.Mesh);
+        AddDiagnostic(
+            "Info",
+            "ANM2 source binding",
+            $"Choose the exact retail source model for {Path.GetFileName(sourcePath)}",
+            "No animation, target, timeline, recovery snapshot, or viewport state has changed. Use as Source will decode the candidate and show exact descriptor coverage before confirmation.");
+        StatusText =
+            $"Choose the source model for {Path.GetFileName(sourcePath)}";
+    }
+
     private void CancelExplorerSourceModelPicker()
     {
         _pendingExplorerAnimationSourceChoice = null;
+        _pendingLocalAnm2ImportPath = null;
         OnPropertyChanged(nameof(IsExplorerSourceModelPickerActive));
         OnPropertyChanged(nameof(ExplorerSourceModelPickerPrompt));
         CancelExplorerSourceModelPickerCommand.NotifyCanExecuteChanged();
@@ -3899,6 +4162,10 @@ public sealed partial class MainWindowViewModel :
             ?? throw new InvalidDataException(
                 "The active animation source asset is missing.");
 
+        long generation = Interlocked.Increment(
+            ref _animationTransitionGeneration);
+        AnimationRuntimeSnapshot previous =
+            CaptureAnimationRuntimeSnapshot();
         IsBusy = true;
         JobViewModel job = AddJob(
             $"Activate {animation.Name}",
@@ -3906,34 +4173,15 @@ public sealed partial class MainWindowViewModel :
             "Resolving immutable source binding");
         try
         {
-            _activeAnimationId = animation.Id;
-            if (persistActivation)
-            {
-                CommitProject(_project with
-                {
-                    ActiveAnimationId = animation.Id,
-                });
-            }
-            else
-            {
-                RefreshAnimationLibrary();
-            }
-            _mimicAnimation = null;
-            _facialFbxAnimation = null;
-            _synchronizedAnimation = null;
-            _activeRetargetMap = null;
-            _pendingAnm2SourcePath = null;
-            _pendingMimicSourcePath = null;
-            _pendingMimicAssetId = null;
-            _pendingFacialFbxSourcePath = null;
-            _pendingFacialFbxAssetId = null;
-
             Dl1MeshPreviewPayload? sourceModelPayload = null;
             RetailAssetRecord? sourceModelRetail = null;
             ProjectAssetReference? sourceModelProjectAsset = null;
+            DecodedRetailModelSession? sourceModel = null;
+            MeshRenderData[] sourceMeshes = [];
             ImportedAnimationSession session;
             if (binding.Kind == AnimationSourceKind.LocalFbx)
             {
+                job.Stage = "Source fingerprint";
                 string sourcePath = ResolveLocalProjectAssetPath(
                     sourceAsset);
                 string actualHash =
@@ -3972,12 +4220,10 @@ public sealed partial class MainWindowViewModel :
                     TimingProvenance = binding.TimingProvenance,
                     TimingDetail = binding.TimingDetail,
                 };
-                _sourceBaseMeshes = [];
-                _sourceModelContext = null;
-                OnPropertyChanged(nameof(ActiveSourceModelLabel));
             }
             else
             {
+                job.Stage = "Immutable source model";
                 ProjectAssetReference sourceModelAsset =
                     binding.RetailSourceModelAssetId is { } modelId
                         ? FindProjectAsset(modelId)
@@ -4041,20 +4287,21 @@ public sealed partial class MainWindowViewModel :
                     TimingDetail = detail,
                     FacialClip = partitioned.FacialClip,
                 };
-                _sourceBaseMeshes = CreatePreviewMeshes(
+                sourceMeshes = CreatePreviewMeshes(
                     sourceModelPayload);
-                _sourceModelContext = new DecodedRetailModelSession(
+                sourceModel = new DecodedRetailModelSession(
                     sourceModelPayload,
                     sourceModelRetail!,
                     sourceModelAsset,
-                    _sourceBaseMeshes);
-                OnPropertyChanged(nameof(ActiveSourceModelLabel));
+                    sourceMeshes);
             }
 
-            _sourceAnimation = session;
-            _synchronizedAnimation = session.Clip;
+            EnsureCurrentAnimationTransition(
+                generation,
+                job.CancellationToken);
             job.Stage = "Target model";
             job.Progress = 65.0;
+            PreparedRetailTarget? preparedTarget = null;
             if (animation.TargetAssetId is { } targetAssetId)
             {
                 ProjectAssetReference targetAsset = FindProjectAsset(
@@ -4067,11 +4314,10 @@ public sealed partial class MainWindowViewModel :
                             binding.RetailSourceModelAssetId!.Value),
                         targetAsset))
                 {
-                    PublishDecodedMesh(
+                    preparedTarget = new PreparedRetailTarget(
                         sourceModelPayload,
                         sourceModelRetail!,
-                        sourceModelProjectAsset,
-                        restoreRetargetMap: false);
+                        targetAsset);
                 }
                 else
                 {
@@ -4080,23 +4326,20 @@ public sealed partial class MainWindowViewModel :
                         await DecodeProjectModelAsync(
                             targetAsset,
                             job.CancellationToken);
-                    PublishDecodedMesh(
+                    preparedTarget = new PreparedRetailTarget(
                         targetPayload,
                         targetRetail,
-                        targetAsset,
-                        restoreRetargetMap: false);
+                        targetAsset);
                 }
             }
-            else
-            {
-                _targetRig = null;
-                _targetProjectAsset = null;
-                _targetBaseMeshes = [];
-                TargetViewport.SceneSource.SetScene([], null, []);
-            }
 
+            RigDefinition? targetRig =
+                preparedTarget?.Payload.Source.Rig;
+            ImportedMimicSession? mimic = null;
+            AnimationClip synchronized = session.Clip;
             if (animation.MimicAssetId is { } mimicAssetId)
             {
+                job.Stage = "Facial source";
                 AnimationClip facialClip;
                 FacialClipTiming timing;
                 if (animation.FacialAnimationSourceBinding is
@@ -4117,7 +4360,7 @@ public sealed partial class MainWindowViewModel :
                 }
                 else
                 {
-                    if (_targetRig is null)
+                    if (targetRig is null)
                     {
                         throw new InvalidOperationException(
                             "A separate mimic source requires its exact decoded target model.");
@@ -4135,7 +4378,7 @@ public sealed partial class MainWindowViewModel :
                             mimicAsset.ContentSha256 ??
                                 throw new InvalidDataException(
                                     "The mimic asset has no fingerprint."),
-                            _targetRig,
+                            targetRig,
                             session.Clip,
                             animation.FrameRate,
                             animation.FrameCount,
@@ -4144,46 +4387,71 @@ public sealed partial class MainWindowViewModel :
                     timing = animation.FacialTiming ?? loaded.Timing;
                 }
 
-                _mimicAnimation = new ImportedMimicSession(
+                mimic = new ImportedMimicSession(
                     mimicAssetId,
                     facialClip,
                     FormatProjectAssetLabel(
                         FindProjectAsset(mimicAssetId)));
-                _synchronizedAnimation =
-                    AnimationClipSynchronization.Synchronize(
-                        session.Clip,
-                        facialClip,
-                        timing);
+                synchronized = AnimationClipSynchronization.Synchronize(
+                    session.Clip,
+                    facialClip,
+                    timing);
             }
 
-            RestoreOrCreateRetargetMap();
-            TargetBindingStatus bindingStatus = _targetRig is null
+            job.Stage = "Mapping validation";
+            RetargetMap? mapping = targetRig is null ||
+                HasSameRigContract(session.Rig, targetRig)
+                    ? null
+                    : animation.BoneMappings.IsEmpty
+                        ? RetargetMapBuilder.CreateSuggested(
+                            session.Rig,
+                            targetRig)
+                        : ToRetargetMap(
+                            session.Rig,
+                            targetRig,
+                            animation.BoneMappings,
+                            animation.TargetBindReviews);
+            TargetBindingStatus bindingStatus = targetRig is null
                 ? TargetBindingStatus.Invalid
                 : ResolveTargetBindingStatus(
                     session.Rig,
-                    _targetRig,
-                    _activeRetargetMap);
-            SetTargetBindingStatus(bindingStatus);
-            _editorSessionCoordinator.Reset(
-                animation.Id,
-                frame: 0);
-            SetWorkspace(
-                bindingStatus == TargetBindingStatus.NeedsReview
-                    ? EditorWorkspaceMode.RetargetEdit
-                    : EditorWorkspaceMode.Animate,
-                preserveLegacyCutscene: false);
-            Timeline.CurrentFrame = 0;
-            Timeline.IsPlaying = beginPlayback &&
-                bindingStatus is TargetBindingStatus.Direct or
-                    TargetBindingStatus.Ready;
-            RefreshAnimationPreview();
+                    targetRig,
+                    mapping);
+            var prepared = new PreparedAnimationTransition(
+                generation,
+                animation,
+                session,
+                sourceMeshes,
+                sourceModel,
+                preparedTarget,
+                mimic,
+                synchronized,
+                mapping,
+                bindingStatus);
+            DlraProject preparedProject = _project with
+            {
+                ActiveAnimationId = animation.Id,
+            };
+            EnsureCurrentAnimationTransition(
+                generation,
+                job.CancellationToken);
+            job.Stage = "Atomic commit";
+            CommitPreparedAnimationTransition(
+                prepared,
+                preparedProject,
+                beginPlayback,
+                persistActivation);
             job.Progress = 100.0;
             job.Complete("Complete");
+            ClearAnimationOperationFailure();
             StatusText = $"Activated {animation.Name}";
         }
         catch (OperationCanceledException)
         {
-            job.Complete("Canceled");
+            RestoreAnimationRuntimeSnapshot(previous);
+            job.Complete("Canceled; previous session retained");
+            StatusText =
+                "Animation activation canceled; previous animation retained";
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -4192,18 +4460,14 @@ public sealed partial class MainWindowViewModel :
             IOException or
             OverflowException)
         {
+            RestoreAnimationRuntimeSnapshot(previous);
             job.Complete("Failed");
-            _sourceAnimation = null;
-            _sourceBaseMeshes = [];
-            _synchronizedAnimation = null;
-            _activeRetargetMap = null;
-            AddDiagnostic(
-                "Error",
-                "Animation library",
-                $"Could not activate {animation.Name}",
-                exception.Message);
-            StatusText = "Animation activation failed";
-            RefreshAnimationPreview();
+            ReportAnimationOperationFailure(
+                "Activation",
+                job.Stage,
+                sourceAsset.RelativePath,
+                generation,
+                exception);
         }
         finally
         {
@@ -6889,6 +7153,7 @@ public sealed partial class MainWindowViewModel :
             ClearIsolatedBrowsePreview();
             ClearLinkedTargetExternalView();
             _pendingExplorerAnimationSourceChoice = null;
+            _pendingLocalAnm2ImportPath = null;
             OnPropertyChanged(
                 nameof(IsExplorerSourceModelPickerActive));
             OnPropertyChanged(
@@ -7006,6 +7271,248 @@ public sealed partial class MainWindowViewModel :
         NotifyProjectChanged();
         SyncBoneEditorFromProject();
         RefreshEditableSkeletonPreview();
+    }
+
+    private void EnsureCurrentAnimationTransition(
+        long generation,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (generation != Volatile.Read(
+                ref _animationTransitionGeneration))
+        {
+            throw new OperationCanceledException(
+                "A newer animation operation superseded this result.",
+                cancellationToken);
+        }
+    }
+
+    private AnimationRuntimeSnapshot CaptureAnimationRuntimeSnapshot() =>
+        new(
+            _project,
+            _savedProject,
+            _activeAnimationId,
+            _sourceAnimation,
+            _mimicAnimation,
+            _facialFbxAnimation,
+            _synchronizedAnimation,
+            _targetRig,
+            _activeRetargetMap,
+            _targetProjectAsset,
+            _sourceModelContext,
+            _sourceBaseMeshes,
+            _targetBaseMeshes,
+            _targetBindingStatus,
+            Timeline.CurrentFrame,
+            Timeline.IsPlaying,
+            Timeline.IsPlaybackEnabled,
+            ActiveWorkspace,
+            ActiveWorkspaceMode,
+            _viewportCoordinator.CaptureOrbitCameras(),
+            _lastPreviewFramePair,
+            _undoProjects.ToArray(),
+            _redoProjects.ToArray());
+
+    private void RestoreAnimationRuntimeSnapshot(
+        AnimationRuntimeSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _project = snapshot.Project;
+        _savedProject = snapshot.SavedProject;
+        _activeAnimationId = snapshot.ActiveAnimationId;
+        _sourceAnimation = snapshot.SourceAnimation;
+        _mimicAnimation = snapshot.MimicAnimation;
+        _facialFbxAnimation = snapshot.FacialFbxAnimation;
+        _synchronizedAnimation = snapshot.SynchronizedAnimation;
+        _targetRig = snapshot.TargetRig;
+        _activeRetargetMap = snapshot.ActiveRetargetMap;
+        _targetProjectAsset = snapshot.TargetProjectAsset;
+        _sourceModelContext = snapshot.SourceModelContext;
+        _sourceBaseMeshes = snapshot.SourceMeshes;
+        _targetBaseMeshes = snapshot.TargetMeshes;
+        _lastPreviewFramePair = snapshot.LastPreviewFramePair;
+        _undoProjects.Clear();
+        foreach (DlraProject project in snapshot.UndoProjects.Reverse())
+        {
+            _undoProjects.Push(project);
+        }
+
+        _redoProjects.Clear();
+        foreach (DlraProject project in snapshot.RedoProjects.Reverse())
+        {
+            _redoProjects.Push(project);
+        }
+
+        _viewportCoordinator.RestoreOrbitCameras(
+            snapshot.OrbitCameras);
+        RefreshProjectBindings();
+        SetTargetBindingStatus(snapshot.TargetBindingStatus);
+        SetWorkspace(
+            snapshot.Workspace,
+            preserveLegacyCutscene:
+                string.Equals(
+                    snapshot.LegacyWorkspace,
+                    "Cutscene",
+                    StringComparison.Ordinal));
+        Timeline.CurrentFrame = snapshot.Frame;
+        Timeline.IsPlaybackEnabled = snapshot.IsPlaybackEnabled;
+        Timeline.IsPlaying = snapshot.IsPlaying;
+        _editorSessionCoordinator.Reset(
+            snapshot.ActiveAnimationId,
+            snapshot.Frame);
+        OnPropertyChanged(nameof(ActiveSourceModelLabel));
+        OnPropertyChanged(nameof(ActiveTargetModelLabel));
+        UpdateDirtyState();
+        NotifyAnimationLibraryCommands();
+        if (_sourceAnimation is not null)
+        {
+            RefreshAnimationPreview();
+        }
+        else
+        {
+            RestoreIsolatedBrowsePreview();
+        }
+    }
+
+    private void CommitPreparedAnimationTransition(
+        PreparedAnimationTransition prepared,
+        DlraProject preparedProject,
+        bool beginPlayback,
+        bool persistProject)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        ArgumentNullException.ThrowIfNull(preparedProject);
+        EnsureCurrentAnimationTransition(
+            prepared.Generation,
+            CancellationToken.None);
+
+        _activeAnimationId = prepared.Animation.Id;
+        _sourceAnimation = prepared.Source;
+        _sourceBaseMeshes = prepared.SourceMeshes;
+        _sourceModelContext = prepared.SourceModel;
+        _mimicAnimation = prepared.Mimic;
+        _facialFbxAnimation = null;
+        _synchronizedAnimation = prepared.SynchronizedClip;
+        _activeRetargetMap = prepared.Mapping;
+        _pendingAnm2SourcePath = null;
+        _pendingLocalAnm2ImportPath = null;
+        _pendingMimicSourcePath = null;
+        _pendingMimicAssetId = null;
+        _pendingFacialFbxSourcePath = null;
+        _pendingFacialFbxAssetId = null;
+        OnPropertyChanged(nameof(ActiveSourceModelLabel));
+        OnPropertyChanged(nameof(IsExplorerSourceModelPickerActive));
+        OnPropertyChanged(nameof(ExplorerSourceModelPickerPrompt));
+        CancelExplorerSourceModelPickerCommand.NotifyCanExecuteChanged();
+
+        if (prepared.Target is { } target)
+        {
+            PublishDecodedMesh(
+                target.Payload,
+                target.RetailAsset,
+                target.ProjectAsset,
+                restoreRetargetMap: false,
+                animationContext: prepared.Animation);
+            _activeRetargetMap = prepared.Mapping;
+        }
+        else
+        {
+            _targetRig = null;
+            _targetProjectAsset = null;
+            _targetBaseMeshes = [];
+            TargetViewport.SceneSource.SetScene([], null, []);
+        }
+
+        if (persistProject)
+        {
+            CommitProject(preparedProject);
+        }
+        else
+        {
+            _project = NormalizeAnimationVariantGroups(preparedProject);
+            RefreshProjectBindings();
+            UpdateDirtyState();
+        }
+
+        SetTargetBindingStatus(prepared.BindingStatus);
+        _editorSessionCoordinator.Reset(
+            prepared.Animation.Id,
+            frame: 0);
+        SetWorkspace(
+            prepared.BindingStatus == TargetBindingStatus.NeedsReview
+                ? EditorWorkspaceMode.RetargetEdit
+                : EditorWorkspaceMode.Animate,
+            preserveLegacyCutscene: false);
+        Timeline.CurrentFrame = 0;
+        Timeline.IsPlaying = beginPlayback &&
+            prepared.BindingStatus is
+                TargetBindingStatus.Direct or
+                TargetBindingStatus.Ready;
+        RefreshAnimationPreview(throwOnFailure: true);
+        if (prepared.BindingStatus is (
+                TargetBindingStatus.Direct or
+                TargetBindingStatus.Ready) &&
+            (_lastPreviewFramePair is null ||
+             _lastPreviewFramePair.Token.AnimationId !=
+                 prepared.Animation.Id))
+        {
+            throw new InvalidOperationException(
+                "The prepared animation did not publish a matching initial viewport frame.");
+        }
+        if (prepared.Mapping is not null)
+        {
+            PublishMappingProposal(prepared.Mapping);
+        }
+    }
+
+    private void ClearAnimationOperationFailure()
+    {
+        if (_animationOperationFailureMessage is null)
+        {
+            return;
+        }
+
+        _animationOperationFailureMessage = null;
+        OnPropertyChanged(nameof(HasAnimationOperationFailure));
+        OnPropertyChanged(nameof(AnimationOperationFailureMessage));
+    }
+
+    private void ReportAnimationOperationFailure(
+        string operation,
+        string stage,
+        string source,
+        long generation,
+        Exception exception)
+    {
+        string actionable =
+            $"{operation} failed during {stage}: {exception.Message} Previous animation retained.";
+        _animationOperationFailureMessage = actionable;
+        OnPropertyChanged(nameof(HasAnimationOperationFailure));
+        OnPropertyChanged(nameof(AnimationOperationFailureMessage));
+        StatusText = actionable;
+        AddDiagnostic(
+            "Error",
+            $"Animation {operation.ToLowerInvariant()}",
+            $"{operation} failed during {stage}; previous session retained",
+            $"Source: {source}\nOperation generation: {generation}\n{exception}");
+        _structuredLogger?.Write(
+            AppLogLevel.Error,
+            $"animation_{operation.ToLowerInvariant()}_failed",
+            actionable,
+            new Dictionary<string, string>
+            {
+                ["source"] = source,
+                ["stage"] = stage,
+                ["generation"] = generation.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                ["candidateSourceFingerprint"] =
+                    _sourceModelContext?.ProjectAsset.ContentSha256 ??
+                    string.Empty,
+                ["targetFingerprint"] =
+                    _targetProjectAsset?.ContentSha256 ?? string.Empty,
+                ["previousSessionRetained"] = "true",
+            },
+            exception);
     }
 
     internal static DlraProject NormalizeAnimationVariantGroups(
@@ -9624,6 +10131,25 @@ public sealed partial class MainWindowViewModel :
                 AssetBrowser.SelectedAsset = pending;
                 IsBusy = false;
                 await PlaySelectedExplorerAnimationAsync();
+            }
+            else if (_pendingLocalAnm2ImportPath is { } localAnm2Path)
+            {
+                _pendingLocalAnm2ImportPath = null;
+                OnPropertyChanged(
+                    nameof(IsExplorerSourceModelPickerActive));
+                OnPropertyChanged(
+                    nameof(ExplorerSourceModelPickerPrompt));
+                CancelExplorerSourceModelPickerCommand
+                    .NotifyCanExecuteChanged();
+                if (ReferenceEquals(_assetDecodeJob, job))
+                {
+                    _assetDecodeJob = null;
+                }
+
+                IsBusy = false;
+                await ImportAnimationPathAsync(
+                    localAnm2Path,
+                    model);
             }
         }
         catch (OperationCanceledException)
@@ -12398,7 +12924,7 @@ public sealed partial class MainWindowViewModel :
                 : PlaybackMode.Clamp);
     }
 
-    private void RefreshAnimationPreview()
+    private void RefreshAnimationPreview(bool throwOnFailure = false)
     {
         if (!UsesLinkedTargetExternalView())
         {
@@ -12657,6 +13183,11 @@ public sealed partial class MainWindowViewModel :
                     "Preview",
                     "The authoritative animation preview could not be evaluated",
                     exception.Message);
+            }
+
+            if (throwOnFailure)
+            {
+                throw;
             }
         }
     }
@@ -13359,20 +13890,20 @@ public sealed partial class MainWindowViewModel :
         PreviewProfile baseline;
         if (ActiveWorkspaceMode == "Cutscene")
         {
+            SourceViewport.SetDiagnosticOverlay(null);
             baseline = PreviewProfile.MovieAuthoring;
             return ApplySavedGameValidationEvidence(baseline);
         }
 
         if (ActiveWorkspaceMode != "FPP")
         {
+            SourceViewport.SetDiagnosticOverlay(null);
             baseline = PreviewProfile.ThirdPersonAuthoring;
             return ApplySavedGameValidationEvidence(baseline);
         }
 
         baseline = PreviewProfile.FirstPersonAuthoring;
-        AuthoringPreviewFidelity fidelity = FacialFpp.UseFppCamera
-            ? baseline.Fidelity
-            : baseline.Fidelity & ~AuthoringPreviewFidelity.Camera;
+        AuthoringPreviewFidelity fidelity = baseline.Fidelity;
         var toggles = ImmutableArray.CreateBuilder<string>();
         if (FacialFpp.ShowHands)
         {
@@ -13471,10 +14002,10 @@ public sealed partial class MainWindowViewModel :
                 profile.ProceduralToggles.Contains(
                     Dl1PreviewStageIds.FppHeadSpineCorrection,
                     StringComparer.Ordinal);
-            FacialFpp.UseFppCamera =
-                isFpp &&
-                profile.Fidelity.HasFlag(
-                    AuthoringPreviewFidelity.Camera);
+            // EyeCamera is the fixed authoring camera in the FPP workspace.
+            // Older projects may have persisted the former opt-out toggle;
+            // loading them must not silently turn the camera pane into orbit.
+            FacialFpp.UseFppCamera = true;
             FacialFpp.ShowHands =
                 !isFpp ||
                 profile.ProceduralToggles.Contains(
@@ -13521,10 +14052,6 @@ public sealed partial class MainWindowViewModel :
 
         AuthoringPreviewFidelity fidelity =
             PreviewProfile.RawAuthoring.Fidelity;
-        if (!FacialFpp.UseFppCamera)
-        {
-            fidelity &= ~AuthoringPreviewFidelity.Camera;
-        }
 
         return new PreviewProfile(
             "raw_fpp_authoring",
@@ -13599,6 +14126,9 @@ public sealed partial class MainWindowViewModel :
     {
         if (ActiveWorkspaceMode == "Cutscene")
         {
+            _viewportCoordinator.SetPreviewCameraOverride(
+                ViewportSide.Source,
+                null);
             TargetViewport.SceneSource.SetFppProjectionState(null);
             if (frame.Camera?.Source ==
                 EvaluatedCameraSource.Dl1MovieReferenceCamera)
@@ -13626,24 +14156,24 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        bool useFppCamera =
-            ActiveWorkspaceMode == "FPP" &&
-            FacialFpp.UseFppCamera;
-        if (!useFppCamera)
+        if (ActiveWorkspaceMode != "FPP")
         {
+            _viewportCoordinator.SetPreviewCameraOverride(
+                ViewportSide.Source,
+                null);
             _viewportCoordinator.SetTargetPreviewCameraOverride(null);
             TargetViewport.SceneSource.SetFppProjectionState(null);
-            FacialFpp.PreviewStatus = ActiveWorkspaceMode == "FPP"
-                ? SelectedPreviewMode == RawPreviewModeLabel
-                    ? "Raw preview is active on the shared timeline; the target viewport remains on its orbit camera."
-                    : "DL1 FPP profile is active on the shared timeline; the target viewport remains on its orbit camera."
-                : "Orbit preview active. Select FPP mode and enable the FPP camera to use the evaluated EyeCamera helper.";
+            FacialFpp.PreviewStatus =
+                "Orbit preview active. Open FPP to use the evaluated EyeCamera helper.";
             PublishLinkedTargetExternalView(frame);
             return;
         }
 
         if (frame.Camera is null)
         {
+            _viewportCoordinator.SetPreviewCameraOverride(
+                ViewportSide.Source,
+                null);
             _viewportCoordinator.SetTargetPreviewCameraOverride(null);
             TargetViewport.SceneSource.SetFppProjectionState(null);
             string unavailable = frame.Dl1PreviewStages
@@ -13653,20 +14183,26 @@ public sealed partial class MainWindowViewModel :
                 ?? "The selected rig does not provide an evaluated FPP camera.";
             FacialFpp.PreviewStatus =
                 $"FPP camera unavailable: {unavailable}";
+            SourceViewport.SetDiagnosticOverlay(
+                $"EyeCamera helper missing or unavailable. {unavailable}");
             PublishLinkedTargetExternalView(frame);
             return;
         }
+
+        SourceViewport.SetDiagnosticOverlay(null);
 
         if (frame.Camera.Source !=
             EvaluatedCameraSource.Dl1FppEyeCamera)
         {
             TargetViewport.SceneSource.SetFppProjectionState(null);
-            _viewportCoordinator.SetTargetPreviewCameraOverride(
+            _viewportCoordinator.SetTargetPreviewCameraOverride(null);
+            _viewportCoordinator.SetPreviewCameraOverride(
+                ViewportSide.Source,
                 Dl1PreviewCameraAdapter.ToRenderCamera(
                     frame.Camera,
                     preserveLensAspectRatio: false));
             FacialFpp.PreviewStatus =
-                "Raw FPP preview follows the evaluated EyeCamera bone with the ordinary scene lens. DL1 hands projection and procedural stages are disabled.";
+                "Left viewport follows the evaluated EyeCamera profile bone with the ordinary scene lens. The right viewport remains a free external orbit.";
             PublishLinkedTargetExternalView(frame);
             return;
         }
@@ -13681,14 +14217,16 @@ public sealed partial class MainWindowViewModel :
                 ? Dl1PreviewCameraAdapter.ToRenderProjection(
                     evaluatedHands)
                 : null;
-        TargetViewport.SceneSource.SetFppProjectionState(
-            new RenderFppProjectionState(
+        var projectionState = new RenderFppProjectionState(
                 RouteHandsMeshes: true,
                 SceneAspectRatio: capturedSceneProjection
                     ? checked((float)frame.Camera.Lens.AspectRatio)
                     : null,
-                HandsProjection: handsProjection));
-        _viewportCoordinator.SetTargetPreviewCameraOverride(
+                HandsProjection: handsProjection);
+        TargetViewport.SceneSource.SetFppProjectionState(null);
+        _viewportCoordinator.SetTargetPreviewCameraOverride(null);
+        _viewportCoordinator.SetPreviewCameraOverride(
+            ViewportSide.Source,
             Dl1PreviewCameraAdapter.ToRenderCamera(
                 frame.Camera,
                 preserveLensAspectRatio:
@@ -13707,18 +14245,21 @@ public sealed partial class MainWindowViewModel :
                 .Select(stage =>
                     $"{Humanize(stage.StageId)}: {stage.Status}"));
         FacialFpp.PreviewStatus =
-            "Target viewport follows the evaluated EyeCamera authoring fallback. " +
+            "Left viewport follows the evaluated EyeCamera authoring fallback; the right viewport remains a free external orbit. " +
             (string.IsNullOrWhiteSpace(stageSummary)
                 ? string.Empty
                 : stageSummary);
-        PublishLinkedTargetExternalView(frame);
+        PublishLinkedTargetExternalView(
+            frame,
+            projectionState);
     }
 
     private bool UsesLinkedTargetExternalView() =>
         ActiveWorkspaceMode is "FPP" or "Cutscene";
 
     private void PublishLinkedTargetExternalView(
-        EvaluationFrame frame)
+        EvaluationFrame frame,
+        RenderFppProjectionState? fppProjection = null)
     {
         ArgumentNullException.ThrowIfNull(frame);
         if (!UsesLinkedTargetExternalView())
@@ -13727,18 +14268,21 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        if (_lastFppExternalOrbitFrame is not null)
+        {
+            TargetViewport.SceneSource.SetExternalPreviewScene(null);
+        }
         RenderFrameSnapshot targetFrame =
             TargetViewport.SceneSource.CaptureFrame();
-        SourceViewport.SceneSource.SetExternalPreviewScene(
-            targetFrame);
-        SourceViewport.SetPresentation(
-            "DL1 Target / External",
-            ActiveWorkspaceMode == "FPP"
-                ? "Same evaluated target | free orbit | FPP hands projection disabled"
-                : "Same evaluated target | free orbit | movie camera override disabled");
 
         if (ActiveWorkspaceMode == "Cutscene")
         {
+            SourceViewport.SetCameraViewActive(false);
+            SourceViewport.SceneSource.SetExternalPreviewScene(
+                targetFrame);
+            SourceViewport.SetPresentation(
+                "DL1 Target / External",
+                "Same evaluated target | free orbit | movie camera override disabled");
             bool hasMovieCamera =
                 frame.Camera?.Source ==
                     EvaluatedCameraSource.Dl1MovieReferenceCamera &&
@@ -13755,9 +14299,22 @@ public sealed partial class MainWindowViewModel :
 
         bool hasFppCamera =
             frame.Camera is not null &&
-            _viewportCoordinator.HasTargetPreviewCameraOverride;
-        RenderFppProjectionState? projection =
-            targetFrame.FppProjectionState;
+            _viewportCoordinator.HasPreviewCameraOverride(
+                ViewportSide.Source);
+        SourceViewport.SetCameraViewActive(hasFppCamera);
+        _suspendedTargetProjection = fppProjection;
+        SourceViewport.SceneSource.SetExternalPreviewScene(
+            targetFrame with
+            {
+                FppProjectionState = fppProjection,
+            },
+            preserveFppProjectionState: true);
+        RenderFrameSnapshot authoredOrbitFrame =
+            CreateFppExternalOrbitFrame(frame, targetFrame);
+        _lastFppExternalOrbitFrame = authoredOrbitFrame;
+        TargetViewport.SceneSource.SetExternalPreviewScene(
+            authoredOrbitFrame);
+        RenderFppProjectionState? projection = fppProjection;
         string fidelity = hasFppCamera
             ? frame.Camera!.Source ==
                 EvaluatedCameraSource.Dl1FppEyeCamera
@@ -13766,19 +14323,29 @@ public sealed partial class MainWindowViewModel :
                     : "Evaluated EyeCamera | hands projection unavailable or disabled"
                 : "Evaluated EyeCamera profile bone | ordinary scene projection"
             : "Evaluated target | EyeCamera override disabled or unavailable";
-        TargetViewport.SetPresentation(
+        SourceViewport.SetPresentation(
             hasFppCamera
                 ? "DL1 Target / EyeCamera"
-                : "DL1 Target / Orbit",
+                : "FPP EyeCamera unavailable",
             fidelity);
+        TargetViewport.SetPresentation(
+            "DL1 Target / External Orbit",
+            "Same evaluated target | free orbit | FPP camera projection disabled");
     }
 
     private void ClearLinkedTargetExternalView(
         bool evaluationUnavailable = false)
     {
         SourceViewport.SceneSource.SetExternalPreviewScene(null);
+        SourceViewport.SetCameraViewActive(false);
+        if (_lastFppExternalOrbitFrame is not null)
+        {
+            TargetViewport.SceneSource.SetExternalPreviewScene(null);
+            _lastFppExternalOrbitFrame = null;
+        }
         if (!UsesLinkedTargetExternalView())
         {
+            SourceViewport.SetDiagnosticOverlay(null);
             SourceViewport.SetPresentation(
                 AuthoredSourcePaneTitle,
                 AuthoredSourcePaneFidelity);
@@ -13788,15 +14355,32 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        if (ActiveWorkspaceMode == "FPP")
+        {
+            SourceViewport.SetPresentation(
+                "FPP EyeCamera unavailable",
+                evaluationUnavailable
+                    ? "The selected rig did not produce an evaluated EyeCamera; the external orbit remains available on the right"
+                    : "Waiting for the evaluated EyeCamera frame");
+            SourceViewport.SetDiagnosticOverlay(
+                evaluationUnavailable
+                    ? "EyeCamera helper missing or unavailable. The external orbit remains usable on the right."
+                    : null);
+            TargetViewport.SetPresentation(
+                "DL1 Target / External Orbit",
+                evaluationUnavailable
+                    ? "Evaluated target unavailable"
+                    : "Same evaluated target | free orbit");
+            return;
+        }
+
         SourceViewport.SetPresentation(
             AuthoredSourcePaneTitle,
             evaluationUnavailable
                 ? "Authored scene restored | evaluated DL1 target unavailable"
                 : AuthoredSourcePaneFidelity);
         TargetViewport.SetPresentation(
-            ActiveWorkspaceMode == "Cutscene"
-                ? "DL1 Target / Movie Camera"
-                : "DL1 Target / EyeCamera",
+            "DL1 Target / Movie Camera",
             evaluationUnavailable
                 ? "Waiting for an evaluated DL1 target scene"
                 : TargetPaneFidelity);
@@ -13809,52 +14393,134 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        if (ActiveWorkspaceMode == "FPP")
+        {
+            RenderFrameSnapshot? authoredOrbitFrame =
+                _lastFppExternalOrbitFrame;
+            if (authoredOrbitFrame is not null)
+            {
+                TargetViewport.SceneSource.SetExternalPreviewScene(null);
+            }
+            RenderFrameSnapshot fppDisplayFrame =
+                TargetViewport.SceneSource.CaptureFrame();
+            bool hasEyeCamera =
+                _viewportCoordinator.HasPreviewCameraOverride(
+                    ViewportSide.Source);
+            SourceViewport.SceneSource.SetExternalPreviewScene(
+                fppDisplayFrame with
+                {
+                    FppProjectionState = _suspendedTargetProjection,
+                },
+                preserveFppProjectionState: true);
+            SourceViewport.SetPresentation(
+                hasEyeCamera
+                    ? "DL1 Target / EyeCamera"
+                    : "FPP EyeCamera unavailable",
+                hasEyeCamera
+                    ? "Restored evaluated EyeCamera | current published frame"
+                    : "The external orbit remains available on the right");
+            SourceViewport.SetDiagnosticOverlay(
+                hasEyeCamera
+                    ? null
+                    : "EyeCamera helper missing or unavailable. The external orbit remains usable on the right.");
+            SourceViewport.SetCameraViewActive(hasEyeCamera);
+            if (authoredOrbitFrame is not null)
+            {
+                TargetViewport.SceneSource.SetExternalPreviewScene(
+                    authoredOrbitFrame);
+            }
+            TargetViewport.SetPresentation(
+                "DL1 Target / External Orbit",
+                "Same evaluated target | free orbit | FPP camera projection disabled");
+            return;
+        }
+
         RenderFrameSnapshot targetFrame =
             TargetViewport.SceneSource.CaptureFrame();
         SourceViewport.SceneSource.SetExternalPreviewScene(targetFrame);
         SourceViewport.SetPresentation(
             "DL1 Target / External",
-            ActiveWorkspaceMode == "Cutscene"
-                ? "Same evaluated target | free orbit | movie camera override disabled"
-                : "Same evaluated target | free orbit | FPP hands projection disabled");
+            "Same evaluated target | free orbit | movie camera override disabled");
         bool hasPreviewCamera =
             _viewportCoordinator.HasTargetPreviewCameraOverride;
         TargetViewport.SetPresentation(
-            ActiveWorkspaceMode == "Cutscene"
-                ? hasPreviewCamera
-                    ? "DL1 Target / Movie Camera"
-                    : "DL1 Target / Orbit"
-                : hasPreviewCamera
-                    ? "DL1 Target / EyeCamera"
-                    : "DL1 Target / Orbit",
             hasPreviewCamera
-                ? ActiveWorkspaceMode == "Cutscene"
-                    ? "Restored evaluated movie camera | current published frame"
-                    : "Restored evaluated EyeCamera | current published frame"
+                ? "DL1 Target / Movie Camera"
+                : "DL1 Target / Orbit",
+            hasPreviewCamera
+                ? "Restored evaluated movie camera | current published frame"
                 : "Evaluated target | free orbit until a camera is available");
+    }
+
+    private RenderFrameSnapshot CreateFppExternalOrbitFrame(
+        EvaluationFrame frame,
+        RenderFrameSnapshot evaluatedDisplayFrame)
+    {
+        SkeletonRenderData skeleton =
+            CorePreviewAdapter.ToRenderSkeleton(
+                frame.AuthoredPose,
+                SelectedBone?.Index,
+                frame.ActorWorldTransform);
+        AttachmentSceneComposition scene =
+            AttachmentSceneComposer.Compose(
+                _targetBaseMeshes,
+                frame.AuthoredAttachments,
+                _attachmentRenderAssets,
+                frame.ActorWorldTransform);
+        Guid? selectedBindingId =
+            AttachmentEditor.SelectedAttachment?.Id;
+        MeshRenderData[] meshes = scene.Meshes
+            .Select(mesh => mesh with
+            {
+                IsSelected = selectedBindingId.HasValue
+                    ? IsAttachmentMeshForBinding(
+                        mesh,
+                        selectedBindingId.Value)
+                    : !mesh.Id.StartsWith(
+                        "attachment/",
+                        StringComparison.Ordinal),
+            })
+            .ToArray();
+        if (meshes.Length == 0 &&
+            _targetBaseMeshes.Length == 0 &&
+            frame.AuthoredAttachments.IsEmpty)
+        {
+            // A renderer-only or test publication may not have the decoded
+            // retail base meshes available to rebuild the authored orbit.
+            // Reuse the already-evaluated geometry in that narrow case while
+            // still removing the FPP camera/projection override.
+            meshes = evaluatedDisplayFrame.Meshes.ToArray();
+        }
+        MorphWeight[] morphs = frame.AuthoredMorphWeights
+            .Select(static pair => new MorphWeight(
+                pair.Key,
+                checked((float)pair.Value)))
+            .ToArray();
+        return evaluatedDisplayFrame with
+        {
+            Meshes = meshes,
+            Skeleton = skeleton,
+            Gizmos = BuildBoneEditGizmos(skeleton),
+            MorphWeights = morphs,
+            FppProjectionState = null,
+        };
     }
 
     private void UpdateUnevaluatedPreviewStatus(string nextStep)
     {
         FacialFpp.PreviewStatus = ActiveWorkspaceMode switch
         {
-            "FPP" when
-                SelectedPreviewMode == RawPreviewModeLabel &&
-                FacialFpp.UseFppCamera =>
-                $"Raw EyeCamera preview is requested without DL1 procedural projection. {nextStep}",
             "FPP" when SelectedPreviewMode == RawPreviewModeLabel =>
-                $"Raw preview is active on the shared timeline; the target viewport remains on its orbit camera. {nextStep}",
-            "FPP" when FacialFpp.UseFppCamera =>
-                $"DL1 FPP camera is requested. {nextStep}",
+                $"Raw EyeCamera preview is requested without DL1 procedural projection. {nextStep}",
             "FPP" =>
-                $"DL1 FPP profile is active on the shared timeline; the target viewport remains on its orbit camera. {nextStep}",
+                $"FPP profile is active. DL1 EyeCamera is requested for the left viewport; the right viewport remains an external orbit. {nextStep}",
             "Cutscene" when
                 FacialFpp.UseMovieReferenceCameraCapture =>
                 $"The explicit external DL1 movie reference camera is requested. {nextStep}",
             "Cutscene" =>
                 $"DL1 movie context is active, but no external reference-camera snapshot is loaded. {nextStep}",
             _ =>
-                "Orbit preview active. Select FPP mode and enable the FPP camera to use the evaluated EyeCamera helper.",
+                "Orbit preview active. Open FPP to use the evaluated EyeCamera helper.",
         };
     }
 
@@ -13997,21 +14663,10 @@ public sealed partial class MainWindowViewModel :
                     $"Transform | {track.Keyframes.Length:N0} source keys",
                     "Source animation",
                     isReadOnly: true,
-                    totalKeyCount: track.Keyframes.Length);
-                foreach (TransformKeyframe keyframe in
-                         SelectTimelineTransformKeys(
-                             track.Keyframes,
-                             maximumCount: 48))
-                {
-                    int frame = checked((int)Math.Round(
-                        keyframe.Frame));
-                    sourceTrack.Keyframes.Add(
-                        new TimelineKeyframeViewModel(
-                            sourceTrack.Name,
-                            frame,
-                            frame * 6.0,
-                            12.0));
-                }
+                    totalKeyCount: track.Keyframes.Length,
+                    exactKeyFrames: track.Keyframes.Select(
+                        static keyframe => checked((int)Math.Round(
+                            keyframe.Frame))));
 
                 viewModels.Add(sourceTrack);
                 AddTransformCurves(
@@ -14038,21 +14693,10 @@ public sealed partial class MainWindowViewModel :
                     $"Scalar | {track.Keyframes.Length:N0} source keys",
                     "Facial",
                     isReadOnly: true,
-                    totalKeyCount: track.Keyframes.Length);
-                foreach (ScalarKeyframe keyframe in
-                         SelectTimelineScalarKeys(
-                             track.Keyframes,
-                             maximumCount: 48))
-                {
-                    int frame = checked((int)Math.Round(
-                        keyframe.Frame));
-                    sourceTrack.Keyframes.Add(
-                        new TimelineKeyframeViewModel(
-                            sourceTrack.Name,
-                            frame,
-                            frame * 6.0,
-                            12.0));
-                }
+                    totalKeyCount: track.Keyframes.Length,
+                    exactKeyFrames: track.Keyframes.Select(
+                        static keyframe => checked((int)Math.Round(
+                            keyframe.Frame))));
 
                 viewModels.Add(sourceTrack);
                 curveModels.Add(
@@ -14819,8 +15463,33 @@ public sealed partial class MainWindowViewModel :
         TargetViewport.SceneSource.SetMorphWeights(weights);
         if (showingExternalTarget)
         {
+            RenderFppProjectionState? fppProjection =
+                ActiveWorkspaceMode == "FPP"
+                    ? _suspendedTargetProjection
+                    : null;
+            RenderFrameSnapshot targetExternal =
+                TargetViewport.SceneSource.CaptureFrame() with
+                {
+                    MorphWeights = weights,
+                    FppProjectionState = null,
+                };
+            TargetViewport.SceneSource.SetExternalPreviewScene(
+                targetExternal);
+            if (ActiveWorkspaceMode == "FPP")
+            {
+                _lastFppExternalOrbitFrame = targetExternal;
+            }
+
+            RenderFrameSnapshot cameraExternal =
+                SourceViewport.SceneSource.CaptureFrame() with
+                {
+                    MorphWeights = weights,
+                    FppProjectionState = fppProjection,
+                };
             SourceViewport.SceneSource.SetExternalPreviewScene(
-                TargetViewport.SceneSource.CaptureFrame());
+                cameraExternal,
+                preserveFppProjectionState:
+                    fppProjection is not null);
             ApplyAuthoringOverlays();
         }
     }
@@ -15362,6 +16031,8 @@ public sealed class ViewportPaneViewModel : ObservableObject
 {
     private string _title;
     private string _fidelityLabel;
+    private string? _diagnosticOverlay;
+    private bool _isCameraViewActive;
 
     public ViewportPaneViewModel(
         string title,
@@ -15389,6 +16060,18 @@ public sealed class ViewportPaneViewModel : ObservableObject
 
     public ViewportSceneSource SceneSource { get; }
 
+    public string? DiagnosticOverlay
+    {
+        get => _diagnosticOverlay;
+        private set => SetProperty(ref _diagnosticOverlay, value);
+    }
+
+    public bool IsCameraViewActive
+    {
+        get => _isCameraViewActive;
+        private set => SetProperty(ref _isCameraViewActive, value);
+    }
+
     internal void SetPresentation(
         string title,
         string fidelityLabel)
@@ -15397,5 +16080,17 @@ public sealed class ViewportPaneViewModel : ObservableObject
         ArgumentException.ThrowIfNullOrWhiteSpace(fidelityLabel);
         Title = title;
         FidelityLabel = fidelityLabel;
+    }
+
+    internal void SetDiagnosticOverlay(string? message)
+    {
+        DiagnosticOverlay = string.IsNullOrWhiteSpace(message)
+            ? null
+            : message.Trim();
+    }
+
+    internal void SetCameraViewActive(bool active)
+    {
+        IsCameraViewActive = active;
     }
 }
