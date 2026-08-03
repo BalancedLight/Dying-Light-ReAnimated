@@ -95,6 +95,104 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
                     600)));
     }
 
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task MissingCapturedHandsProjectionKeepsFppGeometryVisibleThroughSceneLens()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "fpp-fallback-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "fpp-fallback-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "fpp-fallback.json")),
+            new TestProjectFileDialogs(
+                Path.Combine(_temporaryDirectory, "fpp-fallback.dlraproj")),
+            assets);
+        SkeletonRenderData skeleton = CreateSkeleton(
+            Dl1PreviewContract.EyeCameraBoneName,
+            Matrix4x4.Identity,
+            isSelected: false);
+        MeshRenderData fppHands = CreateMesh(
+            "player_1_fpp/hands",
+            MeshProjectionRole.FppHands,
+            isSelected: false);
+        viewModel.TargetViewport.SceneSource.SetScene(
+            [fppHands],
+            skeleton,
+            []);
+        viewModel.ActiveWorkspaceMode = "FPP";
+
+        viewModel.ApplyEvaluatedPreviewCamera(
+            CreateFrame(
+                "FPP",
+                skeleton,
+                includeHandsProjection: false));
+
+        RenderFrameSnapshot cameraFrame =
+            viewModel.SourceViewport.SceneSource.CaptureFrame();
+        RenderFppProjectionState projection = Assert.IsType<
+            RenderFppProjectionState>(cameraFrame.FppProjectionState);
+        Assert.False(projection.RouteHandsMeshes);
+        Assert.Null(projection.HandsProjection);
+        Assert.Contains(fppHands, cameraFrame.Meshes);
+        Assert.Equal(
+            "DL1 Target / EyeCamera",
+            viewModel.SourceViewport.Title);
+        Assert.Contains(
+            "hands projection unavailable",
+            viewModel.SourceViewport.FidelityLabel,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task TppGeometryCannotMasqueradeAsFppEyeCameraPreview()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "tpp-fpp-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "tpp-fpp-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "tpp-fpp.json")),
+            new TestProjectFileDialogs(
+                Path.Combine(_temporaryDirectory, "tpp-fpp.dlraproj")),
+            assets);
+        SkeletonRenderData skeleton = CreateSkeleton(
+            Dl1PreviewContract.EyeCameraBoneName,
+            Matrix4x4.Identity,
+            isSelected: false);
+        viewModel.TargetViewport.SceneSource.SetScene(
+            [CreateMesh(
+                "player_1_tpp/body",
+                MeshProjectionRole.Scene,
+                isSelected: false)],
+            skeleton,
+            []);
+        viewModel.ActiveWorkspaceMode = "FPP";
+
+        viewModel.ApplyEvaluatedPreviewCamera(
+            CreateFrame("FPP", skeleton));
+
+        Assert.False(
+            viewModel.SourceViewport.IsCameraViewActive);
+        Assert.Contains(
+            "requires an FPP retail target",
+            viewModel.SourceViewport.DiagnosticOverlay,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            RenderCameraNavigationResult.Applied,
+            viewModel.TargetViewport.SceneSource.NavigateCamera(
+                RenderCameraNavigationInput.Orbit(
+                    8.0f,
+                    -4.0f,
+                    800,
+                    600)));
+    }
+
     [Theory]
     [InlineData("FPP")]
     [InlineData("Cutscene")]
@@ -404,7 +502,8 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
     private static EvaluationFrame CreateFrame(
         string workspaceMode,
         SkeletonRenderData skeleton,
-        bool includeCamera = true)
+        bool includeCamera = true,
+        bool includeHandsProjection = true)
     {
         var rig = new RigDefinition(
             "linked-target-rig",
@@ -424,7 +523,8 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
             16.0 / 9.0,
             0.02,
             800.0);
-        Dl1ProjectionParameters? handsProjection = isFpp
+        Dl1ProjectionParameters? handsProjection =
+            isFpp && includeHandsProjection
             ? new Dl1ProjectionParameters(
                 72.0,
                 Dl1ProjectionFovAxis.Horizontal,

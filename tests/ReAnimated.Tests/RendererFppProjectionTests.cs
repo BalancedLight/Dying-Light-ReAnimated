@@ -182,6 +182,92 @@ public sealed class RendererFppProjectionTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Renderer")]
+    public void FppHandsMeshUsesSceneProjectionWhenSeparateRoutingIsDisabled()
+    {
+        CreateDevice(
+            out ID3D11Device device,
+            out ID3D11DeviceContext context);
+        using (device)
+        using (context)
+        using (ID3D11Texture2D color = device.CreateTexture2D(
+            CreateTextureDescription(
+                ResourceUsage.Default,
+                BindFlags.RenderTarget,
+                CpuAccessFlags.None)))
+        using (ID3D11RenderTargetView renderTarget =
+            device.CreateRenderTargetView(color))
+        using (ID3D11Texture2D depth = device.CreateTexture2D(
+            CreateDepthDescription()))
+        using (ID3D11DepthStencilView depthStencil =
+            device.CreateDepthStencilView(depth))
+        using (ID3D11Texture2D staging = device.CreateTexture2D(
+            CreateTextureDescription(
+                ResourceUsage.Staging,
+                BindFlags.None,
+                CpuAccessFlags.Read)))
+        using (var pass = new GpuSkinnedMeshRenderPass())
+        {
+            var diagnostics = new List<string>();
+            MeshRenderData hands = CreateTriangle() with
+            {
+                ProjectionRole = MeshProjectionRole.FppHands,
+                Tint = new Vector4(0.85f, 0.35f, 0.15f, 1.0f),
+            };
+            RenderFrameSnapshot frame = new(
+                new Vector4(0.02f, 0.03f, 0.04f, 1.0f),
+                new RenderCamera(
+                    new Vector3(0.0f, 0.0f, 3.0f),
+                    Vector3.Zero,
+                    Vector3.UnitY,
+                    55.0f,
+                    0.02f,
+                    100.0f),
+                [hands],
+                null,
+                [],
+                [])
+            {
+                FppProjectionState =
+                    new RenderFppProjectionState(
+                        false,
+                        null,
+                        null),
+            };
+            D3D11RenderFrameContext renderContext = new(
+                device,
+                context,
+                renderTarget,
+                depthStencil,
+                Width,
+                Height,
+                1,
+                diagnostics.Add);
+
+            context.OMSetRenderTargets(renderTarget, depthStencil);
+            context.ClearRenderTargetView(
+                renderTarget,
+                new Color4(0.02f, 0.03f, 0.04f, 1.0f));
+            context.ClearDepthStencilView(
+                depthStencil,
+                DepthStencilClearFlags.Depth,
+                1.0f,
+                0);
+            pass.Render(in renderContext, frame);
+            byte[] pixels = ReadBack(context, color, staging);
+
+            Assert.True(
+                CountLitSurfacePixels(pixels) >= 40,
+                "The FPP mesh was not drawn through the ordinary EyeCamera scene projection.");
+            Assert.DoesNotContain(
+                diagnostics,
+                message => message.Contains(
+                    "no valid captured hands projection",
+                    StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
     private static MeshRenderData CreateTriangle() =>
         new(
             "fpp-hands",
@@ -303,6 +389,22 @@ public sealed class RendererFppProjectionTests
             if (pixels[index + 2] > 180 &&
                 pixels[index + 1] > 110 &&
                 pixels[index] < 110)
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountLitSurfacePixels(byte[] pixels)
+    {
+        int count = 0;
+        for (int index = 0; index < pixels.Length; index += 4)
+        {
+            if (pixels[index + 2] > 35 ||
+                pixels[index + 1] > 35 ||
+                pixels[index] > 35)
             {
                 count++;
             }

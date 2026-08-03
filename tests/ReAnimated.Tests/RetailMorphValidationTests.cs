@@ -113,15 +113,41 @@ public sealed class RetailMorphValidationTests
 
             Dl1MeshPreviewPayload preview =
                 Dl1MeshPreviewAdapter.Convert(mesh);
+            foreach (ReAnimated.Renderer.D3D11.MeshRenderData renderMesh in
+                     preview.Meshes)
+            {
+                Vector3[] positions = renderMesh.Vertices.Span
+                    .ToArray()
+                    .Select(static vertex => vertex.Position)
+                    .ToArray();
+                if (positions.Length == 0)
+                {
+                    continue;
+                }
+
+                float surfaceDiagonal = Vector3.Distance(
+                    positions.Aggregate(Vector3.Min),
+                    positions.Aggregate(Vector3.Max));
+                foreach (ReAnimated.Renderer.D3D11.MorphTargetRenderData target in
+                         renderMesh.MorphTargets)
+                {
+                    Assert.All(
+                        target.PositionDeltas.Span.ToArray(),
+                        delta => Assert.InRange(
+                            delta.Length(),
+                            0.0f,
+                            surfaceDiagonal + 1.0e-5f));
+                }
+            }
             Assert.Contains(
-                preview.Meshes.SelectMany(static item =>
-                    item.MorphTargets),
-                static target =>
-                    string.Equals(
-                        target.Name,
+                preview.Diagnostics,
+                static diagnostic =>
+                    diagnostic.Contains(
                         "morph_jaw_open",
                         StringComparison.OrdinalIgnoreCase) &&
-                    target.PositionDeltas.Length > 0);
+                    diagnostic.Contains(
+                        "unsafe target was preserved by the codec but omitted from preview",
+                        StringComparison.Ordinal));
         }
         finally
         {

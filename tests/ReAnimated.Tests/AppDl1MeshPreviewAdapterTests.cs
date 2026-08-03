@@ -676,6 +676,82 @@ public sealed class AppDl1MeshPreviewAdapterTests
     }
 
     [Fact]
+    public async Task ImplausibleMorphDisplacementsFailClosedBeforeRendering()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            CompiledMeshTestFixture fixture =
+                RpackTestData.BuildCompiledMeshFixture();
+            string path = await RpackTestData.WriteArchiveAsync(
+                directory,
+                "unsafe_morph_preview",
+                Rp6lResourceTypes.Mesh,
+                [
+                    new RpackTestItem(42, fixture.Metadata),
+                    new RpackTestItem(42, fixture.Variants),
+                    new RpackTestItem(42, [1]),
+                    new RpackTestItem(42, fixture.Vertices),
+                    new RpackTestItem(42, fixture.Indices),
+                ],
+                RpackTestCompression.None);
+            Rp6lArchive archive = await Rp6lArchive.OpenAsync(path);
+            await using Rp6lChunkCache cache = new(new Rp6lChunkCacheOptions
+            {
+                CacheDirectory = Path.Combine(directory, "cache"),
+                MaximumMemoryBytes = 0,
+                MaximumMemoryEntryBytes = 0,
+                MaximumDiskBytes = 8 * 1024 * 1024,
+            });
+            Dl1MeshData decoded =
+                await Dl1MeshResourceDecoder.DecodeAsync(
+                    archive,
+                    Assert.Single(archive.Resources),
+                    cache);
+            Dl1MeshData unsafeMesh = decoded with
+            {
+                MorphTargets = decoded.MorphTargets
+                    .Select(target => target with
+                    {
+                        Bindings = target.Bindings
+                            .Select(binding => binding with
+                            {
+                                PositionDeltaSets =
+                                    binding.PositionDeltaSets
+                                        .Select(set => set with
+                                        {
+                                            PositionDeltas = set.PositionDeltas
+                                                .Select(static delta =>
+                                                    delta * 100.0f)
+                                                .ToArray(),
+                                        })
+                                        .ToArray(),
+                            })
+                            .ToArray(),
+                    })
+                    .ToArray(),
+            };
+
+            Dl1MeshPreviewPayload payload =
+                Dl1MeshPreviewAdapter.Convert(unsafeMesh);
+
+            Assert.All(
+                payload.Meshes,
+                static mesh => Assert.Empty(mesh.MorphTargets));
+            Assert.Contains(
+                payload.Diagnostics,
+                static diagnostic =>
+                    diagnostic.Contains(
+                        "unsafe target was preserved by the codec but omitted from preview",
+                        StringComparison.Ordinal));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
     public async Task SinglePaletteWithoutBlendIndicesUsesStaticEntityTransform()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();

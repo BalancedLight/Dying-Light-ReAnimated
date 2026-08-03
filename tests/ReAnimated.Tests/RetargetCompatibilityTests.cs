@@ -560,6 +560,54 @@ public sealed class RetargetCompatibilityTests
         }
     }
 
+    [Fact]
+    public void SuggestedMapKeepsShiftedIdenticalFingerChainsInBindBasisPolicy()
+    {
+        // DL1 TPP and FPP player rigs share the hand and finger bind chains,
+        // but an omitted/reordered helper shifts their numeric bone indexes.
+        // Index equality is not part of skeleton compatibility.
+        RigDefinition source = CreateRig(
+            "player_tpp",
+            ("bip01", -1, true),
+            ("pelvis", 0, true),
+            ("tpp_only_helper", 0, false),
+            ("l_hand", 1, true),
+            ("l_finger01", 3, true),
+            ("l_finger02", 4, true),
+            ("l_finger03", 5, true));
+        RigDefinition target = CreateRig(
+            "player_fpp",
+            ("bip01", -1, true),
+            ("pelvis", 0, true),
+            ("l_hand", 1, true),
+            ("l_finger01", 2, true),
+            ("l_finger02", 3, true),
+            ("l_finger03", 4, true));
+
+        RetargetMap map =
+            RetargetMapBuilder.CreateSuggested(source, target);
+
+        foreach (string name in
+                 new[] { "l_hand", "l_finger01", "l_finger02", "l_finger03" })
+        {
+            int targetIndex = target.GetBoneIndex(name);
+            BoneMapEntry row = Assert.Single(
+                map.Entries,
+                entry => entry.TargetBoneIndex == targetIndex);
+
+            Assert.Equal(
+                name,
+                source.Bones[row.SourceBoneIndex].Name,
+                ignoreCase: true);
+            Assert.Equal(
+                RetargetTransferPolicy.GlobalBindBasis,
+                row.TransferPolicy);
+            Assert.Equal(
+                RetargetComponentPolicy.FullTransform,
+                row.ComponentPolicy);
+        }
+    }
+
     [Theory]
     [InlineData(
         "mixamorig:LeftHandThumb1",
