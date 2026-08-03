@@ -3,11 +3,36 @@ using Microsoft.Win32;
 
 namespace ReAnimated.App.Infrastructure;
 
+public enum LocalAnm2SourceBindingDecision
+{
+    ConfirmSuggested,
+    ChooseAnother,
+    Cancel,
+}
+
+public sealed record LocalAnm2ImportPreflight(
+    string AnimationName,
+    string SourceModelName,
+    string SourceModelIdentity,
+    string SourceModelFingerprint,
+    int BodyDescriptorCount,
+    int FacialDescriptorCount,
+    int AuxiliaryDescriptorCount,
+    int UnresolvedDescriptorCount,
+    int AmbiguousDescriptorCount)
+{
+    public bool IsBlocked => AmbiguousDescriptorCount > 0;
+}
+
 public interface IProjectFileDialogService
 {
     string? ShowOpenProjectDialog(string? initialPath);
 
     string? ShowOpenAnimationDialog(string? initialPath) => null;
+
+    LocalAnm2SourceBindingDecision ConfirmLocalAnm2SourceBinding(
+        LocalAnm2ImportPreflight preflight) =>
+        LocalAnm2SourceBindingDecision.Cancel;
 
     string? ShowOpenMimicAnimationDialog(string? initialPath) => null;
 
@@ -115,6 +140,40 @@ public sealed class WindowsProjectFileDialogService :
         return dialog.ShowDialog() == true
             ? dialog.FileName
             : null;
+    }
+
+    public LocalAnm2SourceBindingDecision ConfirmLocalAnm2SourceBinding(
+        LocalAnm2ImportPreflight preflight)
+    {
+        ArgumentNullException.ThrowIfNull(preflight);
+        string blocked = preflight.IsBlocked
+            ? $"\n\nThis candidate has {preflight.AmbiguousDescriptorCount:N0} ambiguous descriptor(s), so Yes is not allowed. Choose No to select another model."
+            : string.Empty;
+        System.Windows.MessageBoxResult result = System.Windows.MessageBox.Show(
+            $"Bind '{preflight.AnimationName}' to this immutable DL1 source model?\n\n" +
+            $"Model: {preflight.SourceModelName}\n" +
+            $"Retail identity: {preflight.SourceModelIdentity}\n" +
+            $"Fingerprint: {preflight.SourceModelFingerprint}\n\n" +
+            $"Body: {preflight.BodyDescriptorCount:N0}  |  Facial: {preflight.FacialDescriptorCount:N0}  |  Auxiliary: {preflight.AuxiliaryDescriptorCount:N0}\n" +
+            $"Unresolved: {preflight.UnresolvedDescriptorCount:N0}  |  Ambiguous: {preflight.AmbiguousDescriptorCount:N0}\n\n" +
+            "Yes confirms this exact model. No returns to the asset browser to choose another. Cancel keeps the current animation unchanged." +
+            blocked,
+            "Confirm DL1 ANM2 source model",
+            System.Windows.MessageBoxButton.YesNoCancel,
+            preflight.IsBlocked
+                ? System.Windows.MessageBoxImage.Warning
+                : System.Windows.MessageBoxImage.Question,
+            preflight.IsBlocked
+                ? System.Windows.MessageBoxResult.No
+                : System.Windows.MessageBoxResult.Yes);
+        return result switch
+        {
+            System.Windows.MessageBoxResult.Yes when !preflight.IsBlocked =>
+                LocalAnm2SourceBindingDecision.ConfirmSuggested,
+            System.Windows.MessageBoxResult.No =>
+                LocalAnm2SourceBindingDecision.ChooseAnother,
+            _ => LocalAnm2SourceBindingDecision.Cancel,
+        };
     }
 
     public string? ShowOpenMimicAnimationDialog(string? initialPath)

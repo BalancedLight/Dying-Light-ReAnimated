@@ -22,7 +22,9 @@ public sealed class LinkedViewportCoordinator
     private readonly object _gate = new();
     private RenderCamera _sourceCamera = RenderCamera.Default;
     private RenderCamera _targetCamera = RenderCamera.Default;
+    private RenderCamera? _sourcePreviewCameraOverride;
     private RenderCamera? _targetPreviewCameraOverride;
+    private bool _isSourcePreviewCameraOverrideActive;
     private bool _isTargetPreviewCameraOverrideActive;
     private bool _isLinked = true;
 
@@ -54,9 +56,7 @@ public sealed class LinkedViewportCoordinator
     {
         lock (_gate)
         {
-            return side == ViewportSide.Source
-                ? _sourceCamera
-                : GetEffectiveTargetCameraCore();
+            return GetEffectiveCameraCore(side);
         }
     }
 
@@ -102,9 +102,7 @@ public sealed class LinkedViewportCoordinator
         ArgumentNullException.ThrowIfNull(sceneBuffer);
         lock (_gate)
         {
-            RenderCamera camera = side == ViewportSide.Source
-                ? _sourceCamera
-                : GetEffectiveTargetCameraCore();
+            RenderCamera camera = GetEffectiveCameraCore(side);
             return sceneBuffer.Capture(camera);
         }
     }
@@ -124,14 +122,13 @@ public sealed class LinkedViewportCoordinator
     }
 
     public bool HasTargetPreviewCameraOverride
+        => HasPreviewCameraOverride(ViewportSide.Target);
+
+    public bool HasPreviewCameraOverride(ViewportSide side)
     {
-        get
+        lock (_gate)
         {
-            lock (_gate)
-            {
-                return _isTargetPreviewCameraOverrideActive &&
-                       _targetPreviewCameraOverride is not null;
-            }
+            return HasPreviewCameraOverrideCore(side);
         }
     }
 
@@ -141,11 +138,24 @@ public sealed class LinkedViewportCoordinator
     /// orbit camera immediately.
     /// </summary>
     public void SetTargetPreviewCameraOverride(RenderCamera? camera)
+        => SetPreviewCameraOverride(ViewportSide.Target, camera);
+
+    public void SetPreviewCameraOverride(
+        ViewportSide side,
+        RenderCamera? camera)
     {
         lock (_gate)
         {
-            _targetPreviewCameraOverride = camera;
-            _isTargetPreviewCameraOverrideActive = camera is not null;
+            if (side == ViewportSide.Source)
+            {
+                _sourcePreviewCameraOverride = camera;
+                _isSourcePreviewCameraOverrideActive = camera is not null;
+            }
+            else
+            {
+                _targetPreviewCameraOverride = camera;
+                _isTargetPreviewCameraOverrideActive = camera is not null;
+            }
         }
     }
 
@@ -156,9 +166,23 @@ public sealed class LinkedViewportCoordinator
     /// Returns whether an evaluated camera is active after the request.
     /// </summary>
     public bool SetTargetPreviewCameraOverrideActive(bool isActive)
+        => SetPreviewCameraOverrideActive(
+            ViewportSide.Target,
+            isActive);
+
+    public bool SetPreviewCameraOverrideActive(
+        ViewportSide side,
+        bool isActive)
     {
         lock (_gate)
         {
+            if (side == ViewportSide.Source)
+            {
+                _isSourcePreviewCameraOverrideActive =
+                    isActive && _sourcePreviewCameraOverride is not null;
+                return _isSourcePreviewCameraOverrideActive;
+            }
+
             _isTargetPreviewCameraOverrideActive =
                 isActive && _targetPreviewCameraOverride is not null;
             return _isTargetPreviewCameraOverrideActive;
@@ -179,9 +203,7 @@ public sealed class LinkedViewportCoordinator
     {
         lock (_gate)
         {
-            if (side == ViewportSide.Target &&
-                _isTargetPreviewCameraOverrideActive &&
-                _targetPreviewCameraOverride is not null)
+            if (HasPreviewCameraOverrideCore(side))
             {
                 return RenderCameraNavigationResult
                     .PreviewCameraLocked;
@@ -235,10 +257,21 @@ public sealed class LinkedViewportCoordinator
         }
     }
 
-    private RenderCamera GetEffectiveTargetCameraCore() =>
-        _isTargetPreviewCameraOverrideActive
-            ? _targetPreviewCameraOverride ?? _targetCamera
-            : _targetCamera;
+    private RenderCamera GetEffectiveCameraCore(ViewportSide side) =>
+        side == ViewportSide.Source
+            ? _isSourcePreviewCameraOverrideActive
+                ? _sourcePreviewCameraOverride ?? _sourceCamera
+                : _sourceCamera
+            : _isTargetPreviewCameraOverrideActive
+                ? _targetPreviewCameraOverride ?? _targetCamera
+                : _targetCamera;
+
+    private bool HasPreviewCameraOverrideCore(ViewportSide side) =>
+        side == ViewportSide.Source
+            ? _isSourcePreviewCameraOverrideActive &&
+              _sourcePreviewCameraOverride is not null
+            : _isTargetPreviewCameraOverrideActive &&
+              _targetPreviewCameraOverride is not null;
 
     public void UpdateLens(float fieldOfViewDegrees, float nearPlane)
     {
@@ -414,6 +447,7 @@ public sealed class ViewportSceneSource :
     private IRenderTransformGizmoTarget? _transformGizmoTarget;
     private IRenderTranslationGizmoTarget? _translationGizmoTarget;
     private RenderFrameSnapshot? _externalPreviewScene;
+    private int _preserveExternalFppProjection;
     private SkeletonVisibilityState? _skeletonVisibility;
     private DeformedBoundsCache? _deformedBoundsCache;
     private DeformedBoundsCache? _externalPreviewDeformedBoundsCache;
@@ -443,9 +477,12 @@ public sealed class ViewportSceneSource :
             ? authored
             : externalPreview with
             {
-                ClearColor = authored.ClearColor,
                 Camera = camera,
-                FppProjectionState = null,
+                FppProjectionState =
+                    Volatile.Read(
+                        ref _preserveExternalFppProjection) != 0
+                        ? externalPreview.FppProjectionState
+                        : null,
             };
         return Volatile.Read(ref _showMeshes) != 0
             ? presented
@@ -471,7 +508,9 @@ public sealed class ViewportSceneSource :
     /// pane uses this for the linked FPP external view; the target pane uses
     /// it for Browse asset inspection.
     /// </summary>
-    public void SetExternalPreviewScene(RenderFrameSnapshot? targetFrame)
+    public void SetExternalPreviewScene(
+        RenderFrameSnapshot? targetFrame,
+        bool preserveFppProjectionState = false)
     {
         RenderFrameSnapshot? stableFrame = targetFrame is null
             ? null
@@ -487,9 +526,16 @@ public sealed class ViewportSceneSource :
                     : null,
                 Gizmos = targetFrame.Gizmos.ToArray(),
                 MorphWeights = targetFrame.MorphWeights.ToArray(),
-                FppProjectionState = null,
+                FppProjectionState = preserveFppProjectionState
+                    ? targetFrame.FppProjectionState
+                    : null,
             };
         Volatile.Write(ref _externalPreviewScene, stableFrame);
+        Volatile.Write(
+            ref _preserveExternalFppProjection,
+            targetFrame is not null && preserveFppProjectionState
+                ? 1
+                : 0);
         Volatile.Write(
             ref _externalPreviewDeformedBoundsCache,
             null);

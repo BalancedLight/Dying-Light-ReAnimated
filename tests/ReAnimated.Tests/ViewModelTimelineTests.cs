@@ -294,4 +294,71 @@ public sealed class ViewModelTimelineTests
             timeline.VisibleKeyframes.Count(static key =>
                 !key.IsSelectedTrack));
     }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void TimelineCanvasScrubsAndSelectsTheClickedChannel()
+    {
+        TimelineViewModel timeline = new(0, 120)
+        {
+            IsPlaying = true,
+        };
+        var hips = new TimelineTrackViewModel(
+            "source-transform:0",
+            "Hips",
+            "Transform",
+            "Source animation",
+            isReadOnly: true);
+        var spine = new TimelineTrackViewModel(
+            "source-transform:1",
+            "Spine",
+            "Transform",
+            "Source animation",
+            isReadOnly: true);
+        timeline.ReplaceTracks([hips, spine]);
+
+        timeline.ScrubToPixel(25 * timeline.PixelsPerFrame);
+        TimelineTrackViewModel? selected =
+            timeline.SelectTrackFromCanvasY(24 + 28 + 4);
+
+        Assert.Equal(25, timeline.CurrentFrame);
+        Assert.False(timeline.IsPlaying);
+        Assert.Same(spine, selected);
+        Assert.Same(spine, timeline.SelectedTrack);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void SelectedDenseSourceTrackDrawsEveryExactKey()
+    {
+        int[] exactFrames = Enumerable.Range(0, 3_343).ToArray();
+        var hips = new TimelineTrackViewModel(
+            "source-transform:0",
+            "Hips",
+            "Transform",
+            "Source animation",
+            isReadOnly: true,
+            exactKeyFrames: exactFrames);
+        var spine = new TimelineTrackViewModel(
+            "source-transform:1",
+            "Spine",
+            "Transform",
+            "Source animation",
+            isReadOnly: true,
+            exactKeyFrames: exactFrames);
+        TimelineViewModel timeline = new(0, 3_342);
+
+        timeline.ReplaceTracks([hips, spine]);
+
+        Assert.Equal(3_343, timeline.VisibleKeyframes.Count(static key =>
+            key.IsSelectedTrack));
+        Assert.Equal(12, timeline.VisibleKeyframes.Count(static key =>
+            !key.IsSelectedTrack));
+        Assert.Contains(
+            "exact source keys",
+            hips.KeyPresentationLabel,
+            StringComparison.Ordinal);
+    }
 }

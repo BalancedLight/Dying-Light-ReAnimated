@@ -104,6 +104,65 @@ public sealed class RendererSceneSourceTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "Renderer")]
+    public void EvaluatedSourceCameraLocksOnlyEyeCameraPaneAndPreservesOrbit()
+    {
+        LinkedViewportCoordinator coordinator = new()
+        {
+            IsLinked = false,
+        };
+        RenderCamera sourceOrbit = RenderCamera.Default with
+        {
+            Eye = new Vector3(8.0f, 4.0f, 2.0f),
+        };
+        RenderCamera targetOrbit = RenderCamera.Default with
+        {
+            Eye = new Vector3(-8.0f, 3.0f, 5.0f),
+        };
+        RenderCamera eyeCamera = RenderCamera.Default with
+        {
+            Eye = new Vector3(0.1f, 1.72f, 0.03f),
+            VerticalFieldOfViewDegrees = 68.0f,
+        };
+        coordinator.UpdateCamera(ViewportSide.Source, sourceOrbit);
+        coordinator.UpdateCamera(ViewportSide.Target, targetOrbit);
+        coordinator.SetPreviewCameraOverride(
+            ViewportSide.Source,
+            eyeCamera);
+
+        Assert.Equal(eyeCamera, coordinator.GetCamera(ViewportSide.Source));
+        Assert.Equal(targetOrbit, coordinator.GetCamera(ViewportSide.Target));
+        Assert.Equal(
+            RenderCameraNavigationResult.PreviewCameraLocked,
+            coordinator.NavigateCamera(
+                ViewportSide.Source,
+                RenderCameraNavigationInput.Orbit(
+                    10.0f,
+                    5.0f,
+                    800,
+                    600)));
+        Assert.Equal(
+            RenderCameraNavigationResult.Applied,
+            coordinator.NavigateCamera(
+                ViewportSide.Target,
+                RenderCameraNavigationInput.Pan(
+                    10.0f,
+                    5.0f,
+                    800,
+                    600)));
+
+        Assert.False(coordinator.SetPreviewCameraOverrideActive(
+            ViewportSide.Source,
+            false));
+        Assert.Equal(sourceOrbit, coordinator.GetCamera(ViewportSide.Source));
+        Assert.True(coordinator.SetPreviewCameraOverrideActive(
+            ViewportSide.Source,
+            true));
+        Assert.Equal(eyeCamera, coordinator.GetCamera(ViewportSide.Source));
+    }
+
+    [Fact]
     public void Dl1CameraAdapterUsesRetailMtx34DirectionAndUpAxes()
     {
         TransformMatrix world =

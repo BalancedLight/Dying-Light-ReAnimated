@@ -110,6 +110,11 @@
             <StatusBarItem>
                 <TextBlock Text="{Binding StatusText}" />
             </StatusBarItem>
+            <StatusBarItem Visibility="{Binding HasAnimationOperationFailure, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <Button Command="{Binding ShowAnimationOperationDiagnosticsCommand}"
+                        Content="Open diagnostics"
+                        ToolTip="Open the structured failure details; the previous animation session was retained." />
+            </StatusBarItem>
             <Separator />
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Foreground="{StaticResource MutedTextBrush}"
@@ -1737,9 +1742,15 @@
                                 <TabItem Header="FPP">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Margin="10">
-                                            <CheckBox Margin="4"
-                                                      Content="Use FPP camera"
-                                                      IsChecked="{Binding FacialFpp.UseFppCamera}" />
+                                            <Border Margin="4"
+                                                    Padding="7"
+                                                    Background="#25344A"
+                                                    BorderBrush="{StaticResource AccentBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="3">
+                                                <TextBlock Text="EyeCamera is always shown in the left FPP viewport. The right viewport remains a free external orbit."
+                                                           TextWrapping="Wrap" />
+                                            </Border>
                                             <CheckBox Margin="4"
                                                       Content="Request separate DL1 hands projection"
                                                       ToolTip="Requires captured DL1 FOV axis, aspect, and near-plane state; otherwise the stage is visibly unavailable"
