@@ -525,24 +525,19 @@ public static class RetargetMapBuilder
         RigDefinition target,
         BoneMapEntry entry)
     {
-        if (entry.SourceBoneIndex != entry.TargetBoneIndex)
+        int sourceIndex = entry.SourceBoneIndex;
+        int targetIndex = entry.TargetBoneIndex;
+        while (sourceIndex >= 0 && targetIndex >= 0)
         {
-            return false;
-        }
-
-        int index = entry.TargetBoneIndex;
-        while (index >= 0)
-        {
-            if ((uint)index >= (uint)source.BoneCount)
+            if ((uint)sourceIndex >= (uint)source.BoneCount ||
+                (uint)targetIndex >= (uint)target.BoneCount)
             {
                 return false;
             }
 
-            BoneDefinition sourceBone = source.Bones[index];
-            BoneDefinition targetBone = target.Bones[index];
-            if (sourceBone.Index != targetBone.Index ||
-                sourceBone.ParentIndex != targetBone.ParentIndex ||
-                !string.Equals(
+            BoneDefinition sourceBone = source.Bones[sourceIndex];
+            BoneDefinition targetBone = target.Bones[targetIndex];
+            if (!string.Equals(
                     sourceBone.Name,
                     targetBone.Name,
                     StringComparison.OrdinalIgnoreCase) ||
@@ -555,10 +550,14 @@ public static class RetargetMapBuilder
                 return false;
             }
 
-            index = targetBone.ParentIndex;
+            sourceIndex = sourceBone.ParentIndex;
+            targetIndex = targetBone.ParentIndex;
         }
 
-        return true;
+        // Both chains must reach their roots together. An extra ancestor on
+        // either side changes the global bind basis even when the leaf names
+        // and local transforms happen to match.
+        return sourceIndex < 0 && targetIndex < 0;
     }
 
     private static void AddNameMatches(

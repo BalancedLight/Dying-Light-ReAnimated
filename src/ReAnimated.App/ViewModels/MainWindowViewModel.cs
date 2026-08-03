@@ -10752,15 +10752,20 @@ public sealed partial class MainWindowViewModel :
                 static target =>
                     target.PayloadStatus ==
                         Dl1MorphPayloadStatus.VertexDeltasDecoded);
+            int publishedMorphCount = previewMeshes
+                .SelectMany(static mesh => mesh.MorphTargets)
+                .Select(static target => target.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
             int nameOnlyMorphCount =
                 payload.Source.MorphTargets.Count - decodedMorphCount;
             AddDiagnostic(
-                decodedMorphCount > 0 ? "Info" : "Warning",
+                publishedMorphCount > 0 ? "Info" : "Warning",
                 "Facial",
-                $"{payload.MorphChannelNames.Count:N0} morph names; {decodedMorphCount:N0} position-delta targets decoded",
-                decodedMorphCount > 0
-                    ? $"Mapped entity/LOD targets use evidence-backed target-major SHORT4 XYZ deltas at 1/16384 before skinning. {nameOnlyMorphCount:N0} inventory channels are name-only for this resource. Facial preview remains DL1 profile until matching Windows 1.55 visual captures are approved."
-                    : "This resource has no mapped, supported SHORT4 position-delta target. Named inventory remains available for authoring, while unknown layouts fail locally and are never replaced with fabricated deformation.");
+                $"{payload.MorphChannelNames.Count:N0} morph names; {publishedMorphCount:N0} bounded position-delta targets available for preview",
+                publishedMorphCount > 0
+                    ? $"The codec decoded {decodedMorphCount:N0} target payloads and the preview boundary admitted {publishedMorphCount:N0} after finite displacement checks. {nameOnlyMorphCount:N0} inventory channels are name-only for this resource. Facial preview remains DL1 profile until matching Windows 1.55 visual captures are approved."
+                    : $"The codec decoded {decodedMorphCount:N0} target payloads, but none passed the bounded renderer-safety contract. Named inventory remains available for non-destructive authoring; moving it cannot deform the retail mesh until the remaining compact-payload unit/layout contract is proven.");
         }
 
         if (evidenceClassifiedFppHands)
@@ -10769,7 +10774,7 @@ public sealed partial class MainWindowViewModel :
                 "Info",
                 "FPP",
                 "Retail mesh uses the explicit FPP-hands projection role",
-                "The resource identity has a high-confidence explicit FPP token. In FPP camera mode it renders only when a valid separate hands projection is available; orbit and non-FPP views retain the scene projection.");
+                "The resource identity has a high-confidence explicit FPP token. A captured hands frustum is used when available; otherwise the EyeCamera pane retains a clearly labeled ordinary-scene-projection fallback instead of hiding the mesh.");
         }
 
         if (_targetRig is null)
@@ -14189,6 +14194,28 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        bool hasFirstPersonTargetGeometry =
+            TargetViewport.SceneSource.CaptureFrame().Meshes.Any(
+                static mesh =>
+                    mesh.ProjectionRole == MeshProjectionRole.FppHands);
+        if (!hasFirstPersonTargetGeometry)
+        {
+            _viewportCoordinator.SetPreviewCameraOverride(
+                ViewportSide.Source,
+                null);
+            _viewportCoordinator.SetTargetPreviewCameraOverride(null);
+            TargetViewport.SceneSource.SetFppProjectionState(null);
+            string targetName =
+                _targetProjectAsset?.RetailIdentity?.ResourceName ??
+                "the current target";
+            string unavailable =
+                $"FPP EyeCamera preview requires an FPP retail target, but '{targetName}' is not classified as FPP geometry. Choose the matching player_*_fpp model as Target.";
+            FacialFpp.PreviewStatus = unavailable;
+            SourceViewport.SetDiagnosticOverlay(unavailable);
+            PublishLinkedTargetExternalView(frame);
+            return;
+        }
+
         SourceViewport.SetDiagnosticOverlay(null);
 
         if (frame.Camera.Source !=
@@ -14218,7 +14245,12 @@ public sealed partial class MainWindowViewModel :
                     evaluatedHands)
                 : null;
         var projectionState = new RenderFppProjectionState(
-                RouteHandsMeshes: true,
+                // A separate hands frustum is used only when explicit
+                // capture data supplied it. Otherwise the FPP mesh remains
+                // visible through the ordinary EyeCamera scene projection.
+                // Routing with a null projection makes the renderer fail
+                // closed and caused the reported completely black pane.
+                RouteHandsMeshes: handsProjection is not null,
                 SceneAspectRatio: capturedSceneProjection
                     ? checked((float)frame.Camera.Lens.AspectRatio)
                     : null,

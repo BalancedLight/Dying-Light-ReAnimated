@@ -970,6 +970,46 @@ public static class Dl1MeshPreviewAdapter
                 continue;
             }
 
+            Vector3 surfaceMinimum = surface.Vertices
+                .Select(static vertex => vertex.Position)
+                .Aggregate(Vector3.Min);
+            Vector3 surfaceMaximum = surface.Vertices
+                .Select(static vertex => vertex.Position)
+                .Aggregate(Vector3.Max);
+            float surfaceDiagonal = Vector3.Distance(
+                surfaceMinimum,
+                surfaceMaximum);
+            float maximumDelta = 0.0f;
+            bool hasNonFiniteDelta = false;
+            foreach (Vector3 delta in sourceDeltas)
+            {
+                if (!float.IsFinite(delta.X) ||
+                    !float.IsFinite(delta.Y) ||
+                    !float.IsFinite(delta.Z))
+                {
+                    hasNonFiniteDelta = true;
+                    break;
+                }
+
+                maximumDelta = Math.Max(maximumDelta, delta.Length());
+            }
+
+            // The compact payload is preserved by the codec, but it is not
+            // safe to publish an unverified interpretation to the renderer.
+            // A single facial target moving a vertex farther than the entire
+            // owning surface is a strong unit/layout violation and was the
+            // direct cause of retail faces exploding into screen-sized
+            // triangles. Fail closed until that payload contract is proven.
+            if (hasNonFiniteDelta ||
+                !float.IsFinite(surfaceDiagonal) ||
+                surfaceDiagonal <= 1.0e-6f ||
+                maximumDelta > surfaceDiagonal + 1.0e-5f)
+            {
+                diagnostics.Add(
+                    $"Surface '{surface.Name}' morph '{target.Name}' has an unverified displacement payload (maximum {maximumDelta:R}, surface diagonal {surfaceDiagonal:R}); the unsafe target was preserved by the codec but omitted from preview.");
+                continue;
+            }
+
             Vector3[] deltas = new Vector3[vertexRemap.Count];
             foreach ((ushort sourceIndex, uint renderIndex) in vertexRemap)
             {
