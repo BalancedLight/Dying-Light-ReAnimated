@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Threading;
+using System.Reflection;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 
@@ -42,6 +43,10 @@ public partial class App : Application, IDisposable
             "DL ReAnimated C# started.",
             new Dictionary<string, string>
             {
+                ["executablePath"] = Environment.ProcessPath ?? string.Empty,
+                ["assemblyVersion"] =
+                    Assembly.GetExecutingAssembly().GetName().Version?.ToString() ??
+                    string.Empty,
                 ["runtime"] = Environment.Version.ToString(),
                 ["os"] = Environment.OSVersion.VersionString,
             });

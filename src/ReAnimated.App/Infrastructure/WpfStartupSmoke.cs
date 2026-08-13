@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Threading;
 using ReAnimated.App.ViewModels;
+using ReAnimated.App.Views;
 using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.App.Infrastructure;
@@ -132,13 +133,11 @@ internal sealed class WpfStartupSmoke
         ArgumentNullException.ThrowIfNull(window);
         ArgumentNullException.ThrowIfNull(viewModel);
 
-        SeedAnimationLibrary(viewModel);
-        // Normal empty workspaces physically detach the hidden source HwndHost
-        // to guarantee true single-pane airspace. The package-only smoke
-        // explicitly materializes a synthetic dual layout so it can still
-        // exercise both native hosts without weakening the user-facing rule.
-        viewModel.ActiveWorkspaceMode = "FPP";
-        viewModel.ConfigureStartupSmokeDualViewport();
+        // Reproduce the normal Browse -> Models transition before the renderer
+        // smoke takes ownership of both animation viewports. The Models surface
+        // is physically detached while Browse is active, so this catches the
+        // exact regression where it returned without its command DataContext.
+        viewModel.ActiveWorkspaceMode = "Models";
 
         window.WindowStartupLocation =
             WindowStartupLocation.Manual;
@@ -155,9 +154,66 @@ internal sealed class WpfStartupSmoke
             RoutedEventArgs args)
         {
             window.Loaded -= OnLoaded;
+            // Command bindings are not guaranteed to have transferred until
+            // the first loaded/layout pass. Validate the reattached Models
+            // surface in the same live state in which a user can click it,
+            // rather than treating the pre-show binding queue as a failure.
+            ValidateModelsWorkspaceCommands(window, viewModel);
+
+            SeedAnimationLibrary(viewModel);
+            // Normal empty workspaces physically detach the hidden source
+            // HwndHost to guarantee true single-pane airspace. The
+            // package-only smoke explicitly materializes a synthetic dual
+            // layout so it can still exercise both native hosts without
+            // weakening the user-facing rule.
+            viewModel.ActiveWorkspaceMode = "FPP";
+            viewModel.ConfigureStartupSmokeDualViewport();
             await RunAsync(
                 application,
                 window);
+        }
+    }
+
+    private static void ValidateModelsWorkspaceCommands(
+        Window window,
+        MainWindowViewModel viewModel)
+    {
+        var workspace = window.FindName(
+            "ModelsWorkspaceSurface") as ModelsWorkspaceView
+            ?? throw new InvalidDataException(
+                "The detachable Models workspace was not found in the real WPF window.");
+        if (!ReferenceEquals(workspace.DataContext, viewModel.Models))
+        {
+            throw new InvalidDataException(
+                "The reattached Models workspace did not retain its Models ViewModel.");
+        }
+
+        var importButton = workspace.FindName(
+            "ImportFbxButton") as Button
+            ?? throw new InvalidDataException(
+                "The Models Import FBX button was not found.");
+        var openButton = workspace.FindName(
+            "OpenPackageButton") as Button
+            ?? throw new InvalidDataException(
+                "The Models Open .dlrmodel button was not found.");
+        if (!ReferenceEquals(
+                importButton.Command,
+                viewModel.Models.ImportFbxCommand) ||
+            !importButton.Command.CanExecute(
+                importButton.CommandParameter))
+        {
+            throw new InvalidDataException(
+                "The reattached Models Import FBX button has no executable command.");
+        }
+
+        if (!ReferenceEquals(
+                openButton.Command,
+                viewModel.Models.OpenPackageCommand) ||
+            !openButton.Command.CanExecute(
+                openButton.CommandParameter))
+        {
+            throw new InvalidDataException(
+                "The reattached Models Open .dlrmodel button has no executable command.");
         }
     }
 

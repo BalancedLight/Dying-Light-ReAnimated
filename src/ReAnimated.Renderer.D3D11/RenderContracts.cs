@@ -369,6 +369,7 @@ public sealed record RenderFppProjectionState(
 
 public enum TextureRenderFormat
 {
+    Bgra8Unorm,
     Bc1Unorm,
     Bc2Unorm,
     Bc3Unorm,
@@ -826,6 +827,38 @@ public static class RenderMeshValidation
         {
             error = "its identity or dimensions are outside the preview bounds.";
             return false;
+        }
+
+        if (texture.Format == TextureRenderFormat.Bgra8Unorm)
+        {
+            int bgraRowPitch;
+            int bgraBytes;
+            try
+            {
+                bgraRowPitch = checked(texture.Width * 4);
+                bgraBytes = checked(bgraRowPitch * texture.Height);
+            }
+            catch (OverflowException)
+            {
+                error = "its uncompressed extent overflowed.";
+                return false;
+            }
+
+            if (texture.RowPitch != bgraRowPitch
+                || texture.BaseMipBytes.Length != bgraBytes)
+            {
+                error = "its BGRA byte extent does not match its dimensions.";
+                return false;
+            }
+
+            if (bgraBytes > maximumBytes)
+            {
+                error = "its decoded size exceeds the preview bound.";
+                return false;
+            }
+
+            error = null;
+            return true;
         }
 
         int blockBytes = texture.Format switch

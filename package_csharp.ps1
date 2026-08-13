@@ -846,6 +846,7 @@ function Invoke-PackageSelfTest {
         "Embedded.README.md"
         "Embedded.Schemas.dlraproj.schema.json"
         "Embedded.Schemas.animation-library-build.schema.json"
+        "Embedded.Schemas.dlrmodel.schema.json"
         "Embedded.Docs.CSHARP_REWRITE.md"
         "Embedded.Docs.DL1_FIRST_RELEASE_SUPPORT_MATRIX.md"
         "Embedded.Docs.DL1_BLENDER_RETAIL_HANDOFF.md"

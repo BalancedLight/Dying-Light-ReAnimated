@@ -8,6 +8,7 @@ public enum ProjectAssetKind
 {
     SourceAnimation,
     RetailGameResource,
+    CustomModelSource,
 }
 
 public enum Dl1RootMotionMode
@@ -612,10 +613,12 @@ public sealed record ProjectAnimation
             (!assetKinds.TryGetValue(
                  targetAssetId,
                  out ProjectAssetKind targetKind) ||
-             targetKind != ProjectAssetKind.RetailGameResource))
+             targetKind is not (
+                 ProjectAssetKind.RetailGameResource or
+                 ProjectAssetKind.CustomModelSource)))
         {
             throw new ArgumentException(
-                $"Animation '{Name}' refers to an unknown retail target asset.",
+                $"Animation '{Name}' refers to an unknown retail or custom-model target asset.",
                 parameterName);
         }
 

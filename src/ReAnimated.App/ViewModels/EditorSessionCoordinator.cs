@@ -5,6 +5,7 @@ namespace ReAnimated.App.ViewModels;
 public enum EditorWorkspaceMode
 {
     Browse,
+    Models,
     Animate,
     RetargetEdit,
     Face,

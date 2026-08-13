@@ -95,6 +95,74 @@ public static class ProjectSourceImporter
             sha256);
     }
 
+    public static async Task<ImportedProjectSource> ImportBytesAsync(
+        ReadOnlyMemory<byte> source,
+        string sourceFileName,
+        string projectPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceFileName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        // ReadOnlyMemory<T>.Length is Int32-bounded, so it cannot exceed this
+        // importer's 2 GiB file limit. Keep the non-empty guard here and let
+        // the streaming path enforce the upper bound for larger disk files.
+        if (source.Length <= 0)
+        {
+            throw new InvalidDataException(
+                $"Animation and custom-model sources must be between 1 byte and {MaximumSourceBytes:N0} bytes.");
+        }
+
+        string safeName = Path.GetFileName(sourceFileName);
+        if (string.IsNullOrWhiteSpace(safeName) ||
+            safeName is "." or "..")
+        {
+            throw new InvalidDataException("The source file name is not portable.");
+        }
+
+        string fullProject = Path.GetFullPath(projectPath);
+        string projectDirectory = Path.GetDirectoryName(fullProject)
+            ?? throw new InvalidOperationException(
+                "The project path has no parent directory.");
+        string sourcesDirectory = Path.Combine(projectDirectory, "Sources");
+        Directory.CreateDirectory(sourcesDirectory);
+
+        string sha256 = Convert.ToHexString(SHA256.HashData(source.Span))
+            .ToLowerInvariant();
+        string destination = Path.Combine(sourcesDirectory, safeName);
+        if (File.Exists(destination))
+        {
+            string existingHash = await ComputeSha256Async(
+                destination,
+                cancellationToken).ConfigureAwait(false);
+            if (!string.Equals(existingHash, sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                destination = Path.Combine(
+                    sourcesDirectory,
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"{Path.GetFileNameWithoutExtension(safeName)}-{sha256[..12]}{Path.GetExtension(safeName)}"));
+            }
+        }
+
+        if (!File.Exists(destination))
+        {
+            await WriteAtomicAsync(source, destination, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        string relative = Path.GetRelativePath(projectDirectory, destination)
+            .Replace('\\', '/');
+        if (Path.IsPathRooted(relative) ||
+            relative.Split('/', StringSplitOptions.RemoveEmptyEntries)
+                .Any(static segment => segment == ".."))
+        {
+            throw new InvalidOperationException(
+                "The imported source did not remain inside the project directory.");
+        }
+
+        return new ImportedProjectSource(destination, relative, sha256);
+    }
+
     public static async Task<string> ComputeSha256Async(
         string path,
         CancellationToken cancellationToken)
@@ -149,6 +217,47 @@ public static class ProjectSourceImporter
                     cancellationToken).ConfigureAwait(false);
                 await destination.FlushAsync(
                     cancellationToken).ConfigureAwait(false);
+                destination.Flush(flushToDisk: true);
+            }
+
+            File.Move(temporaryPath, destinationPath, overwrite: false);
+        }
+        finally
+        {
+            if (File.Exists(temporaryPath))
+            {
+                File.Delete(temporaryPath);
+            }
+        }
+    }
+
+    private static async Task WriteAtomicAsync(
+        ReadOnlyMemory<byte> source,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        string destinationDirectory = Path.GetDirectoryName(destinationPath)
+            ?? throw new InvalidOperationException(
+                "The destination has no parent directory.");
+        string temporaryPath = Path.Combine(
+            destinationDirectory,
+            $".{Path.GetFileName(destinationPath)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await using (FileStream destination = new(
+                temporaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                128 * 1024,
+                FileOptions.Asynchronous |
+                FileOptions.SequentialScan |
+                FileOptions.WriteThrough))
+            {
+                await destination.WriteAsync(source, cancellationToken)
+                    .ConfigureAwait(false);
+                await destination.FlushAsync(cancellationToken)
+                    .ConfigureAwait(false);
                 destination.Flush(flushToDisk: true);
             }
 

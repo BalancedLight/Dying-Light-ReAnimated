@@ -695,11 +695,10 @@ public static class FbxStrictExportInspector
                     FbxSemanticValues.ReadDoubleArray(
                         cluster.FindChild("Weights"),
                         $"Cluster {clusterId} Weights");
-                if (indices.IsEmpty ||
-                    indices.Length != weights.Length)
+                if (indices.Length != weights.Length)
                 {
                     throw new InvalidDataException(
-                        $"FBX Cluster {clusterId} must contain equal non-empty Indexes and Weights arrays.");
+                        $"FBX Cluster {clusterId} must contain equal Indexes and Weights arrays.");
                 }
 
                 var localIndices = new HashSet<long>();
@@ -760,8 +759,8 @@ public static class FbxStrictExportInspector
                         clusterId,
                         boneIds[0],
                         indices.Length,
-                        weights.Min(),
-                        weights.Max()));
+                        weights.IsEmpty ? 0.0 : weights.Min(),
+                        weights.IsEmpty ? 0.0 : weights.Max()));
             }
 
             result.Add(

@@ -13,6 +13,7 @@ using ReAnimated.Codecs.Fed;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Core.Project;
 using ReAnimated.DL1.Assets.Catalog;
 using ReAnimated.DL1.Assets.Discovery;
@@ -78,6 +79,19 @@ public sealed partial class MainWindowViewModel :
         RetailAssetRecord RetailAsset,
         ProjectAssetReference ProjectAsset);
 
+    private sealed record PreparedCustomTarget(
+        RigDefinition Rig,
+        MeshRenderData[] Meshes,
+        SkeletonRenderData Skeleton,
+        ProjectAssetReference ProjectAsset);
+
+    private sealed record PreparedCustomModelSource(
+        FbxModelAuthoringImportResult Imported,
+        CustomModelAnimationClip Selection,
+        AnimationClip Clip,
+        CustomModelPreviewPayload Preview,
+        string PackagePath);
+
     private sealed record PreparedAnimationTransition(
         long Generation,
         ProjectAnimation Animation,
@@ -85,6 +99,7 @@ public sealed partial class MainWindowViewModel :
         MeshRenderData[] SourceMeshes,
         DecodedRetailModelSession? SourceModel,
         PreparedRetailTarget? Target,
+        PreparedCustomTarget? CustomTarget,
         ImportedMimicSession? Mimic,
         AnimationClip SynchronizedClip,
         RetargetMap? Mapping,
@@ -539,6 +554,12 @@ public sealed partial class MainWindowViewModel :
                 this,
                 ViewportSide.Target));
 
+        Models = new ModelsWorkspaceViewModel(
+            _fileDialogs,
+            value => StatusText = value,
+            OpenCustomModelAnimationInAnimateAsync,
+            ResolveRetailData0PakPath);
+
         NewWorkspaceCommand = new RelayCommand(
             NewWorkspace,
             () => !IsBusy);
@@ -867,7 +888,7 @@ public sealed partial class MainWindowViewModel :
     public ObservableCollection<string> AdditionalRpackRoots { get; } = [];
 
     public ObservableCollection<string> WorkspaceModes { get; } =
-        ["Browse", "Animate", "Retarget/Edit", "Face", "FPP"];
+        ["Browse", "Models", "Animate", "Retarget/Edit", "Face", "FPP"];
 
     public IReadOnlyList<string> PreviewModes { get; } =
         [RawPreviewModeLabel, Dl1ProfilePreviewModeLabel];
@@ -880,6 +901,8 @@ public sealed partial class MainWindowViewModel :
     public ViewportPaneViewModel SourceViewport { get; }
 
     public ViewportPaneViewModel TargetViewport { get; }
+
+    public ModelsWorkspaceViewModel Models { get; }
 
     public RelayCommand NewWorkspaceCommand { get; }
 
@@ -1252,6 +1275,11 @@ public sealed partial class MainWindowViewModel :
     public bool IsBrowseWorkspace =>
         ActiveWorkspace == EditorWorkspaceMode.Browse;
 
+    public bool IsModelsWorkspace =>
+        ActiveWorkspace == EditorWorkspaceMode.Models;
+
+    public bool IsAnimationWorkspaceSurfaceVisible => !IsModelsWorkspace;
+
     public bool IsAnimateWorkspace =>
         ActiveWorkspace == EditorWorkspaceMode.Animate;
 
@@ -1265,7 +1293,11 @@ public sealed partial class MainWindowViewModel :
         ActiveWorkspace == EditorWorkspaceMode.Fpp;
 
     public bool IsAnimationAuthoringWorkspace =>
-        ActiveWorkspace != EditorWorkspaceMode.Browse;
+        ActiveWorkspace is
+            EditorWorkspaceMode.Animate or
+            EditorWorkspaceMode.RetargetEdit or
+            EditorWorkspaceMode.Face or
+            EditorWorkspaceMode.Fpp;
 
     public bool IsFaceOrFppWorkspace =>
         IsFaceWorkspace || IsFppWorkspace;
@@ -1320,9 +1352,13 @@ public sealed partial class MainWindowViewModel :
             if (SetProperty(ref _isDiagnosticsDrawerOpen, value))
             {
                 OnPropertyChanged(nameof(IsInspectorPanelVisible));
+                OnPropertyChanged(nameof(IsAnimationDiagnosticsDrawerVisible));
             }
         }
     }
+
+    public bool IsAnimationDiagnosticsDrawerVisible =>
+        IsDiagnosticsDrawerOpen && IsAnimationWorkspaceSurfaceVisible;
 
     public int SelectedDiagnosticsTabIndex
     {
@@ -1403,6 +1439,10 @@ public sealed partial class MainWindowViewModel :
 
     public string ActiveTargetModelLabel =>
         _targetProjectAsset?.RetailIdentity?.ResourceName ??
+        (_targetProjectAsset?.Kind == ProjectAssetKind.CustomModelSource
+            ? Path.GetFileNameWithoutExtension(
+                _targetProjectAsset.RelativePath)
+            : null) ??
         "No target model";
 
     public bool IsSourceViewportVisible
@@ -1599,6 +1639,7 @@ public sealed partial class MainWindowViewModel :
                 : value.Trim();
             EditorWorkspaceMode workspace = normalized switch
             {
+                "Models" or "Model Import" => EditorWorkspaceMode.Models,
                 "Animate" => EditorWorkspaceMode.Animate,
                 "Retarget" or "Retarget/Edit" or "Bone Edit" =>
                     EditorWorkspaceMode.RetargetEdit,
@@ -1646,6 +1687,7 @@ public sealed partial class MainWindowViewModel :
             : workspace switch
             {
                 EditorWorkspaceMode.Browse => "Browse",
+                EditorWorkspaceMode.Models => "Models",
                 EditorWorkspaceMode.Animate => "Animate",
                 EditorWorkspaceMode.RetargetEdit => "Retarget",
                 EditorWorkspaceMode.Face => "Facial",
@@ -1674,6 +1716,8 @@ public sealed partial class MainWindowViewModel :
         {
             EditorWorkspaceMode.Browse =>
                 PreviewLayoutMode.IsolatedBrowse,
+            EditorWorkspaceMode.Models =>
+                PreviewLayoutMode.SingleAuthoritative,
             EditorWorkspaceMode.Animate =>
                 PreviewLayoutMode.SingleAuthoritative,
             EditorWorkspaceMode.RetargetEdit =>
@@ -1779,6 +1823,9 @@ public sealed partial class MainWindowViewModel :
                 UpdateIsolatedPreviewPresentation();
             }
             OnPropertyChanged(nameof(IsBrowseWorkspace));
+            OnPropertyChanged(nameof(IsModelsWorkspace));
+            OnPropertyChanged(nameof(IsAnimationWorkspaceSurfaceVisible));
+            OnPropertyChanged(nameof(IsAnimationDiagnosticsDrawerVisible));
             OnPropertyChanged(nameof(IsAnimateWorkspace));
             OnPropertyChanged(nameof(IsRetargetWorkspace));
             OnPropertyChanged(nameof(IsFaceWorkspace));
@@ -2071,6 +2118,7 @@ public sealed partial class MainWindowViewModel :
     public void TickPlayback(DateTimeOffset now)
     {
         Timeline.Tick(now);
+        Models.Tick(now);
     }
 
     /// <summary>
@@ -2260,6 +2308,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         _disposed = true;
+        Models.Dispose();
         CancelAutomaticAssetPreview();
         _lifetimeSource.Cancel();
         if (_assetDecodeJob is { IsCancellable: true } activeAssetDecode)
@@ -2344,6 +2393,20 @@ public sealed partial class MainWindowViewModel :
         return new Dl1AssetWorkspace(
             paths.AssetIndexFile,
             paths.RpackCacheDirectory);
+    }
+
+    private string? ResolveRetailData0PakPath()
+    {
+        Dl1InstallLocation? install = _assetWorkspace.Install ??
+            SteamInstallDiscovery.Discover()
+                .FirstOrDefault(static candidate => candidate.IsValid);
+        if (install is null)
+        {
+            return null;
+        }
+
+        string path = Path.Combine(install.InstallPath, "DW", "Data0.pak");
+        return File.Exists(path) ? path : null;
     }
 
     private void BuildFidelityBadges()
@@ -2875,6 +2938,19 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        if (sourceBinding.Kind == AnimationSourceKind.LocalFbx &&
+            TryParseCustomModelStackResourceId(
+                sourceAsset.ResourceId,
+                out _,
+                out _))
+        {
+            await ActivateAnimationAsync(
+                animation.Id,
+                beginPlayback: false,
+                persistActivation: false);
+            return;
+        }
+
         if (sourceBinding.Kind is
             AnimationSourceKind.LocalAnm2 or
             AnimationSourceKind.RetailAnm2)
@@ -3134,6 +3210,167 @@ public sealed partial class MainWindowViewModel :
             projectDirectory,
             asset,
             "animation source");
+    }
+
+    private async Task<PreparedCustomModelSource> DecodeCustomModelSourceAsync(
+        ProjectAssetReference sourceAsset,
+        ProjectAnimation animation,
+        ProjectAnimationSourceBinding binding,
+        CancellationToken cancellationToken)
+    {
+        if (sourceAsset.Kind != ProjectAssetKind.SourceAnimation ||
+            !TryParseCustomModelStackResourceId(
+                sourceAsset.ResourceId,
+                out Guid expectedModelId,
+                out Guid clipId))
+        {
+            throw new InvalidDataException(
+                "The custom-model animation source identity is invalid.");
+        }
+
+        string packagePath = ResolveLocalProjectAssetPath(sourceAsset);
+        await VerifyLocalProjectAssetHashAsync(
+            sourceAsset,
+            packagePath,
+            "custom-model package",
+            cancellationToken);
+        CustomModelPackage package = await Task.Run(
+            () => CustomModelPackageSerializer.Load(packagePath),
+            cancellationToken);
+        if (package.Document.ModelId != expectedModelId)
+        {
+            throw new InvalidDataException(
+                "The .dlrmodel identity differs from the saved animation source.");
+        }
+
+        FbxModelAuthoringImportResult imported = await Task.Run(
+            () => FbxModelAuthoringImporter.ImportPackage(
+                package,
+                cancellationToken),
+            cancellationToken);
+        RigDefinition rig = imported.Rig ??
+            throw new InvalidDataException(
+                "The saved custom model no longer provides a rig.");
+        string signature = RigSignature.Compute(rig);
+        if (!string.Equals(
+                signature,
+                binding.SourceRigSignature,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                "The custom-model rig differs from its immutable saved source signature.");
+        }
+
+        CustomModelAnimationClip selection = package.Document.AnimationClips
+            .FirstOrDefault(candidate => candidate.Id == clipId) ??
+            throw new InvalidDataException(
+                "The selected animation stack is missing from the saved .dlrmodel.");
+        if (!imported.AnimationClips.TryGetValue(
+                clipId,
+                out AnimationClip? decoded))
+        {
+            throw new InvalidDataException(
+                $"Animation stack '{selection.DisplayName}' can no longer be decoded.");
+        }
+
+        AnimationClip clip = ApplyCustomModelClipSettings(
+            decoded,
+            selection with
+            {
+                DisplayName = animation.Name,
+                FrameRate = animation.FrameRate,
+            });
+        if (clip.FrameCount != animation.FrameCount)
+        {
+            throw new InvalidDataException(
+                "The custom-model animation frame count differs from the saved project document.");
+        }
+
+        CustomModelPreviewPayload preview = CustomModelPreviewAdapter.Create(
+            imported,
+            clip,
+            frame: 0);
+        if (preview.Skeleton is null)
+        {
+            throw new InvalidDataException(
+                "The custom-model animation has no renderable source skeleton.");
+        }
+
+        return new PreparedCustomModelSource(
+            imported,
+            selection,
+            clip,
+            preview,
+            packagePath);
+    }
+
+    private async Task<PreparedCustomTarget> DecodeCustomModelTargetAsync(
+        ProjectAssetReference targetAsset,
+        CancellationToken cancellationToken)
+    {
+        if (targetAsset.Kind != ProjectAssetKind.CustomModelSource)
+        {
+            throw new InvalidDataException(
+                "The requested project asset is not a custom-model target.");
+        }
+
+        string packagePath = ResolveLocalProjectAssetPath(targetAsset);
+        await VerifyLocalProjectAssetHashAsync(
+            targetAsset,
+            packagePath,
+            "custom-model target",
+            cancellationToken);
+        CustomModelPackage package = await Task.Run(
+            () => CustomModelPackageSerializer.Load(packagePath),
+            cancellationToken);
+        string[] identity = targetAsset.ResourceId?.Split(':') ?? [];
+        if (identity.Length < 2 ||
+            !string.Equals(identity[0], "custom-model", StringComparison.Ordinal) ||
+            !Guid.TryParseExact(identity[1], "N", out Guid modelId) ||
+            package.Document.ModelId != modelId)
+        {
+            throw new InvalidDataException(
+                "The .dlrmodel identity differs from the saved custom target.");
+        }
+
+        FbxModelAuthoringImportResult imported = await Task.Run(
+            () => FbxModelAuthoringImporter.ImportPackage(
+                package,
+                cancellationToken),
+            cancellationToken);
+        RigDefinition rig = imported.Rig ??
+            throw new InvalidDataException(
+                "The saved custom target no longer provides a rig.");
+        CustomModelPreviewPayload preview = CustomModelPreviewAdapter.Create(
+            imported,
+            clip: null,
+            frame: 0);
+        return new PreparedCustomTarget(
+            rig,
+            preview.Meshes.ToArray(),
+            preview.Skeleton ??
+                throw new InvalidDataException(
+                    "The custom target has no renderable skeleton."),
+            targetAsset);
+    }
+
+    private static async Task VerifyLocalProjectAssetHashAsync(
+        ProjectAssetReference asset,
+        string path,
+        string description,
+        CancellationToken cancellationToken)
+    {
+        string expected = asset.ContentSha256 ??
+            throw new InvalidDataException(
+                $"The saved {description} has no content fingerprint.");
+        string actual = await ProjectSourceImporter.ComputeSha256Async(
+            path,
+            cancellationToken);
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"The {description} differs from its saved project fingerprint.");
+        }
     }
 
     private async Task<(Dl1MeshPreviewPayload Payload, RetailAssetRecord Asset)>
@@ -3423,6 +3660,291 @@ public sealed partial class MainWindowViewModel :
             confirmedAnm2SourceModel: null);
     }
 
+    private async Task OpenCustomModelAnimationInAnimateAsync(
+        CustomModelAnimationHandoff handoff)
+    {
+        ArgumentNullException.ThrowIfNull(handoff);
+        RigDefinition rig = handoff.Model.Rig ??
+            throw new InvalidOperationException(
+                "A custom-model animation requires a decoded rig.");
+        if (!handoff.Model.AnimationClips.ContainsKey(handoff.Selection.Id))
+        {
+            throw new InvalidDataException(
+                "The selected animation stack is not decoded in the current model package.");
+        }
+
+        if (string.IsNullOrWhiteSpace(ProjectPath))
+        {
+            await SaveWorkspaceAsync();
+            if (string.IsNullOrWhiteSpace(ProjectPath))
+            {
+                StatusText =
+                    "Save a project before opening a custom-model animation in Animate";
+                return;
+            }
+        }
+
+        long generation = Interlocked.Increment(
+            ref _animationTransitionGeneration);
+        AnimationRuntimeSnapshot previous =
+            CaptureAnimationRuntimeSnapshot();
+        IsBusy = true;
+        JobViewModel job = AddJob(
+            $"Open {handoff.Selection.DisplayName}",
+            "Models to Animate",
+            "Serializing immutable custom-model package");
+        try
+        {
+            CustomModelPackage package = handoff.Model.Package;
+            ImmutableArray<byte> packageBytes = await Task.Run(
+                () => CustomModelPackageSerializer.Serialize(package),
+                job.CancellationToken);
+            EnsureCurrentAnimationTransition(
+                generation,
+                job.CancellationToken);
+
+            job.Stage = "Project source";
+            job.Progress = 25.0;
+            string packageName =
+                $"{SanitizeProjectSourceName(package.Document.Name)}-{package.Document.ModelId:N}.dlrmodel";
+            ImportedProjectSource importedSource =
+                await ProjectSourceImporter.ImportBytesAsync(
+                    packageBytes.ToArray(),
+                    packageName,
+                    ProjectPath!,
+                    job.CancellationToken);
+            string stackResourceId = CreateCustomModelStackResourceId(
+                package.Document.ModelId,
+                handoff.Selection.Id);
+            string modelResourceId = CreateCustomModelResourceId(
+                package.Document.ModelId,
+                package.Document.Name);
+
+            ProjectAnimation? existing = _project.Animations.FirstOrDefault(candidate =>
+            {
+                ProjectAssetReference? candidateSource =
+                    _project.Assets.FirstOrDefault(asset =>
+                        asset.Id == candidate.SourceAssetId);
+                ProjectAssetReference? candidateTarget =
+                    candidate.TargetAssetId is { } targetId
+                        ? _project.Assets.FirstOrDefault(asset => asset.Id == targetId)
+                        : null;
+                return candidateSource is
+                       {
+                           Kind: ProjectAssetKind.SourceAnimation,
+                       } &&
+                       candidateTarget is
+                       {
+                           Kind: ProjectAssetKind.CustomModelSource,
+                       } &&
+                       string.Equals(
+                           candidateSource.ResourceId,
+                           stackResourceId,
+                           StringComparison.Ordinal) &&
+                       string.Equals(
+                           candidateSource.ContentSha256,
+                           importedSource.Sha256,
+                           StringComparison.OrdinalIgnoreCase) &&
+                       string.Equals(
+                           candidateTarget.ContentSha256,
+                           importedSource.Sha256,
+                           StringComparison.OrdinalIgnoreCase);
+            });
+            if (existing is not null)
+            {
+                EnsureCurrentAnimationTransition(
+                    generation,
+                    job.CancellationToken);
+                job.Stage = "Reuse existing clip";
+                await ActivateAnimationAsync(
+                    existing.Id,
+                    beginPlayback: true);
+                job.Progress = 100.0;
+                job.Complete("Reused existing custom-model clip");
+                StatusText =
+                    $"Opened existing {existing.Name} custom-model animation";
+                return;
+            }
+
+            var sourceAsset = new ProjectAssetReference
+            {
+                Kind = ProjectAssetKind.SourceAnimation,
+                RelativePath = importedSource.ProjectRelativePath,
+                ResourceId = stackResourceId,
+                ContentSha256 = importedSource.Sha256,
+            };
+            var targetAsset = new ProjectAssetReference
+            {
+                Kind = ProjectAssetKind.CustomModelSource,
+                RelativePath = importedSource.ProjectRelativePath,
+                ResourceId = modelResourceId,
+                ContentSha256 = importedSource.Sha256,
+            };
+
+            job.Stage = "Initial frame";
+            job.Progress = 55.0;
+            AnimationClip clip = ApplyCustomModelClipSettings(
+                handoff.Clip,
+                handoff.Selection);
+            CustomModelPreviewPayload preview =
+                CustomModelPreviewAdapter.Create(
+                    handoff.Model,
+                    clip,
+                    frame: 0);
+            SkeletonRenderData skeleton = preview.Skeleton ??
+                throw new InvalidDataException(
+                    "The custom model has no renderable skeleton.");
+            MeshRenderData[] meshes = preview.Meshes.ToArray();
+            var session = new ImportedAnimationSession(
+                rig,
+                clip,
+                importedSource.AbsolutePath,
+                "Custom-model FBX")
+            {
+                SourceKindContract = AnimationSourceKind.LocalFbx,
+                TimingProvenance = AnimationTimingProvenance.EmbeddedFbx,
+                TimingDetail =
+                    $"Custom model stack {handoff.Selection.SourceName}",
+            };
+            ProjectAnimation animation = CreateProjectAnimation(
+                    session,
+                    sourceAsset,
+                    rig,
+                    targetAsset.Id,
+                    targetAsset.ContentSha256,
+                    proposal: null) with
+                {
+                    RootMotionMode = handoff.Selection.RootMotionMode,
+                    RootBoneName = handoff.Selection.RootBoneName,
+                };
+            DlraProject preparedProject = _project with
+            {
+                Assets = _project.Assets.Add(sourceAsset).Add(targetAsset),
+                Animations = _project.Animations.Add(animation),
+                ActiveAnimationId = animation.Id,
+            };
+            preparedProject.Validate();
+            var prepared = new PreparedAnimationTransition(
+                generation,
+                animation,
+                session,
+                meshes,
+                SourceModel: null,
+                Target: null,
+                CustomTarget: new PreparedCustomTarget(
+                    rig,
+                    meshes,
+                    skeleton,
+                    targetAsset),
+                Mimic: null,
+                SynchronizedClip: clip,
+                Mapping: null,
+                BindingStatus: TargetBindingStatus.Direct);
+            EnsureCurrentAnimationTransition(
+                generation,
+                job.CancellationToken);
+            job.Stage = "Atomic commit";
+            CommitPreparedAnimationTransition(
+                prepared,
+                preparedProject,
+                beginPlayback: true,
+                persistProject: true);
+            job.Progress = 100.0;
+            job.Complete("Complete");
+            ClearAnimationOperationFailure();
+            StatusText =
+                $"Opened {animation.Name} with custom model {package.Document.Name}";
+            AddDiagnostic(
+                "Info",
+                "Custom model",
+                "Custom-model animation opened in Animate",
+                $"Package {importedSource.ProjectRelativePath}; rig {rig.BoneCount:N0} nodes; {meshes.Length:N0} draw surfaces; immutable SHA-256 {importedSource.Sha256}.");
+        }
+        catch (OperationCanceledException)
+        {
+            RestoreAnimationRuntimeSnapshot(previous);
+            job.Complete("Canceled; previous session retained");
+            StatusText =
+                "Custom-model handoff canceled; previous animation retained";
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            CustomModelFormatException or
+            InvalidDataException or
+            InvalidOperationException or
+            IOException or
+            OverflowException)
+        {
+            RestoreAnimationRuntimeSnapshot(previous);
+            job.Complete("Failed");
+            ReportAnimationOperationFailure(
+                "Custom-model handoff",
+                job.Stage,
+                handoff.Model.Package.Document.Source.OriginalFileName,
+                generation,
+                exception);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private static AnimationClip ApplyCustomModelClipSettings(
+        AnimationClip source,
+        CustomModelAnimationClip selection) =>
+        new(
+            selection.DisplayName,
+            selection.FrameRate,
+            source.FrameCount,
+            source.TransformTracks,
+            source.ScalarTracks,
+            source.AuxiliaryTransformTracks);
+
+    private static string CreateCustomModelResourceId(
+        Guid modelId,
+        string modelName) =>
+        $"custom-model:{modelId:N}:{SanitizeProjectSourceName(modelName)}";
+
+    private static string CreateCustomModelStackResourceId(
+        Guid modelId,
+        Guid clipId) =>
+        $"custom-model:{modelId:N}:stack:{clipId:N}";
+
+    private static bool TryParseCustomModelStackResourceId(
+        string? resourceId,
+        out Guid modelId,
+        out Guid clipId)
+    {
+        modelId = Guid.Empty;
+        clipId = Guid.Empty;
+        string[] parts = resourceId?.Split(':') ?? [];
+        return parts.Length == 4 &&
+               string.Equals(parts[0], "custom-model", StringComparison.Ordinal) &&
+               string.Equals(parts[2], "stack", StringComparison.Ordinal) &&
+               Guid.TryParseExact(parts[1], "N", out modelId) &&
+               Guid.TryParseExact(parts[3], "N", out clipId);
+    }
+
+    private static string SanitizeProjectSourceName(string value)
+    {
+        string trimmed = string.IsNullOrWhiteSpace(value)
+            ? "custom-model"
+            : value.Trim();
+        HashSet<char> invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        char[] sanitized = trimmed
+            .Select(character => invalid.Contains(character) ||
+                                 character is '/' or '\\'
+                ? '_'
+                : character)
+            .Take(80)
+            .ToArray();
+        string result = new(sanitized);
+        return string.IsNullOrWhiteSpace(result)
+            ? "custom-model"
+            : result;
+    }
+
     private async Task ImportAnimationPathAsync(
         string selectedPath,
         DecodedRetailModelSession? confirmedAnm2SourceModel)
@@ -3645,10 +4167,11 @@ public sealed partial class MainWindowViewModel :
                         selectedPreviewTarget.Payload,
                         selectedPreviewTarget.RetailAsset,
                         selectedPreviewTarget.ProjectAsset),
+                CustomTarget: null,
                 Mimic: null,
-                session.Clip,
-                proposal,
-                initialBindingStatus);
+                SynchronizedClip: session.Clip,
+                Mapping: proposal,
+                BindingStatus: initialBindingStatus);
             EnsureCurrentAnimationTransition(
                 generation,
                 job.CancellationToken);
@@ -4177,10 +4700,36 @@ public sealed partial class MainWindowViewModel :
             RetailAssetRecord? sourceModelRetail = null;
             ProjectAssetReference? sourceModelProjectAsset = null;
             DecodedRetailModelSession? sourceModel = null;
+            PreparedCustomModelSource? customModelSource = null;
             MeshRenderData[] sourceMeshes = [];
             ImportedAnimationSession session;
             if (binding.Kind == AnimationSourceKind.LocalFbx)
             {
+                if (TryParseCustomModelStackResourceId(
+                        sourceAsset.ResourceId,
+                        out _,
+                        out _))
+                {
+                    job.Stage = "Custom-model package";
+                    customModelSource = await DecodeCustomModelSourceAsync(
+                        sourceAsset,
+                        animation,
+                        binding,
+                        job.CancellationToken);
+                    session = new ImportedAnimationSession(
+                        customModelSource.Imported.Rig!,
+                        customModelSource.Clip,
+                        customModelSource.PackagePath,
+                        "Custom-model FBX")
+                    {
+                        SourceKindContract = AnimationSourceKind.LocalFbx,
+                        TimingProvenance = binding.TimingProvenance,
+                        TimingDetail = binding.TimingDetail,
+                    };
+                    sourceMeshes = customModelSource.Preview.Meshes.ToArray();
+                }
+                else
+                {
                 job.Stage = "Source fingerprint";
                 string sourcePath = ResolveLocalProjectAssetPath(
                     sourceAsset);
@@ -4220,6 +4769,7 @@ public sealed partial class MainWindowViewModel :
                     TimingProvenance = binding.TimingProvenance,
                     TimingDetail = binding.TimingDetail,
                 };
+                }
             }
             else
             {
@@ -4302,13 +4852,37 @@ public sealed partial class MainWindowViewModel :
             job.Stage = "Target model";
             job.Progress = 65.0;
             PreparedRetailTarget? preparedTarget = null;
+            PreparedCustomTarget? preparedCustomTarget = null;
             if (animation.TargetAssetId is { } targetAssetId)
             {
                 ProjectAssetReference targetAsset = FindProjectAsset(
                         targetAssetId)
                     ?? throw new InvalidDataException(
                         "The animation target asset is missing.");
-                if (sourceModelPayload is not null &&
+                if (targetAsset.Kind == ProjectAssetKind.CustomModelSource)
+                {
+                    if (customModelSource is not null &&
+                        string.Equals(
+                            targetAsset.ContentSha256,
+                            sourceAsset.ContentSha256,
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        preparedCustomTarget = new PreparedCustomTarget(
+                            customModelSource.Imported.Rig!,
+                            customModelSource.Preview.Meshes.ToArray(),
+                            customModelSource.Preview.Skeleton ??
+                                throw new InvalidDataException(
+                                    "The saved custom-model target has no renderable skeleton."),
+                            targetAsset);
+                    }
+                    else
+                    {
+                        preparedCustomTarget = await DecodeCustomModelTargetAsync(
+                            targetAsset,
+                            job.CancellationToken);
+                    }
+                }
+                else if (sourceModelPayload is not null &&
                     ProjectRetailAssetsMatch(
                         FindProjectAsset(
                             binding.RetailSourceModelAssetId!.Value),
@@ -4334,6 +4908,7 @@ public sealed partial class MainWindowViewModel :
             }
 
             RigDefinition? targetRig =
+                preparedCustomTarget?.Rig ??
                 preparedTarget?.Payload.Source.Rig;
             ImportedMimicSession? mimic = null;
             AnimationClip synchronized = session.Clip;
@@ -4424,6 +4999,7 @@ public sealed partial class MainWindowViewModel :
                 sourceMeshes,
                 sourceModel,
                 preparedTarget,
+                preparedCustomTarget,
                 mimic,
                 synchronized,
                 mapping,
@@ -7414,6 +7990,23 @@ public sealed partial class MainWindowViewModel :
                 restoreRetargetMap: false,
                 animationContext: prepared.Animation);
             _activeRetargetMap = prepared.Mapping;
+        }
+        else if (prepared.CustomTarget is { } customTarget)
+        {
+            _targetRig = customTarget.Rig;
+            _targetProjectAsset = customTarget.ProjectAsset;
+            _activeRetargetMap = prepared.Mapping;
+            OnPropertyChanged(nameof(ActiveTargetModelLabel));
+            SetTargetPreviewScene(
+                customTarget.Meshes,
+                customTarget.Skeleton);
+            ReplaceSkeleton(customTarget.Skeleton);
+            FacialFpp.ReplaceMorphs([]);
+            IkEditor.ReplaceChains(
+                customTarget.Rig.IkChains.Select(
+                    static chain => chain.Name));
+            InitializeIkEditorFromBindPose();
+            ClearBlenderExportTarget();
         }
         else
         {
@@ -11874,7 +12467,10 @@ public sealed partial class MainWindowViewModel :
                 return false;
             }
 
-            requiredRetailAssets.Add(target);
+            if (target.Kind == ProjectAssetKind.RetailGameResource)
+            {
+                requiredRetailAssets.Add(target);
+            }
         }
 
         // A local FBX with no target needs no retail lookup and is restored by

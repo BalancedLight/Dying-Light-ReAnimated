@@ -216,7 +216,8 @@
         "kind": {
           "enum": [
             "sourceAnimation",
-            "retailGameResource"
+            "retailGameResource",
+            "customModelSource"
           ]
         },
         "relativePath": {

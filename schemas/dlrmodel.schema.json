@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dl-reanimated.local/schemas/dlrmodel.schema.json",
+  "title": "DL ReAnimated C# Custom Model Manifest",
+  "description": "Schema for model.json inside a deterministic .dlrmodel ZIP. The container embeds user-supplied FBX and texture bytes, never retail DL1 assets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "format",
+    "modelId",
+    "name",
+    "rigMode",
+    "source",
+    "axisSystem",
+    "rigSignature",
+    "bones",
+    "meshes",
+    "materials",
+    "animationClips",
+    "diagnostics",
+    "buildSettings"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "format": { "const": "dl-reanimated-csharp-model" },
+    "modelId": { "type": "string", "format": "uuid" },
+    "name": { "type": "string", "minLength": 1 },
+    "rigMode": { "enum": ["auto", "staticProp", "exactFbxRig", "dl1HumanoidFit"] },
+    "source": { "$ref": "#/$defs/source" },
+    "axisSystem": { "$ref": "#/$defs/axisSystem" },
+    "rigSignature": { "$ref": "#/$defs/sha256" },
+    "bones": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/bone" }
+    },
+    "meshes": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/mesh" }
+    },
+    "materials": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/material" }
+    },
+    "animationClips": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/animationClip" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "buildSettings": { "$ref": "#/$defs/buildSettings" },
+    "lastBuildReceipt": { "$ref": "#/$defs/buildReceipt" }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "packagePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?![/\\\\])(?!.*(?:^|/)(?:\\.\\.?)(?:/|$))[^\\\\]+$"
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originalFileName", "contentSha256", "fbxVersion", "embeddedEntryPath"],
+      "properties": {
+        "originalFileName": { "type": "string", "pattern": "\\.[fF][bB][xX]$" },
+        "contentSha256": { "$ref": "#/$defs/sha256" },
+        "fbxVersion": { "type": "integer", "minimum": 1 },
+        "embeddedEntryPath": { "$ref": "#/$defs/packagePath" }
+      }
+    },
+    "axisSystem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["upAxis", "upAxisSign", "frontAxis", "frontAxisSign", "coordinateAxis", "coordinateAxisSign", "unitScaleFactor"],
+      "properties": {
+        "upAxis": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "upAxisSign": { "enum": [-1, 1] },
+        "frontAxis": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "frontAxisSign": { "enum": [-1, 1] },
+        "coordinateAxis": { "type": "integer", "minimum": 0, "maximum": 2 },
+        "coordinateAxisSign": { "enum": [-1, 1] },
+        "unitScaleFactor": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "vector3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      }
+    },
+    "quaternion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z", "w"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" },
+        "w": { "type": "number" }
+      }
+    },
+    "trs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["translation", "rotation", "scale"],
+      "properties": {
+        "translation": { "$ref": "#/$defs/vector3" },
+        "rotation": { "$ref": "#/$defs/quaternion" },
+        "scale": { "$ref": "#/$defs/vector3" }
+      }
+    },
+    "matrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["m11", "m12", "m13", "m14", "m21", "m22", "m23", "m24", "m31", "m32", "m33", "m34", "m41", "m42", "m43", "m44"],
+      "properties": {
+        "m11": { "type": "number" }, "m12": { "type": "number" }, "m13": { "type": "number" }, "m14": { "type": "number" },
+        "m21": { "type": "number" }, "m22": { "type": "number" }, "m23": { "type": "number" }, "m24": { "type": "number" },
+        "m31": { "type": "number" }, "m32": { "type": "number" }, "m33": { "type": "number" }, "m34": { "type": "number" },
+        "m41": { "type": "number" }, "m42": { "type": "number" }, "m43": { "type": "number" }, "m44": { "type": "number" }
+      }
+    },
+    "bone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "fbxObjectId", "name", "parentIndex", "localBindTransform", "exactLocalBindMatrix", "kind", "isWeighted"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "fbxObjectId": { "type": "integer" },
+        "name": { "type": "string", "minLength": 1 },
+        "parentIndex": { "type": "integer", "minimum": -1 },
+        "localBindTransform": { "$ref": "#/$defs/trs" },
+        "exactLocalBindMatrix": { "$ref": "#/$defs/matrix" },
+        "kind": { "enum": ["deform", "helper", "camera", "prop", "root"] },
+        "isWeighted": { "type": "boolean" }
+      }
+    },
+    "mesh": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "geometryObjectId", "modelObjectId", "controlPointCount", "polygonCount", "triangleCount", "expandedVertexCount", "materialSlotCount", "maximumSourceInfluences", "maximumRetainedInfluences", "maximumDiscardedWeight", "requiredPaletteSize", "sourceMaterialIndices"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "geometryObjectId": { "type": "integer" },
+        "modelObjectId": { "type": "integer" },
+        "controlPointCount": { "type": "integer", "minimum": 0 },
+        "polygonCount": { "type": "integer", "minimum": 0 },
+        "triangleCount": { "type": "integer", "minimum": 0 },
+        "expandedVertexCount": { "type": "integer", "minimum": 0 },
+        "materialSlotCount": { "type": "integer", "minimum": 0 },
+        "maximumSourceInfluences": { "type": "integer", "minimum": 0 },
+        "maximumRetainedInfluences": { "type": "integer", "minimum": 0 },
+        "maximumDiscardedWeight": { "type": "number", "minimum": 0 },
+        "requiredPaletteSize": { "type": "integer", "minimum": 0 },
+        "sourceMaterialIndices": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+      }
+    },
+    "texture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "semantic", "sourceKind", "displayName", "contentSha256", "mediaType"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "semantic": { "enum": ["baseColor", "normal", "specular", "mask"] },
+        "sourceKind": { "enum": ["embeddedFbx", "externalFbx", "userOverride", "existingDl1Material"] },
+        "displayName": { "type": "string", "minLength": 1 },
+        "packageEntryPath": { "$ref": "#/$defs/packagePath" },
+        "originalReference": { "type": "string" },
+        "contentSha256": { "$ref": "#/$defs/sha256" },
+        "mediaType": { "type": "string", "minLength": 1 }
+      }
+    },
+    "material": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "textures"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1 },
+        "existingDl1MaterialReference": { "type": "string" },
+        "textures": { "type": "array", "items": { "$ref": "#/$defs/texture" } }
+      }
+    },
+    "frameRate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["numerator", "denominator"],
+      "properties": {
+        "numerator": { "type": "integer", "minimum": 1 },
+        "denominator": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "animationClip": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "fbxObjectId", "sourceName", "displayName", "included", "frameRate", "startFrame", "frameCount", "rootMotionMode", "sourceFingerprint"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "fbxObjectId": { "type": "integer" },
+        "sourceName": { "type": "string", "minLength": 1 },
+        "displayName": { "type": "string", "minLength": 1 },
+        "included": { "type": "boolean" },
+        "frameRate": { "$ref": "#/$defs/frameRate" },
+        "startFrame": { "type": "integer", "minimum": 0 },
+        "frameCount": { "type": "integer", "minimum": 1 },
+        "rootMotionMode": { "enum": ["recorded", "inPlace", "bip01", "motionAccumulator"] },
+        "rootBoneName": { "type": "string", "minLength": 1 },
+        "sourceFingerprint": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "message"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1 },
+        "severity": { "enum": ["information", "warning", "error", "blocker"] },
+        "message": { "type": "string", "minLength": 1 },
+        "subject": { "type": "string" }
+      }
+    },
+    "buildSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resourceName", "surfaceName"],
+      "properties": {
+        "resourceName": { "type": "string", "minLength": 1, "maxLength": 55 },
+        "surfaceName": { "type": "string", "minLength": 1, "maxLength": 63 },
+        "animationScriptAlias": { "type": "string", "minLength": 1 },
+        "flipTextureCoordinateV": { "type": "boolean" }
+      }
+    },
+    "buildReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["inputFingerprint", "toolFingerprint", "outputManifestFingerprint", "state", "completedUtc", "blockingReasons"],
+      "properties": {
+        "inputFingerprint": { "$ref": "#/$defs/sha256" },
+        "toolFingerprint": { "$ref": "#/$defs/sha256" },
+        "compilerFingerprint": { "$ref": "#/$defs/sha256" },
+        "outputManifestFingerprint": { "$ref": "#/$defs/sha256" },
+        "state": { "enum": ["notBuilt", "authoringDraft", "compilerReady", "gameReady", "blocked"] },
+        "completedUtc": { "type": "string", "format": "date-time" },
+        "blockingReasons": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

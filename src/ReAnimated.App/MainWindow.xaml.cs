@@ -24,7 +24,17 @@ public partial class MainWindow : Window
         _autosave = autosave ?? throw new ArgumentNullException(nameof(autosave));
         InitializeComponent();
         DataContext = _viewModel;
+
+        // ModelsWorkspaceSurface is deliberately removed from the visual tree
+        // whenever another workspace owns the D3D viewport. Do not rely on an
+        // inherited DataContext binding for that detachable surface: after an
+        // airspace teardown it can return with a null binding source, leaving
+        // every Models button visibly enabled but with no command to execute.
+        // A direct reference is stable for the lifetime of this window and is
+        // retained across every detach/reattach cycle.
+        ModelsWorkspaceSurface.DataContext = _viewModel.Models;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        ApplyWorkspaceSurfaceLayout();
         ApplyViewportColumnLayout();
         Loaded += OnWindowLoaded;
         Closing += OnWindowClosing;
@@ -71,21 +81,83 @@ public partial class MainWindow : Window
         object? sender,
         PropertyChangedEventArgs args)
     {
-        if (!string.Equals(
+        bool workspaceSurfaceChanged =
+            string.Equals(
                 args.PropertyName,
-                nameof(MainWindowViewModel.IsSourceViewportVisible),
-                StringComparison.Ordinal))
+                nameof(MainWindowViewModel.IsModelsWorkspace),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsAnimationWorkspaceSurfaceVisible),
+                StringComparison.Ordinal);
+        bool viewportLayoutChanged = string.Equals(
+            args.PropertyName,
+            nameof(MainWindowViewModel.IsSourceViewportVisible),
+            StringComparison.Ordinal);
+        if (!workspaceSurfaceChanged && !viewportLayoutChanged)
         {
             return;
         }
 
         if (!Dispatcher.CheckAccess())
         {
-            _ = Dispatcher.BeginInvoke(ApplyViewportColumnLayout);
+            _ = Dispatcher.BeginInvoke(
+                () => ApplyShellLayout(
+                    workspaceSurfaceChanged,
+                    viewportLayoutChanged));
             return;
         }
 
-        ApplyViewportColumnLayout();
+        ApplyShellLayout(
+            workspaceSurfaceChanged,
+            viewportLayoutChanged);
+    }
+
+    private void ApplyShellLayout(
+        bool workspaceSurfaceChanged,
+        bool viewportLayoutChanged)
+    {
+        if (workspaceSurfaceChanged)
+        {
+            ApplyWorkspaceSurfaceLayout();
+        }
+
+        if (viewportLayoutChanged)
+        {
+            ApplyViewportColumnLayout();
+        }
+    }
+
+    private void ApplyWorkspaceSurfaceLayout()
+    {
+        FrameworkElement activeSurface =
+            _viewModel.IsModelsWorkspace
+                ? ModelsWorkspaceSurface
+                : AnimationWorkspaceSurface;
+        FrameworkElement inactiveSurface =
+            _viewModel.IsModelsWorkspace
+                ? AnimationWorkspaceSurface
+                : ModelsWorkspaceSurface;
+
+        // Visibility alone is insufficient for HwndHost. A collapsed workspace
+        // can leave its native D3D child in the Win32 airspace, where it covers
+        // the active workspace and keeps the previous pane's size and camera.
+        // Keep exactly one workspace surface in the visual tree so switching
+        // tears down the inactive HWND before the replacement is arranged.
+        EditorRootGrid.Children.Remove(inactiveSurface);
+        if (!EditorRootGrid.Children.Contains(activeSurface))
+        {
+            Grid.SetRow(activeSurface, 2);
+            EditorRootGrid.Children.Add(activeSurface);
+        }
+
+        // Keep this invariant local to the detach/reattach boundary. It also
+        // repairs the surface if a WPF theme or future layout pass clears an
+        // inherited context while the native viewport is being reconstructed.
+        ModelsWorkspaceSurface.DataContext = _viewModel.Models;
+
+        EditorRootGrid.InvalidateMeasure();
+        EditorRootGrid.InvalidateArrange();
     }
 
     private void ApplyViewportColumnLayout()

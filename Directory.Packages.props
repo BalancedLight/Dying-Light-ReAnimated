@@ -4,10 +4,12 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
   <ItemGroup>
+    <PackageVersion Include="BCnEncoder.Net" Version="2.3.0" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="SharpCompress" Version="0.50.1" />
+    <PackageVersion Include="StbImageSharp" Version="2.30.16" />
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.5" />
     <PackageVersion Include="Vortice.D3DCompiler" Version="3.8.3" />
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />

@@ -440,6 +440,11 @@ public sealed class FbxSemanticScene
     public ImmutableArray<FbxConnection> GetChildren(long objectId) =>
         _children.TryGetValue(objectId, out ImmutableArray<FbxConnection> rows) ? rows : [];
 
+    internal bool TryGetObjectNode(long objectId, out FbxNode? node) =>
+        _objectsById.TryGetValue(objectId, out node);
+
+    internal ImmutableDictionary<long, FbxNode> ObjectNodes => _objectsById;
+
     /// <summary>
     /// Reads authoritative Pose::BindPose globals in the FBX row-vector layout
     /// and converts them into the Core column-vector convention. Multiple

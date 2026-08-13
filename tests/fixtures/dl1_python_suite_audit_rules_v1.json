@@ -304,9 +304,12 @@
       "id": "excluded-custom-model-and-crig",
       "pattern": "^tests/test_(?:chrome_rig|compiler_support|embedded_bind_project_policy|exact_model_crig_animation_integration|fbx_mesh_bind_resolution|fbx_polygon_triangulation|gui_rig_workflow_surfaces|humanoid_mapping_preflight|model_authored_crig|model_blendshape_preflight|model_import_large_production|model_import_preflight|model_layer_validation|model_rig_contract_palette|model_workspace_preoutput)\\.py::.*$",
       "classification": "explicit_exclusion",
-      "area": "deferred-custom-model-authoring",
-      "rationale": "CRIG creation/import/editing, custom-model authoring, and the experimental Models workspace are explicitly deferred from the DL1 first release.",
-      "csharpEvidence": []
+      "area": "legacy-crig-and-unmapped-model-regressions",
+      "rationale": "The C# Models workspace now has focused binary-FBX, custom-rig, embedded-texture, deterministic package, source-MSH, and multi-animation RPack controls. These historical nodes still inspect Python-only CRIG/project/UI internals or model constraints that have not yet been mapped individually, so they remain explicit exclusions rather than implied C# parity.",
+      "csharpEvidence": [
+        "CustomModelAuthoringTests.ModelPackageRoundTripsDeterministicallyAndRejectsTamperedSource",
+        "CustomModelAuthoringTests.PsychopompCorpusImportsCustomRigTexturesAndEveryStack"
+      ]
     },
     {
       "id": "excluded-legacy-project-schemas",
@@ -379,9 +382,12 @@
       "id": "excluded-deferred-model-gui-nodes",
       "pattern": "^tests/test_unified_gui_regressions\\.py::(?:test_generated_model_rig_handoff_preserves_unrelated_clip_target_and_map|test_model_workspace_roundtrip_preserves_unknown_extension_fields)$",
       "classification": "explicit_exclusion",
-      "area": "deferred-custom-model-authoring",
-      "rationale": "These nodes exercise the deferred Models workspace and generated CRIG handoff.",
-      "csharpEvidence": []
+      "area": "legacy-python-model-workspace",
+      "rationale": "These nodes exercise Python-only generated-CRIG and extension-dictionary behavior. The C# Models workspace uses an immutable deterministic .dlrmodel handoff instead and does not claim legacy project-extension or CRIG compatibility.",
+      "csharpEvidence": [
+        "CustomModelAuthoringTests.ModelPackageRoundTripsDeterministicallyAndRejectsTamperedSource",
+        "CustomModelAuthoringTests.PsychopompCorpusImportsCustomRigTexturesAndEveryStack"
+      ]
     },
     {
       "id": "mapped-anm2-provenance",

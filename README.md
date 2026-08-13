@@ -65,6 +65,16 @@ Validation is content-addressed and fail-closed. `-ForceAll` on the validation s
   assets are referenced locally and are never embedded in projects or
   releases.
 - Blender remains optional and is used only for the reverse FBX writer.
+- The independent **Models** workspace accepts user-owned binary FBX models,
+  previews custom rigs/materials/textures, stores deterministic schema-1
+  `.dlrmodel` packages, builds evidence-backed DL1 source `.msh`/`.bscr` and
+  optional `.ascr`, and exports selected FBX animation stacks as one animation
+  RPack. With an installed DL1 Developer Tools compiler and retail compiler
+  bootstrap, it also creates a compiled `.msh_obj` and standalone type-272
+  model RPack in an isolated job, then reopens and validates both hierarchy and
+  RP6L identity before atomic publication. It never embeds retail game assets.
+  Unproven `.chr` and `.skn` generation fails closed instead of emitting
+  placeholders.
 
 See [the C# implementation status](docs/CSHARP_REWRITE.md),
 [the first-release support matrix](docs/DL1_FIRST_RELEASE_SUPPORT_MATRIX.md),

@@ -393,7 +393,7 @@ function Select-TestInputFiles {
 $focusedCodecTests = @(Select-TestInputFiles (
     "^(AnimationPlaybackCorrectness|" +
     "AuthoritativeRootMotionTrailSampler|MimicProjectWorkflow|" +
-    "Anm2Codec|EvaluationPipeline)Tests$"))
+    "Anm2Codec|EvaluationPipeline|CustomModelAuthoring)Tests$"))
 $focusedViewModelTests = @(Select-TestInputFiles (
     "^(AnimationExplorerViewModel|ViewModelTimeline|" +
     "CoreAnimationProject|TransactionalPlayback)Tests$"))
@@ -402,7 +402,7 @@ $focusedRendererTests = @(Select-TestInputFiles (
     "RendererCpuReference|RendererGpuSkinning)Tests$"))
 $hermeticCodecTests = @(Select-TestInputFiles (
     "(Anm2|AnimationScr|AnimationDocument|AuthoringPolicy|CoreAnimation|Evaluation|" +
-    "Retarget|RootMotion|Mimic|Morph|IkConstraint|Fbx)"))
+    "Retarget|RootMotion|Mimic|Morph|IkConstraint|Fbx|CustomModel)"))
 $hermeticViewModelTests = @(Select-TestInputFiles (
     "^(AnimationExplorerViewModel|ViewModel|EditorUsability|" +
     "FppControlSurface|FacialPreviewPolicyViewModel|" +
@@ -417,7 +417,7 @@ $focusedGates = @(
         -Name "focused-codec-evaluation" `
         -Category "codec/evaluation" `
         -Action "test" `
-        -Filter "FullyQualifiedName~AnimationPlaybackCorrectnessTests|FullyQualifiedName~AuthoritativeRootMotionTrailSamplerTests|FullyQualifiedName~MimicProjectWorkflowTests|FullyQualifiedName~Anm2CodecTests|FullyQualifiedName~EvaluationPipelineTests" `
+        -Filter "FullyQualifiedName~AnimationPlaybackCorrectnessTests|FullyQualifiedName~AuthoritativeRootMotionTrailSamplerTests|FullyQualifiedName~MimicProjectWorkflowTests|FullyQualifiedName~Anm2CodecTests|FullyQualifiedName~EvaluationPipelineTests|FullyQualifiedName~CustomModelAuthoringTests" `
         -InputRoots @($codecRoots) `
         -InputFiles @($testProjectInputs + $focusedCodecTests)),
     (New-Gate `
@@ -441,7 +441,7 @@ $hermeticGates = @(
         -Name "hermetic-codec-evaluation" `
         -Category "codec/evaluation" `
         -Action "test" `
-        -Filter "FullyQualifiedName~Anm2|FullyQualifiedName~AnimationScr|FullyQualifiedName~AnimationDocument|FullyQualifiedName~AuthoringPolicy|FullyQualifiedName~CoreAnimation|FullyQualifiedName~Evaluation|FullyQualifiedName~Retarget|FullyQualifiedName~RootMotion|FullyQualifiedName~Mimic|FullyQualifiedName~Morph|FullyQualifiedName~IkConstraint|FullyQualifiedName~Fbx" `
+        -Filter "FullyQualifiedName~Anm2|FullyQualifiedName~AnimationScr|FullyQualifiedName~AnimationDocument|FullyQualifiedName~AuthoringPolicy|FullyQualifiedName~CoreAnimation|FullyQualifiedName~Evaluation|FullyQualifiedName~Retarget|FullyQualifiedName~RootMotion|FullyQualifiedName~Mimic|FullyQualifiedName~Morph|FullyQualifiedName~IkConstraint|FullyQualifiedName~Fbx|FullyQualifiedName~CustomModel" `
         -InputRoots @($codecRoots + @("tests\fixtures")) `
         -InputFiles @($testProjectInputs + $hermeticCodecTests)),
     (New-Gate `

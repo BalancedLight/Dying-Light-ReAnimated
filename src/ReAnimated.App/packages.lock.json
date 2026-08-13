@@ -10,9 +10,14 @@
       },
       "Microsoft.NET.ILLink.Tasks": {
         "type": "Direct",
-        "requested": "[10.0.10, )",
-        "resolved": "10.0.10",
-        "contentHash": "f5VCIE7AJpd5YvzNTeMGVzQIgyE9tX+AreTYwQF+REbu+DZo/2Ae+jNSwhPEYrVz6RRkd7y8ubXjk6Nn6Ka+Cg=="
+        "requested": "[10.0.11, )",
+        "resolved": "10.0.11",
+        "contentHash": "IBf7lbovvjGWVWXZX5cJ/cO0WXbId0Zq4BuSeT94mGZuOAP66oMeH9PTBZ9Jpp3Jb6jtK0qm/NyUbPRo1gC/wQ=="
+      },
+      "CommunityToolkit.HighPerformance": {
+        "type": "Transitive",
+        "resolved": "8.4.0",
+        "contentHash": "flxspiBs0G/0GMp7IK2J2ijV9bTG6hEwFc/z6ekHqB6nwRJ4Ry2yLdx+TkbCUYFCl4XhABkAwomeKbT6zM2Zlg=="
       },
       "Microsoft.Data.Sqlite.Core": {
         "type": "Transitive",
@@ -89,9 +94,11 @@
       "reanimated.codecs": {
         "type": "Project",
         "dependencies": {
+          "BCnEncoder.Net": "[2.3.0, )",
           "ReAnimated.Core": "[0.1.0, )",
           "ReAnimated.Evaluation": "[0.1.0, )",
-          "SharpCompress": "[0.50.1, )"
+          "SharpCompress": "[0.50.1, )",
+          "StbImageSharp": "[2.30.16, )"
         }
       },
       "reanimated.core": {
@@ -129,6 +136,15 @@
           "ReAnimated.Core": "[0.1.0, )"
         }
       },
+      "BCnEncoder.Net": {
+        "type": "CentralTransitive",
+        "requested": "[2.3.0, )",
+        "resolved": "2.3.0",
+        "contentHash": "DJhHJiBJKXUXxlkkrv74ckzJb3wYxqIAZHjXD9G76kpsD0YyJOmqtNufHWEuJe0eH0tB1tCZn80/3JV2UVP7yQ==",
+        "dependencies": {
+          "CommunityToolkit.HighPerformance": "8.4.0"
+        }
+      },
       "Microsoft.Data.Sqlite": {
         "type": "CentralTransitive",
         "requested": "[10.0.10, )",
@@ -155,6 +171,12 @@
           "SQLite": "3.53.4",
           "SQLitePCLRaw.config.e_sqlite3": "3.0.5"
         }
+      },
+      "StbImageSharp": {
+        "type": "CentralTransitive",
+        "requested": "[2.30.16, )",
+        "resolved": "2.30.16",
+        "contentHash": "qg1i+NHihXVKLKYacGKrauhSQIGL31eBWcTC4Vc7jnGmBFj87LkRuCdXB5aDZisWMRnB6x2mcfwYXQxMWEG/lw=="
       },
       "Vortice.D3DCompiler": {
         "type": "CentralTransitive",

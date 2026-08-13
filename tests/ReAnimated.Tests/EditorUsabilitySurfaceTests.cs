@@ -382,6 +382,116 @@ public sealed class EditorUsabilitySurfaceTests
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
+    public void ModelsWorkspaceExposesIndependentCompleteAuthoringFlow()
+    {
+        XDocument shell = XDocument.Load(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "MainWindow.xaml"));
+        Assert.Contains(
+            shell.Descendants(Presentation + "ToggleButton"),
+            static element =>
+                string.Equals(
+                    (string?)element.Attribute("Content"),
+                    "Models",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("CommandParameter"),
+                    "Models",
+                    StringComparison.Ordinal));
+
+        XDocument workspace = XDocument.Load(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "Views",
+                "ModelsWorkspaceView.xaml"));
+        XElement modelsSurface = Assert.Single(
+            shell.Descendants(),
+            static element => string.Equals(
+                element.Name.LocalName,
+                "ModelsWorkspaceView",
+                StringComparison.Ordinal));
+        Assert.Null(modelsSurface.Attribute("DataContext"));
+        Assert.Null(modelsSurface.Attribute("Visibility"));
+
+        string shellCodeBehind = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "MainWindow.xaml.cs"));
+        Assert.Contains(
+            "ModelsWorkspaceSurface.DataContext = _viewModel.Models;",
+            shellCodeBehind,
+            StringComparison.Ordinal);
+        string[] requiredCommands =
+        [
+            "{Binding ImportFbxCommand}",
+            "{Binding OpenPackageCommand}",
+            "{Binding SavePackageCommand}",
+            "{Binding SelectTextureCommand}",
+            "{Binding BuildLooseFilesCommand}",
+            "{Binding ExportAnimationRpackCommand}",
+            "{Binding BuildModelRpackCommand}",
+            "{Binding SelectModelCompilerCommand}",
+            "{Binding OpenSelectedAnimationInAnimateCommand}",
+        ];
+        foreach (string command in requiredCommands)
+        {
+            Assert.Contains(
+                workspace.Descendants(Presentation + "Button"),
+                element => string.Equals(
+                    (string?)element.Attribute("Command"),
+                    command,
+                    StringComparison.Ordinal));
+        }
+
+        string[] editableAnimationFields =
+        [
+            "{Binding Included, UpdateSourceTrigger=PropertyChanged}",
+            "{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}",
+            "{Binding FrameRateNumerator, UpdateSourceTrigger=PropertyChanged}",
+            "{Binding FrameRateDenominator, UpdateSourceTrigger=PropertyChanged}",
+            "{Binding RootMotionMode, UpdateSourceTrigger=PropertyChanged}",
+            "{Binding RootBoneName, UpdateSourceTrigger=PropertyChanged}",
+        ];
+        string[] attributeValues = workspace.Root!
+            .DescendantsAndSelf()
+            .Attributes()
+            .Select(static attribute => attribute.Value)
+            .ToArray();
+        foreach (string binding in editableAnimationFields)
+        {
+            Assert.Contains(binding, attributeValues);
+        }
+
+        Assert.Contains(
+            workspace.Descendants(Presentation + "TextBlock"),
+            static element => ((string?)element.Attribute("Text"))?.Contains(
+                "independent from animation projects",
+                StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            workspace.Descendants(Presentation + "TextBlock"),
+            static element => ((string?)element.Attribute("Text"))?.Contains(
+                ".chr and .skn remain blocked",
+                StringComparison.OrdinalIgnoreCase) == true);
+
+        string dialogCode = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "Infrastructure",
+                "ProjectFileDialogs.cs"));
+        Assert.Contains(
+            "dialog.ShowDialog(owner)",
+            dialogCode,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
     public void ViewportContextAndCatalogStatusUseNonOverlappingClearLayout()
     {
         XDocument document = XDocument.Load(
@@ -470,6 +580,22 @@ public sealed class EditorUsabilitySurfaceTests
             StringComparison.Ordinal);
         Assert.Contains(
             "ViewportGrid.Children.Add(SourceViewportPane);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "EditorRootGrid.Children.Remove(inactiveSurface);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "EditorRootGrid.Children.Add(activeSurface);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "nameof(MainWindowViewModel.IsModelsWorkspace)",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "nameof(MainWindowViewModel.IsAnimationWorkspaceSurfaceVisible)",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(

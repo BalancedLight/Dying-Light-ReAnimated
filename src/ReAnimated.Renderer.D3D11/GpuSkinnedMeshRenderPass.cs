@@ -756,6 +756,8 @@ public sealed class GpuSkinnedMeshRenderPass : ID3D11RenderPass, IDisposable
                 {
                     Format format = texture.Format switch
                     {
+                        TextureRenderFormat.Bgra8Unorm =>
+                            Format.B8G8R8A8_UNorm,
                         TextureRenderFormat.Bc1Unorm =>
                             Format.BC1_UNorm,
                         TextureRenderFormat.Bc2Unorm =>

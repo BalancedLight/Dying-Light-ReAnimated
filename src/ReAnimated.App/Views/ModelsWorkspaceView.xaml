@@ -1,0 +1,311 @@
+<UserControl x:Class="ReAnimated.App.Views.ModelsWorkspaceView"
+             x:Name="WorkspaceRoot"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinWidth="900"
+             MinHeight="520">
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="300" MinWidth="245" />
+            <ColumnDefinition Width="5" />
+            <ColumnDefinition Width="*" MinWidth="360" />
+            <ColumnDefinition Width="5" />
+            <ColumnDefinition Width="360" MinWidth="285" />
+        </Grid.ColumnDefinitions>
+
+        <Border Grid.Column="0" Style="{StaticResource PaneBorderStyle}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="10">
+                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="Custom model" />
+                    <TextBlock Margin="0,3,0,10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="This workspace is independent from animation projects. Importing or previewing a model here cannot replace an active animation target."
+                               TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,0,0,8">
+                        <Button x:Name="ImportFbxButton"
+                                Command="{Binding ImportFbxCommand}"
+                                Content="Import FBX..." />
+                        <Button x:Name="OpenPackageButton"
+                                Command="{Binding OpenPackageCommand}"
+                                Content="Open .dlrmodel..." />
+                        <Button Command="{Binding SavePackageCommand}" Content="Save .dlrmodel..." />
+                    </WrapPanel>
+
+                    <ProgressBar Height="8"
+                                 Margin="0,0,0,8"
+                                 IsIndeterminate="True">
+                        <ProgressBar.Style>
+                            <Style TargetType="{x:Type ProgressBar}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ProgressBar.Style>
+                    </ProgressBar>
+                    <Button Margin="0,0,0,8"
+                            HorizontalAlignment="Left"
+                            Command="{Binding CancelCommand}"
+                            Content="Cancel current operation" />
+
+                    <TextBlock FontWeight="SemiBold" Text="Authoring identity" />
+                    <TextBlock Margin="0,6,0,2" Text="Model name" />
+                    <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="0,6,0,2" Text="Rig treatment" />
+                    <ComboBox ItemsSource="{Binding RigModes}" SelectedItem="{Binding SelectedRigMode}" />
+                    <TextBlock Margin="0,3,0,8"
+                               FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="ExactFbxRig preserves the imported hierarchy. StaticProp ignores skinning. Dl1HumanoidFit is an explicit retargeting authoring mode; it never silently renames custom bones."
+                               TextWrapping="Wrap" />
+                    <TextBlock Margin="0,3,0,2" Text="DL1 resource name" />
+                    <TextBox Text="{Binding ResourceName, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="0,6,0,2" Text="Surface name" />
+                    <TextBox Text="{Binding SurfaceName, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="0,6,0,2" Text="Animation script alias (optional)" />
+                    <TextBox Text="{Binding AnimationScriptAlias, UpdateSourceTrigger=PropertyChanged}" />
+                    <CheckBox Margin="3,9,3,0"
+                              Content="Match DL1 texture origin (flip V)"
+                              IsChecked="{Binding FlipTextureCoordinateV}" />
+
+                    <Separator Margin="0,12" />
+                    <TextBlock FontWeight="SemiBold" Text="Preview" />
+                    <WrapPanel Margin="0,5,0,4">
+                        <Button Command="{Binding FrameModelCommand}" Content="Frame model" />
+                        <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
+                    </WrapPanel>
+                    <WrapPanel>
+                        <CheckBox Margin="3" Content="Mesh" IsChecked="{Binding ShowMeshes}" />
+                        <CheckBox Margin="3" Content="Bones" IsChecked="{Binding ShowBones}" />
+                        <CheckBox Margin="3" Content="Helpers" IsChecked="{Binding ShowHelpers}" />
+                        <CheckBox Margin="3" Content="Cameras" IsChecked="{Binding ShowCameraHelpers}" />
+                        <CheckBox Margin="3" Content="Props" IsChecked="{Binding ShowPropHelpers}" />
+                    </WrapPanel>
+
+                    <Border Margin="0,12,0,0"
+                            Padding="8"
+                            Background="#202A39"
+                            BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1"
+                            CornerRadius="3">
+                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" />
+                    </Border>
+                    <Border Margin="0,6,0,0"
+                            Padding="8"
+                            Background="#3B301D"
+                            BorderBrush="#735D2A"
+                            BorderThickness="1"
+                            CornerRadius="3">
+                        <TextBlock Foreground="#F3C978"
+                                   Text="{Binding BuildStatus}"
+                                   TextWrapping="Wrap" />
+                    </Border>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
+        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" />
+
+        <Grid Grid.Column="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="5" />
+                <RowDefinition Height="285" MinHeight="180" />
+            </Grid.RowDefinitions>
+            <views:ViewportPane xmlns:views="clr-namespace:ReAnimated.App.Views"
+                                DataContext="{Binding Viewport}" />
+            <GridSplitter Grid.Row="1" Height="5" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" />
+            <views:TimelinePanel xmlns:views="clr-namespace:ReAnimated.App.Views"
+                                 Grid.Row="2"
+                                 DataContext="{Binding Timeline}" />
+        </Grid>
+
+        <GridSplitter Grid.Column="3" Width="5" HorizontalAlignment="Stretch" />
+
+        <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
+            <TabControl>
+                <TabItem Header="Rig">
+                    <Grid Margin="7">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Margin="2,0,2,6"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Weighted nodes are deform bones. Connected unweighted nodes remain helpers; custom names and exact bind matrices are preserved."
+                                   TextWrapping="Wrap" />
+                        <DataGrid Grid.Row="1"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  IsReadOnly="True"
+                                  ItemsSource="{Binding Bones}"
+                                  SelectedItem="{Binding SelectedBone}">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Width="42" Binding="{Binding Index}" Header="#" />
+                                <DataGridTextColumn Width="*" Binding="{Binding Name}" Header="Bone / helper" />
+                                <DataGridTextColumn Width="72" Binding="{Binding Role}" Header="Role" />
+                                <DataGridCheckBoxColumn Width="55"
+                                                        Binding="{Binding IsWeighted, Mode=OneWay}"
+                                                        Header="Skin" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Materials">
+                    <Grid Margin="7">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Margin="2,0,2,6"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Embedded FBX textures are used automatically. Select a material to override its base-color texture with a local image."
+                                   TextWrapping="Wrap" />
+                        <ListBox Grid.Row="1"
+                                 ItemsSource="{Binding Materials}"
+                                 SelectedItem="{Binding SelectedMaterial}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="3,4">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                        <TextBlock FontSize="10"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding TextureSummary}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        <Button Grid.Row="2"
+                                Margin="0,7,0,0"
+                                HorizontalAlignment="Left"
+                                Command="{Binding SelectTextureCommand}"
+                                Content="Choose base-color texture..." />
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Animation stacks">
+                    <Grid Margin="7">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Margin="2,0,2,6"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Every FBX animation stack is listed and selected by default. Names, cadence, root policy, and root bone are editable per stack."
+                                   TextWrapping="Wrap" />
+                        <DataGrid Grid.Row="1"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  ItemsSource="{Binding Animations}"
+                                  SelectedItem="{Binding SelectedAnimation}">
+                            <DataGrid.Columns>
+                                <DataGridCheckBoxColumn Width="42" Binding="{Binding Included, UpdateSourceTrigger=PropertyChanged}" Header="Use" />
+                                <DataGridTextColumn Width="*" Binding="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" Header="DL1 name" />
+                                <DataGridTextColumn Width="58" Binding="{Binding FrameRateNumerator, UpdateSourceTrigger=PropertyChanged}" Header="FPS num" />
+                                <DataGridTextColumn Width="58" Binding="{Binding FrameRateDenominator, UpdateSourceTrigger=PropertyChanged}" Header="FPS den" />
+                                <DataGridTemplateColumn Width="100" Header="Root policy">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox ItemsSource="{Binding DataContext.RootMotionModes, ElementName=WorkspaceRoot}"
+                                                      SelectedItem="{Binding RootMotionMode, UpdateSourceTrigger=PropertyChanged}" />
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                                <DataGridTemplateColumn Width="100" Header="Root bone">
+                                    <DataGridTemplateColumn.CellTemplate>
+                                        <DataTemplate>
+                                            <ComboBox IsEditable="True"
+                                                      ItemsSource="{Binding DataContext.RootBoneNames, ElementName=WorkspaceRoot}"
+                                                      Text="{Binding RootBoneName, UpdateSourceTrigger=PropertyChanged}" />
+                                        </DataTemplate>
+                                    </DataGridTemplateColumn.CellTemplate>
+                                </DataGridTemplateColumn>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                        <StackPanel Grid.Row="2" Margin="0,7,0,0">
+                            <TextBlock Foreground="{StaticResource MutedTextBrush}"
+                                       Text="{Binding SelectedAnimation.DecodeStatus}"
+                                       TextWrapping="Wrap" />
+                            <Button Margin="0,6,0,0"
+                                    HorizontalAlignment="Left"
+                                    Command="{Binding OpenSelectedAnimationInAnimateCommand}"
+                                    Content="Open selected stack in Animate" />
+                        </StackPanel>
+                    </Grid>
+                </TabItem>
+
+                <TabItem Header="Build / diagnostics">
+                    <Grid Margin="7">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <Button HorizontalAlignment="Stretch"
+                                Command="{Binding BuildLooseFilesCommand}"
+                                Content="Build DL1 loose model sources..." />
+                        <Button Grid.Row="1"
+                                Margin="0,5,0,0"
+                                HorizontalAlignment="Stretch"
+                                Command="{Binding ExportAnimationRpackCommand}"
+                                Content="Export selected animations as RPack..." />
+                        <Button Grid.Row="2"
+                                Margin="0,5,0,0"
+                                HorizontalAlignment="Stretch"
+                                Command="{Binding BuildModelRpackCommand}"
+                                Content="Compile model RPack with Developer Tools..." />
+                        <StackPanel Grid.Row="3" Margin="0,6,0,0">
+                            <Button HorizontalAlignment="Left"
+                                    Command="{Binding SelectModelCompilerCommand}"
+                                    Content="Choose Developer Tools compiler..." />
+                            <TextBlock Margin="0,4,0,0"
+                                       FontSize="10"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="{Binding CompilerStatus}"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                        <Border Grid.Row="4"
+                                Margin="0,8"
+                                Padding="8"
+                                Background="#3B301D"
+                                BorderBrush="#735D2A"
+                                BorderThickness="1"
+                                CornerRadius="3">
+                            <TextBlock Foreground="#F3C978"
+                                       Text="Loose output emits source .msh, .bscr, and optional .ascr. Animation stacks export to a separate animation RPack. Model-RPack compilation runs Techland's compiler in an isolated temporary project and validates the resulting type-272 mesh before publishing it. .chr and .skn remain blocked rather than fabricated."
+                                       TextWrapping="Wrap" />
+                        </Border>
+                        <ListBox Grid.Row="5" ItemsSource="{Binding Diagnostics}">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <StackPanel Margin="3,4">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock FontWeight="SemiBold" Text="{Binding Severity}" />
+                                            <TextBlock Margin="6,0,0,0"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Text="{Binding Code}" />
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                                        <TextBlock FontSize="10"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding Subject}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Grid>
+                </TabItem>
+            </TabControl>
+        </Border>
+    </Grid>
+</UserControl>

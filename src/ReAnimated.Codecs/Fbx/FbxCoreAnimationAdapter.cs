@@ -25,6 +25,13 @@ public sealed record FbxCoreAnimationImportOptions
 
     public int MaximumSampledTransformKeys { get; init; } = 1_000_000;
 
+    /// <summary>
+    /// Allows the custom-model workflow to project affine shear caused by
+    /// inherited non-uniform scale to a stable TRS preview. Strict animation
+    /// imports keep this disabled and continue to fail closed.
+    /// </summary>
+    public bool ProjectAffineShearToTrs { get; init; }
+
     public SourceAssetFingerprint? SourceAssetFingerprint { get; init; }
 }
 
@@ -199,7 +206,7 @@ public static class FbxCoreAnimationAdapter
                     boneIndexByModel[modelId],
                     model.Name,
                     parentIndex,
-                    DecomposeChecked(local, model.Name, "bind"),
+                    DecomposeForImport(local, model.Name, "bind", options.ProjectAffineShearToTrs),
                     parentIndex < 0 ? BoneKind.Root : BoneKind.Deform));
         }
 
@@ -245,10 +252,11 @@ public static class FbxCoreAnimationAdapter
                 keysByBone[boneIndex].Add(
                     new TransformKeyframe(
                         frameIndex,
-                        DecomposeChecked(
+                        DecomposeForImport(
                             local,
                             scene.Models[modelId].Name,
-                            $"frame {frameIndex}")));
+                            $"frame {frameIndex}",
+                            options.ProjectAffineShearToTrs)));
             }
         }
 
@@ -297,7 +305,7 @@ public static class FbxCoreAnimationAdapter
         }
     }
 
-    private static ImmutableArray<long> BuildOrderedLimbModels(
+    internal static ImmutableArray<long> BuildOrderedLimbModels(
         FbxSemanticScene scene,
         CancellationToken cancellationToken)
     {
@@ -428,7 +436,7 @@ public static class FbxCoreAnimationAdapter
         return result.MoveToImmutable();
     }
 
-    private static ImmutableDictionary<long, TransformMatrix> NormalizeGlobals(
+    internal static ImmutableDictionary<long, TransformMatrix> NormalizeGlobals(
         ImmutableDictionary<long, TransformMatrix> rawGlobals,
         ImmutableArray<long> selectedModelIds,
         double metersPerUnit,
@@ -458,7 +466,7 @@ public static class FbxCoreAnimationAdapter
         return result.ToImmutable();
     }
 
-    private static TransformMatrix BuildGlobalSettingsBasis(
+    internal static TransformMatrix BuildGlobalSettingsBasis(
         ImmutableDictionary<string, ImmutableArray<object>> settings)
     {
         string[] axisNames = ["CoordAxis", "UpAxis", "FrontAxis"];
@@ -492,7 +500,7 @@ public static class FbxCoreAnimationAdapter
             0.0, 0.0, 0.0, 1.0);
     }
 
-    private static TransformMatrix MakeRelative(
+    internal static TransformMatrix MakeRelative(
         TransformMatrix parentGlobal,
         TransformMatrix childGlobal,
         string modelName,
@@ -510,7 +518,7 @@ public static class FbxCoreAnimationAdapter
         }
     }
 
-    private static TransformTRS DecomposeChecked(
+    internal static TransformTRS DecomposeChecked(
         TransformMatrix matrix,
         string modelName,
         string context)
@@ -525,5 +533,72 @@ public static class FbxCoreAnimationAdapter
                 $"FBX Model '{modelName}' cannot be represented as Core TRS at {context}.",
                 exception);
         }
+    }
+
+    private static TransformTRS DecomposeForImport(
+        TransformMatrix matrix,
+        string modelName,
+        string context,
+        bool projectAffineShear)
+    {
+        try
+        {
+            return matrix.Decompose();
+        }
+        catch (InvalidOperationException) when (projectAffineShear)
+        {
+            return ProjectAffineToTrs(matrix, modelName, context);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new InvalidDataException(
+                $"FBX Model '{modelName}' cannot be represented as Core TRS at {context}.",
+                exception);
+        }
+    }
+
+    internal static TransformTRS ProjectAffineToTrs(
+        TransformMatrix matrix,
+        string modelName,
+        string context)
+    {
+        Vector3D columnX = new(matrix.M11, matrix.M21, matrix.M31);
+        Vector3D columnY = new(matrix.M12, matrix.M22, matrix.M32);
+        Vector3D columnZ = new(matrix.M13, matrix.M23, matrix.M33);
+        double scaleX = columnX.Length;
+        double scaleY = columnY.Length;
+        double scaleZ = columnZ.Length;
+        if (!double.IsFinite(scaleX) || !double.IsFinite(scaleY) || !double.IsFinite(scaleZ) ||
+            scaleX <= 1e-12 || scaleY <= 1e-12 || scaleZ <= 1e-12)
+        {
+            throw new InvalidDataException(
+                $"FBX Model '{modelName}' has a singular affine basis at {context}.");
+        }
+
+        Vector3D axisX = columnX / scaleX;
+        Vector3D yCandidate = columnY - (axisX * Vector3D.Dot(columnY, axisX));
+        if (!yCandidate.TryNormalize(out Vector3D axisY))
+        {
+            throw new InvalidDataException(
+                $"FBX Model '{modelName}' has a collinear affine basis at {context}.");
+        }
+
+        Vector3D axisZ = Vector3D.Cross(axisX, axisY).Normalized();
+        if (Vector3D.Dot(axisZ, columnZ) < 0.0)
+        {
+            axisX = -axisX;
+            scaleX = -scaleX;
+            axisZ = Vector3D.Cross(axisX, axisY).Normalized();
+        }
+
+        var rotation = new TransformMatrix(
+            axisX.X, axisY.X, axisZ.X, 0.0,
+            axisX.Y, axisY.Y, axisZ.Y, 0.0,
+            axisX.Z, axisY.Z, axisZ.Z, 0.0,
+            0.0, 0.0, 0.0, 1.0);
+        return new TransformTRS(
+            matrix.Translation,
+            QuaternionD.FromRotationMatrix(rotation),
+            new Vector3D(scaleX, scaleY, scaleZ));
     }
 }

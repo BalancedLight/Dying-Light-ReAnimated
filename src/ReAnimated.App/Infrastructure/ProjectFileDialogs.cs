@@ -1,4 +1,5 @@
 using System.IO;
+using System.Windows;
 using Microsoft.Win32;
 
 namespace ReAnimated.App.Infrastructure;
@@ -64,6 +65,28 @@ public interface IProjectFileDialogService
 
     string? ShowSelectAdditionalRpackRootDialog(string? initialPath) => null;
 
+    string? ShowOpenCustomModelFbxDialog(string? initialPath) => null;
+
+    string? ShowOpenCustomModelPackageDialog(string? initialPath) => null;
+
+    string? ShowSaveCustomModelPackageDialog(
+        string suggestedName,
+        string? initialPath) => null;
+
+    string? ShowSelectCustomModelOutputDirectory(string? initialPath) => null;
+
+    string? ShowOpenCustomModelTextureDialog(string? initialPath) => null;
+
+    string? ShowSaveCustomModelAnimationRpackDialog(
+        string suggestedName,
+        string? initialPath) => null;
+
+    string? ShowOpenDl1DeveloperToolsCompilerDialog(string? initialPath) => null;
+
+    string? ShowSaveCustomModelRpackDialog(
+        string suggestedName,
+        string? initialPath) => null;
+
     string? ShowSaveProjectDialog(
         string suggestedName,
         string? currentPath);
@@ -86,6 +109,12 @@ public sealed class WindowsProjectFileDialogService :
         "Blender executable (blender.exe)|blender.exe|Executable files (*.exe)|*.exe";
     private const string FbxFilter =
         "Autodesk FBX (*.fbx)|*.fbx";
+    private const string CustomModelFilter =
+        "DL ReAnimated model (*.dlrmodel)|*.dlrmodel|All files (*.*)|*.*";
+    private const string CustomModelTextureFilter =
+        "Texture images (*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.dds;*.tga)|*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.dds;*.tga|All files (*.*)|*.*";
+    private const string RpackFilter =
+        "Dying Light RPack (*.rpack)|*.rpack|All files (*.*)|*.*";
 
     public string? ShowOpenProjectDialog(string? initialPath)
     {
@@ -366,6 +395,149 @@ public sealed class WindowsProjectFileDialogService :
         return dialog.ShowDialog() == true
             ? dialog.FolderName
             : null;
+    }
+
+    public string? ShowOpenCustomModelFbxDialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckFileExists = true,
+            DefaultExt = ".fbx",
+            Filter = FbxFilter,
+            Multiselect = false,
+            Title = "Import a user-owned binary FBX model",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenCustomModelPackageDialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckFileExists = true,
+            DefaultExt = ".dlrmodel",
+            Filter = CustomModelFilter,
+            Multiselect = false,
+            Title = "Open a DL ReAnimated custom-model workspace",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveCustomModelPackageDialog(
+        string suggestedName,
+        string? initialPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(suggestedName);
+        SaveFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".dlrmodel",
+            FileName = $"{MakeSafeFileName(suggestedName)}.dlrmodel",
+            Filter = CustomModelFilter,
+            OverwritePrompt = true,
+            Title = "Save custom-model workspace",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSelectCustomModelOutputDirectory(string? initialPath)
+    {
+        OpenFolderDialog dialog = new()
+        {
+            Multiselect = false,
+            Title = "Select folder for DL1 source-model compiler inputs",
+        };
+        string? initialDirectory = Directory.Exists(initialPath)
+            ? initialPath
+            : Path.GetDirectoryName(initialPath);
+        if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+        {
+            dialog.InitialDirectory = initialDirectory;
+        }
+
+        return ShowOwnedDialog(dialog) == true ? dialog.FolderName : null;
+    }
+
+    public string? ShowOpenCustomModelTextureDialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new()
+        {
+            CheckFileExists = true,
+            Filter = CustomModelTextureFilter,
+            Multiselect = false,
+            Title = "Select a user-owned texture",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveCustomModelAnimationRpackDialog(
+        string suggestedName,
+        string? initialPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(suggestedName);
+        SaveFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".rpack",
+            FileName = $"{MakeSafeFileName(suggestedName)}_animations.rpack",
+            Filter = RpackFilter,
+            OverwritePrompt = true,
+            Title = "Export selected model animations to one DL1 RPack",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenDl1DeveloperToolsCompilerDialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckFileExists = true,
+            DefaultExt = ".exe",
+            FileName = "ResPackCompilerConsole_x64_rwdi.exe",
+            Filter = "Techland ResPack compiler (ResPackCompilerConsole_x64_rwdi.exe)|ResPackCompilerConsole_x64_rwdi.exe|Executable files (*.exe)|*.exe",
+            Multiselect = false,
+            Title = "Select the Dying Light Developer Tools ResPack compiler",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveCustomModelRpackDialog(
+        string suggestedName,
+        string? initialPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(suggestedName);
+        SaveFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".rpack",
+            FileName = $"{MakeSafeFileName(suggestedName)}_pc.rpack",
+            Filter = RpackFilter,
+            OverwritePrompt = true,
+            Title = "Compile custom model to a DL1 model RPack",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    private static bool? ShowOwnedDialog(CommonDialog dialog)
+    {
+        ArgumentNullException.ThrowIfNull(dialog);
+        Window? owner = Application.Current?.MainWindow;
+        return owner is { IsVisible: true }
+            ? dialog.ShowDialog(owner)
+            : dialog.ShowDialog();
     }
 
     private static void ApplyInitialPath(

@@ -37,6 +37,8 @@
                       Link="Embedded\Schemas\dlraproj.schema.json" />
     <EmbeddedResource Include="..\..\schemas\animation-library-build.schema.json"
                       Link="Embedded\Schemas\animation-library-build.schema.json" />
+    <EmbeddedResource Include="..\..\schemas\dlrmodel.schema.json"
+                      Link="Embedded\Schemas\dlrmodel.schema.json" />
     <EmbeddedResource Include="..\..\docs\CSHARP_REWRITE.md"
                       Link="Embedded\Docs\CSHARP_REWRITE.md" />
     <EmbeddedResource Include="..\..\docs\DL1_*.md"

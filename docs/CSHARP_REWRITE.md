@@ -154,6 +154,35 @@ one Core-owned LocalAppData contract, so both entry points reuse
 `AssetCatalog\dl1-assets.sqlite3` and `AssetCache\Rp6l` instead of silently
 building separate caches.
 
+The independent **Models** workspace now imports bounded binary FBX sources
+without changing the active animation project. It preserves custom hierarchy
+names, helper/camera/prop roles, exact affine bind matrices, material splits,
+UV/normal seams, top-four skin weights, palette partitions, embedded textures,
+and user-selected base-color overrides. Its single game-oriented viewport and
+separate bone/material/animation inspectors consume the same D3D11 mesh and
+skeleton contracts as the animation editor. Every FBX animation stack is
+listed, selected by default, and can be renamed or assigned its own rational
+cadence, root policy, and root bone. A selected decoded stack can be handed to
+**Animate** explicitly; the handoff stores a deterministic user-owned
+`.dlrmodel` package in the project and creates a direct same-rig source/target
+variant without binding the Models workspace to project state.
+
+`.dlrmodel` is a fresh schema-1 deterministic ZIP marked
+`dl-reanimated-csharp-model`. It contains `model.json`, the source FBX, and only
+user-supplied texture payloads. It never embeds retail DL1 data. The
+evidence-backed model builder emits Chrome source `.msh`, `.bscr`, and optional
+`.ascr`; the multi-stack exporter emits one deterministic animation-library
+RPack containing every selected animation. The optional model compiler bridge
+stages a unique LocalAppData workshop, uses the installed DL1 Developer Tools
+compiler to produce an opaque `.msh_obj`, normalizes only its compiler-object
+RP6L addressing/type bit, and publishes the object plus a standalone type-272
+model RPack only after ordinary archive and compact-hierarchy validation. The
+compiler executable, full user-owned package/settings, and outputs are covered
+by the build receipt. `.chr` and `.skn` remain deliberately blocked instead of
+fabricated because neither the historical Python path nor current evidence
+establishes a trustworthy writer. `.crig` creation/import/editing and
+rest-hierarchy restructuring remain outside this workspace.
+
 Important gaps remain visible and fail closed:
 
 - Python schema 1-10 projects are rejected, not migrated or rewritten.
@@ -201,8 +230,9 @@ Important gaps remain visible and fail closed:
   That subset is decompile matched but not game validated. Runtime-dependent camera motion, the full head-position
   solver, hand inertia, and matching-build game-capture validation remain
   labeled fallback, unavailable, or open as appropriate.
-- Dying Light 2, `.crig`, legacy custom-model authoring, and the Python Qt GUI
-  are not parity targets for this DL1 first pass.
+- Dying Light 2, `.crig` creation/import/editing, unverified compiled custom
+  model outputs, and the Python Qt GUI are not parity targets for this DL1
+  first pass.
 
 In the source checkout, see `docs/DL1_REGRESSION_MAP.md` for the exact
 Python-to-C# test mapping, exclusions, and release gates, and

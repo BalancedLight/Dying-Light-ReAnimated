@@ -127,7 +127,7 @@
             </StatusBarItem>
         </StatusBar>
 
-        <Grid>
+        <Grid x:Name="EditorRootGrid">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -159,6 +159,11 @@
                                       CommandParameter="Browse"
                                       Content="Browse"
                                       IsChecked="{Binding IsBrowseWorkspace, Mode=OneWay}" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="Models"
+                                      Content="Models"
+                                      ToolTip="Import, inspect, texture, and package custom FBX models independently from animation projects."
+                                      IsChecked="{Binding IsModelsWorkspace, Mode=OneWay}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Animate"
                                       Content="Animate"
@@ -211,7 +216,9 @@
                                       IsChecked="{Binding PreviewMotionAccumulationEnabled}"
                                       ToolTip="Preview the auxiliary 0xCCC3CDDF accumulator as actor/world translation and yaw. Skeletal locals and export data remain recorded and untouched." />
                     </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,2">
+                    <StackPanel Orientation="Horizontal"
+                                Margin="0,2"
+                                Visibility="{Binding IsAnimationWorkspaceSurfaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <ToggleButton Content="Linked cameras"
                                       IsChecked="{Binding IsViewportsLinked}"
                                       Visibility="{Binding IsLinkedCameraControlVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
@@ -241,6 +248,7 @@
                     <Button Margin="10,2"
                             Padding="9,4"
                             Command="{Binding ShowFidelityDetailsCommand}"
+                            Visibility="{Binding IsAnimationWorkspaceSurfaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}"
                             ToolTip="Open the Fidelity drawer with the exact preview tier, installed-build state, and renderer feature limits.">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock FontSize="10"
@@ -287,7 +295,10 @@
                 </DockPanel>
             </Border>
 
-            <Grid Grid.Row="2" Margin="8">
+            <Grid x:Name="AnimationWorkspaceSurface"
+                  Grid.Row="2"
+                  Margin="8"
+                  Visibility="{Binding IsAnimationWorkspaceSurfaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="320" MinWidth="260" />
                     <ColumnDefinition Width="5" />
@@ -2006,11 +2017,15 @@
                 </Border>
             </Grid>
 
+            <views:ModelsWorkspaceView x:Name="ModelsWorkspaceSurface"
+                                       Grid.Row="2"
+                                       Margin="8" />
+
             <Border Grid.Row="3"
                     Margin="8,0,8,8"
                     MaxHeight="250"
                     Style="{StaticResource PaneBorderStyle}"
-                    Visibility="{Binding IsDiagnosticsDrawerOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    Visibility="{Binding IsAnimationDiagnosticsDrawerVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <TabControl SelectedIndex="{Binding SelectedDiagnosticsTabIndex}">
                     <TabItem Header="Jobs">
                         <Grid Margin="6">

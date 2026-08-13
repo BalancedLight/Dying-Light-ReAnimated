@@ -6,7 +6,9 @@
   <ItemGroup>
     <ProjectReference Include="..\ReAnimated.Core\ReAnimated.Core.csproj" />
     <ProjectReference Include="..\ReAnimated.Evaluation\ReAnimated.Evaluation.csproj" />
+    <PackageReference Include="BCnEncoder.Net" />
     <PackageReference Include="SharpCompress" />
+    <PackageReference Include="StbImageSharp" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource

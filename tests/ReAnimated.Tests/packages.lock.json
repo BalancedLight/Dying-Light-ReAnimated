@@ -29,6 +29,11 @@
         "resolved": "3.1.5",
         "contentHash": "tKi7dSTwP4m5m9eXPM2Ime4Kn7xNf4x4zT9sdLO/G4hZVnQCRiMTWoSZqI/pYTVeI27oPPqHBKYI/DjJ9GsYgA=="
       },
+      "CommunityToolkit.HighPerformance": {
+        "type": "Transitive",
+        "resolved": "8.4.0",
+        "contentHash": "flxspiBs0G/0GMp7IK2J2ijV9bTG6hEwFc/z6ekHqB6nwRJ4Ry2yLdx+TkbCUYFCl4XhABkAwomeKbT6zM2Zlg=="
+      },
       "Microsoft.CodeCoverage": {
         "type": "Transitive",
         "resolved": "18.8.1",
@@ -175,9 +180,11 @@
       "reanimated.codecs": {
         "type": "Project",
         "dependencies": {
+          "BCnEncoder.Net": "[2.3.0, )",
           "ReAnimated.Core": "[0.1.0, )",
           "ReAnimated.Evaluation": "[0.1.0, )",
-          "SharpCompress": "[0.50.1, )"
+          "SharpCompress": "[0.50.1, )",
+          "StbImageSharp": "[2.30.16, )"
         }
       },
       "reanimated.core": {
@@ -215,6 +222,15 @@
           "ReAnimated.Core": "[0.1.0, )"
         }
       },
+      "BCnEncoder.Net": {
+        "type": "CentralTransitive",
+        "requested": "[2.3.0, )",
+        "resolved": "2.3.0",
+        "contentHash": "DJhHJiBJKXUXxlkkrv74ckzJb3wYxqIAZHjXD9G76kpsD0YyJOmqtNufHWEuJe0eH0tB1tCZn80/3JV2UVP7yQ==",
+        "dependencies": {
+          "CommunityToolkit.HighPerformance": "8.4.0"
+        }
+      },
       "CommunityToolkit.Mvvm": {
         "type": "CentralTransitive",
         "requested": "[8.4.2, )",
@@ -247,6 +263,12 @@
           "SQLite": "3.53.4",
           "SQLitePCLRaw.config.e_sqlite3": "3.0.5"
         }
+      },
+      "StbImageSharp": {
+        "type": "CentralTransitive",
+        "requested": "[2.30.16, )",
+        "resolved": "2.30.16",
+        "contentHash": "qg1i+NHihXVKLKYacGKrauhSQIGL31eBWcTC4Vc7jnGmBFj87LkRuCdXB5aDZisWMRnB6x2mcfwYXQxMWEG/lw=="
       },
       "Vortice.D3DCompiler": {
         "type": "CentralTransitive",
