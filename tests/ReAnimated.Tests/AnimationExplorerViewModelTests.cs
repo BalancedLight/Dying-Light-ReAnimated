@@ -268,7 +268,7 @@ public sealed class AnimationExplorerViewModelTests : IDisposable
                 "dl1-rpacks",
                 RetailAssetSourceKind.Rpack,
                 100,
-                @"C:\retail\common_anims_PC.rpack",
+                TestPaths.Combine("retail", "common_anims_PC.rpack"),
                 name,
                 42,
                 128,

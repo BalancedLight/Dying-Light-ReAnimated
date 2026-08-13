@@ -180,7 +180,11 @@ public sealed class Dl1RetailMeshClassificationTests
             CreateAsset(
                 "player_1_tpp",
                 containerPath:
-                    @"<installed DL1 root>\DW_DLC49\Data\characters_PC.rpack"),
+                    TestPaths.Combine(
+                        "dl1-install",
+                        "DW_DLC49",
+                        "Data",
+                        "characters_PC.rpack")),
             mesh);
 
         Assert.Equal(
@@ -249,7 +253,11 @@ public sealed class Dl1RetailMeshClassificationTests
                 "survivor_a",
                 priority: 100_000_000,
                 containerPath:
-                    @"<installed DL1 root>\DW\Data\override.rpack"),
+                    TestPaths.Combine(
+                        "dl1-install",
+                        "DW",
+                        "Data",
+                        "override.rpack")),
             CreateMesh("survivor_a"));
 
         Assert.Equal(
@@ -276,10 +284,15 @@ public sealed class Dl1RetailMeshClassificationTests
     private static RetailAssetRecord CreateAsset(
         string resourceName,
         int priority = 10_000,
-        string containerPath =
-            @"<installed DL1 root>\DW\Data\common_meshes_PC.rpack",
+        string? containerPath = null,
         short resourceType = 272)
     {
+        containerPath ??= TestPaths.Combine(
+            "dl1-install",
+            "DW",
+            "Data",
+            "common_meshes_PC.rpack");
+
         RetailAssetLogicalId logical =
             RetailAssetLogicalId.Rpack(
                 resourceType,

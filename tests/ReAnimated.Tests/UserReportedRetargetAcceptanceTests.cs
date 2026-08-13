@@ -16,50 +16,23 @@ using Xunit.Abstractions;
 
 namespace ReAnimated.Tests;
 
-public sealed class UserReportedRetargetAcceptanceTests
+public sealed class ExternalCorpusRetargetAcceptanceTests
 {
-    private const string RaisedArmControlSha256 =
-        "local-corpus-sha256";
-    private const string FullBodyControlSha256 =
-        "local-corpus-sha256";
-    private const string FingerChainControlSha256 =
-        "local-corpus-sha256";
-
     private readonly ITestOutputHelper _output;
 
-    public UserReportedRetargetAcceptanceTests(
+    public ExternalCorpusRetargetAcceptanceTests(
         ITestOutputHelper output)
     {
         _output = output;
     }
 
-    [Fact(Timeout = 180_000)]
+    [ExternalCorpusFact(Timeout = 180_000)]
     [Trait("Gate", "ExternalUserRetarget")]
-    public async Task RaisedArmControlPoseTransfersToInstalledPlayerAtReportedFrame()
+    public async Task FullBodyControlTransfersToInstalledPlayerAtConfiguredFrame()
     {
-        const int sampleFrame = 74;
-        string sourcePath = Path.Combine(
-            Environment.GetEnvironmentVariable(
-                "DLR_FBX_ANIMATION_CORPUS_ROOT")
-                ?? @"[local external corpus]",
-            "external-animation-control.fbx");
-        if (!File.Exists(sourcePath))
-        {
-            return;
-        }
-
-        string actualSourceHash =
-            await ReAnimated.App.Infrastructure.ProjectSourceImporter
-                .ComputeSha256Async(
-                    sourcePath,
-                    CancellationToken.None);
-        if (!string.Equals(
-                actualSourceHash,
-                RaisedArmControlSha256,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
+        (ExternalCorpusControl control, string sourcePath) =
+            await RequireVerifiedSourceAsync("retarget-full-body");
+        int sampleFrame = control.RequireInt32("sampleFrame");
 
         Dl1InstallLocation? install = SteamInstallDiscovery
             .Discover()
@@ -216,32 +189,13 @@ public sealed class UserReportedRetargetAcceptanceTests
         }
     }
 
-    [Fact(Timeout = 180_000)]
+    [ExternalCorpusFact(Timeout = 180_000)]
     [Trait("Gate", "ExternalUserRetarget")]
-    public async Task FullBodyControlRaisedForearmKeepsItsModelSpaceMotionOnDl1Player()
+    public async Task RaisedArmControlKeepsItsModelSpaceMotionOnDl1Player()
     {
-        const int sampleFrame = 93;
-        string sourcePath = Path.Combine(
-            Environment.GetEnvironmentVariable(
-                "DLR_FBX_ANIMATION_CORPUS_ROOT")
-                ?? @"[local external corpus]",
-            "external-animation-control.fbx");
-        if (!File.Exists(sourcePath))
-        {
-            return;
-        }
-
-        string actualSourceHash =
-            await ProjectSourceImporter.ComputeSha256Async(
-                sourcePath,
-                CancellationToken.None);
-        if (!string.Equals(
-                actualSourceHash,
-                FullBodyControlSha256,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
+        (ExternalCorpusControl control, string sourcePath) =
+            await RequireVerifiedSourceAsync("retarget-raised-arm");
+        int sampleFrame = control.RequireInt32("sampleFrame");
 
         Dl1InstallLocation? install = SteamInstallDiscovery
             .Discover()
@@ -426,7 +380,7 @@ public sealed class UserReportedRetargetAcceptanceTests
                         "mixamorig:RightHand"));
 
             _output.WriteLine(
-                $"full-body control frames 0/70/{sampleFrame}: source forearm direction motion={sourceMotionDegrees:F6} degrees, worst authored DL1 arm-direction error={worstDirectionErrorDegrees:F6} degrees.");
+                $"Configured raised-arm control frames 0/70/{sampleFrame}: source forearm direction motion={sourceMotionDegrees:F6} degrees, worst authored DL1 arm-direction error={worstDirectionErrorDegrees:F6} degrees.");
             Assert.True(
                 sourceMotionDegrees > 30.0,
                 "The exact reported raised-arm frame did not contain the expected forearm motion.");
@@ -442,40 +396,13 @@ public sealed class UserReportedRetargetAcceptanceTests
         }
     }
 
-    [Fact(Timeout = 180_000)]
+    [ExternalCorpusFact(Timeout = 180_000)]
     [Trait("Gate", "ExternalUserRetarget")]
-    public async Task FingerChainControlFistAndHeadAxesTransferToInstalledVolatile()
+    public async Task FingerChainControlTransfersAxesToInstalledVolatile()
     {
-        const int sampleFrame = 85;
-        string corpusRoot =
-            Environment.GetEnvironmentVariable(
-                "DLR_FBX_ANIMATION_CORPUS_ROOT")
-            ?? @"[local external corpus]";
-        string sourcePath = Path.Combine(
-            corpusRoot,
-            "Sources",
-            "external-animation-control.fbx");
-        if (!File.Exists(sourcePath))
-        {
-            sourcePath = Path.Combine(corpusRoot, "external-animation-control.fbx");
-        }
-
-        if (!File.Exists(sourcePath))
-        {
-            return;
-        }
-
-        string actualSourceHash =
-            await ProjectSourceImporter.ComputeSha256Async(
-                sourcePath,
-                CancellationToken.None);
-        if (!string.Equals(
-                actualSourceHash,
-                FingerChainControlSha256,
-                StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
+        (ExternalCorpusControl control, string sourcePath) =
+            await RequireVerifiedSourceAsync("retarget-finger-chain");
+        int sampleFrame = control.RequireInt32("sampleFrame");
 
         Dl1InstallLocation? install = SteamInstallDiscovery
             .Discover()
@@ -633,7 +560,7 @@ public sealed class UserReportedRetargetAcceptanceTests
                     sourcePose,
                     targetPose);
             _output.WriteLine(
-                $"FingerChainControl frame {sampleFrame}: worst finger palm-direction error={worstFingerError:F6} degrees; head body-frame direction error={headError:F6} degrees.");
+                $"Configured finger-chain control frame {sampleFrame}: worst finger palm-direction error={worstFingerError:F6} degrees; head body-frame direction error={headError:F6} degrees.");
 
             Assert.Equal(sampleFrame, evaluated.SampleFrame);
             Assert.InRange(worstFingerError, 0.0, 0.01);
@@ -646,15 +573,12 @@ public sealed class UserReportedRetargetAcceptanceTests
         }
     }
 
-    [Fact(Timeout = 60_000)]
+    [ExternalCorpusFact(Timeout = 60_000)]
     [Trait("Gate", "ExternalUserRetarget")]
-    public async Task ImportingRaisedArmControlDropsPreviouslyDisplayedRetailMeshFromSourceScene()
+    public async Task ImportingConfiguredFullBodyControlDropsPreviouslyDisplayedRetailMeshFromSourceScene()
     {
-        string sourcePath = ResolveRaisedArmControlSourcePath();
-        if (!await IsReportedRaisedArmControlSourceAsync(sourcePath))
-        {
-            return;
-        }
+        (_, string sourcePath) =
+            await RequireVerifiedSourceAsync("retarget-full-body");
 
         string temporaryDirectory =
             RpackTestData.CreateTemporaryDirectory();
@@ -753,29 +677,20 @@ public sealed class UserReportedRetargetAcceptanceTests
         }
     }
 
-    private static string ResolveRaisedArmControlSourcePath() =>
-        Path.Combine(
-            Environment.GetEnvironmentVariable(
-                "DLR_FBX_ANIMATION_CORPUS_ROOT")
-                ?? @"[local external corpus]",
-            "external-animation-control.fbx");
-
-    private static async Task<bool> IsReportedRaisedArmControlSourceAsync(
-        string sourcePath)
+    private static async Task<(ExternalCorpusControl Control, string SourcePath)>
+        RequireVerifiedSourceAsync(string controlId)
     {
-        if (!File.Exists(sourcePath))
+        ExternalCorpusManifest? manifest = ExternalCorpusManifest.LoadOptional();
+        if (manifest is null)
         {
-            return false;
+            throw new InvalidOperationException(
+                "External retarget controls were expected to be configured before execution.");
         }
 
-        string hash = await ProjectSourceImporter
-            .ComputeSha256Async(
-                sourcePath,
-                CancellationToken.None);
-        return string.Equals(
-            hash,
-            RaisedArmControlSha256,
-            StringComparison.OrdinalIgnoreCase);
+        ExternalCorpusControl control = manifest.RequireControl(controlId);
+        string sourcePath = control.RequireExistingFile();
+        await control.VerifySha256Async(sourcePath);
+        return (control, sourcePath);
     }
 
     private static IEnumerable<string> FingerTargetNames()

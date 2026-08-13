@@ -21,12 +21,12 @@
       "pattern": "^tests/test_animation_fbx_domain_loading\\.py::(?:test_animation_load_options_never_request_model_topology|test_uploaded_compatibility_corpus_uses_animation_domain_only\\[.*\\])$",
       "classification": "applicable_mapped",
       "area": "fbx-animation-domain",
-      "rationale": "The C# animation decoder uses a bounded binary-reader profile that retains the skeleton, authoritative Pose::BindPose matrices, stacks, and curves while excluding model topology payloads. The same installed 11-file compatibility corpus is pinned by exact identity and checks rig, take, frame-count, changing-curve, and skipped-topology behavior without copying those FBXs into the repository; an unavailable corpus is reported as skipped rather than passed.",
+      "rationale": "The C# animation decoder uses a bounded binary-reader profile that retains the skeleton, authoritative Pose::BindPose matrices, stacks, and curves while excluding model topology payloads. Optional locally configured controls are pinned by exact identity and check rig, take, frame-count, changing-curve, and skipped-topology behavior without copying FBXs into the repository; an absent default manifest is reported as skipped rather than passed.",
       "csharpEvidence": [
         "FbxBinaryReaderTests.AnimationPurposeSkipsGeometryPayloadButKeepsObjectInventory",
         "FbxBinaryReaderTests.AnimationDecoderIgnoresUnrequestedMalformedMeshArrays",
         "FbxSemanticEvaluatorTests.ImportPrefersAuthoritativeBindPoseGlobalsOverModelFallback",
-        "FbxAnimationDomainCompatibilityTests.ImportsAnimationWithoutMaterializingModelTopology",
+        "FbxAnimationDomainCompatibilityTests.ImportsConfiguredAnimationControlsWithoutMaterializingModelTopology",
         "MainWindowViewModel.ReportFbxAnimationDomainImport"
       ]
     },

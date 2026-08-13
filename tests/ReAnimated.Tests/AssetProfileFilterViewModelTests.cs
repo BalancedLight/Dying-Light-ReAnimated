@@ -341,7 +341,7 @@ public sealed class AssetProfileFilterViewModelTests
                 "dl1-rpack",
                 RetailAssetSourceKind.Rpack,
                 100,
-                @"C:\retail\data0.pak",
+                TestPaths.Combine("retail", "data0.pak"),
                 name,
                 sourceIndex,
                 128,

@@ -140,7 +140,8 @@ public static class SteamInstallDiscovery
         string value)
     {
         // Old libraryfolders.vdf files represented roots as
-        // "1" "<Steam library>". Modern files use nested "path" fields and
+        // "1" followed by a fully-qualified library root. Modern files use
+        // nested "path" fields and
         // also contain numeric app IDs and byte counts. The lightweight token
         // reader cannot infer brace nesting, so only fully qualified numeric
         // values can be legacy library roots.

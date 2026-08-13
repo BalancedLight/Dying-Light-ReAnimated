@@ -135,8 +135,8 @@ public sealed class Dl1InstalledBuildFingerprintTests : IDisposable
         string expected = new('a', 64);
         string installed = new('b', 64);
         var build = new Dl1InstalledBuildFingerprint(
-            @"C:\Games\Dying Light",
-            @"C:\Games\Dying Light\DyingLightGame.exe",
+            TestPaths.Combine("dl1-install"),
+            TestPaths.Combine("dl1-install", "DyingLightGame.exe"),
             1234,
             new string('c', 64),
             "1.55.0.0",
@@ -182,8 +182,8 @@ public sealed class Dl1InstalledBuildFingerprintTests : IDisposable
         Directory.CreateDirectory(_temporaryDirectory);
         string fingerprint = new('d', 64);
         var build = new Dl1InstalledBuildFingerprint(
-            @"C:\Games\Dying Light",
-            @"C:\Games\Dying Light\DyingLightGame.exe",
+            TestPaths.Combine("dl1-install"),
+            TestPaths.Combine("dl1-install", "DyingLightGame.exe"),
             4321,
             new string('e', 64),
             "1.55.0.0",

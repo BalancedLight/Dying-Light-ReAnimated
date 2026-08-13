@@ -1,5 +1,5 @@
 {
-  "collectionSha256": "9A2C1B71F098AB29709EF68D7F4AEE3BF5698902656C8FFFA1E1034646E692EF",
+  "collectionSha256": "6A316D0E70A760788264319A36D7FDEC3231679E18EACE07B7A7B88F5005AE5D",
   "entries": [
     {
       "area": "fbx-animation-domain",
@@ -30,4286 +30,4209 @@
       "ruleId": "pending-fbx"
     },
     {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 4,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-154-150]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 5,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-86-159]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 6,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-36-159]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 7,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-135-69]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 8,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-897-159]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 9,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-567-159]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 10,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-769-159]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 11,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-1113-159]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 12,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-45-69]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 13,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-78-69]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
-      "area": "fbx-animation-domain",
-      "classification": "applicable_mapped",
-      "index": 14,
-      "nodeId": "tests/test_animation_fbx_domain_loading.py::test_uploaded_compatibility_corpus_uses_animation_domain_only[external-animation-control.fbx-2-0]",
-      "ruleId": "mapped-fbx-animation-domain"
-    },
-    {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 15,
+      "index": 4,
       "nodeId": "tests/test_animation_fbx_domain_loading.py::test_real_quad_heavy_file_preflight_reports_ignored_model_domain",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 16,
+      "index": 5,
       "nodeId": "tests/test_animation_fbx_domain_loading.py::test_static_t_pose_preflight_is_importable_as_rest_pose",
       "ruleId": "pending-fbx"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 17,
+      "index": 6,
       "nodeId": "tests/test_anm2_fbx_timebase_resample.py::test_381_at_30_resamples_to_305_at_24_with_exact_endpoints",
       "ruleId": "mapped-anm2-temporal-resampling"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 18,
+      "index": 7,
       "nodeId": "tests/test_anm2_fbx_timebase_resample.py::test_shortest_hemisphere_slerp_and_single_frame",
       "ruleId": "mapped-anm2-temporal-resampling"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 19,
+      "index": 8,
       "nodeId": "tests/test_anm2_multipage_writer.py::test_large_packed_clip_is_split_into_valid_pages",
       "ruleId": "mapped-anm2-multipage-writer"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 20,
+      "index": 9,
       "nodeId": "tests/test_anm2_multipage_writer.py::test_small_packed_clip_remains_one_page",
       "ruleId": "mapped-anm2-partial-and-one-page-controls"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 21,
+      "index": 10,
       "nodeId": "tests/test_anm2_multipage_writer.py::test_project_validator_rejects_declared_oversized_one_page_clip",
       "ruleId": "mapped-anm2-partial-and-one-page-controls"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 22,
+      "index": 11,
       "nodeId": "tests/test_anm2_only_export.py::test_export_project_anm2_files_copies_only_generated_payloads",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 23,
+      "index": 12,
       "nodeId": "tests/test_anm2_packed.py::Anm2PackedTests::test_decode_partial_frame_range",
       "ruleId": "mapped-anm2-partial-and-one-page-controls"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 24,
+      "index": 13,
       "nodeId": "tests/test_anm2_packed.py::Anm2PackedTests::test_encode_decode_flat_group",
       "ruleId": "mapped-anm2-packed-roundtrip"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 25,
+      "index": 14,
       "nodeId": "tests/test_anm2_packed.py::Anm2PackedTests::test_encode_decode_ramp_group",
       "ruleId": "mapped-anm2-packed-roundtrip"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 26,
+      "index": 15,
       "nodeId": "tests/test_anm2_provenance.py::test_provenance_is_deterministic_and_hash_gated",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 27,
+      "index": 16,
       "nodeId": "tests/test_anm2_provenance.py::test_missing_and_malformed_provenance_are_nonfatal",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 28,
+      "index": 17,
       "nodeId": "tests/test_anm2_provenance.py::test_optional_source_animation_stack_round_trips_and_old_sidecars_remain_valid",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 29,
+      "index": 18,
       "nodeId": "tests/test_anm2_provenance.py::test_optional_export_contract_provenance_round_trips",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 30,
+      "index": 19,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[sample_fps-True]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 31,
+      "index": 20,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[source_duration_seconds-False]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 32,
+      "index": 21,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[frame_count-True]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 33,
+      "index": 22,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[schema_version-True]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 34,
+      "index": 23,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[source_animation_stack-42]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 35,
+      "index": 24,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[sampler_contract-42]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 36,
+      "index": 25,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[source_target_compatibility_class-42]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 37,
+      "index": 26,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[bind_retained_bones-value7]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 38,
+      "index": 27,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[playback_fps-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 39,
+      "index": 28,
       "nodeId": "tests/test_anm2_provenance.py::test_malformed_scalar_metadata_is_one_nonfatal_advisory[source_duration_seconds-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000]",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-provenance",
       "classification": "applicable_mapped",
-      "index": 40,
+      "index": 29,
       "nodeId": "tests/test_anm2_provenance.py::test_valid_provenance_drives_reverse_input_and_output_rates",
       "ruleId": "mapped-anm2-provenance"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 41,
+      "index": 30,
       "nodeId": "tests/test_anm2_to_fbx.py::test_full_clip_decode_and_cayley_continuity",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 42,
+      "index": 31,
       "nodeId": "tests/test_anm2_to_fbx.py::test_motion_accumulator_bakes_root_and_preserves_helper",
       "ruleId": "mapped-blender-motion-accumulator-bake"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 43,
+      "index": 32,
       "nodeId": "tests/test_anm2_to_fbx.py::test_static_motion_accumulator_does_not_change_root",
       "ruleId": "mapped-blender-motion-accumulator-bake"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 44,
+      "index": 33,
       "nodeId": "tests/test_anm2_to_fbx.py::test_export_service_bakes_by_default_and_toggle_keeps_raw_helper",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 45,
+      "index": 34,
       "nodeId": "tests/test_anm2_to_fbx.py::test_cross_rig_motion_accumulator_uses_translation_scale",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 46,
+      "index": 35,
       "nodeId": "tests/test_anm2_to_fbx.py::test_auto_map_then_bind_relative_cross_rig",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 47,
+      "index": 36,
       "nodeId": "tests/test_anm2_to_fbx.py::test_generic_bone_map_roundtrip_allows_source_fanout_and_rejects_duplicate_target",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 48,
+      "index": 37,
       "nodeId": "tests/test_anm2_to_fbx.py::test_full_decoder_crosses_physical_page_boundary",
       "ruleId": "mapped-anm2-multipage-full-decode"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 49,
+      "index": 38,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_builtins_default_to_auto_and_custom_targets_stay_exact",
       "ruleId": "excluded-legacy-dl2-custom-target-defaults"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 50,
+      "index": 39,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_schema_v9_migrates_builtin_dl2_exact_unless_expert_override",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 51,
+      "index": 40,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_two_turn_root_policies_remove_or_transfer_heading_and_preserve_tilt",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "root-motion",
       "classification": "applicable_mapped",
-      "index": 52,
+      "index": 41,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_heading_policy_reconstructs_local_when_selected_root_has_parent",
       "ruleId": "mapped-parented-root-heading"
     },
     {
       "area": "anm2-bulk-decode",
       "classification": "applicable_mapped",
-      "index": 53,
+      "index": 42,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_cached_decoder_matches_random_time_decoder[sample0]",
       "ruleId": "mapped-anm2-bulk-decode"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 54,
+      "index": 43,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_cached_decoder_matches_random_time_decoder[sample1]",
       "ruleId": "excluded-auto-root-dl2-fixtures"
     },
     {
       "area": "anm2-bulk-decode",
       "classification": "applicable_mapped",
-      "index": 55,
+      "index": 44,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_cached_decoder_decodes_each_unique_slot_once_and_selects_tracks",
       "ruleId": "mapped-anm2-bulk-decode"
     },
     {
       "area": "anm2-codec",
       "classification": "applicable_mapped",
-      "index": 56,
+      "index": 45,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_vectorized_cayley_conversion_matches_scalar_and_is_continuous",
       "ruleId": "mapped-cayley-sequence-continuity"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 57,
+      "index": 46,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_generated_fixture_root_heading_and_sparse_271_job",
       "ruleId": "excluded-auto-root-dl2-fixtures"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 58,
+      "index": 47,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_blender_helper_uses_bulk_curves_and_one_dependency_update_site",
       "ruleId": "mapped-blender-bulk-curve-helper"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 59,
+      "index": 48,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_default_unknown_sidecar_uses_a_separate_selected_decode_pass",
       "ruleId": "mapped-blender-selected-track-passes"
     },
     {
       "area": "anm2-bulk-decode",
       "classification": "applicable_mapped",
-      "index": 60,
+      "index": 49,
       "nodeId": "tests/test_auto_root_cached_sparse.py::test_cached_decode_cancellation_is_checked_during_work",
       "ruleId": "mapped-anm2-bulk-decode"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 61,
+      "index": 50,
       "nodeId": "tests/test_automatic_plan_execution.py::test_composed_and_fractional_rotation_helpers_preserve_target_geometry",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 62,
+      "index": 51,
       "nodeId": "tests/test_automatic_plan_execution.py::test_materialized_plan_executes_composed_distributed_and_inherited_modes",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 63,
+      "index": 52,
       "nodeId": "tests/test_automatic_plan_execution.py::test_direct_engine_report_does_not_trust_non_live_certificate",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 64,
+      "index": 53,
       "nodeId": "tests/test_automatic_plan_execution.py::test_analyzed_bone_side_conflict_blocks_animated_critical_candidate",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 65,
+      "index": 54,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_source_analysis_is_scoped_to_document_and_selected_stack",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 66,
+      "index": 55,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_plan_hash_tracks_semantic_policy_independently_of_wrapper_context",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 67,
+      "index": 56,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_exact_name_and_ancestry_identity_maps_every_target",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 68,
+      "index": 57,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_exact_identity_consumes_nonsemantic_animated_source_bones",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 69,
+      "index": 58,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_dl1_eye_helpers_are_ignored_without_blocking_export",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 70,
+      "index": 59,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_stale_manual_source_assignments_fall_back_to_bind",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 71,
+      "index": 60,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_missing_optional_limbs_quietly_inherit_bind",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 72,
+      "index": 61,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_ambiguous_animated_roles_use_nonblocking_bind_fallbacks",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 73,
+      "index": 62,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_unknown_nonhumanoid_source_exports_with_bind_fallbacks",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 74,
+      "index": 63,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_explicit_semantic_chain_policy_supports_composed_and_distributed_modes[source_names0-target_names0-inherit_bind-expected0]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 75,
+      "index": 64,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_explicit_semantic_chain_policy_supports_composed_and_distributed_modes[source_names1-target_names1-distributed-expected1]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 76,
+      "index": 65,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_recipe_round_trip_and_live_revalidation",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 77,
+      "index": 66,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_reviewed_recipe_store_reuses_correction_for_same_skeleton_new_clip",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 78,
+      "index": 67,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_recipe_replay_ignores_newly_animated_unmapped_source_chain",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 79,
+      "index": 68,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_reviewed_recipe_can_resolve_newly_animated_unknown_source",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 80,
+      "index": 69,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_profile_recipe_export_requires_reviewed_provenance",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 81,
+      "index": 70,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_recipe_accepts_ambiguous_rows_as_bind_fallbacks",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 82,
+      "index": 71,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_reflected_wrapper_preserves_automatic_bilateral_rows_by_default",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 83,
+      "index": 72,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_explicit_bilateral_swap_changes_only_automatic_bilateral_rows",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 84,
+      "index": 73,
       "nodeId": "tests/test_automatic_retarget_plan.py::test_asymmetric_motion_stays_named_by_default_and_crosses_only_explicitly",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "applicable_mapped",
-      "index": 85,
+      "index": 74,
       "nodeId": "tests/test_blender_fbx_integration.py::test_blender_exports_first_anm2_frame_and_animation",
       "ruleId": "mapped-blender-core-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 86,
+      "index": 75,
       "nodeId": "tests/test_blender_fbx_integration.py::test_blender_fbx_bind_pose_is_independent_from_first_sample",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 87,
+      "index": 76,
       "nodeId": "tests/test_blender_fbx_integration.py::test_bundled_native_fbx_uses_readable_helpers_and_roundtrips",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 88,
+      "index": 77,
       "nodeId": "tests/test_blender_fbx_integration.py::test_native_edit_bones_follow_child_pivots_and_roundtrip",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 89,
+      "index": 78,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_v1_map_migrates_to_explicit_v2_without_losing_meaning_or_unknowns",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 90,
+      "index": 79,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_base_rows_honor_transfer_and_component_policies_and_bind_unmapped",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 91,
+      "index": 80,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_reviewed_spatial_map_builds_without_changing_target_lengths_translation_or_scale",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 92,
+      "index": 81,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_stale_target_full_bind_hash_fails_before_build",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 93,
+      "index": 82,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_reviewed_profile_requires_an_explicit_row_for_every_deform_target",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 94,
+      "index": 83,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_mapped_rotation_uses_collapsed_non_limb_ancestor_local",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 95,
+      "index": 84,
       "nodeId": "tests/test_bone_map_v2_row_policies.py::test_translation_owned_length_changes_remain_model_relative",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 96,
+      "index": 85,
       "nodeId": "tests/test_chrome_rig.py::test_model_only_crig_and_exact_rig_object_export[names0]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 97,
+      "index": 86,
       "nodeId": "tests/test_chrome_rig.py::test_model_only_crig_and_exact_rig_object_export[names1]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 98,
+      "index": 87,
       "nodeId": "tests/test_chrome_rig.py::test_exact_engine_reuses_one_canonical_document_across_legacy_adapter",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 99,
+      "index": 88,
       "nodeId": "tests/test_chrome_rig.py::test_exact_and_mapped_writers_accept_fbx_time_mode_12_rate",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 100,
+      "index": 89,
       "nodeId": "tests/test_chrome_rig.py::test_crig_writer_profile_preserves_fractional_default_fps",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 101,
+      "index": 90,
       "nodeId": "tests/test_chrome_rig.py::test_static_exact_clip_writes_two_identical_frames",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 102,
+      "index": 91,
       "nodeId": "tests/test_chrome_rig.py::test_exact_rig_rejects_parent_mismatch",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 103,
+      "index": 92,
       "nodeId": "tests/test_chrome_rig.py::test_crig_marks_only_skinned_bones_and_their_ancestors_as_required",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 104,
+      "index": 93,
       "nodeId": "tests/test_chrome_rig.py::test_exact_rig_default_pose_mismatch_warns_and_exports",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 105,
+      "index": 94,
       "nodeId": "tests/test_chrome_rig.py::test_exact_rig_roundtrips_synthetic_motion_helper",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 106,
+      "index": 95,
       "nodeId": "tests/test_chrome_rig.py::test_rotation_delta_manual_root_mapping_keeps_root_displacement",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 107,
+      "index": 96,
       "nodeId": "tests/test_chrome_rig.py::test_forward_fbx_to_anm2_uses_rest_relative_transforms_not_visible_bone_axes",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 108,
+      "index": 97,
       "nodeId": "tests/test_chrome_rig.py::test_mapped_rig_helper_fanout_is_applied_after_base_solver",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 109,
+      "index": 98,
       "nodeId": "tests/test_chrome_rig.py::test_crig_rejects_unsafe_or_executable_members",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 110,
+      "index": 99,
       "nodeId": "tests/test_chrome_rig.py::test_builtin_humanoid_is_represented_as_a_chrome_rig",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 111,
+      "index": 100,
       "nodeId": "tests/test_chrome_rig.py::test_project_v2_migrates_to_crig_aware_schema_v3",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 112,
+      "index": 101,
       "nodeId": "tests/test_chrome_rig.py::test_project_builder_keeps_automatic_identity_superset_on_exact_engine",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 113,
+      "index": 102,
       "nodeId": "tests/test_chrome_rig.py::test_project_builder_uses_reviewed_crig_map_instead_of_strict_exact_engine",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 114,
+      "index": 103,
       "nodeId": "tests/test_chrome_rig.py::test_reviewed_mapping_identity_rejects_cross_wired_pairs",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "retail-mesh-bind",
       "classification": "applicable_mapped",
-      "index": 115,
+      "index": 104,
       "nodeId": "tests/test_compact_mesh_matrices.py::test_compact_parser_reports_local_reference_and_reconstructed_global_matrices",
       "ruleId": "mapped-retail-compact-matrices"
     },
     {
       "area": "retail-mesh-bind",
       "classification": "applicable_mapped",
-      "index": 116,
+      "index": 105,
       "nodeId": "tests/test_compact_mesh_matrices.py::test_compact_bone_bounds_are_aggregated_in_global_bind_space",
       "ruleId": "mapped-retail-compact-matrices"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 117,
+      "index": 106,
       "nodeId": "tests/test_compiler_support.py::test_staged_bootstrap_report_is_json_serializable",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 118,
+      "index": 107,
       "nodeId": "tests/test_compiler_support.py::test_compiler_contract_rejects_collapsed_bone_bounds",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 119,
+      "index": 108,
       "nodeId": "tests/test_compiler_support.py::test_compiler_contract_accepts_nonzero_bone_bounds",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 120,
+      "index": 109,
       "nodeId": "tests/test_compiler_support.py::test_compiler_contract_accepts_stock_position_tracks_on_stock_bind_rig",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 121,
+      "index": 110,
       "nodeId": "tests/test_compiler_support.py::test_compiler_contract_rejects_unknown_humanoid_animation_policy",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 122,
+      "index": 111,
       "nodeId": "tests/test_compiler_support.py::test_compiler_contract_rejects_nodes_without_animated_flag",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 123,
+      "index": 112,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_mixamo_unit_scale_is_centimeters",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 124,
+      "index": 113,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_pack_contains_controls_and_two_variants_per_clip",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 125,
+      "index": 114,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_finger_mapping_covers_all_30_anm2_digit_tracks",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 126,
+      "index": 115,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_target_finger_root_parent_routes_match_smd_hierarchy",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 127,
+      "index": 116,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_finger_strategy_is_absolute_not_bind_biased",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 128,
+      "index": 117,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_candidates_keep_helpers_static_and_only_expected_root_tracks_move",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 129,
+      "index": 118,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_greeting_candidate_adds_real_finger_motion",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 130,
+      "index": 119,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_motion_variants_encode_expected_movement_ranges",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 131,
+      "index": 120,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_inplace_and_motion_payloads_have_same_duration_but_different_root_data",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 132,
+      "index": 121,
       "nodeId": "tests/test_custom_fbx_release_candidate_editor_rpack.py::test_all_root_policy_toggles_and_ik_sidecar",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 133,
+      "index": 122,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_xyz_euler_uses_intrinsic_fbx_order",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 134,
+      "index": 123,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_corrected_tpose_matches_trusted_blender_rest",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 135,
+      "index": 124,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_pack_contains_controls_right_arm_and_fullbody_resources",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 136,
+      "index": 125,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_custom_frame0_preserves_source_pose_instead_of_target_bind",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 137,
+      "index": 126,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_corrected_right_arm_transfers_frame70_body_space_directions",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 138,
+      "index": 127,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_fullbody_candidates_move_both_arms_legs_and_torso",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 139,
+      "index": 128,
       "nodeId": "tests/test_custom_fbx_smd_intrinsic_absolute_editor_rpack.py::test_rebuild_is_byte_reproducible",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 140,
+      "index": 129,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_helper_rig_is_deterministic_and_legacy_default_is_stable",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 141,
+      "index": 130,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_named_helpers_are_armature_bones_and_unknown_tracks_are_empties",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 142,
+      "index": 131,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_legacy_dl1_export_does_not_enable_helper_roundtrip_contract",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 143,
+      "index": 132,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_helper_rig_marks_sidecar_and_drop_unknown_modes_one_way",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 144,
+      "index": 133,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_dl1_auto_detection_requires_helper_specific_evidence",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 145,
+      "index": 134,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_contract_sidecar_fallback_agreement_and_stale_identity",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 146,
+      "index": 135,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_contract_rejects_structural_edits_and_unexpected_nodes",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 147,
+      "index": 136,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_rest_pose_and_armature_object_transform_are_strict",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 148,
+      "index": 137,
       "nodeId": "tests/test_dl1_helper_roundtrip.py::test_append_thresholds_treat_quaternion_equivalent_rows_as_noops",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 149,
+      "index": 138,
       "nodeId": "tests/test_dl1_helper_roundtrip_blender.py::test_base_game_refcamera_helper_roundtrip_acceptance",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "anm2-to-fbx",
       "classification": "still_pending",
-      "index": 150,
+      "index": 139,
       "nodeId": "tests/test_dl1_helper_roundtrip_blender.py::test_offset_helper_unbakes_only_recorded_root_and_keeps_current_track",
       "ruleId": "pending-blender-handoff"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 151,
+      "index": 140,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_private_fixture_plan_is_complete_semantic_and_deterministic",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 152,
+      "index": 141,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_verified_profile_materializes_exactly_52_body_rows_and_219_bind_rows",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 153,
+      "index": 142,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_reviewed_recipe_profile_preserves_dl2_execution_policies",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 154,
+      "index": 143,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_dl2_local_recipe_builder_separates_reviewed_and_verified_authority",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 155,
+      "index": 144,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_spine_head_and_correct_shifted_finger_slots",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 156,
+      "index": 145,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_known_legacy_spatial_filler_pairs_are_all_absent",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 157,
+      "index": 146,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_certificate_is_exhaustive_and_live_revalidated",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 158,
+      "index": 147,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_profile_json_round_trip_preserves_live_certificate",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 159,
+      "index": 148,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[source_pair]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 160,
+      "index": 149,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[mapping_mode]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 161,
+      "index": 150,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[row_decision]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 162,
+      "index": 151,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[executable_source_bones]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 163,
+      "index": 152,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[distribution_weight]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 164,
+      "index": 153,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[semantic_chain_id]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 165,
+      "index": 154,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[certificate_version]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 166,
+      "index": 155,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[spatial_mapping]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 167,
+      "index": 156,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_serialized_mapping_or_certificate_mutations_fail_closed[facial_map]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 168,
+      "index": 157,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_live_source_bind_target_and_policy_changes_fail_closed",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 169,
+      "index": 158,
       "nodeId": "tests/test_dl2_advanced_body_bridge.py::test_unauthorized_policy_cannot_materialize_verified_bridge",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 170,
+      "index": 159,
       "nodeId": "tests/test_dl2_advanced_export_fixture.py::test_reviewed_thriller_clip_exports_through_verified_advanced_bridge",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 171,
+      "index": 160,
       "nodeId": "tests/test_dl2_advanced_gui_integration.py::test_dl2_hides_facial_tab_and_body_face_column",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 172,
+      "index": 161,
       "nodeId": "tests/test_dl2_advanced_gui_integration.py::test_dl2_import_opens_52_editable_semantic_roles_and_manual_edit_clears_cache",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 173,
+      "index": 162,
       "nodeId": "tests/test_dl2_advanced_gui_integration.py::test_reviewed_generic_map_migrates_to_semantic_profile_without_deleting_source",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 174,
+      "index": 163,
       "nodeId": "tests/test_dl2_advanced_gui_integration.py::test_schema_v1_profile_migrates_manual_and_automatic_assignments",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 175,
+      "index": 164,
       "nodeId": "tests/test_dl2_advanced_mapping_migration.py::test_old_automatic_repair_is_replaced_without_promoting_or_deleting_it",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 176,
+      "index": 165,
       "nodeId": "tests/test_dl2_advanced_mapping_migration.py::test_manually_reviewed_advanced_map_is_never_overwritten",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 177,
+      "index": 166,
       "nodeId": "tests/test_dl2_advanced_mapping_migration.py::test_stale_verified_profile_is_regenerated_not_trusted_or_mutated",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 178,
+      "index": 167,
       "nodeId": "tests/test_dl2_advanced_mapping_migration.py::test_project_builder_reuses_reviewed_local_recipe_without_certifying_it[False]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 179,
+      "index": 168,
       "nodeId": "tests/test_dl2_advanced_mapping_migration.py::test_project_builder_reuses_reviewed_local_recipe_without_certifying_it[True]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 180,
+      "index": 169,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_verified_summary_is_exactly_five_stable_lines",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 181,
+      "index": 170,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_verified_solver_preview_revalidates_before_routing",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 182,
+      "index": 171,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_advanced_auto_action_stores_complete_verified_profile",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 183,
+      "index": 172,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_advanced_generation_failure_is_focused_and_non_modal",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 184,
+      "index": 173,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_advanced_action_state_hides_verified_approval_and_blocks_legacy_repair",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 185,
+      "index": 174,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_advanced_workspace_exposes_typed_recipe_import_export_controls",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 186,
+      "index": 175,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_old_advanced_repair_cannot_be_programmatically_bulk_approved",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 187,
+      "index": 176,
       "nodeId": "tests/test_dl2_advanced_mapping_workspace.py::test_custom_legacy_repair_retains_explicit_approval",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 188,
+      "index": 177,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_advanced_smd_is_the_exact_271_node_single_root_input",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 189,
+      "index": 178,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_advanced_and_legacy_smd_topology_diff_matches_the_audit",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 190,
+      "index": 179,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_advanced_crig_preserves_full_reference_order_and_mapping_contract",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 191,
+      "index": 180,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_advanced_crig_records_neutral_categories_and_no_false_split_metadata",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 192,
+      "index": 181,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_reference_rig_bind_quantization_is_cross_numpy_stable",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 193,
+      "index": 182,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_dual_preset_generator_matches_checked_in_structures",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 194,
+      "index": 183,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_registry_resolves_both_bundled_presets_with_stable_labels",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 195,
+      "index": 184,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_profile_defaults_advance_new_projects_but_preserve_explicit_legacy",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 196,
+      "index": 185,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_explicit_builtin_selection_applies_one_coherent_package",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 197,
+      "index": 186,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_legacy_example_paths_resolve_from_its_own_directory",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 198,
+      "index": 187,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_stale_legacy_builtin_path_falls_back_to_the_registry",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 199,
+      "index": 188,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_project_coherence_accepts_legacy_but_rejects_crossed_package_paths",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 200,
+      "index": 189,
       "nodeId": "tests/test_dl2_advanced_player_rig.py::test_target_package_validation_selects_advanced_or_legacy_by_rig_id",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 201,
+      "index": 190,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_native_dl2_decode_dispatch_and_report",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 202,
+      "index": 191,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_default_dl2_scene_is_advanced_skeleton_with_sidecar_policy",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 203,
+      "index": 192,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_unknown_sidecar_is_complete_and_deterministic",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 204,
+      "index": 193,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_helpers_and_drop_are_explicit_policies",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 205,
+      "index": 194,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_partial_dl2_frame_range_uses_container_bounds",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 206,
+      "index": 195,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_export_service_writes_default_dl2_sidecar_without_interactive_blender",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 207,
+      "index": 196,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_optional_blender_exports_the_advanced_dl2_scene",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 208,
+      "index": 197,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_cli_resolves_advanced_builtin_and_routes_policy_noninteractively",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 209,
+      "index": 198,
       "nodeId": "tests/test_dl2_anm2_to_fbx.py::test_advanced_read_export_example_and_manifest_are_coherent",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 210,
+      "index": 199,
       "nodeId": "tests/test_dl2_anm2_v2_decode.py::test_selected_native_values_match_independent_fixture",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 211,
+      "index": 200,
       "nodeId": "tests/test_dl2_anm2_v2_decode.py::test_native_v2_decode_all_frames_is_finite_and_crosses_blocks",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 212,
+      "index": 201,
       "nodeId": "tests/test_dl2_anm2_v2_decode.py::test_resolved_sampler_helper_is_container_neutral",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 213,
+      "index": 202,
       "nodeId": "tests/test_dl2_anm2_v2_decode.py::test_v1_wrapper_and_dispatch_remain_identical",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 214,
+      "index": 203,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_exact_header_v2_layout_and_tables",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 215,
+      "index": 204,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_exact_block_dictionaries_and_base_segments",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 216,
+      "index": 205,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_full_dictionary_table_does_not_require_zero_padding",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 217,
+      "index": 206,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[0-0-1-0-0.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 218,
+      "index": 207,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[1-0-1-0-1.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 219,
+      "index": 208,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[15-0-1-14-1.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 220,
+      "index": 209,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[16-0-2-0-1.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 221,
+      "index": 210,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[120-0-8-14-1.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 222,
+      "index": 211,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[121-1-1-0-1.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 223,
+      "index": 212,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_golden_time_selections[228-1-8-2-1.0]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 224,
+      "index": 213,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_fractional_and_generic_vfr_selection",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 225,
+      "index": 214,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_malformed_layouts_are_rejected[<lambda>-does not equal file size]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 226,
+      "index": 215,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_malformed_layouts_are_rejected[<lambda>-not strictly increasing]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 227,
+      "index": 216,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_malformed_layouts_are_rejected[<lambda>-static stream count exceeds]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 228,
+      "index": 217,
       "nodeId": "tests/test_dl2_anm2_v2_layout.py::test_malformed_layouts_are_rejected[<lambda>-track descriptor table extends]",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 229,
+      "index": 218,
       "nodeId": "tests/test_dl2_regression_repair.py::test_bundled_dl2_default_package_is_the_coherent_271_bone_advanced_rig",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 230,
+      "index": 219,
       "nodeId": "tests/test_dl2_regression_repair.py::test_smd_bom_and_line_endings_are_semantic_not_structural_changes",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 231,
+      "index": 220,
       "nodeId": "tests/test_dl2_regression_repair.py::test_bundled_dl2_legacy_package_remains_coherent_with_four_roots",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 232,
+      "index": 221,
       "nodeId": "tests/test_dl2_regression_repair.py::test_modified_smd_fails_coherence_and_blocks_a_builtin_build",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 233,
+      "index": 222,
       "nodeId": "tests/test_dl2_regression_repair.py::test_source_global_normalization_applies_units_and_axis_once",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 234,
+      "index": 223,
       "nodeId": "tests/test_dl2_regression_repair.py::test_automatic_repair_cannot_silently_select_the_mapped_solver",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 235,
+      "index": 224,
       "nodeId": "tests/test_dl2_regression_repair.py::test_automatic_verified_origin_requires_live_revalidation_to_route",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 236,
+      "index": 225,
       "nodeId": "tests/test_dl2_regression_repair.py::test_bind_frame_reconstructs_target_and_independent_roots_stay_independent",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 237,
+      "index": 226,
       "nodeId": "tests/test_dl2_regression_repair.py::test_hierarchy_safety_rejects_displacement_and_accepts_normal_pose",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 238,
+      "index": 227,
       "nodeId": "tests/test_dl2_support.py::test_old_projects_default_to_dl1_and_preserve_unknown_fields",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 239,
+      "index": 228,
       "nodeId": "tests/test_dl2_support.py::test_unicode_project_path_bom_and_names_roundtrip",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 240,
+      "index": 229,
       "nodeId": "tests/test_dl2_support.py::test_non_ascii_implicit_descriptor_is_blocked_but_explicit_crig_is_valid",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 241,
+      "index": 230,
       "nodeId": "tests/test_dl2_support.py::test_switching_profiles_updates_only_previous_defaults",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 242,
+      "index": 231,
       "nodeId": "tests/test_dl2_support.py::test_cross_game_builtin_target_is_blocked",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 243,
+      "index": 232,
       "nodeId": "tests/test_dl2_support.py::test_format1_header_v2_dispatch_and_descriptor_inspection",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 244,
+      "index": 233,
       "nodeId": "tests/test_dl2_support.py::test_global_bind_basis_correction_reconstructs_target_bind_with_wrapper_scale",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 245,
+      "index": 234,
       "nodeId": "tests/test_dl2_support.py::test_global_bind_basis_correction_normalizes_fbx_centimeters_before_animation",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 246,
+      "index": 235,
       "nodeId": "tests/test_dl2_support.py::test_cross_rig_rotation_delta_preserves_target_translation_and_scale",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 247,
+      "index": 236,
       "nodeId": "tests/test_dl2_support.py::test_legacy_dl2_root_policies_keep_pelvis_and_motion_tracks_coherent",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 248,
+      "index": 237,
       "nodeId": "tests/test_dl2_support.py::test_fbx_scene_bind_priority_pose_then_transformlink_then_fallback",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 249,
+      "index": 238,
       "nodeId": "tests/test_dl2_support.py::test_bundled_dl2_targets_keep_advanced_and_legacy_root_contracts",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 250,
+      "index": 239,
       "nodeId": "tests/test_dl2_support.py::test_private_dl2_fbx_is_superset_bind_corrected_and_builds",
       "ruleId": "excluded-dl2-files"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 251,
+      "index": 240,
       "nodeId": "tests/test_embedded_bind_project_policy.py::test_embedded_bind_uses_each_animation_fbx_and_skips_trusted_json",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 252,
+      "index": 241,
       "nodeId": "tests/test_embedded_bind_project_policy.py::test_explicit_rest_mode_uses_selected_rest_and_trusted_json",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 253,
+      "index": 242,
       "nodeId": "tests/test_embedded_bind_project_policy.py::test_humanoid_project_passes_embedded_helper_rules_to_value_builder",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 254,
+      "index": 243,
       "nodeId": "tests/test_embedded_bind_project_policy.py::test_explicit_rest_mode_rejects_blank_or_directory",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 255,
+      "index": 244,
       "nodeId": "tests/test_encoding_contract.py::test_utf8_pack_manifest_load_is_independent_of_cp936_locale",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 256,
+      "index": 245,
       "nodeId": "tests/test_encoding_contract.py::test_production_path_text_calls_declare_an_encoding",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 257,
+      "index": 246,
       "nodeId": "tests/test_encoding_contract.py::test_production_text_mode_open_calls_declare_an_encoding",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 258,
+      "index": 247,
       "nodeId": "tests/test_encoding_contract.py::test_text_mode_subprocesses_declare_utf8_and_replacement_errors",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 259,
+      "index": 248,
       "nodeId": "tests/test_exact_model_crig_animation_integration.py::test_exact_model_contract_crig_bind_and_same_rig_animation_are_continuous",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 260,
+      "index": 249,
       "nodeId": "tests/test_exact_model_crig_animation_integration.py::test_source_superset_extras_do_not_break_any_required_target_track",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 261,
+      "index": 250,
       "nodeId": "tests/test_exact_model_crig_animation_integration.py::test_signed_non_y_up_scene_uses_one_model_and_animation_target_basis",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 262,
+      "index": 251,
       "nodeId": "tests/test_exact_name_source_superset.py::test_large_structurally_anchored_exact_source_superset_keeps_rows",
       "ruleId": "excluded-dl2-exact-source-superset"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 263,
+      "index": 252,
       "nodeId": "tests/test_exact_name_source_superset.py::test_tiny_coincidental_exact_overlap_still_uses_semantic_fallback",
       "ruleId": "excluded-dl2-exact-source-superset"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 264,
+      "index": 253,
       "nodeId": "tests/test_exe_build_surface.py::test_runtime_dependencies_are_minimal",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 265,
+      "index": 254,
       "nodeId": "tests/test_exe_build_surface.py::test_importing_gui_surface_does_not_eagerly_import_retarget_pipeline",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 266,
+      "index": 255,
       "nodeId": "tests/test_exe_build_surface.py::test_source_runtime_paths_resolve_to_repository",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 267,
+      "index": 256,
       "nodeId": "tests/test_exe_build_surface.py::test_windows_build_surface_exists_and_mentions_frozen_self_test",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 268,
+      "index": 257,
       "nodeId": "tests/test_exe_build_surface.py::test_setup_only_mode_exits_before_gui_launch",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 269,
+      "index": 258,
       "nodeId": "tests/test_exe_build_surface.py::test_environment_check_succeeds_without_qt_for_core_assets",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 270,
+      "index": 259,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_left_whistle_legacy_matches_real_tag_0_5_0",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 271,
+      "index": 260,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_left_whistle_current_v2_preserves_same_side_motion",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 272,
+      "index": 261,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_left_whistle_four_way_semantic_and_conjugation_ablation",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 273,
+      "index": 262,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_dl2test_current_v2_control_stays_within_legacy_parity",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 274,
+      "index": 263,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_whistle_roundtrip_control_remains_close_to_current_output",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 275,
+      "index": 264,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_pinhead_decoded_control_remains_unchanged",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 276,
+      "index": 265,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_left_hand_jump_export_first_regression",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 277,
+      "index": 266,
       "nodeId": "tests/test_export_first_private_fixtures.py::test_alone_test_fall_remains_readable_under_export_first_preflight",
       "ruleId": "excluded-dl2-private-export-controls"
     },
     {
       "area": "fbx-animation-stacks",
       "classification": "applicable_mapped",
-      "index": 278,
+      "index": 267,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_arbitrary_layer_names_and_stack_selection_isolate_curves",
       "ruleId": "mapped-fbx-stack-controls"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 279,
+      "index": 268,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_reselecting_a_stack_reuses_its_transform_contract",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-animation-stacks",
       "classification": "applicable_mapped",
-      "index": 280,
+      "index": 269,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_stack_timing_starts_at_selected_nonzero_tick",
       "ruleId": "mapped-fbx-stack-controls"
     },
     {
       "area": "fbx-animation-stacks",
       "classification": "applicable_mapped",
-      "index": 281,
+      "index": 270,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_multilayer_stack_requires_bake_or_flatten",
       "ruleId": "mapped-fbx-stack-controls"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 282,
+      "index": 271,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_stack_inventory_follows_connections_not_layer0_name",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-animation-stacks",
       "classification": "applicable_mapped",
-      "index": 283,
+      "index": 272,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_unique_changing_skeletal_stack_is_preferred_over_static_peer",
       "ruleId": "mapped-fbx-stack-controls"
     },
     {
       "area": "fbx-animation-stacks",
       "classification": "applicable_mapped",
-      "index": 284,
+      "index": 273,
       "nodeId": "tests/test_fbx_animation_stacks.py::test_malformed_curve_is_actionable_stack_data_not_fbx_unreadable",
       "ruleId": "mapped-fbx-stack-controls"
     },
     {
       "area": "fbx-timing",
       "classification": "applicable_mapped",
-      "index": 285,
+      "index": 274,
       "nodeId": "tests/test_fbx_declared_timebase.py::test_complete_fbx_time_mode_table",
       "ruleId": "mapped-fbx-timebase-controls"
     },
     {
       "area": "fbx-timing",
       "classification": "applicable_mapped",
-      "index": 286,
+      "index": 275,
       "nodeId": "tests/test_fbx_declared_timebase.py::test_declared_mode_wins_over_key_spacing",
       "ruleId": "mapped-fbx-timebase-controls"
     },
     {
       "area": "fbx-timing",
       "classification": "applicable_mapped",
-      "index": 287,
+      "index": 276,
       "nodeId": "tests/test_fbx_declared_timebase.py::test_custom_mode_and_low_confidence_fallback",
       "ruleId": "mapped-fbx-timebase-controls"
     },
     {
       "area": "fbx-facial-animation",
       "classification": "applicable_mapped",
-      "index": 288,
+      "index": 277,
       "nodeId": "tests/test_fbx_declared_timebase.py::test_facial_scan_keeps_declared_rate_and_exact_tick_span",
       "ruleId": "mapped-fbx-facial-animation-domain"
     },
     {
       "area": "fbx-facial-animation",
       "classification": "applicable_mapped",
-      "index": 289,
+      "index": 278,
       "nodeId": "tests/test_fbx_declared_timebase.py::test_facial_only_keys_define_span_and_fallback_timebase",
       "ruleId": "mapped-fbx-facial-animation-domain"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 290,
+      "index": 279,
       "nodeId": "tests/test_fbx_declared_timebase.py::test_private_left_hand_jump_declares_24_fps",
       "ruleId": "pending-fbx"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 291,
+      "index": 280,
       "nodeId": "tests/test_fbx_mesh_bind_resolution.py::test_mesh_bind_uses_model_pose_not_first_cluster_transform",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 292,
+      "index": 281,
       "nodeId": "tests/test_fbx_mesh_bind_resolution.py::test_mesh_bind_reconstructs_from_transform_link_and_transform",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 293,
+      "index": 282,
       "nodeId": "tests/test_fbx_mesh_bind_resolution.py::test_cluster_consensus_outvotes_a_mismatched_model_bind_pose",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 294,
+      "index": 283,
       "nodeId": "tests/test_fbx_mesh_bind_resolution.py::test_fbx_cluster_constructor_remains_backward_compatible",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 295,
+      "index": 284,
       "nodeId": "tests/test_fbx_optional_hierarchy_policy.py::test_disconnected_optional_exact_name_is_bind_held_not_blocking",
       "ruleId": "excluded-dl2-fbx-optional-hierarchy"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 296,
+      "index": 285,
       "nodeId": "tests/test_fbx_optional_hierarchy_policy.py::test_required_deform_parent_mismatch_remains_action_required",
       "ruleId": "excluded-dl2-fbx-optional-hierarchy"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 297,
+      "index": 286,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_planar_convex_quad_is_safe_for_deterministic_fan",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 298,
+      "index": 287,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_source_triangle_order_is_preserved",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 299,
+      "index": 288,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_concave_polygon_uses_deterministic_ear_clipping",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 300,
+      "index": 289,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_nonplanar_quad_is_repaired_and_warned",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 301,
+      "index": 290,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_both_quad_diagonal_decisions_are_repeatable",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 302,
+      "index": 291,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_repeated_ngon_corner_is_rejected",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 303,
+      "index": 292,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_irreparably_self_intersecting_polygon_is_blocked",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 304,
+      "index": 293,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_invalid_control_point_index_blocks_requested_model_geometry",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 305,
+      "index": 294,
       "nodeId": "tests/test_fbx_polygon_triangulation.py::test_strict_model_diagnostics_can_block_nonplanar_recovery",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "fbx-transform-evaluation",
       "classification": "applicable_mapped",
-      "index": 306,
+      "index": 295,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_share_all_six_euler_orders[0]",
       "ruleId": "mapped-fbx-euler-orders"
     },
     {
       "area": "fbx-transform-evaluation",
       "classification": "applicable_mapped",
-      "index": 307,
+      "index": 296,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_share_all_six_euler_orders[1]",
       "ruleId": "mapped-fbx-euler-orders"
     },
     {
       "area": "fbx-transform-evaluation",
       "classification": "applicable_mapped",
-      "index": 308,
+      "index": 297,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_share_all_six_euler_orders[2]",
       "ruleId": "mapped-fbx-euler-orders"
     },
     {
       "area": "fbx-transform-evaluation",
       "classification": "applicable_mapped",
-      "index": 309,
+      "index": 298,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_share_all_six_euler_orders[3]",
       "ruleId": "mapped-fbx-euler-orders"
     },
     {
       "area": "fbx-transform-evaluation",
       "classification": "applicable_mapped",
-      "index": 310,
+      "index": 299,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_share_all_six_euler_orders[4]",
       "ruleId": "mapped-fbx-euler-orders"
     },
     {
       "area": "fbx-transform-evaluation",
       "classification": "applicable_mapped",
-      "index": 311,
+      "index": 300,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_share_all_six_euler_orders[5]",
       "ruleId": "mapped-fbx-euler-orders"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 312,
+      "index": 301,
       "nodeId": "tests/test_fbx_transform_contract.py::test_transform_contract_is_serializable_and_reports_wrapper_normalization",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 313,
+      "index": 302,
       "nodeId": "tests/test_fbx_transform_contract.py::test_reflected_common_wrapper_is_removed_before_bone_classification",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 314,
+      "index": 303,
       "nodeId": "tests/test_fbx_transform_contract.py::test_uniform_negative_blender_wrapper_exposes_lateral_mirror_context",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 315,
+      "index": 304,
       "nodeId": "tests/test_fbx_transform_contract.py::test_reflected_wrapper_bind_consensus_is_independent_of_semantic_policy",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 316,
+      "index": 305,
       "nodeId": "tests/test_fbx_transform_contract.py::test_true_local_reflection_is_advisory_for_animation_and_strict_for_model",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 317,
+      "index": 306,
       "nodeId": "tests/test_fbx_transform_contract.py::test_animated_determinant_sign_change_without_sampled_zero_is_advisory",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 318,
+      "index": 307,
       "nodeId": "tests/test_fbx_transform_contract.py::test_non_uniform_armature_wrapper_has_named_actionable_preflight_finding",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 319,
+      "index": 308,
       "nodeId": "tests/test_fbx_transform_contract.py::test_independent_uniform_wrappers_use_per_bone_normalization_factors",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 320,
+      "index": 309,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_and_animation_wrapper_scale_axis_normalization_reach_same_bind",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 321,
+      "index": 310,
       "nodeId": "tests/test_fbx_transform_contract.py::test_animation_sampling_retains_proper_blender_wrapper_axis_basis",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 322,
+      "index": 311,
       "nodeId": "tests/test_fbx_transform_contract.py::test_animation_sampling_removes_reflected_wrapper_axis_basis",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 323,
+      "index": 312,
       "nodeId": "tests/test_fbx_transform_contract.py::test_auto_axis_policy_accepts_signed_orthonormal_permutations",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 324,
+      "index": 313,
       "nodeId": "tests/test_fbx_transform_contract.py::test_non_limb_model_between_joints_preserves_animation_parent",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 325,
+      "index": 314,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_preflight_allows_static_prop_but_animation_still_blocks",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 326,
+      "index": 315,
       "nodeId": "tests/test_fbx_transform_contract.py::test_animation_without_skeleton_accepts_supported_scalar_mimic_domain",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 327,
+      "index": 316,
       "nodeId": "tests/test_fbx_transform_contract.py::test_crig_builder_uses_resolved_bind_and_bind_changes_rig_identity",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 328,
+      "index": 317,
       "nodeId": "tests/test_fbx_transform_contract.py::test_negative_bone_scale_is_an_actionable_blocking_preflight",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 329,
+      "index": 318,
       "nodeId": "tests/test_fbx_transform_contract.py::test_model_blendshapes_block_before_silent_base_mesh_output",
       "ruleId": "pending-fbx"
     },
     {
       "area": "fbx-parity",
       "classification": "still_pending",
-      "index": 330,
+      "index": 319,
       "nodeId": "tests/test_fbx_transform_contract.py::test_unsupported_binary_fbx_version_fails_with_reexport_action",
       "ruleId": "pending-fbx"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 331,
+      "index": 320,
       "nodeId": "tests/test_gui_rig_workflow_surfaces.py::test_import_tolerance_is_explicitly_parser_only",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 332,
+      "index": 321,
       "nodeId": "tests/test_gui_rig_workflow_surfaces.py::test_dl2_gui_switches_complete_builtin_packages_and_validates_v2_rows",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 333,
+      "index": 322,
       "nodeId": "tests/test_gui_rig_workflow_surfaces.py::test_model_details_and_artifact_actions_expose_rig_build_evidence",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 334,
+      "index": 323,
       "nodeId": "tests/test_gui_rig_workflow_surfaces.py::test_model_mapping_review_table_shows_policy_and_resets_only_safe_rows",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 335,
+      "index": 324,
       "nodeId": "tests/test_gui_rig_workflow_surfaces.py::test_animation_target_filter_group_and_model_jump_are_per_crig",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 336,
+      "index": 325,
       "nodeId": "tests/test_helper_mapping_fanout.py::test_one_source_can_drive_body_and_multiple_helper_targets",
       "ruleId": "mapped-helper-fanout-and-base-identity"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 337,
+      "index": 326,
       "nodeId": "tests/test_helper_mapping_fanout.py::test_duplicate_target_name_or_descriptor_remains_invalid",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 338,
+      "index": 327,
       "nodeId": "tests/test_helper_mapping_fanout.py::test_v1_json_defaults_and_unknown_pair_fields_roundtrip",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 339,
+      "index": 328,
       "nodeId": "tests/test_helper_mapping_fanout.py::test_helper_crosswire_does_not_change_base_identity_selection",
       "ruleId": "mapped-helper-fanout-and-base-identity"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 340,
+      "index": 329,
       "nodeId": "tests/test_helper_mapping_fanout.py::test_compatible_exact_map_uses_global_base_policy_when_helpers_need_value_stage",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 341,
+      "index": 330,
       "nodeId": "tests/test_helper_retarget.py::test_component_merge_replaces_only_selected_values[rotation-changed0-preserved0]",
       "ruleId": "mapped-helper-component-policies"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 342,
+      "index": 331,
       "nodeId": "tests/test_helper_retarget.py::test_component_merge_replaces_only_selected_values[translation-changed1-preserved1]",
       "ruleId": "mapped-helper-component-policies"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 343,
+      "index": 332,
       "nodeId": "tests/test_helper_retarget.py::test_component_merge_replaces_only_selected_values[rotation_translation-changed2-preserved2]",
       "ruleId": "mapped-helper-component-policies"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 344,
+      "index": 333,
       "nodeId": "tests/test_helper_retarget.py::test_component_merge_replaces_only_selected_values[scale-changed3-preserved3]",
       "ruleId": "mapped-helper-component-policies"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 345,
+      "index": 334,
       "nodeId": "tests/test_helper_retarget.py::test_component_merge_replaces_only_selected_values[full_transform-changed4-preserved4]",
       "ruleId": "mapped-helper-component-policies"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 346,
+      "index": 335,
       "nodeId": "tests/test_helper_retarget.py::test_shared_source_keeps_distinct_target_bind_transforms",
       "ruleId": "mapped-helper-evaluation-contracts"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 347,
+      "index": 336,
       "nodeId": "tests/test_helper_retarget.py::test_rotation_delta_preserves_target_translation_and_scale",
       "ruleId": "mapped-helper-evaluation-contracts"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 348,
+      "index": 337,
       "nodeId": "tests/test_helper_retarget.py::test_apply_is_deterministic_and_leaves_unmapped_helper_unchanged",
       "ruleId": "mapped-helper-determinism-and-discovery"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 349,
+      "index": 338,
       "nodeId": "tests/test_helper_retarget.py::test_non_finite_helper_output_is_rejected",
       "ruleId": "mapped-helper-evaluation-contracts"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 350,
+      "index": 339,
       "nodeId": "tests/test_helper_retarget.py::test_fanout_report_includes_existing_body_target",
       "ruleId": "mapped-helper-determinism-and-discovery"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 351,
+      "index": 340,
       "nodeId": "tests/test_helper_retarget.py::test_detected_exact_name_helpers_are_automapped_conservatively",
       "ruleId": "mapped-helper-determinism-and-discovery"
     },
     {
       "area": "retarget-helper-policies",
       "classification": "applicable_mapped",
-      "index": 352,
+      "index": 341,
       "nodeId": "tests/test_helper_retarget.py::test_ambiguous_normalized_helper_names_are_not_automapped",
       "ruleId": "mapped-helper-determinism-and-discovery"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 353,
+      "index": 342,
       "nodeId": "tests/test_helper_retarget_gui.py::test_exact_mapping_ui_does_not_steal_shared_source",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 354,
+      "index": 343,
       "nodeId": "tests/test_helper_retarget_gui.py::test_changing_helper_source_preserves_body_mapping_and_policy",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 355,
+      "index": 344,
       "nodeId": "tests/test_helper_retarget_gui.py::test_shared_source_status_is_explicit",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 356,
+      "index": 345,
       "nodeId": "tests/test_helper_retarget_gui.py::test_show_helper_bones_toggle_controls_helper_row_visibility",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 357,
+      "index": 346,
       "nodeId": "tests/test_helper_retarget_gui.py::test_normal_target_lists_camera_helpers_directly_from_its_smd",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 358,
+      "index": 347,
       "nodeId": "tests/test_helper_retarget_project_builder.py::test_no_mapped_helpers_keeps_legacy_target_descriptor_order",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 359,
+      "index": 348,
       "nodeId": "tests/test_helper_retarget_project_builder.py::test_builder_appends_only_helpers_the_user_mapped",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 360,
+      "index": 349,
       "nodeId": "tests/test_helper_retarget_project_builder.py::test_bundled_smd_exposes_camera_helpers_without_a_profile",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 361,
+      "index": 350,
       "nodeId": "tests/test_helper_retarget_project_builder.py::test_helper_settings_persist_per_clip_without_project_schema_migration",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 362,
+      "index": 351,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_model_mapping_prefers_the_weighted_deformation_pelvis",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 363,
+      "index": 352,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_manual_mapping_reports_cross_role_finger_shift_without_overriding_user",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 364,
+      "index": 353,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_model_mapping_uses_available_dying_light_twist_and_neck_chains",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 365,
+      "index": 354,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_model_mapping_keeps_cc_spine_and_middle_finger_pivots_distinct",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 366,
+      "index": 355,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_fitted_bind_interpolates_unanchored_nodes_between_source_pivots",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 367,
+      "index": 356,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_effective_mapping_distinguishes_ancestor_and_root_fallback",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 368,
+      "index": 357,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_bind_topology_preflight_rejects_an_exploded_triangle",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 369,
+      "index": 358,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_weighted_coverage_error_names_the_highest_fallback_bone",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 370,
+      "index": 359,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_humanoid_weight_remap_combines_targets_without_changing_bind_surface",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 371,
+      "index": 360,
       "nodeId": "tests/test_humanoid_mapping_preflight.py::test_bind_compatibility_warns_about_distant_animation_pivots_without_warping",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "legacy-python-compatibility",
       "classification": "explicit_exclusion",
-      "index": 372,
+      "index": 361,
       "nodeId": "tests/test_legacy_5_0_export_behavior.py::test_legacy_global_bind_basis_retains_target_scale_and_optional_bind",
       "ruleId": "excluded-legacy-export-050"
     },
     {
       "area": "legacy-python-compatibility",
       "classification": "explicit_exclusion",
-      "index": 373,
+      "index": 362,
       "nodeId": "tests/test_legacy_5_0_export_behavior.py::test_mapped_engine_rejects_legacy_behavior",
       "ruleId": "excluded-legacy-export-050"
     },
     {
       "area": "legacy-python-compatibility",
       "classification": "explicit_exclusion",
-      "index": 374,
+      "index": 363,
       "nodeId": "tests/test_legacy_5_0_export_behavior.py::test_project_roundtrips_fbx_anm2_export_behavior",
       "ruleId": "excluded-legacy-export-050"
     },
     {
       "area": "legacy-python-compatibility",
       "classification": "explicit_exclusion",
-      "index": 375,
+      "index": 364,
       "nodeId": "tests/test_legacy_5_0_export_behavior.py::test_project_bilateral_semantics_default_and_legacy_migration",
       "ruleId": "excluded-legacy-export-050"
     },
     {
       "area": "legacy-python-compatibility",
       "classification": "explicit_exclusion",
-      "index": 376,
+      "index": 365,
       "nodeId": "tests/test_legacy_5_0_export_behavior.py::test_export_comparison_samples_first_middle_and_final_frames",
       "ruleId": "excluded-legacy-export-050"
     },
     {
       "area": "mimic",
       "classification": "applicable_mapped",
-      "index": 377,
+      "index": 366,
       "nodeId": "tests/test_mimic_builder.py::test_mimic_writer_uses_tx_scalar_and_consolidates_sources",
       "ruleId": "mapped-mimic-consolidation"
     },
     {
       "area": "mimic",
       "classification": "applicable_mapped",
-      "index": 378,
+      "index": 367,
       "nodeId": "tests/test_mimic_builder.py::test_unmapped_activity_is_reported_instead_of_guessed",
       "ruleId": "mapped-mimic-source-diagnostics-and-scale"
     },
     {
       "area": "mimic",
       "classification": "applicable_mapped",
-      "index": 379,
+      "index": 368,
       "nodeId": "tests/test_mimic_builder.py::test_fbx_percent_scale_handles_percent_and_normalized_exports",
       "ruleId": "mapped-mimic-source-diagnostics-and-scale"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 380,
+      "index": 369,
       "nodeId": "tests/test_mimic_patch_surface.py::test_host_integration_markers_are_present",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 381,
+      "index": 370,
       "nodeId": "tests/test_mimic_patch_surface.py::test_mimic_gui_uses_safe_qt_column_insertion_and_visible_tab",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 382,
+      "index": 371,
       "nodeId": "tests/test_mimic_patch_surface.py::test_mimic_clip_combo_refresh_blocks_signals",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "mimic",
       "classification": "applicable_mapped",
-      "index": 383,
+      "index": 372,
       "nodeId": "tests/test_mimic_profiles.py::test_common46_profile_is_declarative_and_unique",
       "ruleId": "mapped-mimic-common46-profile"
     },
     {
       "area": "mimic",
       "classification": "applicable_mapped",
-      "index": 384,
+      "index": 373,
       "nodeId": "tests/test_mimic_profiles.py::test_auto_map_supports_consolidation_and_blink_companion",
       "ruleId": "mapped-mimic-common46-profile"
     },
     {
       "area": "mimic",
       "classification": "applicable_mapped",
-      "index": 385,
+      "index": 374,
       "nodeId": "tests/test_mimic_profiles.py::test_profile_round_trip_keeps_unknown_descriptor_semantics",
       "ruleId": "mapped-mimic-common46-profile"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 386,
+      "index": 375,
       "nodeId": "tests/test_mimic_project_extensions.py::test_mimic_and_motion_override_survive_project_save_load",
       "ruleId": "excluded-legacy-mimic-project-extension"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 387,
+      "index": 376,
       "nodeId": "tests/test_mimic_project_extensions.py::test_body_builder_state_is_synchronized_without_copying_enabled_flag",
       "ruleId": "excluded-python-mimic-builder-state-copy"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 388,
+      "index": 377,
       "nodeId": "tests/test_mimic_project_extensions.py::test_dl2_hides_morph_facial_ui_without_changing_dl1_support",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 389,
+      "index": 378,
       "nodeId": "tests/test_mimic_project_extensions.py::test_dl2_build_skips_mimic_only_and_keeps_body_from_both",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 390,
+      "index": 379,
       "nodeId": "tests/test_model_authored_crig.py::test_crig_uses_exact_authored_msh_bind_and_preserves_helpers",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 391,
+      "index": 380,
       "nodeId": "tests/test_model_authored_crig.py::test_crig_identity_changes_when_authored_bind_changes",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 392,
+      "index": 381,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_sparse_zero_shape_is_allowed_and_reported",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 393,
+      "index": 382,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_zero_position_with_small_normal_noise_is_allowed",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 394,
+      "index": 383,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_nonzero_position_is_real_and_respects_morph_capability",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 395,
+      "index": 384,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_changing_nonzero_curve_is_not_identity",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 396,
+      "index": 385,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_noop_target_with_unrelated_name_is_allowed",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 397,
+      "index": 386,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_identity_like_name_with_real_deformation_is_not_ignored",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 398,
+      "index": 387,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_malformed_sparse_index_is_blocked_with_exact_context",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 399,
+      "index": 388,
       "nodeId": "tests/test_model_blendshape_preflight.py::test_identity_target_leaves_non_morph_model_payload_unchanged",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 400,
+      "index": 389,
       "nodeId": "tests/test_model_import_large_production.py::test_exact_fbx_build_accepts_320_weighted_nodes_with_local_palettes",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 401,
+      "index": 390,
       "nodeId": "tests/test_model_import_large_production.py::test_exact_fbx_build_splits_at_the_65535_vertex_boundary",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 402,
+      "index": 391,
       "nodeId": "tests/test_model_import_preflight.py::test_auto_orientation_respects_declared_y_up_scene_and_keeps_manual_override",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 403,
+      "index": 392,
       "nodeId": "tests/test_model_import_preflight.py::test_resolved_model_axis_conversion_overrides_legacy_crig_basis_heuristics",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 404,
+      "index": 393,
       "nodeId": "tests/test_model_import_preflight.py::test_bind_topology_preflight_accepts_coherent_retarget_scale_and_translation",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 405,
+      "index": 394,
       "nodeId": "tests/test_model_import_preflight.py::test_bind_topology_preflight_rejects_catastrophic_stretch_or_shrink[12.0]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 406,
+      "index": 395,
       "nodeId": "tests/test_model_import_preflight.py::test_bind_topology_preflight_rejects_catastrophic_stretch_or_shrink[0.08333333333333333]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 407,
+      "index": 396,
       "nodeId": "tests/test_model_import_preflight.py::test_bind_topology_preflight_warns_for_review_band_without_blocking",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 408,
+      "index": 397,
       "nodeId": "tests/test_model_import_preflight.py::test_bind_topology_preflight_rejects_more_than_one_percent_collapsed_edges",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 409,
+      "index": 398,
       "nodeId": "tests/test_model_import_preflight.py::test_fitted_humanoid_bscr_accepts_tracks_retargeted_to_emitted_bind",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 410,
+      "index": 399,
       "nodeId": "tests/test_model_import_preflight.py::test_fitted_humanoid_rejects_direct_stock_animation_alias",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 411,
+      "index": 400,
       "nodeId": "tests/test_model_import_preflight.py::test_model_bounds_carrier_matches_emitted_vertices_and_has_no_lod",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 412,
+      "index": 401,
       "nodeId": "tests/test_model_import_preflight.py::test_bone_bounds_cover_weighted_geometry_and_unused_child_segment",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 413,
+      "index": 402,
       "nodeId": "tests/test_model_import_preflight.py::test_stock_humanoid_profile_keeps_69_bones_and_18_helpers_only",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 414,
+      "index": 403,
       "nodeId": "tests/test_model_import_preflight.py::test_segment_proxy_bounds_ignore_remote_weighted_vertices_and_extend_leaf_x",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 415,
+      "index": 404,
       "nodeId": "tests/test_model_import_preflight.py::test_source_node_animated_flag_roundtrips_in_v3_tail_word",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 416,
+      "index": 405,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_present_normal_layer_index_is_actionable",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 417,
+      "index": 406,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_present_uv_layer_index_is_actionable",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 418,
+      "index": 407,
       "nodeId": "tests/test_model_layer_validation.py::test_extreme_degenerate_authored_uv_blocks_tangent_fallback_with_provenance",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 419,
+      "index": 408,
       "nodeId": "tests/test_model_layer_validation.py::test_degenerate_uv_is_allowed_when_valid_authored_tangents_are_imported",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 420,
+      "index": 409,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_authored_tangents_report_rebuild_provenance_on_degenerate_uv",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 421,
+      "index": 410,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_present_material_slot_is_actionable",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 422,
+      "index": 411,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_skin_cluster_rows_are_rejected[99-1.0-control point 99]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 423,
+      "index": 412,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_skin_cluster_rows_are_rejected[-1-1.0-control point -1]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 424,
+      "index": 413,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_skin_cluster_rows_are_rejected[0-nan-invalid weight]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 425,
+      "index": 414,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_skin_cluster_rows_are_rejected[0-inf-invalid weight]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 426,
+      "index": 415,
       "nodeId": "tests/test_model_layer_validation.py::test_invalid_skin_cluster_rows_are_rejected[0--0.25-invalid weight]",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 427,
+      "index": 416,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_320_node_hierarchy_uses_subset_local_uint8_indexes",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 428,
+      "index": 417,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_generated_crig_uses_the_complete_authored_contract_bind",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 429,
+      "index": 418,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_contract_identity_changes_for_renamed_same_bind_and_loads_legacy_id",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 430,
+      "index": 419,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_compile_preflight_rejects_renamed_same_bind_stale_crig",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 431,
+      "index": 420,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_generated_crig_rejects_anm2_writer_over_capacity_in_memory",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 432,
+      "index": 421,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_prebuilt_crig_writer_validates_before_creating_output",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 433,
+      "index": 422,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_partitioning_is_stable_per_material_and_flushes_at_256",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 434,
+      "index": 423,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_global_to_local_round_trip_never_writes_global_node_number",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 435,
+      "index": 424,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_complete_vertex_key_preserves_uv_seams_and_deduplicates_exact_corners",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 436,
+      "index": 425,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_complete_vertex_key_preserves_hard_normal_seams",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 437,
+      "index": 426,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_partitioning_splits_before_the_unique_vertex_limit",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 438,
+      "index": 427,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_palette_overflow_is_rejected_before_serialization",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 439,
+      "index": 428,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_large_source_compile_preflight_accepts_total_hierarchy_over_256",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 440,
+      "index": 429,
       "nodeId": "tests/test_model_rig_contract_palette.py::test_compile_preflight_rejects_stale_generated_crig_bind_before_output",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 441,
+      "index": 430,
       "nodeId": "tests/test_model_workspace_preoutput.py::test_crig_bind_rejection_happens_before_model_workspace_writes",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 442,
+      "index": 431,
       "nodeId": "tests/test_model_workspace_preoutput.py::test_generated_rig_handoff_rejects_a_changed_model_source",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 443,
+      "index": 432,
       "nodeId": "tests/test_model_workspace_preoutput.py::test_generated_rig_handoff_rejects_a_different_authored_bind",
       "ruleId": "excluded-custom-model-and-crig"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 444,
+      "index": 433,
       "nodeId": "tests/test_optional_retarget_helpers.py::test_missing_optional_head_end_recovers_head_axis_from_animation",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 445,
+      "index": 434,
       "nodeId": "tests/test_optional_retarget_helpers.py::test_missing_optional_limb_terminal_holds_only_terminal_at_bind",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 446,
+      "index": 435,
       "nodeId": "tests/test_optional_retarget_helpers.py::test_background_key_error_message_explains_what_the_name_means",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 447,
+      "index": 436,
       "nodeId": "tests/test_optional_retarget_helpers.py::test_normal_gui_failure_message_has_no_traceback_hint",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 448,
+      "index": 437,
       "nodeId": "tests/test_private_thriller_root_basis.py::test_private_thriller_forward_range_stays_planar_for_dl2_advanced",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 449,
+      "index": 438,
       "nodeId": "tests/test_project_format.py::test_project_roundtrip_uses_portable_paths",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 450,
+      "index": 439,
       "nodeId": "tests/test_project_format.py::test_v0_project_is_migrated",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 451,
+      "index": 440,
       "nodeId": "tests/test_project_format.py::test_v3_project_adds_empty_animation_stack_selection",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 452,
+      "index": 441,
       "nodeId": "tests/test_project_format.py::test_v1_project_bind_policy_migration_preserves_explicit_rest",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 453,
+      "index": 442,
       "nodeId": "tests/test_project_format.py::test_unknown_fields_are_preserved",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 454,
+      "index": 443,
       "nodeId": "tests/test_project_format.py::test_import_tolerance_and_saved_animation_diagnostics_roundtrip",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 455,
+      "index": 444,
       "nodeId": "tests/test_project_format.py::test_newer_project_schema_is_rejected",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 456,
+      "index": 445,
       "nodeId": "tests/test_project_format.py::test_duplicate_animation_resource_is_global_across_script_targets",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 457,
+      "index": 446,
       "nodeId": "tests/test_project_format.py::test_schema_v2_describes_embedded_bind_policy",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 458,
+      "index": 447,
       "nodeId": "tests/test_project_format.py::test_schema_v4_describes_animation_stack_selection",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 459,
+      "index": 448,
       "nodeId": "tests/test_project_format.py::test_v4_project_adds_reverse_workspace",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 460,
+      "index": 449,
       "nodeId": "tests/test_project_format.py::test_reverse_workspace_paths_are_portable",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 461,
+      "index": 450,
       "nodeId": "tests/test_project_format.py::test_schema_v5_describes_reverse_workspace",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 462,
+      "index": 451,
       "nodeId": "tests/test_project_multi_target_migration.py::test_v8_schema_names_default_and_per_animation_targets",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 463,
+      "index": 452,
       "nodeId": "tests/test_project_multi_target_migration.py::test_old_project_animation_inherits_target_without_losing_settings_or_map",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 464,
+      "index": 453,
       "nodeId": "tests/test_project_multi_target_migration.py::test_animation_target_override_path_is_portable_and_roundtrips",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 465,
+      "index": 454,
       "nodeId": "tests/test_project_multi_target_migration.py::test_exact_project_can_use_only_per_animation_targets",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 466,
+      "index": 455,
       "nodeId": "tests/test_project_multi_target_migration.py::test_builder_groups_two_per_animation_crig_targets",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 467,
+      "index": 456,
       "nodeId": "tests/test_project_multi_target_migration.py::test_helper_roundtrip_builder_ignores_stale_humanoid_mapping",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 468,
+      "index": 457,
       "nodeId": "tests/test_project_multi_target_migration.py::test_expanded_dl1_target_routes_normal_and_contract_clips_separately",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 469,
+      "index": 458,
       "nodeId": "tests/test_project_multi_target_migration.py::test_missing_late_animation_fails_before_any_output",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 470,
+      "index": 459,
       "nodeId": "tests/test_project_multi_target_migration.py::test_invalid_frame_range_fails_before_candidate_anm2_output",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 471,
+      "index": 460,
       "nodeId": "tests/test_project_multi_target_migration.py::test_append_name_collision_fails_before_candidate_output",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 472,
+      "index": 461,
       "nodeId": "tests/test_project_timing_migration.py::test_schema_v10_migration_preserves_mode_dependent_legacy_sampling",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 473,
+      "index": 462,
       "nodeId": "tests/test_project_timing_migration.py::test_v9_aliases_mirror_v10_playback_and_output_rates",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 474,
+      "index": 463,
       "nodeId": "tests/test_project_timing_migration.py::test_provenance_uses_external_root_mode_vocabulary",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "legacy-projects",
       "classification": "explicit_exclusion",
-      "index": 475,
+      "index": 464,
       "nodeId": "tests/test_project_timing_migration.py::test_validation_reports_malformed_timing_without_raising",
       "ruleId": "excluded-legacy-project-schemas"
     },
     {
       "area": "root-motion",
       "classification": "applicable_mapped",
-      "index": 476,
+      "index": 465,
       "nodeId": "tests/test_public_api.py::test_public_root_policy_choices",
       "ruleId": "mapped-public-root-modes"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 477,
+      "index": 466,
       "nodeId": "tests/test_release_gui_surface.py::test_gui_module_is_importable_without_loading_qt",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 478,
+      "index": 467,
       "nodeId": "tests/test_release_gui_surface.py::test_release_docs_launchers_and_examples_exist",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 479,
+      "index": 468,
       "nodeId": "tests/test_release_gui_surface.py::test_example_project_opens_and_uses_multiple_script_targets",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 480,
+      "index": 469,
       "nodeId": "tests/test_release_gui_surface.py::test_builtin_script_targets_include_player_and_female",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 481,
+      "index": 470,
       "nodeId": "tests/test_release_gui_surface.py::test_alpha3_gui_usability_surface_is_present",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 482,
+      "index": 471,
       "nodeId": "tests/test_release_gui_surface.py::test_release_root_is_not_cluttered_with_project_documents",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 483,
+      "index": 472,
       "nodeId": "tests/test_retarget_decode_validation.py::test_retarget_engines_reject_nonfinite_packed_decode[legacy_exact-dlanm2_gui.retarget_engines.legacy_exact_rig]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 484,
+      "index": 473,
       "nodeId": "tests/test_retarget_decode_validation.py::test_retarget_engines_reject_nonfinite_packed_decode[mapped-dlanm2_gui.retarget_engines.mapped_rig]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 485,
+      "index": 474,
       "nodeId": "tests/test_retarget_decode_validation.py::test_retarget_engines_enforce_existing_decode_tolerance[legacy_exact-dlanm2_gui.retarget_engines.legacy_exact_rig-ExactRigRetargetEngine]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 486,
+      "index": 475,
       "nodeId": "tests/test_retarget_decode_validation.py::test_retarget_engines_enforce_existing_decode_tolerance[mapped-dlanm2_gui.retarget_engines.mapped_rig-MappedRigRetargetEngine]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 487,
+      "index": 476,
       "nodeId": "tests/test_retarget_decode_validation.py::test_successful_legacy_exact_build_reports_decode_tolerance",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 488,
+      "index": 477,
       "nodeId": "tests/test_retarget_decode_validation.py::test_mapped_rig_reuses_matching_preflight_without_a_second_pass",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 489,
+      "index": 478,
       "nodeId": "tests/test_retarget_decode_validation.py::test_exact_rig_reuses_matching_preflight_without_a_second_pass",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 490,
+      "index": 479,
       "nodeId": "tests/test_retarget_decode_validation.py::test_long_mapped_sampling_reports_frame_progress_and_spills_to_request_storage",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 491,
+      "index": 480,
       "nodeId": "tests/test_retarget_profiles.py::test_standard_mixamo_skeleton_maps_exactly",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 492,
+      "index": 481,
       "nodeId": "tests/test_retarget_profiles.py::test_profile_roundtrip",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 493,
+      "index": 482,
       "nodeId": "tests/test_retarget_profiles.py::test_common_non_mixamo_names_are_recognized",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 494,
+      "index": 483,
       "nodeId": "tests/test_retarget_profiles.py::test_native_dl_names_win_exactly_and_fingers_keep_native_segment_numbers",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 495,
+      "index": 484,
       "nodeId": "tests/test_retarget_profiles.py::test_character_creator_and_dl_suffix_names_use_shared_scan",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 496,
+      "index": 485,
       "nodeId": "tests/test_retarget_profiles.py::test_mixamo_short_arm_and_leg_names_are_semantic_roles",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 497,
+      "index": 486,
       "nodeId": "tests/test_root_motion_actor_basis.py::test_forward_displacement_maps_by_actor_axes_not_model_axis_conversion",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 498,
+      "index": 487,
       "nodeId": "tests/test_root_motion_actor_basis.py::test_actor_frame_rejects_degenerate_or_non_finite_evidence",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "root-motion",
       "classification": "applicable_mapped",
-      "index": 499,
+      "index": 488,
       "nodeId": "tests/test_root_motion_actor_basis.py::test_legacy_root_policy_is_only_a_target_neutral_adapter[inplace-inplace-lock_initial]",
       "ruleId": "mapped-root-mode-adapters"
     },
     {
       "area": "root-motion",
       "classification": "applicable_mapped",
-      "index": 500,
+      "index": 489,
       "nodeId": "tests/test_root_motion_actor_basis.py::test_legacy_root_policy_is_only_a_target_neutral_adapter[bip01-skeletal_root-preserve]",
       "ruleId": "mapped-root-mode-adapters"
     },
     {
       "area": "root-motion",
       "classification": "applicable_mapped",
-      "index": 501,
+      "index": 490,
       "nodeId": "tests/test_root_motion_actor_basis.py::test_legacy_root_policy_is_only_a_target_neutral_adapter[motion-motion_accumulator-to_motion_accumulator]",
       "ruleId": "mapped-root-mode-adapters"
     },
     {
       "area": "animation-rpack",
       "classification": "applicable_mapped",
-      "index": 502,
+      "index": 491,
       "nodeId": "tests/test_rp6l_library.py::test_multi_script_library_roundtrip",
       "ruleId": "mapped-rp6l-animation-library"
     },
     {
       "area": "animation-rpack",
       "classification": "applicable_mapped",
-      "index": 503,
+      "index": 492,
       "nodeId": "tests/test_rp6l_library.py::test_rebuilt_library_can_append_without_losing_existing_resources",
       "ruleId": "mapped-rp6l-animation-library"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 504,
+      "index": 493,
       "nodeId": "tests/test_script_targets.py::test_builtin_script_targets_resolve_to_resource_names",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 505,
+      "index": 494,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_bundled_dl2_targets_share_52_role_editor_and_verified_compile[player_skeleton.crig-builtin:dl2_player_advanced-271-dl2_advanced_body_bridge_v1]",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 506,
+      "index": 495,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_bundled_dl2_targets_share_52_role_editor_and_verified_compile[player_shadow_caster.crig-builtin:dl2_player_shadow_caster-81-dl2_legacy_body_bridge_v1]",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 507,
+      "index": 496,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_dl1_eye_helper_animation_compiles_without_dl2_eye_mappings",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 508,
+      "index": 497,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_manual_semantic_role_override_changes_compiled_pair_and_solver",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 509,
+      "index": 498,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_arbitrary_target_override_is_compiled_and_freshly_certified",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 510,
+      "index": 499,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_target_override_clears_matching_unresolved_source_before_validation",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 511,
+      "index": 500,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_exact_identity_still_has_semantic_profile_and_exact_execution",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 512,
+      "index": 501,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_editor_ownership_uses_target_origin_not_exact_solver_mode",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 513,
+      "index": 502,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_dl1_helper_target_is_native_only_with_per_clip_contract_evidence",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 514,
+      "index": 503,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_build_resolution_recompiles_semantic_source_of_truth_and_rejects_stale_cache",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 515,
+      "index": 504,
       "nodeId": "tests/test_semantic_retarget_workflow.py::test_compile_reuses_current_prepared_state_and_invalidates_profile_edits",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 516,
+      "index": 505,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_native_dl_finger_segments_are_classified_consistently",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 517,
+      "index": 506,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_mapping_repair_error_is_nonblocking_for_import_and_export",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 518,
+      "index": 507,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_model_import_uses_shared_scan_and_ignores_cc_helpers",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 519,
+      "index": 508,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_animation_workspace_mapper_uses_the_same_suffix_heuristics",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 520,
+      "index": 509,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_automatic_mapping_records_reviewable_top_and_runner_up_evidence",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 521,
+      "index": 510,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_spatial_global_assignment_is_deterministic_and_keeps_ties_unreviewed",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 522,
+      "index": 511,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_document_mapping_evidence_includes_bind_and_positive_skin_ownership",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 523,
+      "index": 512,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_animation_mapper_aligns_mixamo_to_character_creator_chain_and_fingers",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 524,
+      "index": 513,
       "nodeId": "tests/test_shared_humanoid_mapping.py::test_animation_mapper_keeps_same_named_helper_root_for_identical_rig",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "legacy-smd-target",
       "classification": "explicit_exclusion",
-      "index": 525,
+      "index": 514,
       "nodeId": "tests/test_smd_bind_pose.py::test_smd_parser_reads_full_bind_skeleton",
       "ruleId": "excluded-legacy-smd-target-parser"
     },
     {
       "area": "legacy-smd-target",
       "classification": "explicit_exclusion",
-      "index": 526,
+      "index": 515,
       "nodeId": "tests/test_smd_bind_pose.py::test_smd_extrinsic_xyz_reconstructs_ascii_globals",
       "ruleId": "excluded-legacy-smd-target-parser"
     },
     {
       "area": "legacy-smd-target",
       "classification": "explicit_exclusion",
-      "index": 527,
+      "index": 516,
       "nodeId": "tests/test_smd_bind_pose.py::test_smd_names_cover_69_of_70_stock_tracks",
       "ruleId": "excluded-legacy-smd-target-parser"
     },
     {
       "area": "legacy-smd-target",
       "classification": "explicit_exclusion",
-      "index": 528,
+      "index": 517,
       "nodeId": "tests/test_smd_bind_pose.py::test_pelvis_smd_rotation_matches_engine_cayley_vector",
       "ruleId": "excluded-legacy-smd-target-parser"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 529,
+      "index": 518,
       "nodeId": "tests/test_target_mapping_inventory.py::test_advanced_all_target_inventory_is_exactly_271_unique_rows",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 530,
+      "index": 519,
       "nodeId": "tests/test_target_mapping_inventory.py::test_helper_inventory_is_target_owned_for_advanced_and_legacy",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 531,
+      "index": 520,
       "nodeId": "tests/test_target_retarget_policy.py::test_coherent_dl2_advanced_body_policy_has_exact_inventory_and_no_deform_mutation",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 532,
+      "index": 521,
       "nodeId": "tests/test_target_retarget_policy.py::test_dl2_direct_slots_are_anatomical_and_finger_roots_remain_bind_held",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 533,
+      "index": 522,
       "nodeId": "tests/test_target_retarget_policy.py::test_dl2_semantic_chains_expose_full_target_topology_and_three_spine_slots",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 534,
+      "index": 523,
       "nodeId": "tests/test_target_retarget_policy.py::test_dl2_policy_fails_closed_for_wrong_game_domain_hash_or_provenance",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 535,
+      "index": 524,
       "nodeId": "tests/test_target_retarget_policy.py::test_generic_humanoid_and_unknown_targets_never_self_authorize",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 536,
+      "index": 525,
       "nodeId": "tests/test_target_retarget_policy.py::test_semantic_chain_alignment_direct_composed_and_distributed_modes",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 537,
+      "index": 526,
       "nodeId": "tests/test_target_retarget_policy.py::test_semantic_chain_alignment_missing_terminals_inherit_bind_without_manual_rows",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 538,
+      "index": 527,
       "nodeId": "tests/test_target_retarget_policy.py::test_semantic_chain_alignment_static_side_topology_and_margin_safety",
       "ruleId": "excluded-dl2-policy-files"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 539,
+      "index": 528,
       "nodeId": "tests/test_unified_gui_regressions.py::test_work_in_progress_notice_copy_help_buttons_and_project_clean",
       "ruleId": "excluded-python-work-in-progress-notice"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 540,
+      "index": 529,
       "nodeId": "tests/test_unified_gui_regressions.py::test_work_in_progress_notice_persists_checkbox_for_every_dismissal[continue-True]",
       "ruleId": "excluded-python-work-in-progress-notice"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 541,
+      "index": 530,
       "nodeId": "tests/test_unified_gui_regressions.py::test_work_in_progress_notice_persists_checkbox_for_every_dismissal[escape-True]",
       "ruleId": "excluded-python-work-in-progress-notice"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 542,
+      "index": 531,
       "nodeId": "tests/test_unified_gui_regressions.py::test_work_in_progress_notice_persists_checkbox_for_every_dismissal[window_close-False]",
       "ruleId": "excluded-python-work-in-progress-notice"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 543,
+      "index": 532,
       "nodeId": "tests/test_unified_gui_regressions.py::test_work_in_progress_notice_opt_out_and_manual_recovery",
       "ruleId": "excluded-python-work-in-progress-notice"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 544,
+      "index": 533,
       "nodeId": "tests/test_unified_gui_regressions.py::test_startup_notice_is_queued_once_after_window_is_visible",
       "ruleId": "excluded-python-work-in-progress-notice"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 545,
+      "index": 534,
       "nodeId": "tests/test_unified_gui_regressions.py::test_timing_controls_preserve_fractional_standard_rates",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 546,
+      "index": 535,
       "nodeId": "tests/test_unified_gui_regressions.py::test_advanced_toggle_does_not_retain_deleted_help_buttons",
       "ruleId": "pending-gui"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 547,
+      "index": 536,
       "nodeId": "tests/test_unified_gui_regressions.py::test_dl2_auto_mapping_opens_retargeting_without_crig_tab",
       "ruleId": "excluded-dl2-mixed-nodes"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 548,
+      "index": 537,
       "nodeId": "tests/test_unified_gui_regressions.py::test_file_menu_tracks_and_opens_recent_projects",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 549,
+      "index": 538,
       "nodeId": "tests/test_unified_gui_regressions.py::test_project_load_with_animations_does_not_parse_fbx_on_gui_thread",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 550,
+      "index": 539,
       "nodeId": "tests/test_unified_gui_regressions.py::test_import_result_refresh_does_not_rebuild_retarget_editor",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 551,
+      "index": 540,
       "nodeId": "tests/test_unified_gui_regressions.py::test_combo_popup_is_not_closed_by_delayed_refresh",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 552,
+      "index": 541,
       "nodeId": "tests/test_unified_gui_regressions.py::test_retarget_table_popup_does_not_commit_on_focus_transfer",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 553,
+      "index": 542,
       "nodeId": "tests/test_unified_gui_regressions.py::test_normal_retarget_tab_shows_and_edits_target_helpers",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 554,
+      "index": 543,
       "nodeId": "tests/test_unified_gui_regressions.py::test_background_runner_keeps_qt_event_loop_responsive",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 555,
+      "index": 544,
       "nodeId": "tests/test_unified_gui_regressions.py::test_background_runner_failure_clears_busy_before_finished",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 556,
+      "index": 545,
       "nodeId": "tests/test_unified_gui_regressions.py::test_visible_multifile_import_streams_rows_and_can_be_cancelled",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 557,
+      "index": 546,
       "nodeId": "tests/test_unified_gui_regressions.py::test_prepare_multifile_import_publishes_each_completed_file",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 558,
+      "index": 547,
       "nodeId": "tests/test_unified_gui_regressions.py::test_background_humanoid_import_automaps_detected_helper_names",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 559,
+      "index": 548,
       "nodeId": "tests/test_unified_gui_regressions.py::test_background_dl1_helper_roundtrip_import_does_not_create_humanoid_map",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 560,
+      "index": 549,
       "nodeId": "tests/test_unified_gui_regressions.py::test_background_normal_animation_on_helper_target_keeps_humanoid_mapper",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 561,
+      "index": 550,
       "nodeId": "tests/test_unified_gui_regressions.py::test_helper_roundtrip_offer_requires_a_valid_expanded_rig_contract",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 562,
+      "index": 551,
       "nodeId": "tests/test_unified_gui_regressions.py::test_confirmed_helper_roundtrip_offer_switches_only_imported_clip",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 563,
+      "index": 552,
       "nodeId": "tests/test_unified_gui_regressions.py::test_declining_helper_roundtrip_offer_preserves_current_target",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 564,
+      "index": 553,
       "nodeId": "tests/test_unified_gui_regressions.py::test_dl1_helper_roundtrip_panel_disables_irrelevant_mapping",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 565,
+      "index": 554,
       "nodeId": "tests/test_unified_gui_regressions.py::test_normal_animation_on_expanded_target_keeps_mapping_controls",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 566,
+      "index": 555,
       "nodeId": "tests/test_unified_gui_regressions.py::test_normal_animation_replaces_intermediate_generic_map_with_humanoid_map",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 567,
+      "index": 556,
       "nodeId": "tests/test_unified_gui_regressions.py::test_close_during_animation_import_cancels_then_closes",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 568,
+      "index": 557,
       "nodeId": "tests/test_unified_gui_regressions.py::test_cross_rig_animation_is_added_with_editable_map_and_opens_editor",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 569,
+      "index": 558,
       "nodeId": "tests/test_unified_gui_regressions.py::test_batch_animation_import_keeps_valid_clip_and_selects_unique_changing_stack",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 570,
+      "index": 559,
       "nodeId": "tests/test_unified_gui_regressions.py::test_static_animation_import_stays_enabled_and_uses_ready_state",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 571,
+      "index": 560,
       "nodeId": "tests/test_unified_gui_regressions.py::test_animation_build_uses_background_runner",
       "ruleId": "pending-gui"
     },
     {
       "area": "wpf-behavior-parity",
       "classification": "still_pending",
-      "index": 572,
+      "index": 561,
       "nodeId": "tests/test_unified_gui_regressions.py::test_animation_target_column_overrides_only_one_clip",
       "ruleId": "pending-gui"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 573,
+      "index": 562,
       "nodeId": "tests/test_unified_gui_regressions.py::test_generated_model_rig_handoff_preserves_unrelated_clip_target_and_map",
       "ruleId": "excluded-deferred-model-gui-nodes"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 574,
+      "index": 563,
       "nodeId": "tests/test_unified_gui_regressions.py::test_model_workspace_roundtrip_preserves_unknown_extension_fields",
       "ruleId": "excluded-deferred-model-gui-nodes"
     },
     {
       "area": "deferred-custom-model-authoring",
       "classification": "explicit_exclusion",
-      "index": 575,
+      "index": 564,
       "nodeId": "tests/test_unified_release_smoke.py::test_builtin_humanoid_crig_roundtrip",
       "ruleId": "excluded-deferred-crig-smoke"
     },
     {
       "area": "animation-rpack",
       "classification": "applicable_mapped",
-      "index": 576,
+      "index": 565,
       "nodeId": "tests/test_unified_release_smoke.py::test_animation_rpack_roundtrip",
       "ruleId": "mapped-rp6l-animation-library"
     },
     {
       "area": "animation-library-workflows",
       "classification": "still_pending",
-      "index": 577,
+      "index": 566,
       "nodeId": "tests/test_unified_release_smoke.py::test_no_bip01_fallback_fixture",
       "ruleId": "pending-animation-library-workflows"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 578,
+      "index": 567,
       "nodeId": "tests/test_unified_root_mapping.py::test_target_without_literal_bip01_uses_pelvis",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 579,
+      "index": 568,
       "nodeId": "tests/test_unified_root_mapping.py::test_descriptor_alias_keeps_real_name_and_adds_bip01",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 580,
+      "index": 569,
       "nodeId": "tests/test_unified_root_mapping.py::test_manual_target_missing_from_template_has_actionable_error",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 581,
+      "index": 570,
       "nodeId": "tests/test_unified_root_mapping.py::test_source_root_prefers_reviewed_humanoid_hips_mapping",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 582,
+      "index": 571,
       "nodeId": "tests/test_unified_root_mapping.py::test_tied_multiple_roots_require_an_explicit_selection",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "anm2-root-parity",
       "classification": "still_pending",
-      "index": 583,
+      "index": 572,
       "nodeId": "tests/test_unified_root_mapping.py::test_root_mapping_is_saved_per_animation_extension",
       "ruleId": "pending-anm2-and-root"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 584,
+      "index": 573,
       "nodeId": "tests/test_universal_retarget_package_manifest.py::test_manifest_declares_versioned_universal_and_verified_policies",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 585,
+      "index": 574,
       "nodeId": "tests/test_universal_retarget_package_manifest.py::test_manifest_hashes_the_complete_retarget_release_surface",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 586,
+      "index": 575,
       "nodeId": "tests/test_universal_retarget_package_manifest.py::test_python_surface_is_discovered_and_selected_docs_ship_with_windows_bundle",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "legacy-python-application",
       "classification": "explicit_exclusion",
-      "index": 587,
+      "index": 576,
       "nodeId": "tests/test_universal_retarget_package_manifest.py::test_private_regression_fixtures_are_not_release_manifest_entries",
       "ruleId": "excluded-python-release-implementation"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 588,
+      "index": 577,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_unicode_normalization_preserves_original_and_extracts_finger_identity",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 589,
+      "index": 578,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[Hueso|Cadera_Izquierda-pelvis-left-Latin]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 590,
+      "index": 579,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[Os|AvantBras_Droite-forearm-right-Latin]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 591,
+      "index": 580,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[Knochen|Unterarm_Links-forearm-left-Latin]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 592,
+      "index": 581,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[Ko/u015b/u0107|Przedrami/u0119_Prawa-forearm-right-Latin]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 593,
+      "index": 582,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[Osso|Antebra/xe7o_Esquerda-forearm-left-Latin]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 594,
+      "index": 583,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[Osso|Avambraccio_Destra-forearm-right-Latin]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 595,
+      "index": 584,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[/u0420/u0438/u0433|/u041b/u0435/u0432/u043e/u0435_/u041f/u0440/u0435/u0434/u043f/u043b/u0435/u0447/u044c/u0435-forearm-left-Cyrillic]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 596,
+      "index": 585,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[/u0420/u0456/u0433|/u041f/u0440/u0430/u0432/u0435_/u041f/u0435/u0440/u0435/u0434/u043f/u043b/u0456/u0447/u0447/u044f-forearm-right-Cyrillic]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 597,
+      "index": 586,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[/u9aa8/u67b6|/u5de6/u524d/u81c2-forearm-left-Han]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 598,
+      "index": 587,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[/u30a2/u30fc/u30de/u30c1/u30e5/u30a2|/u53f3/u524d/u8155-forearm-right-Han]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 599,
+      "index": 588,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_multilingual_anatomy_and_side_lexicon[/uc544/ub9c8/ucd94/uc5b4|/uc67c/ucabd_/uc544/ub798/ud314-forearm-left-Hangul]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 600,
+      "index": 589,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_family_adapters_are_hints_into_one_analysis_route",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 601,
+      "index": 590,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_rigify_helper_prefixes_remain_evidence_and_cannot_steal_body_roles",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 602,
+      "index": 591,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_rigify_control_branches_and_inserted_twists_are_collapsed_from_topology",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 603,
+      "index": 592,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_anonymous_humanoid_is_inferred_from_topology_bind_and_symmetry",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 604,
+      "index": 593,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_non_latin_humanoid_uses_lexicon_and_the_same_topology_route",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 605,
+      "index": 594,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_missing_optional_terminal_and_upper_body_domain_do_not_block_analysis",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 606,
+      "index": 595,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_physically_absent_bilateral_legs_remain_safe_upper_body_humanoid",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 607,
+      "index": 596,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_named_three_node_arm_without_hands_does_not_shift_roles",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 608,
+      "index": 597,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_named_three_node_arm_without_clavicles_does_not_shift_roles",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 609,
+      "index": 598,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_named_arm_interior_gap_is_not_positionally_compressed[upper_arm-upperarm]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 610,
+      "index": 599,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_named_arm_interior_gap_is_not_positionally_compressed[forearm-forearm]",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 611,
+      "index": 600,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_anonymous_animated_arm_gap_stays_unresolved_without_side_only_roles",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 612,
+      "index": 601,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_name_tokens_do_not_force_a_non_humanoid_chain",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 613,
+      "index": 602,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_nfkc_casefold_collision_is_reported_without_losing_originals",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "retarget-parity",
       "classification": "still_pending",
-      "index": 614,
+      "index": 603,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_equal_semantic_name_candidates_keep_a_zero_runner_up_margin",
       "ruleId": "pending-retargeting"
     },
     {
       "area": "dl2",
       "classification": "explicit_exclusion",
-      "index": 615,
+      "index": 604,
       "nodeId": "tests/test_universal_skeleton_analysis.py::test_private_thriller_fixture_has_52_usable_animated_body_roles",
       "ruleId": "excluded-dl2-mixed-nodes"
     }
@@ -4728,7 +4651,7 @@
     }
   ],
   "pythonTestSourcesSha256": "BCD023BEA1542ED58E612133775696FB8DFB6AE898319FD339CFBD90940AA7A5",
-  "rulesSha256": "C366E596CF15A1398EE3F29A8413A227D6461DAD7E425655F2EF7D0006374EF3",
+  "rulesSha256": "5ABC9487038B332EA5D2A49741E3F1C1DE352C1B275AA3D58FA45D9F8967EAE5",
   "scope": {
     "game": "Dying Light 1",
     "notes": [
@@ -4751,7 +4674,7 @@
       "anm2-to-fbx": 21,
       "deferred-custom-model-authoring": 117,
       "dl2": 132,
-      "fbx-animation-domain": 12,
+      "fbx-animation-domain": 1,
       "fbx-animation-stacks": 5,
       "fbx-facial-animation": 3,
       "fbx-parity": 26,
@@ -4769,17 +4692,17 @@
       "wpf-behavior-parity": 27
     },
     "byClassification": {
-      "applicable_mapped": 92,
+      "applicable_mapped": 81,
       "explicit_exclusion": 317,
       "still_pending": 207
     },
     "byFile": [
       {
-        "applicableMapped": 13,
+        "applicableMapped": 2,
         "explicitExclusion": 0,
         "path": "tests/test_animation_fbx_domain_loading.py",
         "stillPending": 4,
-        "total": 17
+        "total": 6
       },
       {
         "applicableMapped": 2,
@@ -5349,6 +5272,6 @@
         "total": 28
       }
     ],
-    "total": 616
+    "total": 605
   }
 }

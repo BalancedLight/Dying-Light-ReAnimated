@@ -78,15 +78,17 @@ Root translation nor its reported bake state.
 - `tests/fixtures/dl1_python_suite_audit_rules_v1.json` contains ordered,
   reviewed classification rules, rationales, and named C# evidence for mapped
   behavior.
-- `tests/fixtures/dl1_python_suite_audit_v1.json` stores all 616 exact node IDs
-  in pytest collection order, their classifications, rule IDs, areas, source
-  file identities, and summary counts.
+- `tests/fixtures/dl1_python_suite_audit_v1.json` stores 605 public node IDs in
+  pytest collection order, their classifications, rule IDs, areas, source file
+  identities, and summary counts. Private parameterized external-corpus node IDs
+  are deliberately omitted; their optional C# controls live only in the ignored
+  local manifest.
 - `PythonSuiteAuditTests` independently checks the manifest, rules, hard-coded reviewed totals, node/rule matches, and collection identity as static data only.
 
 The live collector was historical drift evidence. Current C# validation intentionally checks only the reviewed manifest and rules that are checked into this repository.
 
-The reviewed collection identity is
-`9A2C1B71F098AB29709EF68D7F4AEE3BF5698902656C8FFFA1E1034646E692EF`.
+The reviewed public collection identity is
+`6A316D0E70A760788264319A36D7FDEC3231679E18EACE07B7A7B88F5005AE5D`.
 The aggregate Python test-source identity is
 `BCD023BEA1542ED58E612133775696FB8DFB6AE898319FD339CFBD90940AA7A5`.
 

@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .pytest_tmp/
+tests/local-external-corpora.json
 
 # Packaging and build output
 build/

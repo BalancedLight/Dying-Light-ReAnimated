@@ -5,13 +5,9 @@ what the inspected decompile establishes, what the offline evaluator can apply,
 and which game stages must remain visibly unavailable until their runtime inputs
 are captured. A `Dl1Profile` preview is not labeled `GameValidated`.
 
-The source snapshot inspected for this pass is:
-
-- `[local Windows decompilation]\local Windows game source`
-- `[local decompilation]\local macOS game source`
-- `[local decompilation]\local macOS engine source`
-- `<installed DL1 root>\DW\Data0.pak`,
-  specifically `data/vis/bodyvis.def` and
+The source snapshot inspected for this pass is a local Windows game-module
+decompilation, local named macOS game/engine-module decompilations, and a local
+installed DL1 `Data0.pak`, specifically `data/vis/bodyvis.def` and
   `data/vis/playerfppbodyvis.scr`
 
 ## Camera contexts

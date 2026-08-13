@@ -72,11 +72,10 @@ model-payload semantic errors because doing so would require parsing the domain
 it excludes. Python preflight nodes that require exact quad inventory or
 geometry-error text remain pending rather than being counted as C# parity.
 
-`FbxAnimationDomainCompatibilityTests` runs the same optional external
-11-file Mixamo corpus used by the Python animation-domain tests. When
-`DLR_FBX_ANIMATION_CORPUS_ROOT` is unset it uses
-`[local external corpus]`. Every exercised control is pinned by exact byte
-length and SHA-256 before it is decoded; a same-named replacement cannot
-satisfy the expected frame, curve, and topology-exclusion checks. When a file
-is unavailable the corresponding xUnit control is reported as skipped, never as
-a green pass. No FBX from this corpus is copied into the repository or release.
+`FbxAnimationDomainCompatibilityTests` reads optional controls from the ignored
+`tests/local-external-corpora.json` manifest, or the file named by
+`DLR_EXTERNAL_CORPORA_MANIFEST`. Every configured control supplies its local
+path, SHA-256, and semantic expectations. A missing default manifest skips the
+gate; an explicitly configured manifest, control, or file that is invalid fails
+with an actionable error. No FBX from a local corpus is copied into the
+repository or release.

@@ -52,7 +52,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         JsonWorkspaceStateStore store = CreateStore();
         MainWindowViewModel first = new(store)
         {
-            ProjectPath = @"C:\Projects\volatile-test.reanimated",
+            ProjectPath = TestPaths.Combine("projects", "volatile-test.reanimated"),
             IsViewportsLinked = false,
             ActiveWorkspaceMode = "FPP",
             ShowMeshes = false,

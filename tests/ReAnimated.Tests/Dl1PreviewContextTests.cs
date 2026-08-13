@@ -21,7 +21,7 @@ public sealed class Dl1PreviewContextTests
         var inputs = new Dl1PreviewInputs(
             new Dl1FppProjectionSnapshot(sceneLens, handsProjection));
 
-        // local decompilation/local macOS game source:149511-149523 and
+        // Local named game-module decompilation:149511-149523 and
         // 6899768-6899859 identify EyeCamera/RefCamera in PlayerFppVis.
         // Lines 6926255-6926275 build a distinct infinite-far hands frustum.
         EvaluationFrame frame = new AnimationEvaluator().Evaluate(
@@ -502,7 +502,7 @@ public sealed class Dl1PreviewContextTests
                     externalTransform,
                     externalLens));
 
-        // local decompilation/local macOS engine source:1302334-1302343 stores
+        // Local named engine-module decompilation:1302334-1302343 stores
         // CMovieManager's reference camera as an external IBaseCamera. It is
         // not the player-rig helper also named RefCamera.
         var evaluator = new AnimationEvaluator();

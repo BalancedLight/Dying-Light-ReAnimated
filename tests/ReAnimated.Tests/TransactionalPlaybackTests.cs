@@ -312,7 +312,7 @@ public sealed class TransactionalPlaybackTests : IDisposable
         await using var assets = new Dl1AssetWorkspace(
             Path.Combine(_temporaryDirectory, "assets.sqlite3"),
             Path.Combine(_temporaryDirectory, "cache"));
-        SetWorkspaceInstall(assets, @"C:\retail");
+        SetWorkspaceInstall(assets, TestPaths.Combine("retail"));
         var decoder = new ControlledMeshDecodeService("armored");
         await using var viewModel = new MainWindowViewModel(
             new JsonWorkspaceStateStore(
@@ -364,7 +364,7 @@ public sealed class TransactionalPlaybackTests : IDisposable
         await using var assets = new Dl1AssetWorkspace(
             Path.Combine(_temporaryDirectory, "browse-assets.sqlite3"),
             Path.Combine(_temporaryDirectory, "browse-cache"));
-        SetWorkspaceInstall(assets, @"C:\retail");
+        SetWorkspaceInstall(assets, TestPaths.Combine("retail"));
         var decoder = new ControlledMeshDecodeService("armored");
         await using var viewModel = new MainWindowViewModel(
             new JsonWorkspaceStateStore(
@@ -473,7 +473,7 @@ public sealed class TransactionalPlaybackTests : IDisposable
         await using var assets = new Dl1AssetWorkspace(
             Path.Combine(_temporaryDirectory, "rapid-assets.sqlite3"),
             Path.Combine(_temporaryDirectory, "rapid-cache"));
-        SetWorkspaceInstall(assets, @"C:\retail");
+        SetWorkspaceInstall(assets, TestPaths.Combine("retail"));
         var decoder = new ControlledMeshDecodeService(
             "armored",
             "player_11_tpp");
@@ -863,7 +863,7 @@ public sealed class TransactionalPlaybackTests : IDisposable
                 "dl1-rpacks",
                 RetailAssetSourceKind.Rpack,
                 100,
-                @"C:\retail\common.mesh.rpack",
+                TestPaths.Combine("retail", "common.mesh.rpack"),
                 name,
                 1,
                 0,

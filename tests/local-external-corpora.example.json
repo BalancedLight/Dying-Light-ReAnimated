@@ -1,0 +1,59 @@
+{
+  "format": "dl-reanimated-external-corpora-v1",
+  "controls": [
+    {
+      "id": "animation-domain-control-01",
+      "kind": "animation-domain",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {
+        "fileBytes": 0,
+        "rigBoneCount": 0,
+        "animationStackName": "<animation-stack-name>",
+        "frameCount": 0,
+        "changingCurveCount": 0
+      }
+    },
+    {
+      "id": "retarget-full-body",
+      "kind": "retarget",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {
+        "sampleFrame": 0
+      }
+    },
+    {
+      "id": "retarget-raised-arm",
+      "kind": "retarget",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {
+        "sampleFrame": 0
+      }
+    },
+    {
+      "id": "retarget-finger-chain",
+      "kind": "retarget",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {
+        "sampleFrame": 0
+      }
+    },
+    {
+      "id": "custom-model-package",
+      "kind": "custom-model",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {
+        "rigBoneCount": 0,
+        "meshCount": 0,
+        "animationClipCount": 0,
+        "excludedClipIndex": 0,
+        "roundTripFrameRateNumerator": 0,
+        "roundTripFrameRateDenominator": 1
+      }
+    }
+  ]
+}

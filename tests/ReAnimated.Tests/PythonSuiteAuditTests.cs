@@ -11,8 +11,8 @@ public sealed class PythonSuiteAuditTests
         "dl-reanimated-python-suite-audit-rules-v1";
     private const string ManifestFormat =
         "dl-reanimated-python-suite-audit-manifest-v1";
-    private const int ReviewedNodeCount = 616;
-    private const int ReviewedMappedCount = 92;
+    private const int ReviewedNodeCount = 605;
+    private const int ReviewedMappedCount = 81;
     private const int ReviewedExclusionCount = 317;
     private const int ReviewedPendingCount = 207;
     private const int MaximumRulesBytes = 512 * 1024;

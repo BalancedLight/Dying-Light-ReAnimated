@@ -49,12 +49,12 @@ payload is present in this row.
 
 Evidence locations used for this pass:
 
-- `[local Windows decompilation]\local Windows engine source`,
+- a local Windows engine-module decompilation,
   approximately 1523260-1523425 (`CCompactMeshEntity::Create`),
   1548275-1548310 (SHORT4 range selection),
   1552050-1552075 (SHORT4/DEC4 declaration selection), and
   1552628-1552695 (target-major conversion and `* 16384.0`)
-- `[local decompilation]\local macOS engine source`, approximately
+- a local named macOS engine-module decompilation, approximately
   2917732-2917780 (`CCompactMeshEntity::Create`) and
   2937721-2937860 (`SConvShortVec4`)
 
@@ -146,13 +146,13 @@ counts. The optional installed-retail control also decodes the `armored` mesh fr
 
 Material evidence locations used for this pass:
 
-- `[local decompilation]\local macOS engine source`,
+- a local named macOS engine-module decompilation,
   2917813-2917866
   (`CCompactMesh::PreloadMaterialSlots`)
-- `[local decompilation]\local macOS engine source`,
+- the same local named macOS engine-module decompilation,
   2918796-2918884 and 2919127-2919130
   (slot/database accessors)
-- `[local Windows decompilation]\local Windows engine source`,
+- the local Windows engine-module decompilation,
   1522207-1522262
   (`MeshMaterialDatabaseHolder::AddMaterial` evidence string and 24-byte rows)
 

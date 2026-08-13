@@ -51,9 +51,8 @@ sentinel value.
 
 ## Engine evidence
 
-The Windows decompile at
-`[local Windows decompilation]\local Windows engine source`
-around lines 1,522,687 through 1,522,711 performs the following operation in
+The local Windows engine-module decompilation around lines 1,522,687 through
+1,522,711 performs the following operation in
 the compact-mesh creation path:
 
 1. Match `survivor_woman_a.msh` or `survivor_woman_b.msh`.
@@ -61,9 +60,8 @@ the compact-mesh creation path:
 3. Retrieve LOD 1.
 4. If its surface index count is 1,368, subtract 3.
 
-The named engine decompile at
-`[local decompilation]\local macOS engine source` around lines 2,917,644
-through 2,917,667 independently contains the same
+The local named macOS engine-module decompilation around lines 2,917,644 through
+2,917,667 independently contains the same
 `CCompactMesh::Create` workaround and assigns the effective count 1,365.
 
 This cross-build behavior is why DL ReAnimated applies an identity-scoped
@@ -81,4 +79,3 @@ runtime correction rather than classifying the retail resources as malformed.
   decoder;
 - exact installed resource hashes, LOD offsets/counts, valid-prefix bounds,
   alignment bytes, following-surface boundary, and corrected decode.
-

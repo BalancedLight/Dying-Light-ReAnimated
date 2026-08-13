@@ -558,14 +558,14 @@ public sealed class BlenderFbxStrictValidationTests :
                     [42L, $"Video::{TextureFileName}", "Clip"],
                     Node(
                         "FileName",
-                        [@$"<temporary test directory>\{TextureFileName}"])),
+                        [TestPaths.Combine("dlr-stage", TextureFileName)])),
             FixtureCorruption.AbsoluteAndRelativeTexturePaths =>
                 Node(
                     "Video",
                     [42L, $"Video::{TextureFileName}", "Clip"],
                     Node(
                         "FileName",
-                        [@$"<temporary test directory>\{TextureFileName}"]),
+                        [TestPaths.Combine("dlr-stage", TextureFileName)]),
                     Node(
                         "RelativeFilename",
                         [TextureFileName])),

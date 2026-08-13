@@ -145,9 +145,12 @@ with an exact local executable:
 
 ```powershell
 .\tools\validate_dl1_blender_handoff.ps1 `
-  -BlenderExecutable '$env:BLENDER_EXECUTABLE' `
+  -BlenderExecutable $env:BLENDER_EXECUTABLE `
   -Configuration Release
 ```
+
+Set `BLENDER_EXECUTABLE` to the full path of a local `blender.exe`; do not
+commit that path or the associated retail inputs.
 
 The validator probes Blender in `--background --factory-startup` mode and then
 sets the opt-in environment contract before running only

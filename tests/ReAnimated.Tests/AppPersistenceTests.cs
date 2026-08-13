@@ -95,7 +95,7 @@ public sealed class AppPersistenceTests : IDisposable
         string report = reporter.WriteReport(
             exception,
             "unit-test",
-            @"C:\Recovery\workspace.autosave.json");
+            TestPaths.Combine("recovery", "workspace.autosave.json"));
         string json = File.ReadAllText(report);
 
         Assert.Contains("renderer test failure", json, StringComparison.Ordinal);

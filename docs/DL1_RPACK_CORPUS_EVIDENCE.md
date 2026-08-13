@@ -300,8 +300,7 @@ offsets in the explicit chunks are chunk-relative. The parser therefore
 normalizes the implicit tail's physical offset to 1,805 and subtracts an
 `ItemOffsetBias` of 1,805 when exposing logical item offsets.
 
-This matches the named runtime evidence in
-`[local decompilation]\local macOS engine source`:
+This matches the named local macOS engine-module decompilation:
 
 - approximately 2715473-2715499 reads the fixed 20-byte chunk rows, 16-byte
   item rows, 12-byte resource rows, and name offsets;
