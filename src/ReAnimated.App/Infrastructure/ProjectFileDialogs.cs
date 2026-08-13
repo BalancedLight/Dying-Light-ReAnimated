@@ -451,7 +451,7 @@ public sealed class WindowsProjectFileDialogService :
         OpenFolderDialog dialog = new()
         {
             Multiselect = false,
-            Title = "Select folder for DL1 source-model compiler inputs",
+            Title = "Select parent folder for the complete DL1 model package",
         };
         string? initialDirectory = Directory.Exists(initialPath)
             ? initialPath

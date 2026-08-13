@@ -1,0 +1,208 @@
+using System.Collections.Immutable;
+using System.Security.Cryptography;
+using ReAnimated.Codecs.Anm2;
+using ReAnimated.Codecs.Fbx;
+using ReAnimated.Codecs.Models;
+using ReAnimated.Codecs.Rp6l;
+using ReAnimated.Core.Domain;
+using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.ModelAuthoring;
+using ReAnimated.Core.Project;
+
+namespace ReAnimated.Tests;
+
+public sealed class CustomModelAnimationLibraryExporterTests
+{
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "Codec")]
+    public async Task SelectedStacksPublishOneExactAliasAnimationScriptAndReopen()
+    {
+        FbxModelAuthoringImportResult model = CreateSyntheticAnimatedModel();
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string requestedPath = Path.Combine(directory, "animation_library");
+            CustomModelAnimationLibraryResult result =
+                await CustomModelAnimationLibraryExporter.ExportAsync(
+                    new CustomModelAnimationLibraryRequest
+                    {
+                        Model = model,
+                        OutputPath = requestedPath,
+                    });
+
+            Assert.Equal("synthetic_model_anim_script", result.AnimationScriptName);
+            Assert.Equal(Path.Combine(directory, "animation_library.rpack"), result.OutputPath);
+            Assert.Equal(["idle_loop", "walk_loop"], result.AnimationNames.ToArray());
+            Assert.True(File.Exists(result.ManifestPath));
+
+            Rp6lAnimationLibrary reopened =
+                await Rp6lAnimationLibraryCodec.ExtractAsync(result.OutputPath);
+            Assert.Equal(2, reopened.Animations.Count);
+            KeyValuePair<string, Rp6lAnimationScript> script =
+                Assert.Single(reopened.AnimationScripts);
+            Assert.Equal("synthetic_model_anim_script", script.Key);
+            ParsedAnimationScr parsed = AnimationScrCodec.Parse(
+                new AnimationScrSections(
+                    script.Value.HeaderSection,
+                    script.Value.BodySection));
+            Assert.Equal(2, parsed.DeclaredSequenceCount);
+            Assert.Equal(2, parsed.Sequences.Length);
+
+            Dictionary<string, ParsedAnimationScrSequence> sequences = parsed.Sequences
+                .ToDictionary(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase);
+            AssertSequence(sequences["idle_loop"], 4, 60.0f);
+            AssertSequence(sequences["walk_loop"], 1, 24_000.0f / 1_001.0f);
+            Assert.Equal(
+                5,
+                Anm2Reader.Read(reopened.Animations["idle_loop"], "idle_loop").Header.FrameCount);
+            Assert.Contains(
+                "\"name\": \"synthetic_model_anim_script\"",
+                await File.ReadAllTextAsync(result.ManifestPath),
+                StringComparison.Ordinal);
+            Assert.Empty(Directory.EnumerateFiles(directory, "*.tmp"));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    private static void AssertSequence(
+        ParsedAnimationScrSequence sequence,
+        float expectedEndFrame,
+        float expectedFramesPerSecond)
+    {
+        Assert.Equal(0.0f, sequence.StartFrame);
+        Assert.Equal(expectedEndFrame, sequence.EndFrame);
+        Assert.Equal(expectedFramesPerSecond, sequence.FramesPerSecond);
+        Assert.Equal(1, sequence.Enabled);
+        Assert.Equal(0.5f, sequence.Blend);
+        Assert.Equal(0, sequence.EventCount);
+    }
+
+    private static FbxModelAuthoringImportResult CreateSyntheticAnimatedModel()
+    {
+        byte[] source = "Kaydara FBX Binary  synthetic animation library"u8.ToArray();
+        string sourceHash = Convert.ToHexString(SHA256.HashData(source)).ToLowerInvariant();
+        Guid idleId = new("1d4710ae-906d-5f02-a5d7-b233724be7bc");
+        Guid walkId = new("a8b1a0fc-bf0a-5243-9915-9737586b030b");
+        var document = new CustomModelDocument
+        {
+            ModelId = new Guid("15f90ea7-f179-5d7b-bf99-d473c6ad64fd"),
+            Name = "Synthetic animated model",
+            RigMode = CustomModelRigMode.ExactFbxRig,
+            Source = new CustomModelSourceIdentity
+            {
+                OriginalFileName = "synthetic.fbx",
+                ContentSha256 = sourceHash,
+                FbxVersion = 7400,
+            },
+            RigSignature = sourceHash,
+            Bones =
+            [
+                new CustomModelBone
+                {
+                    Index = 0,
+                    FbxObjectId = 1,
+                    Name = "bip01",
+                    ParentIndex = -1,
+                    LocalBindTransform = TransformTRS.Identity,
+                    ExactLocalBindMatrix = TransformMatrix.Identity,
+                    Kind = BoneKind.Root,
+                    IsWeighted = true,
+                },
+            ],
+            Meshes = [],
+            Materials = [],
+            AnimationClips =
+            [
+                CreateSelection(idleId, 2, "Idle Take", "idle_loop", new FrameRate(60, 1), 3, sourceHash),
+                CreateSelection(walkId, 3, "Walk Take", "walk_loop", new FrameRate(24_000, 1_001), 2, sourceHash),
+            ],
+            Diagnostics = [],
+            BuildSettings = new CustomModelBuildSettings
+            {
+                ResourceName = "synthetic_model",
+                SurfaceName = "default",
+                AnimationScriptAlias = "synthetic_model_anim_script",
+            },
+        };
+        document.Validate();
+        RigDefinition rig = document.CreateRigDefinition();
+        var package = new CustomModelPackage(
+            document,
+            source.ToImmutableArray(),
+            ImmutableDictionary<string, ImmutableArray<byte>>.Empty);
+        var clips = ImmutableDictionary<Guid, AnimationClip>.Empty
+            .Add(idleId, CreateClip("Idle Take", new FrameRate(30, 1), 3, new Vector3D(0.25, 0.0, 0.0)))
+            .Add(walkId, CreateClip("Walk Take", new FrameRate(24_000, 1_001), 2, new Vector3D(0.0, 0.5, 0.0)));
+        return new FbxModelAuthoringImportResult(
+            package,
+            rig,
+            [],
+            clips,
+            new FbxStrictExportInspection(
+                [],
+                ImmutableDictionary<string, FbxAnimationStackInspection>.Empty,
+                ImmutableDictionary<string, long>.Empty,
+                ImmutableDictionary<string, long?>.Empty,
+                [],
+                0,
+                0,
+                ImmutableHashSet<string>.Empty,
+                ImmutableHashSet<string>.Empty,
+                ImmutableDictionary<string, FbxMeshGeometryInspection>.Empty,
+                0,
+                0,
+                [],
+                [],
+                ImmutableHashSet<string>.Empty));
+    }
+
+    private static CustomModelAnimationClip CreateSelection(
+        Guid id,
+        long objectId,
+        string sourceName,
+        string displayName,
+        FrameRate frameRate,
+        long frameCount,
+        string sourceHash) =>
+        new()
+        {
+            Id = id,
+            FbxObjectId = objectId,
+            SourceName = sourceName,
+            DisplayName = displayName,
+            FrameRate = frameRate,
+            StartFrame = 0,
+            FrameCount = frameCount,
+            RootMotionMode = Dl1RootMotionMode.Recorded,
+            RootBoneName = "bip01",
+            SourceFingerprint = sourceHash,
+            Included = true,
+        };
+
+    private static AnimationClip CreateClip(
+        string name,
+        FrameRate frameRate,
+        long frameCount,
+        Vector3D finalTranslation) =>
+        new(
+            name,
+            frameRate,
+            frameCount,
+            [
+                new TransformTrack(
+                    0,
+                    [
+                        new TransformKeyframe(0, TransformTRS.Identity),
+                        new TransformKeyframe(
+                            frameCount - 1,
+                            new TransformTRS(
+                                finalTranslation,
+                                QuaternionD.Identity,
+                                Vector3D.One)),
+                    ]),
+            ]);
+}

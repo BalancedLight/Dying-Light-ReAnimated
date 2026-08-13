@@ -105,11 +105,14 @@ are outside every badge.
 
 - Dying Light 2.
 - `.crig` creation/import/editing.
-- `.chr` and `.skn` custom-model writers without an evidence-backed contract.
-  The independent Models workspace supports binary FBX preview, deterministic
-  `.dlrmodel`, source `.msh`/`.bscr`/optional `.ascr`, explicit Animate
-  handoff, multi-animation RPack export, and optional installed-Developer-Tools
-  compilation to a validated `.msh_obj` plus standalone type-272 model RPack.
+- `.skn` custom-model writing without an evidence-backed contract. The
+  independent Models workspace supports binary FBX and authored-DL1 preview,
+  deterministic `.dlrmodel`, source `.msh`/structured CHR v4 `.chr`/`.bscr`/
+  optional `.ascr`, explicit Animate handoff, paired multi-animation/type-322
+  RPack export, and optional installed-Developer-Tools compilation to a
+  compiler/archive-validated `.msh_obj`, type-272 model RPack, and `local_dx11.mp`.
+  Installed-editor and in-game acceptance remain separate evidence. The complete
+  loose/compiled/animation package is published as one atomic transaction.
 - rest-skeleton structural editing.
 - exact reproduction of every material, shader, cloth, physics, and
   post-process state.

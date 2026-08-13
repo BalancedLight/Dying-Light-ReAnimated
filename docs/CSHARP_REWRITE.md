@@ -170,17 +170,22 @@ variant without binding the Models workspace to project state.
 `.dlrmodel` is a fresh schema-1 deterministic ZIP marked
 `dl-reanimated-csharp-model`. It contains `model.json`, the source FBX, and only
 user-supplied texture payloads. It never embeds retail DL1 data. The
-evidence-backed model builder emits Chrome source `.msh`, `.bscr`, and optional
-`.ascr`; the multi-stack exporter emits one deterministic animation-library
-RPack containing every selected animation. The optional model compiler bridge
-stages a unique LocalAppData workshop, uses the installed DL1 Developer Tools
-compiler to produce an opaque `.msh_obj`, normalizes only its compiler-object
-RP6L addressing/type bit, and publishes the object plus a standalone type-272
-model RPack only after ordinary archive and compact-hierarchy validation. The
-compiler executable, full user-owned package/settings, and outputs are covered
-by the build receipt. `.chr` and `.skn` remain deliberately blocked instead of
-fabricated because neither the historical Python path nor current evidence
-establishes a trustworthy writer. `.crig` creation/import/editing and
+evidence-backed model builder emits Chrome source `.msh`, a structured CHR v4
+`.chr`, `.bscr`, and optional `.ascr`. Source preview, DL1-output preview, CHR,
+source MSH, skin palettes, bounds, and animation rebasing all consume one
+immutable authored-rig contract. The multi-stack exporter emits one
+deterministic animation-library RPack containing every selected animation plus
+an extensionless type-322 AnimationScr identity while the loose `.ascr`
+references its corresponding virtual `.scr` filename. The optional model compiler
+bridge stages a unique LocalAppData workshop, uses the installed DL1 Developer
+Tools compiler to produce an opaque `.msh_obj`, normalizes only its
+compiler-object RP6L addressing/type bit, structurally validates the type-272 model RPack and
+`local_dx11.mp`, and publishes the complete loose/compiled/animation package
+atomically. Texture bindings distinguish sRGB base color from linear
+normal/specular data; RGB normal maps are repacked to DL1's alpha/green
+convention and absent normal/specular channels are not fabricated. These checks
+prove compiler/archive integrity, not live editor or in-game behavior. `.skn`
+remains deliberately blocked. `.crig` creation/import/editing and
 rest-hierarchy restructuring remain outside this workspace.
 
 Important gaps remain visible and fail closed:

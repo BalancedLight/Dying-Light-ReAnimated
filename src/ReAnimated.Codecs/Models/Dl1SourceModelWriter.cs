@@ -30,6 +30,7 @@ public sealed record Dl1SourceModelBuildRequest
 public sealed record Dl1SourceModelBuildResult(
     string ResourceName,
     string SourceMshPath,
+    string CharacterDefinitionPath,
     string BoneScriptPath,
     string? AnimationScriptPath,
     string ManifestPath,
@@ -41,10 +42,9 @@ public sealed record Dl1SourceModelBuildResult(
     ImmutableArray<string> BlockingReasons);
 
 /// <summary>
-/// Writes the documented Chrome source-MSH and companion scripts consumed by
-/// Techland's editor compiler. This boundary deliberately does not fabricate
-/// compact .chr/.skn/.msh_obj products: those remain outputs of the official
-/// compiler until an independently verified writer exists.
+/// Writes the documented Chrome source-MSH, structured CHR v4 character
+/// definition, and companion scripts consumed by Techland's editor compiler.
+/// Compact .skn/.msh_obj products remain outputs of the official compiler.
 /// </summary>
 public static class Dl1SourceModelWriter
 {
@@ -82,14 +82,20 @@ public static class Dl1SourceModelWriter
 
         PreparedSourceModel prepared = Prepare(request.Model, resourceName, surfaceName, cancellationToken);
         byte[] msh = BuildMsh(prepared);
+        byte[] chr = Dl1ChrV4Codec.Build(
+            Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(
+                BuildChrObjects(prepared),
+                "default"));
         string bscr = BuildBoneScript(prepared.BoneNames);
-        string? ascr = string.IsNullOrWhiteSpace(request.AnimationScriptAlias)
+        string? animationScriptAlias = string.IsNullOrWhiteSpace(request.AnimationScriptAlias)
             ? null
-            : $"AnimScriptAlias(\"{EscapeScriptString(request.AnimationScriptAlias.Trim())}\")\n";
+            : RequireExactResourceName(request.AnimationScriptAlias, 63, "animation script alias");
+        string? ascr = animationScriptAlias is null
+            ? null
+            : $"AnimScriptAlias(\"{EscapeScriptString(AnimationScriptFileName(animationScriptAlias))}\")\n";
         string blocked =
-            "DL ReAnimated generated validated Chrome source-model compiler inputs.\r\n" +
+            "DL ReAnimated generated bounded DL1 source-model compiler inputs.\r\n" +
             "The following requested products are intentionally not fabricated:\r\n" +
-            "  - .chr\r\n" +
             "  - .skn\r\n" +
             "  - .msh_obj\r\n" +
             "Use Techland's matching Dying Light Developer Tools compiler to create its compact output.\r\n" +
@@ -98,6 +104,7 @@ public static class Dl1SourceModelWriter
         var files = new Dictionary<string, byte[]>(StringComparer.Ordinal)
         {
             [$"{resourceName}.msh"] = msh,
+            [$"{resourceName}.chr"] = chr,
             [$"{resourceName}.bscr"] = Encoding.UTF8.GetBytes(bscr),
             ["BLOCKED_OUTPUTS.txt"] = Encoding.UTF8.GetBytes(blocked),
         };
@@ -126,15 +133,25 @@ public static class Dl1SourceModelWriter
                 modelId = request.Model.Package.Document.ModelId,
                 sourceFbxSha256 = request.Model.Package.Document.Source.ContentSha256,
                 rigSignature = request.Model.Package.Document.RigSignature,
+                authoredRig = prepared.RigContract is null
+                    ? null
+                    : new
+                    {
+                        prepared.RigContract.ContractId,
+                        prepared.RigContract.SkeletonFingerprint,
+                        prepared.RigContract.BindFingerprint,
+                        prepared.RigContract.DescriptorFingerprint,
+                    },
             },
             outputContract = new
             {
                 state = CustomModelBuildState.CompilerReady.ToString(),
                 sourceMsh = "Chrome source MSH for the official Techland compiler",
+                characterDefinition = "Structured DL1 CHR v4 with one default variant in exact physical object order",
                 boneScript = "Per-entity POS/ROT, plus root SCL",
                 animationScript = ascr is null ? "not authored" : "explicit user-supplied alias",
                 materials = "Techland DMT sources with user-owned diffuse/normal/specular DDS dependencies",
-                unsupported = new[] { ".chr", ".skn", ".msh_obj" },
+                unsupported = new[] { ".skn", ".msh_obj" },
             },
             counts = new
             {
@@ -142,6 +159,7 @@ public static class Dl1SourceModelWriter
                 helpers = prepared.HelperCount,
                 drawSurfaces = prepared.GeometryNodes.Length,
                 physicalNodes = prepared.Nodes.Length,
+                characterObjects = prepared.Nodes.Length,
                 materials = prepared.MaterialNames.Length,
                 materialSourceFiles = prepared.MaterialFiles.Count,
             },
@@ -186,6 +204,7 @@ public static class Dl1SourceModelWriter
         return new Dl1SourceModelBuildResult(
             resourceName,
             Path.Combine(outputDirectory, $"{resourceName}.msh"),
+            Path.Combine(outputDirectory, $"{resourceName}.chr"),
             Path.Combine(outputDirectory, $"{resourceName}.bscr"),
             ascr is null ? null : Path.Combine(outputDirectory, $"{resourceName}.ascr"),
             Path.Combine(outputDirectory, "model-build.json"),
@@ -208,8 +227,27 @@ public static class Dl1SourceModelWriter
                 .ToImmutableArray(),
             hashes,
             [
-                ".chr, .skn, and .msh_obj require the matching official Techland compiler.",
+                ".skn and .msh_obj require the matching official Techland compiler.",
             ]);
+    }
+
+    private static ImmutableArray<Dl1ChrV4ObjectTransform> BuildChrObjects(
+        PreparedSourceModel model)
+    {
+        var objects = ImmutableArray.CreateBuilder<Dl1ChrV4ObjectTransform>(model.Nodes.Length);
+        for (int index = 0; index < model.Nodes.Length; index++)
+        {
+            SourceNode node = model.Nodes[index];
+            if (!node.LocalMatrix.IsFinite)
+            {
+                throw new InvalidDataException(
+                    $"Source node '{node.Name}' has a non-finite local transform for CHR output.");
+            }
+
+            objects.Add(new Dl1ChrV4ObjectTransform(node.Name, node.LocalMatrix));
+        }
+
+        return objects.MoveToImmutable();
     }
 
     private static PreparedSourceModel Prepare(
@@ -221,40 +259,31 @@ public static class Dl1SourceModelWriter
         CustomModelDocument document = model.Package.Document;
         ImmutableArray<CustomModelBone> sourceBones = document.Bones;
         ValidateUniqueBoneNames(sourceBones);
-
-        ImmutableArray<int> depthFirstBones = BuildDepthFirstBoneOrder(sourceBones);
-        var physicalBySource = ImmutableArray.CreateBuilder<int>(sourceBones.Length);
-        physicalBySource.Count = sourceBones.Length;
-        for (int physicalIndex = 0; physicalIndex < depthFirstBones.Length; physicalIndex++)
-        {
-            physicalBySource[depthFirstBones[physicalIndex]] = physicalIndex;
-        }
-
-        ImmutableArray<TransformMatrix> globals = ComputeExactGlobals(sourceBones);
+        Dl1PreparedAuthoredRig? authoredRig = sourceBones.IsEmpty
+            ? null
+            : Dl1CustomModelRigPreparer.Prepare(model, cancellationToken);
         var nodes = ImmutableArray.CreateBuilder<SourceNode>();
         var boneNames = ImmutableArray.CreateBuilder<string>();
         int helperCount = 0;
-        foreach (int sourceIndex in depthFirstBones)
+        foreach (Dl1AuthoredRigNode node in authoredRig?.Contract.Nodes ?? [])
         {
             cancellationToken.ThrowIfCancellationRequested();
-            CustomModelBone bone = sourceBones[sourceIndex];
-            int physicalParent = bone.ParentIndex < 0 ? -1 : physicalBySource[bone.ParentIndex];
-            bool isHelper = !bone.IsWeighted || bone.Kind is not (Core.Domain.BoneKind.Deform or Core.Domain.BoneKind.Root);
+            bool isHelper = !node.IsDeform;
             if (isHelper)
             {
                 helperCount++;
             }
 
             nodes.Add(new SourceNode(
-                bone.Name,
+                node.Name,
                 isHelper ? NodeHelper : NodeBone,
-                physicalParent,
-                bone.ExactLocalBindMatrix,
-                globals[sourceIndex].InvertedAffine(),
-                Bounds.Zero,
+                node.ParentPhysicalIndex,
+                node.LocalBindMatrix,
+                node.InverseGlobalReferenceMatrix,
+                new Bounds(node.Bounds.Center, node.Bounds.HalfExtents),
                 NodeAnimated,
                 null));
-            boneNames.Add(bone.Name);
+            boneNames.Add(node.Name);
         }
 
         ImmutableArray<CustomModelMaterial> documentMaterials = document.Materials;
@@ -294,17 +323,12 @@ public static class Dl1SourceModelWriter
             int materialIndex = materialIndexById.TryGetValue(surface.MaterialId, out int resolvedMaterial)
                 ? resolvedMaterial
                 : 0;
-            ImmutableArray<int> physicalPalette = surface.PaletteBoneIndices
-                .Select(index =>
-                {
-                    if ((uint)index >= (uint)physicalBySource.Count)
-                    {
-                        throw new InvalidDataException($"Surface '{surface.Id}' references unknown source bone {index}.");
-                    }
-
-                    return physicalBySource[index];
-                })
-                .ToImmutableArray();
+            ImmutableArray<int> physicalPalette = authoredRig is null
+                ? surface.PaletteBoneIndices.IsEmpty
+                    ? []
+                    : throw new InvalidDataException(
+                        $"Surface '{surface.Id}' has a skin palette but the custom model has no authored rig.")
+                : authoredRig.Surfaces[surfaceIndex].PhysicalPalette;
             string nodeName = UniqueName(
                 SanitizeName($"{resourceName}_{surface.MeshName}_p{surfaceIndex:00}", 63),
                 usedNames);
@@ -356,7 +380,8 @@ public static class Dl1SourceModelWriter
             nodeArray,
             boneNames.ToImmutable(),
             helperCount,
-            geometryNodes.ToImmutable());
+            geometryNodes.ToImmutable(),
+            authoredRig?.Contract);
     }
 
     private static SourceLod BuildLod(
@@ -667,60 +692,6 @@ public static class Dl1SourceModelWriter
         return Vector3D.Cross(normal, axis).Normalized();
     }
 
-    private static ImmutableArray<int> BuildDepthFirstBoneOrder(ImmutableArray<CustomModelBone> bones)
-    {
-        var children = Enumerable.Range(0, bones.Length).Select(static _ => new List<int>()).ToArray();
-        var roots = new List<int>();
-        for (int index = 0; index < bones.Length; index++)
-        {
-            int parent = bones[index].ParentIndex;
-            if (parent < 0)
-            {
-                roots.Add(index);
-            }
-            else
-            {
-                children[parent].Add(index);
-            }
-        }
-
-        var result = ImmutableArray.CreateBuilder<int>(bones.Length);
-        void Visit(int index)
-        {
-            result.Add(index);
-            foreach (int child in children[index])
-            {
-                Visit(child);
-            }
-        }
-
-        foreach (int root in roots)
-        {
-            Visit(root);
-        }
-
-        if (result.Count != bones.Length)
-        {
-            throw new InvalidDataException("Custom-model hierarchy traversal did not include every bone.");
-        }
-
-        return result.MoveToImmutable();
-    }
-
-    private static ImmutableArray<TransformMatrix> ComputeExactGlobals(ImmutableArray<CustomModelBone> bones)
-    {
-        var globals = ImmutableArray.CreateBuilder<TransformMatrix>(bones.Length);
-        for (int index = 0; index < bones.Length; index++)
-        {
-            CustomModelBone bone = bones[index];
-            globals.Add(bone.ParentIndex < 0
-                ? bone.ExactLocalBindMatrix
-                : globals[bone.ParentIndex] * bone.ExactLocalBindMatrix);
-        }
-
-        return globals.MoveToImmutable();
-    }
-
     private static void ValidateUniqueBoneNames(ImmutableArray<CustomModelBone> bones)
     {
         string[] duplicates = bones.GroupBy(static bone => bone.Name, StringComparer.OrdinalIgnoreCase)
@@ -960,6 +931,39 @@ public static class Dl1SourceModelWriter
         return $"{clean.TrimEnd('_')}_{digest}";
     }
 
+    /// <summary>
+    /// Validates a DL1 resource identity without silently rewriting it. The
+    /// type-322 AnimationScr identity is extensionless; the loose ASCR refers
+    /// to its corresponding virtual <c>.scr</c> filename.
+    /// </summary>
+    internal static string RequireExactResourceName(
+        string value,
+        int maximumUtf8Bytes,
+        string label)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        string exact = value.Trim();
+        string normalized = SanitizeName(exact, maximumUtf8Bytes);
+        if (!string.Equals(exact, normalized, StringComparison.Ordinal))
+        {
+            throw new ArgumentException(
+                $"The {label} '{exact}' is not a valid exact DL1 resource name. " +
+                "Use only ASCII letters, digits, and underscores within the format limit.",
+                nameof(value));
+        }
+
+        return exact;
+    }
+
+    /// <summary>
+    /// Chrome's type-322 resource identity is extensionless, while an ASCR
+    /// declaration names the virtual script file resolved by the engine. The
+    /// editor derives the default by replacing the model extension with
+    /// <c>.scr</c>, and stock ASCR declarations use the same suffix.
+    /// </summary>
+    internal static string AnimationScriptFileName(string resourceIdentity) =>
+        $"{RequireExactResourceName(resourceIdentity, 63, "animation script resource identity")}.scr";
+
     internal static double ConvertTextureCoordinateV(double value, bool flip)
     {
         if (!double.IsFinite(value))
@@ -1019,5 +1023,6 @@ public static class Dl1SourceModelWriter
         ImmutableArray<SourceNode> Nodes,
         ImmutableArray<string> BoneNames,
         int HelperCount,
-        ImmutableArray<SourceNode> GeometryNodes);
+        ImmutableArray<SourceNode> GeometryNodes,
+        Dl1AuthoredRigContract? RigContract);
 }

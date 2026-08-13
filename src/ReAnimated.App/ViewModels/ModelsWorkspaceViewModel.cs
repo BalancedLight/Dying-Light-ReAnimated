@@ -21,6 +21,10 @@ public sealed record CustomModelAnimationHandoff(
     AnimationClip Clip,
     IReadOnlyList<MeshRenderData> PreviewMeshes);
 
+public sealed record CustomModelPreviewModeChoice(
+    CustomModelPreviewMode Mode,
+    string Label);
+
 /// <summary>
 /// Independent custom-model authoring session. Nothing in this object reads
 /// or mutates the animation project's active target, recovery snapshot, or
@@ -28,6 +32,15 @@ public sealed record CustomModelAnimationHandoff(
 /// </summary>
 public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 {
+    private const string InvalidatedBuildReceiptDiagnosticCode =
+        "model_build_receipt_invalidated";
+
+    private static readonly IReadOnlyList<CustomModelPreviewModeChoice> PreviewModeChoicesValue =
+    [
+        new(CustomModelPreviewMode.Dl1Output, "DL1 output"),
+        new(CustomModelPreviewMode.SourceFbx, "Source FBX"),
+    ];
+
     private readonly IProjectFileDialogService _fileDialogs;
     private readonly Action<string> _setStatus;
     private readonly Func<CustomModelAnimationHandoff, Task> _openInAnimate;
@@ -35,10 +48,13 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private readonly LinkedViewportCoordinator _cameraCoordinator = new();
     private CancellationTokenSource? _operationCancellation;
     private FbxModelAuthoringImportResult? _model;
+    private CustomModelPreviewSession? _previewSession;
     private string? _packagePath;
     private string? _sourcePath;
     private long _operationGeneration;
+    private long _authoringRevision;
     private long _previewGeneration;
+    private bool _suppressPreviewRefresh;
     private bool _isBusy;
     private string _modelName = "No custom model loaded";
     private CustomModelRigMode _selectedRigMode = CustomModelRigMode.Auto;
@@ -54,6 +70,10 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private bool _showHelpers = true;
     private bool _showCameraHelpers = true;
     private bool _showPropHelpers = true;
+    private CustomModelPreviewModeChoice _selectedPreviewMode = PreviewModeChoicesValue[0];
+    private CustomModelTextureSemantic _selectedTextureSemantic = CustomModelTextureSemantic.BaseColor;
+    private CustomModelNormalMapConvention _selectedNormalMapConvention =
+        CustomModelNormalMapConvention.RgbOpenGl;
     private CustomModelAnimationClipItemViewModel? _selectedAnimation;
     private CustomModelMaterialItemViewModel? _selectedMaterial;
     private CustomModelBoneItemViewModel? _selectedBone;
@@ -73,7 +93,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         _cameraCoordinator.IsLinked = false;
         Viewport = new ViewportPaneViewModel(
             "Custom model preview",
-            "Neutral DL1 authoring render | source hierarchy and textures",
+            "DL1 output hierarchy, skinning, and authored textures",
             new ViewportSceneSource(
                 _cameraCoordinator,
                 ViewportSide.Target,
@@ -85,6 +105,9 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         OpenPackageCommand = new AsyncRelayCommand(OpenPackageAsync, () => !IsBusy);
         SavePackageCommand = new RelayCommand(SavePackage, () => HasModel && !IsBusy);
         SelectTextureCommand = new RelayCommand(SelectTexture, () => SelectedMaterial is not null && !IsBusy);
+        BuildCompletePackageCommand = new AsyncRelayCommand(
+            BuildCompletePackageAsync,
+            () => HasModel && !IsBusy);
         BuildLooseFilesCommand = new AsyncRelayCommand(BuildLooseFilesAsync, () => HasModel && !IsBusy);
         SelectModelCompilerCommand = new RelayCommand(SelectModelCompiler, () => !IsBusy);
         BuildModelRpackCommand = new AsyncRelayCommand(BuildModelRpackAsync, () => HasModel && !IsBusy);
@@ -115,6 +138,18 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     public IReadOnlyList<Dl1RootMotionMode> RootMotionModes { get; } = Enum.GetValues<Dl1RootMotionMode>();
 
+    public static IReadOnlyList<CustomModelPreviewModeChoice> PreviewModeChoices => PreviewModeChoicesValue;
+
+    public IReadOnlyList<CustomModelTextureSemantic> TextureSemantics { get; } =
+    [
+        CustomModelTextureSemantic.BaseColor,
+        CustomModelTextureSemantic.Normal,
+        CustomModelTextureSemantic.Specular,
+    ];
+
+    public IReadOnlyList<CustomModelNormalMapConvention> NormalMapConventions { get; } =
+        Enum.GetValues<CustomModelNormalMapConvention>();
+
     public ObservableCollection<string> RootBoneNames { get; } = [];
 
     public IAsyncRelayCommand ImportFbxCommand { get; }
@@ -124,6 +159,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand SavePackageCommand { get; }
 
     public IRelayCommand SelectTextureCommand { get; }
+
+    public IAsyncRelayCommand BuildCompletePackageCommand { get; }
 
     public IAsyncRelayCommand BuildLooseFilesCommand { get; }
 
@@ -143,6 +180,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     public bool HasModel => _model is not null;
 
+    public bool CanChangeRigMode => !HasModel && !IsBusy;
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -150,6 +189,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _isBusy, value))
             {
+                OnPropertyChanged(nameof(CanChangeRigMode));
                 NotifyCommands();
             }
         }
@@ -158,31 +198,107 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     public string ModelName
     {
         get => _modelName;
-        set => SetProperty(ref _modelName, string.IsNullOrWhiteSpace(value) ? "Untitled model" : value.Trim());
+        set
+        {
+            if (SetProperty(ref _modelName, string.IsNullOrWhiteSpace(value) ? "Untitled model" : value.Trim()))
+            {
+                MarkAuthoringChanged();
+            }
+        }
     }
 
     public CustomModelRigMode SelectedRigMode
     {
         get => _selectedRigMode;
-        set => SetProperty(ref _selectedRigMode, value);
+        set
+        {
+            if (HasModel)
+            {
+                if (_selectedRigMode != value)
+                {
+                    OnPropertyChanged();
+                    BuildStatus = "Rig treatment is selected before import. Re-import the FBX to use a different treatment.";
+                }
+
+                return;
+            }
+
+            if (SetProperty(ref _selectedRigMode, value))
+            {
+                MarkAuthoringChanged();
+            }
+        }
     }
 
     public string ResourceName
     {
         get => _resourceName;
-        set => SetProperty(ref _resourceName, value ?? string.Empty);
+        set
+        {
+            if (SetProperty(ref _resourceName, value ?? string.Empty))
+            {
+                MarkAuthoringChanged();
+            }
+        }
     }
 
     public string SurfaceName
     {
         get => _surfaceName;
-        set => SetProperty(ref _surfaceName, value ?? string.Empty);
+        set
+        {
+            if (SetProperty(ref _surfaceName, value ?? string.Empty))
+            {
+                MarkAuthoringChanged();
+            }
+        }
     }
 
     public string AnimationScriptAlias
     {
         get => _animationScriptAlias;
-        set => SetProperty(ref _animationScriptAlias, value ?? string.Empty);
+        set
+        {
+            if (SetProperty(ref _animationScriptAlias, value ?? string.Empty))
+            {
+                MarkAuthoringChanged();
+            }
+        }
+    }
+
+    public CustomModelPreviewModeChoice SelectedPreviewMode
+    {
+        get => _selectedPreviewMode;
+        set
+        {
+            ArgumentNullException.ThrowIfNull(value);
+            if (SetProperty(ref _selectedPreviewMode, value) && HasModel)
+            {
+                RefreshPreview();
+                FrameModel();
+            }
+        }
+    }
+
+    public CustomModelTextureSemantic SelectedTextureSemantic
+    {
+        get => _selectedTextureSemantic;
+        set
+        {
+            if (SetProperty(ref _selectedTextureSemantic, value))
+            {
+                OnPropertyChanged(nameof(IsNormalTextureSelected));
+            }
+        }
+    }
+
+    public bool IsNormalTextureSelected =>
+        SelectedTextureSemantic == CustomModelTextureSemantic.Normal;
+
+    public CustomModelNormalMapConvention SelectedNormalMapConvention
+    {
+        get => _selectedNormalMapConvention;
+        set => SetProperty(ref _selectedNormalMapConvention, value);
     }
 
     public bool FlipTextureCoordinateV
@@ -192,6 +308,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _flipTextureCoordinateV, value) && _model is not null)
             {
+                MarkAuthoringChanged();
                 SyncDocument();
                 RefreshPreview();
                 BuildStatus = value
@@ -355,6 +472,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             InvalidDataException or
             InvalidOperationException or
             IOException or
+            UnauthorizedAccessException or
             NotSupportedException or
             OverflowException)
         {
@@ -423,7 +541,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception) when (
             exception is ArgumentException or InvalidDataException or InvalidOperationException or
-            IOException or NotSupportedException or OverflowException or CustomModelFormatException)
+            IOException or UnauthorizedAccessException or NotSupportedException or OverflowException or
+            CustomModelFormatException)
         {
             BuildStatus = $"Open failed: {exception.Message}";
             _setStatus("Custom-model package open failed; previous model retained");
@@ -459,7 +578,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception) when (
             exception is ArgumentException or InvalidDataException or IOException or
-            InvalidOperationException or CustomModelFormatException)
+            UnauthorizedAccessException or InvalidOperationException or CustomModelFormatException)
         {
             BuildStatus = $"Save failed: {exception.Message}";
             _setStatus(BuildStatus);
@@ -496,8 +615,14 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             CustomModelTextureBinding binding = new()
             {
                 Id = Guid.NewGuid(),
-                Semantic = CustomModelTextureSemantic.BaseColor,
+                Semantic = SelectedTextureSemantic,
                 SourceKind = CustomModelTextureSourceKind.UserOverride,
+                ColorSpace = SelectedTextureSemantic == CustomModelTextureSemantic.BaseColor
+                    ? CustomModelTextureColorSpace.Srgb
+                    : CustomModelTextureColorSpace.Linear,
+                NormalMapConvention = SelectedTextureSemantic == CustomModelTextureSemantic.Normal
+                    ? SelectedNormalMapConvention
+                    : CustomModelNormalMapConvention.RgbOpenGl,
                 DisplayName = Path.GetFileName(path),
                 PackageEntryPath = entryPath,
                 OriginalReference = Path.GetFileName(path),
@@ -507,7 +632,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             material = material with
             {
                 Textures = material.Textures
-                    .Where(static texture => texture.Semantic != CustomModelTextureSemantic.BaseColor)
+                    .Where(texture => texture.Semantic != SelectedTextureSemantic)
                     .Append(binding)
                     .OrderBy(static texture => texture.Semantic)
                     .ToImmutableArray(),
@@ -517,6 +642,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 Materials = _model.Package.Document.Materials
                     .Select(candidate => candidate.Id == material.Id ? material : candidate)
                     .ToImmutableArray(),
+                LastBuildReceipt = null,
             };
             ImmutableDictionary<string, ImmutableArray<byte>> payloads = _model.Package.TexturePayloads
                 .Where(pair => document.Materials
@@ -528,13 +654,15 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             {
                 Package = new CustomModelPackage(document, _model.Package.SourceFbx, payloads),
             };
+            MarkAuthoringChanged();
             PopulateMaterials();
             SelectedMaterial = Materials.First(item => item.Contract.Id == material.Id);
             RefreshPreview();
-            BuildStatus = $"Selected base-color texture {Path.GetFileName(path)}";
+            BuildStatus = $"Selected {SelectedTextureSemantic} texture {Path.GetFileName(path)}";
         }
         catch (Exception exception) when (
-            exception is ArgumentException or InvalidDataException or IOException or OverflowException)
+            exception is ArgumentException or InvalidDataException or IOException or
+            UnauthorizedAccessException or OverflowException)
         {
             BuildStatus = $"Texture selection failed: {exception.Message}";
         }
@@ -571,7 +699,9 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 token);
             EnsureCurrent(generation, token);
             BuildStatus =
-                $"Source model ready: {Path.GetFileName(result.SourceMshPath)}, {Path.GetFileName(result.BoneScriptPath)}. Use Compile model RPack to create the validated .msh_obj and RPack; .chr/.skn remain unsupported.";
+                $"Source model ready: {Path.GetFileName(result.SourceMshPath)}, " +
+                $"{Path.GetFileName(result.CharacterDefinitionPath)}, {Path.GetFileName(result.BoneScriptPath)}. " +
+                "Use Compile model RPack to create the validated .msh_obj and RPack; .skn remains unsupported.";
             _setStatus($"Built custom-model source files in {directory}");
         }
         catch (OperationCanceledException)
@@ -579,7 +709,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             BuildStatus = "Model build canceled";
         }
         catch (Exception exception) when (
-            exception is ArgumentException or InvalidDataException or InvalidOperationException or IOException or OverflowException)
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or IOException or
+            UnauthorizedAccessException or OverflowException)
         {
             BuildStatus = $"Build failed: {exception.Message}";
         }
@@ -589,16 +720,132 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    private async Task BuildCompletePackageAsync()
+    {
+        if (_model is null)
+        {
+            return;
+        }
+
+        if (!File.Exists(CompilerExecutablePath))
+        {
+            SelectModelCompiler();
+            if (!File.Exists(CompilerExecutablePath))
+            {
+                BuildStatus = "Complete package build canceled: select the Dying Light Developer Tools compiler first.";
+                return;
+            }
+        }
+
+        if (!TryShowModelPicker(
+                "Choose a parent folder for the complete DL1 model package",
+                () => _fileDialogs.ShowSelectCustomModelOutputDirectory(_packagePath ?? _sourcePath),
+                out string? parentDirectory))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(parentDirectory))
+        {
+            return;
+        }
+
+        long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
+        try
+        {
+            SyncDocument();
+            FbxModelAuthoringImportResult buildModel = _model ??
+                throw new InvalidOperationException("The custom-model authoring document is no longer available.");
+            long buildRevision = Volatile.Read(ref _authoringRevision);
+            string resourceName = Dl1SourceModelWriter.SanitizeName(ResourceName, 55);
+            BuildStatus = "Building and validating the complete DL1 model package in staging...";
+            Dl1CustomModelPackageResult result = await Dl1CustomModelPackageBuilder.BuildAsync(
+                new Dl1CustomModelPackageRequest
+                {
+                    Model = buildModel,
+                    ParentOutputDirectory = parentDirectory,
+                    CompilerExecutablePath = CompilerExecutablePath,
+                    RetailData0PakPath = _getRetailData0PakPath(),
+                    ResourceName = resourceName,
+                    SurfaceName = SurfaceName,
+                    AnimationScriptAlias = string.IsNullOrWhiteSpace(AnimationScriptAlias)
+                        ? null
+                        : AnimationScriptAlias.Trim(),
+                    AnimationSelections = buildModel.Package.Document.AnimationClips,
+                },
+                token);
+            EnsureCurrentGeneration(generation);
+            bool currentDraftMatchesBuild =
+                ReferenceEquals(_model, buildModel) &&
+                buildRevision == Volatile.Read(ref _authoringRevision);
+            CustomModelDocument document = buildModel.Package.Document with
+            {
+                LastBuildReceipt = currentDraftMatchesBuild
+                    ? result.CompiledModel.BuildReceipt
+                    : null,
+            };
+            document.Validate();
+            if (currentDraftMatchesBuild)
+            {
+                _model = buildModel with
+                {
+                    Package = new CustomModelPackage(
+                        document,
+                        buildModel.Package.SourceFbx,
+                        buildModel.Package.TexturePayloads),
+                };
+            }
+            else
+            {
+                ClearLastBuildReceipt();
+            }
+
+            BuildStatus = result.AnimationLibrary is null
+                ? $"Complete DL1 model package built: {result.PackageDirectory}"
+                : $"Complete DL1 model + {result.AnimationLibrary.AnimationNames.Length:N0} animation(s): {result.PackageDirectory}";
+            if (!currentDraftMatchesBuild)
+            {
+                BuildStatus += " The authoring draft changed during the build, so its compiler-validation receipt was not attached; rebuild the current draft before publishing it.";
+            }
+
+            _setStatus(BuildStatus);
+        }
+        catch (OperationCanceledException)
+        {
+            BuildStatus = "Complete package build canceled; the previous valid package was retained.";
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or
+            IOException or UnauthorizedAccessException or OverflowException or TimeoutException or Win32Exception)
+        {
+            BuildStatus = $"Complete package build failed; the previous valid package was retained: {exception.Message}";
+        }
+        finally
+        {
+            EndOperation(generation);
+        }
+    }
+
     private void SelectModelCompiler()
     {
-        string? path = _fileDialogs.ShowOpenDl1DeveloperToolsCompilerDialog(
-            File.Exists(CompilerExecutablePath)
-                ? CompilerExecutablePath
-                : _packagePath ?? _sourcePath);
-        if (!string.IsNullOrWhiteSpace(path))
+        try
         {
-            CompilerExecutablePath = Path.GetFullPath(path);
-            BuildStatus = "Selected the Dying Light Developer Tools compiler";
+            string? path = _fileDialogs.ShowOpenDl1DeveloperToolsCompilerDialog(
+                File.Exists(CompilerExecutablePath)
+                    ? CompilerExecutablePath
+                    : _packagePath ?? _sourcePath);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                CompilerExecutablePath = Path.GetFullPath(path);
+                BuildStatus = "Selected the Dying Light Developer Tools compiler";
+            }
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or IOException or UnauthorizedAccessException or
+            InvalidOperationException or NotSupportedException)
+        {
+            BuildStatus = $"Compiler selection failed: {exception.Message}";
+            _setStatus(BuildStatus);
         }
     }
 
@@ -631,11 +878,14 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         try
         {
             SyncDocument();
+            FbxModelAuthoringImportResult buildModel = _model ??
+                throw new InvalidOperationException("The custom-model authoring document is no longer available.");
+            long buildRevision = Volatile.Read(ref _authoringRevision);
             BuildStatus = "Compiling model in an isolated Developer Tools workspace...";
             Dl1OfficialModelCompilerResult result = await Dl1OfficialModelCompiler.CompileAsync(
                 new Dl1OfficialModelCompilerRequest
                 {
-                    Model = _model,
+                    Model = buildModel,
                     CompilerExecutablePath = CompilerExecutablePath,
                     RetailData0PakPath = _getRetailData0PakPath(),
                     OutputRpackPath = path,
@@ -647,25 +897,43 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 },
                 token);
             EnsureCurrent(generation, token);
-            CustomModelDocument document = _model.Package.Document with
+            bool currentDraftMatchesBuild =
+                ReferenceEquals(_model, buildModel) &&
+                buildRevision == Volatile.Read(ref _authoringRevision);
+            CustomModelDocument document = buildModel.Package.Document with
             {
-                LastBuildReceipt = result.BuildReceipt,
+                LastBuildReceipt = currentDraftMatchesBuild
+                    ? result.BuildReceipt
+                    : null,
             };
             document.Validate();
-            _model = _model with
+            if (currentDraftMatchesBuild)
             {
-                Package = new CustomModelPackage(
-                    document,
-                    _model.Package.SourceFbx,
-                    _model.Package.TexturePayloads),
-            };
+                _model = buildModel with
+                {
+                    Package = new CustomModelPackage(
+                        document,
+                        buildModel.Package.SourceFbx,
+                        buildModel.Package.TexturePayloads),
+                };
+            }
+            else
+            {
+                ClearLastBuildReceipt();
+            }
+
             BuildStatus =
-                $"Game-ready model bundle: {Path.GetFileName(result.OutputRpackPath)}" +
+                $"Compiler-validated model bundle: {Path.GetFileName(result.OutputRpackPath)}" +
                 (result.MaterialDatabasePath is null
                     ? string.Empty
                     : $" + {Path.GetFileName(result.MaterialDatabasePath)}") +
-                $"; compiled mesh: {Path.GetFileName(result.CompiledMeshObjectPath)}. .chr/.skn remain unsupported.";
-            _setStatus($"Compiled custom model RPack {Path.GetFileName(result.OutputRpackPath)}");
+                $"; compiled mesh: {Path.GetFileName(result.CompiledMeshObjectPath)}. " +
+                "The loose source build supplies CHR v4; .skn remains unsupported.";
+            if (!currentDraftMatchesBuild)
+            {
+                BuildStatus += " The authoring draft changed during compilation, so its validation receipt was not attached; rebuild the current draft before publishing it.";
+            }
+            _setStatus($"Compiler-validated custom model RPack {Path.GetFileName(result.OutputRpackPath)}");
         }
         catch (OperationCanceledException)
         {
@@ -673,7 +941,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
         catch (Exception exception) when (
             exception is ArgumentException or InvalidDataException or InvalidOperationException or
-            IOException or OverflowException or TimeoutException or Win32Exception)
+            IOException or UnauthorizedAccessException or OverflowException or TimeoutException or Win32Exception)
         {
             BuildStatus = $"Model RPack compile failed: {exception.Message}";
         }
@@ -719,7 +987,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             BuildStatus = "Animation RPack export canceled";
         }
         catch (Exception exception) when (
-            exception is ArgumentException or InvalidDataException or InvalidOperationException or IOException or OverflowException)
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or IOException or
+            UnauthorizedAccessException or OverflowException)
         {
             BuildStatus = $"Animation RPack export failed: {exception.Message}";
         }
@@ -736,18 +1005,30 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        SyncDocument();
-        CustomModelAnimationClip selection = _model.Package.Document.AnimationClips
-            .First(candidate => candidate.Id == SelectedAnimation.Id);
-        CustomModelPreviewPayload preview = CustomModelPreviewAdapter.Create(
-            _model,
-            clip,
-            Timeline.CurrentFrame);
-        await _openInAnimate(new CustomModelAnimationHandoff(
-            _model,
-            selection,
-            clip,
-            preview.Meshes));
+        try
+        {
+            SyncDocument();
+            CustomModelAnimationClip selection = _model.Package.Document.AnimationClips
+                .First(candidate => candidate.Id == SelectedAnimation.Id);
+            CustomModelPreviewPayload preview = CustomModelPreviewAdapter.Create(
+                _model,
+                clip,
+                Timeline.CurrentFrame,
+                mode: CustomModelPreviewMode.SourceFbx);
+            await _openInAnimate(new CustomModelAnimationHandoff(
+                _model,
+                selection,
+                clip,
+                preview.Meshes));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or
+            IOException or UnauthorizedAccessException or NotSupportedException or OverflowException or
+            CustomModelFormatException)
+        {
+            BuildStatus = $"Open in Animate failed: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
     }
 
     private void CommitModel(
@@ -755,54 +1036,69 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         string? sourcePath,
         string? packagePath)
     {
-        _model = imported;
-        _sourcePath = sourcePath;
-        _packagePath = packagePath;
-        ModelName = imported.Package.Document.Name;
-        SelectedRigMode = imported.Package.Document.RigMode;
-        ResourceName = imported.Package.Document.BuildSettings.ResourceName;
-        SurfaceName = imported.Package.Document.BuildSettings.SurfaceName;
-        AnimationScriptAlias = imported.Package.Document.BuildSettings.AnimationScriptAlias ?? string.Empty;
-        _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
-        OnPropertyChanged(nameof(FlipTextureCoordinateV));
-        BuildStatus = imported.Package.Document.LastBuildReceipt is { } receipt
-            ? $"Last build: {receipt.State} at {receipt.CompletedUtc.LocalDateTime:g}"
-            : "Authoring draft";
-
-        Bones.Clear();
-        RootBoneNames.Clear();
-        foreach (CustomModelBone bone in imported.Package.Document.Bones)
+        imported = NormalizeBuildReceipt(imported, out string buildStatus);
+        _suppressPreviewRefresh = true;
+        try
         {
-            Bones.Add(new CustomModelBoneItemViewModel(bone));
-            RootBoneNames.Add(bone.Name);
+            _previewSession = null;
+            _model = imported;
+            _sourcePath = sourcePath;
+            _packagePath = packagePath;
+            ModelName = imported.Package.Document.Name;
+            SetProperty(ref _selectedRigMode, imported.Package.Document.RigMode, nameof(SelectedRigMode));
+            ResourceName = imported.Package.Document.BuildSettings.ResourceName;
+            SurfaceName = imported.Package.Document.BuildSettings.SurfaceName;
+            AnimationScriptAlias = imported.Package.Document.BuildSettings.AnimationScriptAlias ?? string.Empty;
+            _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
+            OnPropertyChanged(nameof(FlipTextureCoordinateV));
+            BuildStatus = buildStatus;
+
+            Bones.Clear();
+            RootBoneNames.Clear();
+            foreach (CustomModelBone bone in imported.Package.Document.Bones)
+            {
+                Bones.Add(new CustomModelBoneItemViewModel(bone));
+                RootBoneNames.Add(bone.Name);
+            }
+
+            PopulateMaterials();
+            foreach (CustomModelAnimationClipItemViewModel animation in Animations)
+            {
+                animation.PropertyChanged -= OnAnimationItemPropertyChanged;
+            }
+
+            Animations.Clear();
+            foreach (CustomModelAnimationClip clip in imported.Package.Document.AnimationClips)
+            {
+                imported.AnimationClips.TryGetValue(clip.Id, out AnimationClip? decoded);
+                var item = new CustomModelAnimationClipItemViewModel(clip, decoded);
+                item.PropertyChanged += OnAnimationItemPropertyChanged;
+                Animations.Add(item);
+            }
+
+            Diagnostics.Clear();
+            foreach (CustomModelImportDiagnostic diagnostic in imported.Package.Document.Diagnostics)
+            {
+                Diagnostics.Add(new CustomModelDiagnosticItemViewModel(diagnostic));
+            }
+
+            SelectedBone = Bones.FirstOrDefault();
+            SelectedMaterial = Materials.FirstOrDefault();
+            SelectedAnimation = Animations.FirstOrDefault(static clip => clip.DecodedClip is not null);
+            Summary =
+                $"{imported.Package.Document.Meshes.Length:N0} mesh part(s) | {imported.Surfaces.Length:N0} draw surface(s) | " +
+                $"{imported.Package.Document.Bones.Length:N0} rig node(s) | {Animations.Count:N0} animation stack(s) | " +
+                $"{Materials.Count:N0} material(s)";
+            OnPropertyChanged(nameof(HasModel));
+            OnPropertyChanged(nameof(CanChangeRigMode));
+            NotifyCommands();
+            RefreshTimeline();
+        }
+        finally
+        {
+            _suppressPreviewRefresh = false;
         }
 
-        PopulateMaterials();
-        Animations.Clear();
-        foreach (CustomModelAnimationClip clip in imported.Package.Document.AnimationClips)
-        {
-            imported.AnimationClips.TryGetValue(clip.Id, out AnimationClip? decoded);
-            var item = new CustomModelAnimationClipItemViewModel(clip, decoded);
-            item.PropertyChanged += OnAnimationItemPropertyChanged;
-            Animations.Add(item);
-        }
-
-        Diagnostics.Clear();
-        foreach (CustomModelImportDiagnostic diagnostic in imported.Package.Document.Diagnostics)
-        {
-            Diagnostics.Add(new CustomModelDiagnosticItemViewModel(diagnostic));
-        }
-
-        SelectedBone = Bones.FirstOrDefault();
-        SelectedMaterial = Materials.FirstOrDefault();
-        SelectedAnimation = Animations.FirstOrDefault(static clip => clip.DecodedClip is not null);
-        Summary =
-            $"{imported.Package.Document.Meshes.Length:N0} mesh part(s) | {imported.Surfaces.Length:N0} draw surface(s) | " +
-            $"{imported.Package.Document.Bones.Length:N0} rig node(s) | {Animations.Count:N0} animation stack(s) | " +
-            $"{Materials.Count:N0} material(s)";
-        OnPropertyChanged(nameof(HasModel));
-        NotifyCommands();
-        RefreshTimeline();
         RefreshPreview();
         FrameModel();
     }
@@ -821,6 +1117,65 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    internal static FbxModelAuthoringImportResult NormalizeBuildReceipt(
+        FbxModelAuthoringImportResult imported,
+        out string buildStatus)
+    {
+        ArgumentNullException.ThrowIfNull(imported);
+        CustomModelBuildReceipt? receipt = imported.Package.Document.LastBuildReceipt;
+        if (receipt is null)
+        {
+            buildStatus = "Authoring draft";
+            return imported;
+        }
+
+        if (Dl1OfficialModelCompiler.IsCurrentBuildReceipt(receipt, imported))
+        {
+            buildStatus =
+                $"Last compiler-validated build: {receipt.CompletedUtc.LocalDateTime:g}";
+            return imported;
+        }
+
+        string reason = receipt.State == CustomModelBuildState.GameReady
+            ? "The saved schema-1 game-ready receipt predates the current evidence boundary."
+            : string.Equals(
+                receipt.ToolFingerprint,
+                Dl1OfficialModelCompiler.CurrentToolFingerprint,
+                StringComparison.OrdinalIgnoreCase)
+                ? "The saved compiler receipt does not match the current model package or build settings."
+                : "The saved compiler receipt was produced by an older model-output contract.";
+        string message =
+            $"{reason} It was invalidated; rebuild this model before publishing it.";
+        ImmutableArray<CustomModelImportDiagnostic> diagnostics = imported.Package.Document.Diagnostics
+            .Where(static diagnostic =>
+                !string.Equals(
+                    diagnostic.Code,
+                    InvalidatedBuildReceiptDiagnosticCode,
+                    StringComparison.Ordinal))
+            .Append(new CustomModelImportDiagnostic
+            {
+                Code = InvalidatedBuildReceiptDiagnosticCode,
+                Severity = CustomModelImportSeverity.Warning,
+                Message = message,
+                Subject = imported.Package.Document.Name,
+            })
+            .ToImmutableArray();
+        CustomModelDocument document = imported.Package.Document with
+        {
+            Diagnostics = diagnostics,
+            LastBuildReceipt = null,
+        };
+        document.Validate();
+        buildStatus = message;
+        return imported with
+        {
+            Package = new CustomModelPackage(
+                document,
+                imported.Package.SourceFbx,
+                imported.Package.TexturePayloads),
+        };
+    }
+
     private void SyncDocument()
     {
         if (_model is null)
@@ -831,19 +1186,26 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         ImmutableArray<CustomModelAnimationClip> selections = Animations
             .Select(static item => item.ToContract())
             .ToImmutableArray();
-        CustomModelDocument document = _model.Package.Document with
+        CustomModelBuildSettings buildSettings = new()
+        {
+            ResourceName = Dl1SourceModelWriter.SanitizeName(ResourceName, 55),
+            SurfaceName = Dl1SourceModelWriter.SanitizeName(SurfaceName, 63),
+            AnimationScriptAlias = string.IsNullOrWhiteSpace(AnimationScriptAlias)
+                ? null
+                : AnimationScriptAlias.Trim(),
+            FlipTextureCoordinateV = FlipTextureCoordinateV,
+        };
+        CustomModelDocument current = _model.Package.Document;
+        bool invalidatesBuildReceipt =
+            !string.Equals(current.Name, ModelName, StringComparison.Ordinal) ||
+            !current.AnimationClips.SequenceEqual(selections) ||
+            current.BuildSettings != buildSettings;
+        CustomModelDocument document = current with
         {
             Name = ModelName,
             AnimationClips = selections,
-            BuildSettings = new CustomModelBuildSettings
-            {
-                ResourceName = Dl1SourceModelWriter.SanitizeName(ResourceName, 55),
-                SurfaceName = Dl1SourceModelWriter.SanitizeName(SurfaceName, 63),
-                AnimationScriptAlias = string.IsNullOrWhiteSpace(AnimationScriptAlias)
-                    ? null
-                    : AnimationScriptAlias.Trim(),
-                FlipTextureCoordinateV = FlipTextureCoordinateV,
-            },
+            BuildSettings = buildSettings,
+            LastBuildReceipt = invalidatesBuildReceipt ? null : current.LastBuildReceipt,
         };
         document.Validate();
         _model = _model with
@@ -857,8 +1219,14 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     private void RefreshPreview()
     {
+        if (_suppressPreviewRefresh)
+        {
+            return;
+        }
+
         if (_model is null)
         {
+            _previewSession = null;
             Viewport.SceneSource.SetScene([], null, []);
             return;
         }
@@ -867,27 +1235,57 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         int frame = clip is null
             ? 0
             : Math.Clamp(Timeline.CurrentFrame, 0, checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)));
-        CustomModelPreviewPayload payload = CustomModelPreviewAdapter.Create(
-            _model,
-            clip,
-            frame,
-            SelectedBone?.Index);
-        SkeletonRenderData? skeleton = ShowBones ? payload.Skeleton : null;
-        Viewport.SceneSource.SetScene(
-            payload.Meshes,
-            skeleton,
-            [],
-            generation: Interlocked.Increment(ref _previewGeneration));
+        bool replacePreparedScene;
+        CustomModelPreviewSession session;
+        if (_previewSession is null ||
+            !_previewSession.Matches(_model, SelectedPreviewMode.Mode))
+        {
+            session = CustomModelPreviewAdapter.CreateSession(
+                _model,
+                SelectedPreviewMode.Mode);
+            _previewSession = session;
+            replacePreparedScene = true;
+        }
+        else
+        {
+            session = _previewSession;
+            replacePreparedScene = false;
+        }
+
+        SkeletonRenderData? skeleton = ShowBones
+            ? session.CreateSkeleton(clip, frame, SelectedBone?.Index)
+            : null;
+        if (replacePreparedScene)
+        {
+            Viewport.SceneSource.SetScene(
+                session.Meshes,
+                skeleton,
+                [],
+                generation: Interlocked.Increment(ref _previewGeneration));
+        }
+        else
+        {
+            Viewport.SceneSource.SetSkeleton(skeleton);
+        }
+
         Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
         ApplySkeletonVisibility();
+        string previewLabel = session.IsSourceFallback
+            ? "Source FBX fallback"
+            : SelectedPreviewMode.Label;
         Viewport.SetPresentation(
-            $"Model preview — {ModelName}",
+            $"{previewLabel} preview - {ModelName}",
             clip is null
-                ? "Exact FBX bind hierarchy | neutral DL1 authoring render"
-                : $"Animation stack: {SelectedAnimation!.DisplayName} | frame {frame:N0}");
-        Viewport.SetDiagnosticOverlay(payload.Diagnostics.IsEmpty
+                ? session.EffectiveMode == CustomModelPreviewMode.Dl1Output
+                    ? "Emitted Chrome hierarchy, +X authored bone frames, and DL1 texture semantics"
+                    : session.IsSourceFallback
+                        ? "DL1 preparation failed; showing the unmodified source FBX hierarchy and texture coordinates"
+                        : "Unmodified FBX bind hierarchy, skin palettes, and source textures"
+                : $"Animation stack: {SelectedAnimation!.DisplayName} | frame {frame:N0}" +
+                    (session.IsSourceFallback ? " | Source FBX fallback" : string.Empty));
+        Viewport.SetDiagnosticOverlay(session.Diagnostics.IsEmpty
             ? null
-            : string.Join(Environment.NewLine, payload.Diagnostics.Take(3)));
+            : string.Join(Environment.NewLine, session.Diagnostics.Take(3)));
     }
 
     private void ApplySkeletonVisibility() =>
@@ -980,6 +1378,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     private void OnAnimationItemPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {
+        MarkAuthoringChanged();
         ExportAnimationRpackCommand.NotifyCanExecuteChanged();
         if (args.PropertyName is nameof(CustomModelAnimationClipItemViewModel.FrameRateNumerator) or
             nameof(CustomModelAnimationClipItemViewModel.FrameRateDenominator))
@@ -1001,6 +1400,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private void EnsureCurrent(long generation, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        EnsureCurrentGeneration(generation);
+    }
+
+    private void EnsureCurrentGeneration(long generation)
+    {
         if (generation != Volatile.Read(ref _operationGeneration))
         {
             throw new OperationCanceledException("A newer Models-workspace operation superseded this result.");
@@ -1016,6 +1420,26 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     }
 
     private void Cancel() => _operationCancellation?.Cancel();
+
+    private void MarkAuthoringChanged() => Interlocked.Increment(ref _authoringRevision);
+
+    private void ClearLastBuildReceipt()
+    {
+        if (_model is null || _model.Package.Document.LastBuildReceipt is null)
+        {
+            return;
+        }
+
+        CustomModelDocument document = _model.Package.Document with { LastBuildReceipt = null };
+        document.Validate();
+        _model = _model with
+        {
+            Package = new CustomModelPackage(
+                document,
+                _model.Package.SourceFbx,
+                _model.Package.TexturePayloads),
+        };
+    }
 
     private bool TryShowModelPicker(
         string status,
@@ -1046,6 +1470,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         OpenPackageCommand.NotifyCanExecuteChanged();
         SavePackageCommand.NotifyCanExecuteChanged();
         SelectTextureCommand.NotifyCanExecuteChanged();
+        BuildCompletePackageCommand.NotifyCanExecuteChanged();
         BuildLooseFilesCommand.NotifyCanExecuteChanged();
         SelectModelCompilerCommand.NotifyCanExecuteChanged();
         BuildModelRpackCommand.NotifyCanExecuteChanged();

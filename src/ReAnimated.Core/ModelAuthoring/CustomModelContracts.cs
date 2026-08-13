@@ -30,6 +30,31 @@ public enum CustomModelTextureSourceKind
     ExistingDl1Material,
 }
 
+/// <summary>
+/// Declares how authored texture samples are interpreted before DL1 output.
+/// Color textures are sRGB while data textures, including normals, remain
+/// linear. The declaration is stored in the portable model package so build
+/// results never depend on an editor-global texture setting.
+/// </summary>
+public enum CustomModelTextureColorSpace
+{
+    Auto,
+    Srgb,
+    Linear,
+}
+
+/// <summary>
+/// Declares the source channel convention of a normal-map binding. DL1's
+/// standard material samples tangent X from alpha and tangent Y from green;
+/// ordinary RGB normal maps must therefore be repacked before compilation.
+/// </summary>
+public enum CustomModelNormalMapConvention
+{
+    RgbOpenGl,
+    RgbDirectX,
+    Dl1AlphaGreen,
+}
+
 public enum CustomModelImportSeverity
 {
     Information,
@@ -43,6 +68,9 @@ public enum CustomModelBuildState
     NotBuilt,
     AuthoringDraft,
     CompilerReady,
+    CompilerValidated,
+    // Retained so existing schema-1 packages can still be read. New builds do
+    // not claim game readiness without a separate installed-editor/game gate.
     GameReady,
     Blocked,
 }
@@ -235,9 +263,13 @@ public sealed record CustomModelMeshPart
         ];
         if (counts.Any(static count => count < 0) ||
             !double.IsFinite(MaximumDiscardedWeight) ||
-            MaximumDiscardedWeight < 0.0)
+            MaximumDiscardedWeight < 0.0 ||
+            SourceMaterialIndices.IsDefault ||
+            SourceMaterialIndices.Any(static index => index < 0))
         {
-            throw new ArgumentOutOfRangeException(parameterName, $"Mesh '{Name}' contains invalid counts.");
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                $"Mesh '{Name}' contains invalid counts or source material indices.");
         }
     }
 }
@@ -249,6 +281,17 @@ public sealed record CustomModelTextureBinding
     public CustomModelTextureSemantic Semantic { get; init; }
 
     public CustomModelTextureSourceKind SourceKind { get; init; }
+
+    public CustomModelTextureColorSpace ColorSpace { get; init; } =
+        CustomModelTextureColorSpace.Auto;
+
+    /// <summary>
+    /// Source-channel convention used when <see cref="Semantic"/> is
+    /// <see cref="CustomModelTextureSemantic.Normal"/>. Other semantics
+    /// retain the default value and do not interpret it.
+    /// </summary>
+    public CustomModelNormalMapConvention NormalMapConvention { get; init; } =
+        CustomModelNormalMapConvention.RgbOpenGl;
 
     public string DisplayName { get; init; } = string.Empty;
 
@@ -269,6 +312,36 @@ public sealed record CustomModelTextureBinding
 
         ArgumentException.ThrowIfNullOrWhiteSpace(DisplayName, parameterName);
         ArgumentException.ThrowIfNullOrWhiteSpace(MediaType, parameterName);
+        if (!Enum.IsDefined(Semantic) ||
+            !Enum.IsDefined(SourceKind) ||
+            !Enum.IsDefined(ColorSpace) ||
+            !Enum.IsDefined(NormalMapConvention))
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                "Texture bindings contain an unsupported semantic, source, color-space, or normal-map convention.");
+        }
+
+        if (Semantic == CustomModelTextureSemantic.BaseColor &&
+            ColorSpace == CustomModelTextureColorSpace.Linear)
+        {
+            throw new ArgumentException("Base-color textures must be authored as sRGB.", parameterName);
+        }
+
+        if (Semantic != CustomModelTextureSemantic.BaseColor &&
+            ColorSpace == CustomModelTextureColorSpace.Srgb)
+        {
+            throw new ArgumentException("Normal, specular, and mask textures must be authored as linear data.", parameterName);
+        }
+
+        if (Semantic != CustomModelTextureSemantic.Normal &&
+            NormalMapConvention != CustomModelNormalMapConvention.RgbOpenGl)
+        {
+            throw new ArgumentException(
+                "A normal-map channel convention can only be assigned to normal textures.",
+                parameterName);
+        }
+
         ProjectAssetReference.ValidateSha256(ContentSha256, parameterName);
         if (PackageEntryPath is { } entryPath)
         {
@@ -387,6 +460,10 @@ public sealed record CustomModelBuildSettings
 
     public string SurfaceName { get; init; } = "default";
 
+    /// <summary>
+    /// Extensionless type-322 AnimationScr resource identity. Loose ASCR
+    /// output references the corresponding virtual <c>{identity}.scr</c> file.
+    /// </summary>
     public string? AnimationScriptAlias { get; init; }
 
     /// <summary>

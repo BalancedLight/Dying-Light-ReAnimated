@@ -173,6 +173,8 @@
         "id": { "type": "string", "format": "uuid" },
         "semantic": { "enum": ["baseColor", "normal", "specular", "mask"] },
         "sourceKind": { "enum": ["embeddedFbx", "externalFbx", "userOverride", "existingDl1Material"] },
+        "colorSpace": { "enum": ["auto", "srgb", "linear"] },
+        "normalMapConvention": { "enum": ["rgbOpenGl", "rgbDirectX", "dl1AlphaGreen"] },
         "displayName": { "type": "string", "minLength": 1 },
         "packageEntryPath": { "$ref": "#/$defs/packagePath" },
         "originalReference": { "type": "string" },
@@ -249,7 +251,7 @@
         "toolFingerprint": { "$ref": "#/$defs/sha256" },
         "compilerFingerprint": { "$ref": "#/$defs/sha256" },
         "outputManifestFingerprint": { "$ref": "#/$defs/sha256" },
-        "state": { "enum": ["notBuilt", "authoringDraft", "compilerReady", "gameReady", "blocked"] },
+        "state": { "enum": ["notBuilt", "authoringDraft", "compilerReady", "compilerValidated", "gameReady", "blocked"] },
         "completedUtc": { "type": "string", "format": "date-time" },
         "blockingReasons": { "type": "array", "items": { "type": "string" } }
       }

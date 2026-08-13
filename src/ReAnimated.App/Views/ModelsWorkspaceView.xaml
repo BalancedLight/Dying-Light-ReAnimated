@@ -54,7 +54,9 @@
                     <TextBlock Margin="0,6,0,2" Text="Model name" />
                     <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}" />
                     <TextBlock Margin="0,6,0,2" Text="Rig treatment" />
-                    <ComboBox ItemsSource="{Binding RigModes}" SelectedItem="{Binding SelectedRigMode}" />
+                    <ComboBox IsEnabled="{Binding CanChangeRigMode}"
+                              ItemsSource="{Binding RigModes}"
+                              SelectedItem="{Binding SelectedRigMode}" />
                     <TextBlock Margin="0,3,0,8"
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
@@ -72,6 +74,10 @@
 
                     <Separator Margin="0,12" />
                     <TextBlock FontWeight="SemiBold" Text="Preview" />
+                    <TextBlock Margin="0,5,0,2" Text="Preview contract" />
+                    <ComboBox DisplayMemberPath="Label"
+                              ItemsSource="{Binding PreviewModeChoices}"
+                              SelectedItem="{Binding SelectedPreviewMode}" />
                     <WrapPanel Margin="0,5,0,4">
                         <Button Command="{Binding FrameModelCommand}" Content="Frame model" />
                         <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
@@ -163,7 +169,7 @@
                         </Grid.RowDefinitions>
                         <TextBlock Margin="2,0,2,6"
                                    Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Embedded FBX textures are used automatically. Select a material to override its base-color texture with a local image."
+                                   Text="Embedded FBX textures are used automatically. Override base color, normal, or specular independently. Normal maps are repacked to DL1's alpha/green convention during build."
                                    TextWrapping="Wrap" />
                         <ListBox Grid.Row="1"
                                  ItemsSource="{Binding Materials}"
@@ -180,11 +186,21 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <Button Grid.Row="2"
-                                Margin="0,7,0,0"
-                                HorizontalAlignment="Left"
-                                Command="{Binding SelectTextureCommand}"
-                                Content="Choose base-color texture..." />
+                        <StackPanel Grid.Row="2" Margin="0,7,0,0">
+                            <TextBlock Text="Texture channel" />
+                            <ComboBox Margin="0,2,0,5"
+                                      ItemsSource="{Binding TextureSemantics}"
+                                      SelectedItem="{Binding SelectedTextureSemantic}" />
+                            <StackPanel Visibility="{Binding IsNormalTextureSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Source normal convention" />
+                                <ComboBox Margin="0,2,0,5"
+                                          ItemsSource="{Binding NormalMapConventions}"
+                                          SelectedItem="{Binding SelectedNormalMapConvention}" />
+                            </StackPanel>
+                            <Button HorizontalAlignment="Left"
+                                    Command="{Binding SelectTextureCommand}"
+                                    Content="Choose texture..." />
+                        </StackPanel>
                     </Grid>
                 </TabItem>
 
@@ -247,23 +263,14 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
                         <Button HorizontalAlignment="Stretch"
-                                Command="{Binding BuildLooseFilesCommand}"
-                                Content="Build DL1 loose model sources..." />
-                        <Button Grid.Row="1"
-                                Margin="0,5,0,0"
-                                HorizontalAlignment="Stretch"
-                                Command="{Binding ExportAnimationRpackCommand}"
-                                Content="Export selected animations as RPack..." />
-                        <Button Grid.Row="2"
-                                Margin="0,5,0,0"
-                                HorizontalAlignment="Stretch"
-                                Command="{Binding BuildModelRpackCommand}"
-                                Content="Compile model RPack with Developer Tools..." />
-                        <StackPanel Grid.Row="3" Margin="0,6,0,0">
+                                Padding="8,6"
+                                FontWeight="SemiBold"
+                                Command="{Binding BuildCompletePackageCommand}"
+                                Content="Build complete DL1 model package..." />
+                        <StackPanel Grid.Row="1" Margin="0,6,0,0">
                             <Button HorizontalAlignment="Left"
                                     Command="{Binding SelectModelCompilerCommand}"
                                     Content="Choose Developer Tools compiler..." />
@@ -273,7 +280,7 @@
                                        Text="{Binding CompilerStatus}"
                                        TextWrapping="Wrap" />
                         </StackPanel>
-                        <Border Grid.Row="4"
+                        <Border Grid.Row="2"
                                 Margin="0,8"
                                 Padding="8"
                                 Background="#3B301D"
@@ -281,10 +288,27 @@
                                 BorderThickness="1"
                                 CornerRadius="3">
                             <TextBlock Foreground="#F3C978"
-                                       Text="Loose output emits source .msh, .bscr, and optional .ascr. Animation stacks export to a separate animation RPack. Model-RPack compilation runs Techland's compiler in an isolated temporary project and validates the resulting type-272 mesh before publishing it. .chr and .skn remain blocked rather than fabricated."
+                                       Text="One transaction writes the loose .msh/.bscr/.chr and optional .ascr, compiles and validates the model RPack and local_dx11.mp, and emits one animation RPack when stacks are selected. Nothing replaces the previous package until every required artifact passes validation."
                                        TextWrapping="Wrap" />
                         </Border>
-                        <ListBox Grid.Row="5" ItemsSource="{Binding Diagnostics}">
+                        <Expander Grid.Row="3"
+                                  Margin="0,0,0,8"
+                                  Header="Advanced partial exports">
+                            <StackPanel Margin="0,5,0,0">
+                                <Button HorizontalAlignment="Stretch"
+                                        Command="{Binding BuildLooseFilesCommand}"
+                                        Content="Write loose source files only..." />
+                                <Button Margin="0,5,0,0"
+                                        HorizontalAlignment="Stretch"
+                                        Command="{Binding ExportAnimationRpackCommand}"
+                                        Content="Export animation RPack only..." />
+                                <Button Margin="0,5,0,0"
+                                        HorizontalAlignment="Stretch"
+                                        Command="{Binding BuildModelRpackCommand}"
+                                        Content="Compile model RPack only..." />
+                            </StackPanel>
+                        </Expander>
+                        <ListBox Grid.Row="4" ItemsSource="{Binding Diagnostics}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <StackPanel Margin="3,4">

@@ -431,6 +431,7 @@ public sealed class EditorUsabilitySurfaceTests
             "{Binding OpenPackageCommand}",
             "{Binding SavePackageCommand}",
             "{Binding SelectTextureCommand}",
+            "{Binding BuildCompletePackageCommand}",
             "{Binding BuildLooseFilesCommand}",
             "{Binding ExportAnimationRpackCommand}",
             "{Binding BuildModelRpackCommand}",
@@ -446,6 +447,16 @@ public sealed class EditorUsabilitySurfaceTests
                     command,
                     StringComparison.Ordinal));
         }
+
+        XElement rigTreatment = Assert.Single(
+            workspace.Descendants(Presentation + "ComboBox"),
+            static element => string.Equals(
+                (string?)element.Attribute("SelectedItem"),
+                "{Binding SelectedRigMode}",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "{Binding CanChangeRigMode}",
+            (string?)rigTreatment.Attribute("IsEnabled"));
 
         string[] editableAnimationFields =
         [
@@ -474,7 +485,7 @@ public sealed class EditorUsabilitySurfaceTests
         Assert.Contains(
             workspace.Descendants(Presentation + "TextBlock"),
             static element => ((string?)element.Attribute("Text"))?.Contains(
-                ".chr and .skn remain blocked",
+                "loose .msh/.bscr/.chr",
                 StringComparison.OrdinalIgnoreCase) == true);
 
         string dialogCode = File.ReadAllText(

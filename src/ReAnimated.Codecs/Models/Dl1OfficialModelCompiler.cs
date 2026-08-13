@@ -58,13 +58,16 @@ public sealed record Dl1OfficialModelCompilerResult(
 /// </summary>
 public static class Dl1OfficialModelCompiler
 {
+    private const string ToolContractIdentity =
+        "dl-reanimated-csharp-model-compiler-chr-local-ascr-filename-v6";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
     private const int WindowsAccessViolationExitCode = unchecked((int)0xC0000005);
+    private const int WindowsIllegalInstructionExitCode = unchecked((int)0xC000001D);
     private const string CompilerEnvironmentVariable = "DLR_DL1_RESPACK_COMPILER";
 
-    private static readonly string[] UnsupportedCompiledOutputs = [".chr", ".skn"];
+    private static readonly string[] UnsupportedCompiledOutputs = [".skn"];
 
     private static readonly (string Target, string[] Sources)[] BootstrapFiles =
     [
@@ -83,6 +86,70 @@ public static class Dl1OfficialModelCompiler
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = true,
     };
+
+    /// <summary>
+    /// Identifies the complete source-writer and compiler-validation contract
+    /// represented by a model-build receipt. Changing CHR, MSH, material,
+    /// animation-alias, or archive-validation semantics must change the
+    /// contract identity so older receipts fail closed when reopened.
+    /// </summary>
+    public static string CurrentToolFingerprint { get; } =
+        Sha256(Encoding.UTF8.GetBytes(ToolContractIdentity));
+
+    public static bool IsCurrentBuildReceipt(
+        CustomModelBuildReceipt? receipt,
+        FbxModelAuthoringImportResult model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        if (receipt is not
+            {
+                State: CustomModelBuildState.CompilerValidated,
+            } ||
+            !string.Equals(
+                receipt.ToolFingerprint,
+                CurrentToolFingerprint,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        CustomModelBuildSettings settings = model.Package.Document.BuildSettings;
+        string expectedInputFingerprint = CalculateInputFingerprint(
+            model,
+            settings.ResourceName,
+            settings.SurfaceName,
+            settings.AnimationScriptAlias);
+        return string.Equals(
+            receipt.InputFingerprint,
+            expectedInputFingerprint,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static string CalculateInputFingerprint(
+        FbxModelAuthoringImportResult model,
+        string resourceName,
+        string surfaceName,
+        string? animationScriptAlias)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        model.Package.Document.Validate();
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(surfaceName);
+        string canonicalResourceName = Dl1SourceModelWriter.SanitizeName(resourceName, 55);
+        string canonicalSurfaceName = Dl1SourceModelWriter.SanitizeName(surfaceName, 63);
+        CustomModelPackage fingerprintPackage = new(
+            model.Package.Document with { LastBuildReceipt = null },
+            model.Package.SourceFbx,
+            model.Package.TexturePayloads);
+        ImmutableArray<byte> packageBytes =
+            CustomModelPackageSerializer.Serialize(fingerprintPackage);
+        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        hash.AppendData("dl-reanimated-model-compiler-input-v2\0"u8);
+        hash.AppendData(packageBytes.AsSpan());
+        hash.AppendData(Encoding.UTF8.GetBytes(
+            $"\0resource={canonicalResourceName}\0surface={canonicalSurfaceName}\0animationAlias={animationScriptAlias?.Trim() ?? string.Empty}"));
+        return Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
 
     public static string? FindDefaultCompilerExecutable()
     {
@@ -226,8 +293,8 @@ public static class Dl1OfficialModelCompiler
                     "local_dx11.mp");
                 ValidateCompiledMaterialDatabase(
                     compiledMaterialDatabase,
-                    projectDirectory,
-                    locallyAuthoredMaterialReferences);
+                    locallyAuthoredMaterialReferences,
+                    sourceBuild.TextureSourceFiles);
             }
 
             ImmutableArray<CompilerResourceUnit> units = CreateCompilerResourceUnits(
@@ -264,12 +331,16 @@ public static class Dl1OfficialModelCompiler
                     unit.ExpectedObjectFileName);
                 if (process.ExitCode != 0)
                 {
-                    if (process.ExitCode == WindowsAccessViolationExitCode &&
+                    if ((process.ExitCode == WindowsAccessViolationExitCode ||
+                         process.ExitCode == WindowsIllegalInstructionExitCode) &&
                         emittedObject is not null)
                     {
+                        string exceptionName = process.ExitCode == WindowsAccessViolationExitCode
+                            ? "access violation 0xC0000005"
+                            : "illegal instruction 0xC000001D";
                         AppendBounded(
                             compilerLog,
-                            $"Techland compiler exited with access violation 0xC0000005 after emitting {Path.GetFileName(emittedObject)}. " +
+                            $"Techland compiler exited with {exceptionName} after emitting {Path.GetFileName(emittedObject)}. " +
                             "The isolated object will be admitted only if bounded linking and ordinary RP6L validation both pass.\r\n");
                     }
                     else
@@ -430,19 +501,17 @@ public static class Dl1OfficialModelCompiler
                 Encoding.UTF8.GetBytes(
                     $"rpack={outputRpackSha256}\nmsh_obj={outputObjectSha256}\nlocal_dx11.mp={outputMaterialDatabaseSha256 ?? "none"}\n"));
             string inputFingerprint = CreateInputFingerprint(request, resourceName);
-            string toolFingerprint = Sha256(Encoding.UTF8.GetBytes(
-                "dl-reanimated-csharp-model-compiler-material-texture-link-v4"));
             CustomModelBuildReceipt buildReceipt = new()
             {
                 InputFingerprint = inputFingerprint,
-                ToolFingerprint = toolFingerprint,
+                ToolFingerprint = CurrentToolFingerprint,
                 CompilerFingerprint = compilerFingerprint,
                 OutputManifestFingerprint = outputManifestFingerprint,
-                State = CustomModelBuildState.GameReady,
+                State = CustomModelBuildState.CompilerValidated,
                 CompletedUtc = DateTimeOffset.UtcNow,
                 BlockingReasons =
                 [
-                    ".chr and .skn remain unsupported until an evidence-backed writer is validated.",
+                    ".skn remains unsupported; the loose package includes the evidence-backed CHR v4 definition.",
                 ],
             };
             string receiptPath = Path.Combine(
@@ -454,7 +523,7 @@ public static class Dl1OfficialModelCompiler
                     format = "dl-reanimated-csharp-model-compiler-receipt",
                     schemaVersion = 1,
                     resourceName,
-                    state = CustomModelBuildState.GameReady.ToString(),
+                    state = CustomModelBuildState.CompilerValidated.ToString(),
                     input = new
                     {
                         sourceFbxSha256 = request.Model.Package.Document.Source.ContentSha256,
@@ -471,7 +540,7 @@ public static class Dl1OfficialModelCompiler
                     linker = new
                     {
                         kind = "opaque-mesh-and-texture-object-link",
-                        toolFingerprint,
+                        toolFingerprint = CurrentToolFingerprint,
                         normalization.ConvertedResourceCount,
                     },
                     outputs = new[]
@@ -748,49 +817,309 @@ public static class Dl1OfficialModelCompiler
 
     internal static void ValidateCompiledMaterialDatabase(
         string materialDatabasePath,
-        string projectDirectory,
-        IEnumerable<string> customMaterialReferences)
+        IEnumerable<string> customMaterialReferences,
+        IEnumerable<string> customTextureReferences)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(materialDatabasePath);
-        ArgumentException.ThrowIfNullOrWhiteSpace(projectDirectory);
         ArgumentNullException.ThrowIfNull(customMaterialReferences);
+        ArgumentNullException.ThrowIfNull(customTextureReferences);
         if (!File.Exists(materialDatabasePath))
         {
             throw new InvalidDataException(
                 "Techland's material compiler did not emit Assets_PC/local_dx11.mp. No model bundle was published.");
         }
 
+        Dictionary<uint, CompiledMaterialRecord> materials;
         using (FileStream stream = new(
                    materialDatabasePath,
                    FileMode.Open,
                    FileAccess.Read,
-                   FileShare.Read))
+                   FileShare.Read,
+                   bufferSize: 4096,
+                   FileOptions.RandomAccess))
         {
-            Span<byte> magic = stackalloc byte[4];
-            if (stream.Length < 16 || stream.Read(magic) != magic.Length ||
-                BinaryPrimitives.ReadUInt32LittleEndian(magic) != 0x4D44_4241)
+            try
+            {
+                materials = ReadCompiledMaterialRecords(stream);
+            }
+            catch (InvalidDataException exception)
             {
                 throw new InvalidDataException(
-                    "Techland's material compiler emitted an invalid ABDM local_dx11.mp. No model bundle was published.");
+                    "Techland's material compiler emitted an invalid ABDM local_dx11.mp. No model bundle was published.",
+                    exception);
             }
         }
 
-        string materialDependencyRoot = Path.Combine(projectDirectory, "Assets_PC");
-        string[] missing = customMaterialReferences
-            .Select(static reference => $"{Path.GetFileNameWithoutExtension(reference.Replace('\\', '/'))}.dmt_obj_dep")
-            .Where(name => Directory.GetFiles(
-                materialDependencyRoot,
-                name,
-                SearchOption.AllDirectories).Length == 0)
+        string[] materialNames = customMaterialReferences
+            .Select(NormalizeCompiledResourceName)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToArray();
-        if (missing.Length != 0)
+        string[] missingMaterials = materialNames
+            .Where(name => !materials.ContainsKey(ComputeCompiledResourceHash(name)))
+            .ToArray();
+        if (missingMaterials.Length != 0)
         {
             throw new InvalidDataException(
-                $"Techland's material compiler did not compile material source(s): {string.Join(", ", missing)}. " +
+                $"Techland's material compiler database is missing material resource(s): {string.Join(", ", missingMaterials)}. " +
                 "No model bundle was published.");
         }
+
+        HashSet<uint> compiledTextureHashes = materialNames
+            .Select(name => materials[ComputeCompiledResourceHash(name)])
+            .SelectMany(static material => material.TextureNameHashes)
+            .ToHashSet();
+        string[] missingTextures = customTextureReferences
+            .Select(static source => new
+            {
+                SourceName = NormalizeCompiledResourceName(source),
+                CompiledResourceName = NormalizeCompiledTextureReferenceName(source),
+            })
+            .Where(texture => !compiledTextureHashes.Contains(
+                ComputeCompiledTextureReferenceHash(texture.CompiledResourceName)))
+            .Select(static texture => texture.SourceName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Order(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        if (missingTextures.Length != 0)
+        {
+            throw new InvalidDataException(
+                $"Techland's compiled materials do not reference authored texture resource(s): {string.Join(", ", missingTextures)}. " +
+                "No model bundle was published.");
+        }
+    }
+
+    private static Dictionary<uint, CompiledMaterialRecord> ReadCompiledMaterialRecords(FileStream stream)
+    {
+        const int headerBytes = 16;
+        const int containerRowBytes = 48;
+        const int materialRowBytes = 16;
+        const int textureRowBytes = 12;
+        const int maximumContainers = 128;
+        const int maximumMaterials = 1_000_000;
+        const int maximumTableBytes = 32 * 1024 * 1024;
+        const int maximumMaterialBytes = 1024 * 1024;
+        const int maximumTextures = 256;
+
+        if (stream.Length < headerBytes)
+        {
+            throw new InvalidDataException("The ABDM material database is shorter than its header.");
+        }
+
+        byte[] header = ReadExactlyAt(stream, 0, headerBytes);
+        ReadOnlySpan<byte> headerData = header;
+        if (BinaryPrimitives.ReadUInt32LittleEndian(headerData) != 0x4D44_4241 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(headerData[12..]) != 0)
+        {
+            throw new InvalidDataException("The ABDM material database header is invalid.");
+        }
+
+        int containerCount = ReadBoundedCompiledCount(headerData[4..], maximumContainers, "container");
+        long containerOffset = BinaryPrimitives.ReadUInt32LittleEndian(headerData[8..]);
+        int containerBytes = checked(containerCount * containerRowBytes);
+        if (containerBytes > maximumTableBytes)
+        {
+            throw new InvalidDataException("The ABDM container table exceeds its bounded size.");
+        }
+
+        ValidateCompiledRange(containerOffset, containerBytes, stream.Length, "container table");
+        byte[] containerTable = ReadExactlyAt(stream, containerOffset, containerBytes);
+        int materialCount = -1;
+        long materialTableOffset = -1;
+        for (int index = 0; index < containerCount; index++)
+        {
+            ReadOnlySpan<byte> row = containerTable.AsSpan(index * containerRowBytes, containerRowBytes);
+            int terminator = row[..32].IndexOf((byte)0);
+            if (terminator < 0 ||
+                row[(terminator + 1)..32].ContainsAnyExcept((byte)0) ||
+                !IsPrintableCompiledAscii(row[..terminator]))
+            {
+                throw new InvalidDataException($"ABDM container {index} has an invalid name.");
+            }
+
+            string name = Encoding.ASCII.GetString(row[..terminator]);
+            int count = ReadBoundedCompiledCount(row[32..], maximumMaterials, $"'{name}' entry");
+            int declared = ReadBoundedCompiledCount(row[36..], maximumMaterials, $"'{name}' declared entry");
+            if (count != declared || BinaryPrimitives.ReadUInt32LittleEndian(row[44..]) != 0)
+            {
+                throw new InvalidDataException($"ABDM container '{name}' has an unsupported layout.");
+            }
+
+            if (!name.Equals("materials", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (materialCount >= 0)
+            {
+                throw new InvalidDataException("The ABDM database has multiple materials containers.");
+            }
+
+            materialCount = count;
+            materialTableOffset = BinaryPrimitives.ReadUInt32LittleEndian(row[40..]);
+        }
+
+        if (materialCount < 0)
+        {
+            throw new InvalidDataException("The ABDM database has no materials container.");
+        }
+
+        int materialTableBytes = checked(materialCount * materialRowBytes);
+        if (materialTableBytes > maximumTableBytes)
+        {
+            throw new InvalidDataException("The ABDM material table exceeds its bounded size.");
+        }
+
+        ValidateCompiledRange(materialTableOffset, materialTableBytes, stream.Length, "material table");
+        byte[] materialTable = ReadExactlyAt(stream, materialTableOffset, materialTableBytes);
+        var materials = new Dictionary<uint, CompiledMaterialRecord>(materialCount);
+        uint previousHash = 0;
+        for (int index = 0; index < materialCount; index++)
+        {
+            ReadOnlySpan<byte> row = materialTable.AsSpan(index * materialRowBytes, materialRowBytes);
+            uint hash = BinaryPrimitives.ReadUInt32LittleEndian(row);
+            long offset = BinaryPrimitives.ReadUInt32LittleEndian(row[4..]);
+            int logicalSize = ReadBoundedCompiledCount(row[8..], maximumMaterialBytes, "material byte");
+            int storedSize = ReadBoundedCompiledCount(row[12..], maximumMaterialBytes, "stored material byte");
+            if (logicalSize > storedSize || (index > 0 && hash <= previousHash))
+            {
+                throw new InvalidDataException($"ABDM material 0x{hash:X8} has an invalid inventory row.");
+            }
+
+            ValidateCompiledRange(offset, storedSize, stream.Length, $"material 0x{hash:X8}");
+            byte[] payload = ReadExactlyAt(stream, offset, logicalSize);
+            if (payload.Length < 24 || BinaryPrimitives.ReadUInt32LittleEndian(payload) != hash)
+            {
+                throw new InvalidDataException($"ABDM material 0x{hash:X8} has invalid fixed fields.");
+            }
+
+            int textureCount = BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(18));
+            if (textureCount > maximumTextures)
+            {
+                throw new InvalidDataException($"ABDM material 0x{hash:X8} declares too many textures.");
+            }
+
+            int textureOffset = checked(22 + BinaryPrimitives.ReadUInt16LittleEndian(payload.AsSpan(22)));
+            int textureBytes = checked(textureCount * textureRowBytes);
+            if (textureCount > 0 && (textureOffset < 24 || textureOffset > payload.Length - textureBytes))
+            {
+                throw new InvalidDataException($"ABDM material 0x{hash:X8} has an invalid texture table.");
+            }
+
+            var textureHashes = ImmutableArray.CreateBuilder<uint>(textureCount);
+            for (int textureIndex = 0; textureIndex < textureCount; textureIndex++)
+            {
+                int rowOffset = textureOffset + textureIndex * textureRowBytes;
+                textureHashes.Add(BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(rowOffset + 4)));
+            }
+
+            materials.Add(hash, new CompiledMaterialRecord(textureHashes.ToImmutable()));
+            previousHash = hash;
+        }
+
+        return materials;
+    }
+
+    private static bool IsPrintableCompiledAscii(ReadOnlySpan<byte> bytes)
+    {
+        foreach (byte value in bytes)
+        {
+            if (value is < 0x20 or > 0x7E)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static byte[] ReadExactlyAt(FileStream stream, long offset, int count)
+    {
+        byte[] bytes = GC.AllocateUninitializedArray<byte>(count);
+        stream.Position = offset;
+        stream.ReadExactly(bytes);
+        return bytes;
+    }
+
+    private static int ReadBoundedCompiledCount(ReadOnlySpan<byte> bytes, int maximum, string field)
+    {
+        uint value = BinaryPrimitives.ReadUInt32LittleEndian(bytes);
+        if (value > maximum)
+        {
+            throw new InvalidDataException($"The ABDM {field} count {value:N0} exceeds the bounded {maximum:N0} limit.");
+        }
+
+        return checked((int)value);
+    }
+
+    private static void ValidateCompiledRange(long offset, int size, long length, string field)
+    {
+        if (offset < 0 || size < 0 || offset > length || size > length - offset)
+        {
+            throw new InvalidDataException($"The ABDM {field} range is outside the database.");
+        }
+    }
+
+    private static string NormalizeCompiledResourceName(string resourceName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+        string fileName = resourceName.Replace('\\', '/').Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? string.Empty;
+        if (fileName.Length == 0 || fileName.Contains('\0') || fileName.Any(static value => value > 0x7F))
+        {
+            throw new InvalidDataException($"DL1 resource name '{resourceName}' is not a safe ASCII filename.");
+        }
+
+        return fileName.ToLowerInvariant();
+    }
+
+    private static uint ComputeCompiledResourceHash(string resourceName)
+    {
+        uint crc = 0x811C9DC5 ^ uint.MaxValue;
+        foreach (byte value in Encoding.ASCII.GetBytes(NormalizeCompiledResourceName(resourceName)))
+        {
+            crc ^= value;
+            for (int bit = 0; bit < 8; bit++)
+            {
+                uint mask = unchecked((uint)-(int)(crc & 1));
+                crc = (crc >> 1) ^ (0xEDB88320U & mask);
+            }
+        }
+
+        return crc ^ uint.MaxValue;
+    }
+
+    private static string NormalizeCompiledTextureReferenceName(string resourceName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
+        string fileName = resourceName.Replace('\\', '/').Split(
+            '/',
+            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault() ?? string.Empty;
+        if (fileName.Length == 0 || fileName.Contains('\0') || fileName.Any(static value => value > 0x7F))
+        {
+            throw new InvalidDataException($"DL1 texture resource name '{resourceName}' is not a safe ASCII filename.");
+        }
+
+        return fileName.EndsWith(".dds", StringComparison.OrdinalIgnoreCase)
+            ? fileName
+            : string.Concat(fileName, ".dds");
+    }
+
+    private static uint ComputeCompiledTextureReferenceHash(string resourceName)
+    {
+        uint crc = 0x811C9DC5 ^ uint.MaxValue;
+        foreach (byte value in Encoding.ASCII.GetBytes(NormalizeCompiledTextureReferenceName(resourceName)))
+        {
+            crc ^= value;
+            for (int bit = 0; bit < 8; bit++)
+            {
+                uint mask = unchecked((uint)-(int)(crc & 1));
+                crc = (crc >> 1) ^ (0xEDB88320U & mask);
+            }
+        }
+
+        return crc ^ uint.MaxValue;
     }
 
     private static void ValidateCompiledResourceNames(
@@ -1131,28 +1460,23 @@ public static class Dl1OfficialModelCompiler
     }
 
     private static string? TryFindCompilerOutput(string root, string fileName) =>
-        Directory.GetFiles(root, fileName, SearchOption.AllDirectories)
+        Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+            .Where(path => string.Equals(
+                Path.GetFileName(path),
+                fileName,
+                StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(path => path.Contains("CompilerOutput", StringComparison.OrdinalIgnoreCase))
             .ThenBy(path => path.Length)
             .FirstOrDefault();
 
     private static string CreateInputFingerprint(
         Dl1OfficialModelCompilerRequest request,
-        string resourceName)
-    {
-        CustomModelPackage fingerprintPackage = new(
-            request.Model.Package.Document with { LastBuildReceipt = null },
-            request.Model.Package.SourceFbx,
-            request.Model.Package.TexturePayloads);
-        ImmutableArray<byte> packageBytes =
-            CustomModelPackageSerializer.Serialize(fingerprintPackage);
-        using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("dl-reanimated-model-compiler-input-v2\0"u8);
-        hash.AppendData(packageBytes.AsSpan());
-        hash.AppendData(Encoding.UTF8.GetBytes(
-            $"\0resource={resourceName}\0surface={request.SurfaceName}\0animationAlias={request.AnimationScriptAlias ?? string.Empty}"));
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
+        string resourceName) =>
+        CalculateInputFingerprint(
+            request.Model,
+            resourceName,
+            request.SurfaceName,
+            request.AnimationScriptAlias);
 
     private static async Task PublishFileAtomicallyAsync(
         string sourcePath,
@@ -1297,6 +1621,9 @@ public static class Dl1OfficialModelCompiler
     private static string EscapeScript(string value) =>
         value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
+
+    private sealed record CompiledMaterialRecord(
+        ImmutableArray<uint> TextureNameHashes);
 
     private sealed record ProcessResult(int ExitCode, string Output);
 

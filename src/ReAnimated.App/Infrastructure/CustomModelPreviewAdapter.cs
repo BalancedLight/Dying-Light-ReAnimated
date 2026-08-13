@@ -4,6 +4,7 @@ using System.Numerics;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
@@ -11,10 +12,108 @@ using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.App.Infrastructure;
 
+public enum CustomModelPreviewMode
+{
+    SourceFbx,
+    Dl1Output,
+}
+
 public sealed record CustomModelPreviewPayload(
     IReadOnlyList<MeshRenderData> Meshes,
     SkeletonRenderData? Skeleton,
     ImmutableArray<string> Diagnostics);
+
+/// <summary>
+/// One immutable prepared preview. Mesh conversion, texture decoding, and DL1
+/// rig authoring happen once; animation playback samples only the skeleton.
+/// </summary>
+public sealed class CustomModelPreviewSession
+{
+    private readonly FbxModelAuthoringImportResult _model;
+    private readonly Dl1PreparedAuthoredRig? _authoredRig;
+    private readonly bool _configuredFlipTextureCoordinateV;
+
+    internal CustomModelPreviewSession(
+        FbxModelAuthoringImportResult model,
+        CustomModelPreviewMode requestedMode,
+        CustomModelPreviewMode effectiveMode,
+        bool configuredFlipTextureCoordinateV,
+        bool appliesTextureCoordinateVFlip,
+        Dl1PreparedAuthoredRig? authoredRig,
+        ImmutableArray<MeshRenderData> meshes,
+        ImmutableArray<string> diagnostics)
+    {
+        _model = model;
+        _authoredRig = authoredRig;
+        _configuredFlipTextureCoordinateV = configuredFlipTextureCoordinateV;
+        RequestedMode = requestedMode;
+        EffectiveMode = effectiveMode;
+        AppliesTextureCoordinateVFlip = appliesTextureCoordinateVFlip;
+        Meshes = meshes;
+        Diagnostics = diagnostics;
+    }
+
+    public CustomModelPreviewMode RequestedMode { get; }
+
+    public CustomModelPreviewMode EffectiveMode { get; }
+
+    public bool IsSourceFallback => RequestedMode != EffectiveMode;
+
+    public bool AppliesTextureCoordinateVFlip { get; }
+
+    public ImmutableArray<MeshRenderData> Meshes { get; }
+
+    public ImmutableArray<string> Diagnostics { get; }
+
+    internal bool Matches(
+        FbxModelAuthoringImportResult model,
+        CustomModelPreviewMode mode)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        return ReferenceEquals(_model, model) &&
+            RequestedMode == mode &&
+            _configuredFlipTextureCoordinateV ==
+                model.Package.Document.BuildSettings.FlipTextureCoordinateV;
+    }
+
+    public SkeletonRenderData? CreateSkeleton(
+        AnimationClip? clip,
+        int frame,
+        int? selectedBoneIndex = null)
+    {
+        if (_model.Rig is not { } rig)
+        {
+            return null;
+        }
+
+        SkeletonPose sourcePose = clip is null
+            ? rig.CreateBindPose()
+            : clip.SamplePose(
+                rig,
+                clip.FrameRate.SecondsForFrame(
+                    Math.Clamp(
+                        frame,
+                        0,
+                        checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))),
+                PlaybackMode.Clamp);
+        SkeletonPose previewPose = _authoredRig?.RebasePose(sourcePose) ?? sourcePose;
+        int? previewSelectedBone = _authoredRig is null || selectedBoneIndex is not { } sourceIndex
+            ? selectedBoneIndex
+            : (uint)sourceIndex < (uint)_authoredRig.Contract.SourceToPhysicalIndices.Length
+                ? _authoredRig.Contract.SourceToPhysicalIndices[sourceIndex]
+                : null;
+        return CorePreviewAdapter.ToRenderSkeleton(previewPose, previewSelectedBone);
+    }
+
+    public CustomModelPreviewPayload CreatePayload(
+        AnimationClip? clip,
+        int frame,
+        int? selectedBoneIndex = null) =>
+        new(
+            Meshes,
+            CreateSkeleton(clip, frame, selectedBoneIndex),
+            Diagnostics);
+}
 
 /// <summary>
 /// Converts the immutable Models-workspace import into the same renderer
@@ -27,26 +126,118 @@ public static class CustomModelPreviewAdapter
         FbxModelAuthoringImportResult imported,
         AnimationClip? clip,
         int frame,
-        int? selectedBoneIndex = null)
+        int? selectedBoneIndex = null,
+        CustomModelPreviewMode mode = CustomModelPreviewMode.SourceFbx)
+    {
+        CustomModelPreviewSession session = CreateSession(imported, mode);
+        return session.CreatePayload(clip, frame, selectedBoneIndex);
+    }
+
+    public static CustomModelPreviewSession CreateSession(
+        FbxModelAuthoringImportResult imported,
+        CustomModelPreviewMode mode = CustomModelPreviewMode.SourceFbx)
     {
         ArgumentNullException.ThrowIfNull(imported);
+        if (!Enum.IsDefined(mode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unsupported custom-model preview mode.");
+        }
+
         CustomModelPackage package = imported.Package;
         package.Document.Validate();
-
+        bool configuredFlipTextureCoordinateV =
+            package.Document.BuildSettings.FlipTextureCoordinateV;
         var diagnostics = ImmutableArray.CreateBuilder<string>();
+        CustomModelPreviewMode effectiveMode = mode;
+        Dl1PreparedAuthoredRig? authoredRig = null;
+        PreparedMeshSet preparedMeshes;
+        if (mode == CustomModelPreviewMode.Dl1Output)
+        {
+            try
+            {
+                authoredRig = imported.Rig is null
+                    ? null
+                    : Dl1CustomModelRigPreparer.Prepare(imported);
+                preparedMeshes = CreateMeshes(
+                    imported,
+                    authoredRig,
+                    configuredFlipTextureCoordinateV);
+            }
+            catch (Exception exception) when (IsRecoverableDl1PreviewFailure(exception))
+            {
+                effectiveMode = CustomModelPreviewMode.SourceFbx;
+                authoredRig = null;
+                diagnostics.Add(
+                    $"DL1 Output preview preparation failed ({exception.Message}). Showing the Source FBX preview with unmodified texture coordinates; DL1 build and export remain blocked until preparation succeeds.");
+                preparedMeshes = CreateMeshes(
+                    imported,
+                    authoredRig: null,
+                    flipTextureCoordinateV: false);
+            }
+        }
+        else
+        {
+            preparedMeshes = CreateMeshes(
+                imported,
+                authoredRig: null,
+                flipTextureCoordinateV: false);
+        }
+
+        diagnostics.AddRange(preparedMeshes.Diagnostics);
+        if (effectiveMode == CustomModelPreviewMode.Dl1Output)
+        {
+            diagnostics.Add(imported.Rig is null
+                ? "DL1 Output preview uses the static source geometry and DL1 build-boundary texture coordinates."
+                : "DL1 Output preview uses the emitted Chrome hierarchy, +X bone frames, inverse references, and segment bounds.");
+        }
+        else if (mode == CustomModelPreviewMode.SourceFbx)
+        {
+            diagnostics.Add(
+                "Source FBX preview uses the imported hierarchy, bind references, and unmodified FBX texture coordinates.");
+        }
+
+        bool appliesTextureCoordinateVFlip =
+            effectiveMode == CustomModelPreviewMode.Dl1Output &&
+            configuredFlipTextureCoordinateV;
+        return new CustomModelPreviewSession(
+            imported,
+            mode,
+            effectiveMode,
+            configuredFlipTextureCoordinateV,
+            appliesTextureCoordinateVFlip,
+            authoredRig,
+            preparedMeshes.Meshes,
+            diagnostics.ToImmutable());
+    }
+
+    private static PreparedMeshSet CreateMeshes(
+        FbxModelAuthoringImportResult imported,
+        Dl1PreparedAuthoredRig? authoredRig,
+        bool flipTextureCoordinateV)
+    {
+        CustomModelPackage package = imported.Package;
         Dictionary<Guid, CustomModelMaterial> materials = package.Document.Materials
             .ToDictionary(static material => material.Id);
         var textureCache = new Dictionary<string, TextureRenderData?>(
             StringComparer.OrdinalIgnoreCase);
-        bool flipTextureCoordinateV = package.Document.BuildSettings.FlipTextureCoordinateV;
-        var meshes = new MeshRenderData[imported.Surfaces.Length];
+        var diagnostics = ImmutableArray.CreateBuilder<string>();
+        if (authoredRig is not null && authoredRig.Surfaces.Length != imported.Surfaces.Length)
+        {
+            throw new InvalidDataException(
+                "The prepared DL1 rig does not match the imported draw-surface table.");
+        }
+
+        var meshes = ImmutableArray.CreateBuilder<MeshRenderData>(imported.Surfaces.Length);
         for (int surfaceIndex = 0; surfaceIndex < imported.Surfaces.Length; surfaceIndex++)
         {
             FbxModelSurface surface = imported.Surfaces[surfaceIndex];
             MeshVertex[] vertices = surface.Vertices
                 .Select(vertex => ToRenderVertex(vertex, flipTextureCoordinateV))
                 .ToArray();
-            Matrix4x4[] inverseBinds = surface.InverseBindMatrices
+            ImmutableArray<TransformMatrix> preparedInverseBinds = authoredRig is null
+                ? surface.InverseBindMatrices
+                : authoredRig.Surfaces[surfaceIndex].InverseBindMatrices;
+            Matrix4x4[] inverseBinds = preparedInverseBinds
                 .Select(static matrix => CorePreviewAdapter.ToSystemMatrix(matrix))
                 .ToArray();
             TextureRenderData? baseColor = null;
@@ -64,7 +255,7 @@ public static class CustomModelPreviewAdapter
                 }
             }
 
-            meshes[surfaceIndex] = new MeshRenderData(
+            meshes.Add(new MeshRenderData(
                 surface.Id,
                 vertices,
                 surface.Indices.ToArray(),
@@ -72,32 +263,29 @@ public static class CustomModelPreviewAdapter
                 inverseBinds,
                 surface.IsSkinned)
             {
-                SkinBoneIndices = surface.PaletteBoneIndices.ToArray(),
+                SkinBoneIndices = authoredRig is null
+                    ? surface.PaletteBoneIndices.ToArray()
+                    : authoredRig.Surfaces[surfaceIndex].PhysicalPalette.ToArray(),
                 BaseColorTexture = baseColor,
                 Tint = baseColor is null
                     ? new Vector4(0.66f, 0.69f, 0.72f, 1.0f)
                     : Vector4.One,
-            };
+            });
         }
 
-        SkeletonRenderData? skeleton = null;
-        if (imported.Rig is { } rig)
-        {
-            SkeletonPose pose = clip is null
-                ? rig.CreateBindPose()
-                : clip.SamplePose(
-                    rig,
-                    clip.FrameRate.SecondsForFrame(
-                        Math.Clamp(frame, 0, checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))),
-                    PlaybackMode.Clamp);
-            skeleton = CorePreviewAdapter.ToRenderSkeleton(pose, selectedBoneIndex);
-        }
-
-        return new CustomModelPreviewPayload(
-            meshes,
-            skeleton,
+        return new PreparedMeshSet(
+            meshes.MoveToImmutable(),
             diagnostics.ToImmutable());
     }
+
+    private static bool IsRecoverableDl1PreviewFailure(Exception exception) =>
+        exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException or
+            KeyNotFoundException or
+            NotSupportedException or
+            OverflowException or
+            IndexOutOfRangeException;
 
     private static MeshVertex ToRenderVertex(
         FbxModelVertex vertex,
@@ -267,4 +455,8 @@ public static class CustomModelPreviewAdapter
 
     private static uint ReadUInt32(ReadOnlySpan<byte> payload, int offset) =>
         System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
+
+    private sealed record PreparedMeshSet(
+        ImmutableArray<MeshRenderData> Meshes,
+        ImmutableArray<string> Diagnostics);
 }

@@ -66,15 +66,18 @@ Validation is content-addressed and fail-closed. `-ForceAll` on the validation s
   releases.
 - Blender remains optional and is used only for the reverse FBX writer.
 - The independent **Models** workspace accepts user-owned binary FBX models,
-  previews custom rigs/materials/textures, stores deterministic schema-1
-  `.dlrmodel` packages, builds evidence-backed DL1 source `.msh`/`.bscr` and
-  optional `.ascr`, and exports selected FBX animation stacks as one animation
-  RPack. With an installed DL1 Developer Tools compiler and retail compiler
-  bootstrap, it also creates a compiled `.msh_obj` and standalone type-272
-  model RPack in an isolated job, then reopens and validates both hierarchy and
-  RP6L identity before atomic publication. It never embeds retail game assets.
-  Unproven `.chr` and `.skn` generation fails closed instead of emitting
-  placeholders.
+  previews either their exact FBX bind or the authored DL1 rig contract, and
+  stores deterministic schema-1 `.dlrmodel` packages. It builds Chrome source
+  `.msh`, structured CHR v4 `.chr`, `.bscr`, and optional `.ascr` files. Every
+  selected FBX animation stack is rebased through that same rig and exported
+  in one animation RPack with an extensionless type-322 AnimationScr identity;
+  the loose `.ascr` resolves the matching virtual `.scr` filename.
+  With an installed DL1 Developer Tools compiler and retail compiler bootstrap,
+  one transaction also creates and structurally validates the `.msh_obj`, type-272 model
+  RPack, and `local_dx11.mp`, then atomically publishes a complete package. It
+  never embeds retail game assets. This compiler/archive validation is not a
+  claim of in-game playback; unproven `.skn` generation still fails
+  closed instead of emitting a placeholder.
 
 See [the C# implementation status](docs/CSHARP_REWRITE.md),
 [the first-release support matrix](docs/DL1_FIRST_RELEASE_SUPPORT_MATRIX.md),

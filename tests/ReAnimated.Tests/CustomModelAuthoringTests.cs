@@ -2,9 +2,11 @@ using System.Collections.Immutable;
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
+using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Codecs.Rp6l;
@@ -178,15 +180,15 @@ public sealed class CustomModelAuthoringTests
                 "custom_model",
                 CancellationToken.None);
             Assert.Equal("custom_model_Default.mat", Assert.Single(materials.MaterialReferences));
-            Assert.Equal(4, materials.Files.Count);
+            Assert.Equal(2, materials.Files.Count);
             string dmt = System.Text.Encoding.UTF8.GetString(
                 materials.Files["custom_model_Default.dmt"]);
             Assert.Equal(
                 "<MaterialData>\r\n" +
                 "<TemplateData>\r\n" +
                 "<template>standard</template>\r\n" +
-                "<nrm_0_tex>\"custom_model_Default_nrm.dds\"</nrm_0_tex>\r\n" +
-                "<spc_0_tex>\"custom_model_Default_shn.dds\"</spc_0_tex>\r\n" +
+                "<nrm_0_tex>\"\"</nrm_0_tex>\r\n" +
+                "<spc_0_tex>\"\"</spc_0_tex>\r\n" +
                 "<dif_0_tex>\"custom_model_Default.dds\"</dif_0_tex>\r\n" +
                 "</TemplateData>\r\n" +
                 "</MaterialData>\r\n",
@@ -194,12 +196,8 @@ public sealed class CustomModelAuthoringTests
             AssertLegacyDds(
                 materials.Files["custom_model_Default.dds"],
                 "DXT1");
-            AssertLegacyDds(
-                materials.Files["custom_model_Default_nrm.dds"],
-                "DXT5");
-            AssertLegacyDds(
-                materials.Files["custom_model_Default_shn.dds"],
-                "DXT1");
+            Assert.DoesNotContain("custom_model_Default_nrm.dds", materials.Files.Keys);
+            Assert.DoesNotContain("custom_model_Default_shn.dds", materials.Files.Keys);
 
             using var archive = ZipFile.OpenRead(first);
             ZipArchiveEntry manifestEntry = Assert.Single(
@@ -236,6 +234,37 @@ public sealed class CustomModelAuthoringTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ModelDocumentRejectsNegativeSourceMaterialIndices()
+    {
+        const string hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var document = new CustomModelDocument
+        {
+            Name = "Synthetic invalid material index",
+            RigMode = CustomModelRigMode.StaticProp,
+            Source = new CustomModelSourceIdentity
+            {
+                OriginalFileName = "synthetic.fbx",
+                ContentSha256 = hash,
+                FbxVersion = 7400,
+            },
+            RigSignature = hash,
+            Meshes =
+            [
+                new CustomModelMeshPart
+                {
+                    Name = "Synthetic",
+                    SourceMaterialIndices = [-1],
+                },
+            ],
+        };
+
+        ArgumentOutOfRangeException error = Assert.Throws<ArgumentOutOfRangeException>(document.Validate);
+        Assert.Contains("source material indices", error.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -323,6 +352,130 @@ public sealed class CustomModelAuthoringTests
                     StringComparison.OrdinalIgnoreCase)).ToArray(),
                 ["material_a.dds", "material_a_nrm.dds", "material_a_shn.dds"]));
         Assert.Contains("material_a_nrm", missingTexture.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public void Dl1NormalPackingUsesAlphaForTangentXAndGreenForTangentY()
+    {
+        byte[] rgbOpenGl =
+        [
+            128, 128, 255, 255,
+            255, 128, 255, 255,
+            128, 255, 255, 255,
+        ];
+
+        byte[] packed = Dl1CustomMaterialWriter.RepackNormalForDl1(
+            rgbOpenGl,
+            CustomModelNormalMapConvention.RgbOpenGl);
+
+        Assert.Equal(new byte[] { 0, 128, 255, 128 }, packed[..4]);
+        Assert.Equal(new byte[] { 0, 128, 255, 255 }, packed[4..8]);
+        Assert.Equal(new byte[] { 0, 255, 255, 128 }, packed[8..12]);
+
+        byte[] directX = Dl1CustomMaterialWriter.RepackNormalForDl1(
+            rgbOpenGl,
+            CustomModelNormalMapConvention.RgbDirectX);
+        Assert.Equal(new byte[] { 0, 0, 255, 128 }, directX[8..12]);
+
+        Assert.Equal(
+            packed,
+            Dl1CustomMaterialWriter.RepackNormalForDl1(
+                packed,
+                CustomModelNormalMapConvention.Dl1AlphaGreen));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            Dl1CustomMaterialWriter.RepackNormalForDl1(
+                rgbOpenGl,
+                (CustomModelNormalMapConvention)99));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPackage")]
+    public void TextureSemanticMetadataRejectsInvalidColorAndNormalConventions()
+    {
+        const string hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        var normal = new CustomModelTextureBinding
+        {
+            Id = new Guid("e1df8c7c-1f82-52de-94b6-b81116952a76"),
+            Semantic = CustomModelTextureSemantic.Normal,
+            SourceKind = CustomModelTextureSourceKind.UserOverride,
+            ColorSpace = CustomModelTextureColorSpace.Linear,
+            NormalMapConvention = CustomModelNormalMapConvention.RgbDirectX,
+            DisplayName = "synthetic_normal.png",
+            PackageEntryPath = $"textures/{hash}.png",
+            OriginalReference = "synthetic_normal.png",
+            ContentSha256 = hash,
+            MediaType = "image/png",
+        };
+
+        CreateDocumentWithTexture(normal).Validate();
+
+        Assert.Throws<ArgumentException>(() =>
+            CreateDocumentWithTexture(normal with
+            {
+                ColorSpace = CustomModelTextureColorSpace.Srgb,
+            }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            CreateDocumentWithTexture(normal with
+            {
+                Semantic = CustomModelTextureSemantic.BaseColor,
+                ColorSpace = CustomModelTextureColorSpace.Srgb,
+            }).Validate());
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            CreateDocumentWithTexture(normal with
+            {
+                NormalMapConvention = (CustomModelNormalMapConvention)99,
+            }).Validate());
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public void ModelCompilerValidatesMaterialAndTextureRecordsInsideAbdm()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            const string materialName = "synthetic_surface.mat";
+            const string diffuseName = "synthetic_surface_Diffuse.dds";
+            const string normalName = "synthetic_surface_Normal.dds";
+            string databasePath = Path.Combine(directory, "local_dx11.mp");
+            File.WriteAllBytes(
+                databasePath,
+                BuildSyntheticMaterialDatabase(
+                    new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [materialName] = [
+                            diffuseName,
+                            normalName,
+                        ],
+                    }));
+
+            Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabase(
+                databasePath,
+                [materialName],
+                [diffuseName, normalName]);
+
+            InvalidDataException missingMaterial = Assert.Throws<InvalidDataException>(() =>
+                Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabase(
+                    databasePath,
+                    ["missing_surface.mat"],
+                    [diffuseName]));
+            Assert.Contains("missing_surface.mat", missingMaterial.Message, StringComparison.Ordinal);
+
+            InvalidDataException missingTexture = Assert.Throws<InvalidDataException>(() =>
+                Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabase(
+                    databasePath,
+                    [materialName],
+                    [diffuseName, "missing_surface_nrm.dds"]));
+            Assert.Contains("missing_surface_nrm.dds", missingTexture.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Theory]
@@ -590,7 +743,8 @@ public sealed class CustomModelAuthoringTests
         CustomModelPreviewPayload preview = CustomModelPreviewAdapter.Create(
             result,
             clip: null,
-            frame: 0);
+            frame: 0,
+            mode: CustomModelPreviewMode.Dl1Output);
         Assert.Equal(result.Surfaces.Length, preview.Meshes.Count);
         Assert.All(preview.Meshes, static mesh => Assert.NotNull(mesh.BaseColorTexture));
         Assert.All(result.Surfaces.Select((surface, surfaceIndex) => (surface, surfaceIndex)), item =>
@@ -663,7 +817,11 @@ public sealed class CustomModelAuthoringTests
             Assert.Equal(0x0048_534Du, BinaryPrimitives.ReadUInt32LittleEndian(sourceMsh));
             Assert.Equal((uint)sourceMsh.Length, BinaryPrimitives.ReadUInt32LittleEndian(sourceMsh.AsSpan(8, 4)));
             Assert.Contains("SetBoneAnimTrans", await File.ReadAllTextAsync(modelBuild.BoneScriptPath));
-            Assert.Contains(".chr", await File.ReadAllTextAsync(modelBuild.BlockedOutputsPath));
+            Dl1ChrV4Document character = Dl1ChrV4Codec.Parse(
+                await File.ReadAllBytesAsync(modelBuild.CharacterDefinitionPath));
+            Assert.Equal(result.Package.Document.Bones.Length + result.Surfaces.Length + 1, character.ObjectNames.Length);
+            Assert.Equal("default", Assert.Single(character.Variants).Name);
+            Assert.DoesNotContain(".chr", await File.ReadAllTextAsync(modelBuild.BlockedOutputsPath));
             string[] materialSources = Directory.GetFiles(modelDirectory, "*.dmt");
             Assert.Equal(result.Package.Document.Materials.Length, materialSources.Length);
             Assert.All(materialSources, materialSource =>
@@ -675,9 +833,13 @@ public sealed class CustomModelAuthoringTests
                 Assert.Contains("<spc_0_tex>", text, StringComparison.Ordinal);
             });
             string[] textures = Directory.GetFiles(modelDirectory, "*.dds");
-            Assert.Equal(result.Package.Document.Materials.Length * 3, textures.Length);
+            int expectedTextureCount = result.Package.Document.Materials.Sum(material =>
+                1 +
+                (material.Textures.Any(static texture => texture.Semantic == CustomModelTextureSemantic.Normal) ? 1 : 0) +
+                (material.Textures.Any(static texture => texture.Semantic == CustomModelTextureSemantic.Specular) ? 1 : 0));
+            Assert.Equal(expectedTextureCount, textures.Length);
             Assert.All(textures, texture => AssertLegacyDds(File.ReadAllBytes(texture)));
-            Assert.False(File.Exists(Path.Combine(modelDirectory, "external_model_control_player.chr")));
+            Assert.True(File.Exists(Path.Combine(modelDirectory, "external_model_control_player.chr")));
             Assert.False(File.Exists(Path.Combine(modelDirectory, "external_model_control_player.skn")));
 
             ImmutableArray<CustomModelAnimationClip> selected = result.Package.Document.AnimationClips
@@ -692,11 +854,22 @@ public sealed class CustomModelAuthoringTests
                         Model = result,
                         OutputPath = animationPath,
                         Selections = selected,
+                        AnimationScriptAlias = "external_model_control_anim_script",
                     });
             Rp6lAnimationLibrary library = await Rp6lAnimationLibraryCodec.ExtractAsync(animationBuild.OutputPath);
             Assert.Equal(2, library.Animations.Count);
             Assert.Equal(2, animationBuild.AnimationNames.Length);
-            Assert.Empty(library.AnimationScripts);
+            Rp6lAnimationScript script = Assert.Single(library.AnimationScripts).Value;
+            ParsedAnimationScr parsedScript = AnimationScrCodec.Parse(
+                new AnimationScrSections(script.HeaderSection, script.BodySection));
+            Assert.Equal("external_model_control_anim_script", animationBuild.AnimationScriptName);
+            Assert.Equal(2, parsedScript.DeclaredSequenceCount);
+            Assert.Equal(2, parsedScript.Sequences.Length);
+            Assert.All(parsedScript.Sequences, sequence =>
+            {
+                Assert.Equal(0, sequence.StartFrame);
+                Assert.Equal(0, sequence.EventCount);
+            });
         }
         finally
         {
@@ -766,7 +939,7 @@ public sealed class CustomModelAuthoringTests
                     OutputRpackPath = rpackPath,
                     ResourceName = "external_model_control_player",
                 });
-            Assert.Equal(CustomModelBuildState.GameReady, result.BuildReceipt.State);
+            Assert.Equal(CustomModelBuildState.CompilerValidated, result.BuildReceipt.State);
             Assert.True(File.Exists(result.OutputRpackPath));
             Assert.True(File.Exists(result.CompiledMeshObjectPath));
             Assert.True(File.Exists(result.MaterialDatabasePath));
@@ -775,31 +948,54 @@ public sealed class CustomModelAuthoringTests
             Assert.Contains(archive.Resources, static resource =>
                 resource.ResourceType == Rp6lResourceTypes.Mesh &&
                 string.Equals(resource.Name, "external_model_control_player", StringComparison.OrdinalIgnoreCase));
-            string[] expectedMaterialNames = model.Package.Document.Materials
+            CustomModelMaterial[] authoredMaterials = model.Package.Document.Materials
                 .Where(static material => string.IsNullOrWhiteSpace(material.ExistingDl1MaterialReference))
-                .Select(static material => Dl1SourceModelWriter.SanitizeName(
-                    $"external_model_control_player_{material.Name}",
-                    55))
                 .ToArray();
-            Assert.NotEmpty(expectedMaterialNames);
+            Assert.NotEmpty(authoredMaterials);
             await using Dl1MaterialPackReader materialDatabase =
                 await Dl1MaterialPackReader.OpenAsync(result.MaterialDatabasePath!);
-            foreach (string materialName in expectedMaterialNames)
+            foreach (CustomModelMaterial authoredMaterial in authoredMaterials)
             {
+                string materialName = Dl1SourceModelWriter.SanitizeName(
+                    $"external_model_control_player_{authoredMaterial.Name}",
+                    55);
                 Dl1MaterialPackMaterialRecord? material =
                     await materialDatabase.ReadMaterialAsync($"{materialName}.mat");
                 Assert.NotNull(material);
-                Assert.InRange(material!.Textures.Count, 3, 256);
-                foreach (string textureName in new[]
-                         {
-                             materialName,
-                             $"{materialName}_nrm",
-                             $"{materialName}_shn",
-                         })
+                string[] expectedTextures =
+                [
+                    materialName,
+                    .. authoredMaterial.Textures.Any(static texture =>
+                        texture.Semantic == CustomModelTextureSemantic.Normal)
+                            ? [$"{materialName}_nrm"]
+                            : Array.Empty<string>(),
+                    .. authoredMaterial.Textures.Any(static texture =>
+                        texture.Semantic == CustomModelTextureSemantic.Specular)
+                            ? [$"{materialName}_shn"]
+                            : Array.Empty<string>(),
+                ];
+                Assert.InRange(material!.Textures.Count, expectedTextures.Length, 256);
+                foreach (string textureName in expectedTextures)
                 {
                     Assert.Contains(archive.Resources, resource =>
                         resource.ResourceType == Rp6lResourceTypes.Texture &&
                         string.Equals(resource.Name, textureName, StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (!authoredMaterial.Textures.Any(static texture =>
+                        texture.Semantic == CustomModelTextureSemantic.Normal))
+                {
+                    Assert.DoesNotContain(archive.Resources, resource =>
+                        resource.ResourceType == Rp6lResourceTypes.Texture &&
+                        string.Equals(resource.Name, $"{materialName}_nrm", StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (!authoredMaterial.Textures.Any(static texture =>
+                        texture.Semantic == CustomModelTextureSemantic.Specular))
+                {
+                    Assert.DoesNotContain(archive.Resources, resource =>
+                        resource.ResourceType == Rp6lResourceTypes.Texture &&
+                        string.Equals(resource.Name, $"{materialName}_shn", StringComparison.OrdinalIgnoreCase));
                 }
             }
 
@@ -1122,6 +1318,124 @@ public sealed class CustomModelAuthoringTests
         name.CopyTo(output.AsSpan(cursor));
         payload.CopyTo(output.AsSpan(payloadOffset));
         return output;
+    }
+
+    private static byte[] BuildSyntheticMaterialDatabase(
+        IReadOnlyDictionary<string, string[]> materials)
+    {
+        const int headerSize = 16;
+        const int containerRowSize = 48;
+        const int materialRowSize = 16;
+        const int textureRowSize = 12;
+        const int materialTableOffset = headerSize + containerRowSize;
+
+        (uint Hash, uint[] TextureHashes)[] records = materials
+            .Select(static entry => (
+                Dl1ResourceNameHash.Compute(entry.Key),
+                entry.Value.Select(ComputeCompiledTextureReferenceHash).ToArray()))
+            .OrderBy(static record => record.Item1)
+            .ToArray();
+        int payloadOffset = checked(materialTableOffset + records.Length * materialRowSize);
+        int payloadBytes = records.Sum(static record =>
+            checked(24 + record.TextureHashes.Length * textureRowSize));
+        byte[] output = new byte[checked(payloadOffset + payloadBytes)];
+        "ABDM"u8.CopyTo(output);
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(4), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(8), headerSize);
+
+        "materials"u8.CopyTo(output.AsSpan(headerSize));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            output.AsSpan(headerSize + 32),
+            checked((uint)records.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            output.AsSpan(headerSize + 36),
+            checked((uint)records.Length));
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            output.AsSpan(headerSize + 40),
+            materialTableOffset);
+
+        int payloadCursor = payloadOffset;
+        for (int index = 0; index < records.Length; index++)
+        {
+            (uint hash, uint[] textureHashes) = records[index];
+            int payloadLength = checked(24 + textureHashes.Length * textureRowSize);
+            int rowOffset = materialTableOffset + index * materialRowSize;
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(rowOffset), hash);
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                output.AsSpan(rowOffset + 4),
+                checked((uint)payloadCursor));
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                output.AsSpan(rowOffset + 8),
+                checked((uint)payloadLength));
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                output.AsSpan(rowOffset + 12),
+                checked((uint)payloadLength));
+
+            BinaryPrimitives.WriteUInt32LittleEndian(output.AsSpan(payloadCursor), hash);
+            BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(payloadCursor + 16), 1);
+            BinaryPrimitives.WriteUInt16LittleEndian(
+                output.AsSpan(payloadCursor + 18),
+                checked((ushort)textureHashes.Length));
+            BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(payloadCursor + 22), 2);
+            for (int textureIndex = 0; textureIndex < textureHashes.Length; textureIndex++)
+            {
+                int textureOffset = payloadCursor + 24 + textureIndex * textureRowSize;
+                BinaryPrimitives.WriteUInt32LittleEndian(
+                    output.AsSpan(textureOffset),
+                    checked((uint)(textureIndex + 1)));
+                BinaryPrimitives.WriteUInt32LittleEndian(
+                    output.AsSpan(textureOffset + 4),
+                    textureHashes[textureIndex]);
+            }
+
+            payloadCursor += payloadLength;
+        }
+
+        return output;
+    }
+
+    private static uint ComputeCompiledTextureReferenceHash(string resourceName)
+    {
+        uint crc = 0x811C9DC5 ^ uint.MaxValue;
+        foreach (byte value in Encoding.ASCII.GetBytes(resourceName))
+        {
+            crc ^= value;
+            for (int bit = 0; bit < 8; bit++)
+            {
+                uint mask = unchecked((uint)-(int)(crc & 1));
+                crc = (crc >> 1) ^ (0xEDB88320U & mask);
+            }
+        }
+
+        return crc ^ uint.MaxValue;
+    }
+
+    private static CustomModelDocument CreateDocumentWithTexture(
+        CustomModelTextureBinding texture)
+    {
+        const string hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        return new CustomModelDocument
+        {
+            ModelId = new Guid("09718b62-9bf5-5aa2-8dd6-59035cd8bd5e"),
+            Name = "Synthetic texture contract",
+            RigMode = CustomModelRigMode.StaticProp,
+            Source = new CustomModelSourceIdentity
+            {
+                OriginalFileName = "synthetic.fbx",
+                ContentSha256 = hash,
+                FbxVersion = 7400,
+            },
+            RigSignature = hash,
+            Materials =
+            [
+                new CustomModelMaterial
+                {
+                    Id = new Guid("e8f7f630-d758-50eb-8693-3a04f1084672"),
+                    Name = "Synthetic material",
+                    Textures = [texture],
+                },
+            ],
+        };
     }
 
     private static void AssertLegacyDds(byte[] bytes, string? expectedFourCc = null)
