@@ -72,6 +72,7 @@ base assets/
 /.codex-remote-attachments/
 /.github/instructions/codacy.instructions.md
 /AGENTS.md
+/tests/local-external-corpora.json
 
 
 #Ignore vscode AI rules

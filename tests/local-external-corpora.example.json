@@ -54,6 +54,25 @@
         "roundTripFrameRateNumerator": 0,
         "roundTripFrameRateDenominator": 1
       }
+    },
+    {
+      "id": "custom-model-fbx-control",
+      "kind": "custom-model",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {
+        "rigBoneCount": 0,
+        "meshCount": 0,
+        "animationClipCount": 0,
+        "excludedClipIndex": 0
+      }
+    },
+    {
+      "id": "custom-model-glb-orientation-control",
+      "kind": "custom-model",
+      "filePath": "<local-file-path>",
+      "sha256": "<64-character-lowercase-sha256>",
+      "expectations": {}
     }
   ]
 }
