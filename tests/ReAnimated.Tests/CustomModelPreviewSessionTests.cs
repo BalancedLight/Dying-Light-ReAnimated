@@ -106,7 +106,7 @@ public sealed class CustomModelPreviewSessionTests
             Dl1CustomModelRigPreparer.Prepare(model));
     }
 
-    private static FbxModelAuthoringImportResult CreateModel(
+    internal static FbxModelAuthoringImportResult CreateModel(
         bool flipTextureCoordinateV,
         bool duplicateNormalizedBoneName = false)
     {

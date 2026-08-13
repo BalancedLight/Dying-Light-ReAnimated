@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Security.Cryptography;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -25,6 +26,50 @@ public sealed record CustomModelPreviewModeChoice(
     CustomModelPreviewMode Mode,
     string Label);
 
+internal sealed record ModelsWorkspacePersistencePayload(
+    Guid ModelId,
+    string SuggestedFileName,
+    ImmutableArray<byte> PackageBytes,
+    Guid? SelectedAnimationClipId,
+    ProjectCustomModelPreviewMode PreviewMode,
+    bool ShowMeshes,
+    bool ShowBones,
+    bool ShowHelpers,
+    bool ShowCameraHelpers,
+    bool ShowPropHelpers)
+{
+    public ProjectModelsWorkspaceState CreateProjectState(Guid packageAssetId) =>
+        new()
+        {
+            PackageAssetId = packageAssetId,
+            SelectedAnimationClipId = SelectedAnimationClipId,
+            PreviewMode = PreviewMode,
+            ShowMeshes = ShowMeshes,
+            ShowBones = ShowBones,
+            ShowHelpers = ShowHelpers,
+            ShowCameraHelpers = ShowCameraHelpers,
+            ShowPropHelpers = ShowPropHelpers,
+        };
+}
+
+internal sealed record PreparedModelsWorkspaceRestore(
+    FbxModelAuthoringImportResult Model,
+    string PackagePath,
+    ProjectModelsWorkspaceState State);
+
+internal sealed record ModelsWorkspaceSessionSnapshot(
+    FbxModelAuthoringImportResult? Model,
+    string? SourcePath,
+    string? PackagePath,
+    Guid? SelectedAnimationClipId,
+    CustomModelPreviewMode PreviewMode,
+    bool ShowMeshes,
+    bool ShowBones,
+    bool ShowHelpers,
+    bool ShowCameraHelpers,
+    bool ShowPropHelpers,
+    long AuthoringRevision);
+
 /// <summary>
 /// Independent custom-model authoring session. Nothing in this object reads
 /// or mutates the animation project's active target, recovery snapshot, or
@@ -45,6 +90,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private readonly Action<string> _setStatus;
     private readonly Func<CustomModelAnimationHandoff, Task> _openInAnimate;
     private readonly Func<string?> _getRetailData0PakPath;
+    private readonly CustomModelDeveloperToolsSettings _developerToolsSettings;
     private readonly LinkedViewportCoordinator _cameraCoordinator = new();
     private CancellationTokenSource? _operationCancellation;
     private FbxModelAuthoringImportResult? _model;
@@ -55,14 +101,26 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private long _authoringRevision;
     private long _previewGeneration;
     private bool _suppressPreviewRefresh;
+    private bool _suppressPersistenceNotifications;
     private bool _isBusy;
     private string _modelName = "No custom model loaded";
     private CustomModelRigMode _selectedRigMode = CustomModelRigMode.Auto;
     private string _resourceName = "custom_model";
+    private string _characterId = "custom_model";
+    private bool _characterIdWasExplicitlyEdited;
     private string _surfaceName = "default";
     private string _animationScriptAlias = string.Empty;
     private bool _flipTextureCoordinateV = true;
     private string _compilerExecutablePath = Dl1OfficialModelCompiler.FindDefaultCompilerExecutable() ?? string.Empty;
+    private string _developerToolsProjectRoot = string.Empty;
+    private bool _installLooseAnm2 = true;
+    private bool _exportPortableAnimationRpack = true;
+    private string _lastDeploymentManifestPath = string.Empty;
+    private string _lastDeployedAnimationScriptPath = string.Empty;
+    private bool _canRollbackLastDeployment;
+    private ImmutableArray<string> _legacyOutputPaths = [];
+    private string _deploymentPreflightSummary =
+        "Choose a Developer Tools project, then deploy to run the exact staged preflight.";
     private string _summary = "Import a binary FBX to inspect its mesh, exact hierarchy, materials, and animation stacks.";
     private string _buildStatus = "Not built";
     private bool _showMeshes = true;
@@ -90,6 +148,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         _openInAnimate = openInAnimate ?? throw new ArgumentNullException(nameof(openInAnimate));
         _getRetailData0PakPath = getRetailData0PakPath ??
             throw new ArgumentNullException(nameof(getRetailData0PakPath));
+        _developerToolsSettings = CustomModelDeveloperToolsSettings.CreateDefault();
+        _developerToolsProjectRoot = _developerToolsSettings.LoadProjectRoot() ?? string.Empty;
         _cameraCoordinator.IsLinked = false;
         Viewport = new ViewportPaneViewModel(
             "Custom model preview",
@@ -110,6 +170,16 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             () => HasModel && !IsBusy);
         BuildLooseFilesCommand = new AsyncRelayCommand(BuildLooseFilesAsync, () => HasModel && !IsBusy);
         SelectModelCompilerCommand = new RelayCommand(SelectModelCompiler, () => !IsBusy);
+        SelectDeveloperToolsProjectCommand = new RelayCommand(SelectDeveloperToolsProject, () => !IsBusy);
+        DeployToDeveloperToolsProjectCommand = new AsyncRelayCommand(
+            DeployToDeveloperToolsProjectAsync,
+            CanDeployToDeveloperToolsProject);
+        RollBackDeploymentCommand = new AsyncRelayCommand(
+            RollBackDeploymentAsync,
+            () => _canRollbackLastDeployment && File.Exists(_lastDeploymentManifestPath) && !IsBusy);
+        BackUpLegacyOutputsCommand = new AsyncRelayCommand(
+            BackUpLegacyOutputsAsync,
+            () => !_legacyOutputPaths.IsEmpty && Directory.Exists(DeveloperToolsProjectRoot) && !IsBusy);
         BuildModelRpackCommand = new AsyncRelayCommand(BuildModelRpackAsync, () => HasModel && !IsBusy);
         ExportAnimationRpackCommand = new AsyncRelayCommand(
             ExportAnimationRpackAsync,
@@ -117,10 +187,22 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         OpenSelectedAnimationInAnimateCommand = new AsyncRelayCommand(
             OpenSelectedAnimationInAnimateAsync,
             () => HasModel && SelectedAnimation?.DecodedClip is not null && !IsBusy);
+        OpenDeveloperToolsProjectCommand = new RelayCommand(
+            () => OpenPath(DeveloperToolsProjectRoot),
+            () => Directory.Exists(DeveloperToolsProjectRoot));
+        OpenDeployedAnimationScriptCommand = new RelayCommand(
+            () => OpenPath(_lastDeployedAnimationScriptPath),
+            () => File.Exists(_lastDeployedAnimationScriptPath));
+        OpenDeploymentReceiptCommand = new RelayCommand(
+            () => OpenPath(_lastDeploymentManifestPath),
+            () => File.Exists(_lastDeploymentManifestPath));
         FrameModelCommand = new RelayCommand(FrameModel, () => HasModel);
         ResetCameraCommand = new RelayCommand(ResetCamera);
         CancelCommand = new RelayCommand(Cancel, () => IsBusy);
+        RestoreLatestDeploymentActions();
     }
+
+    public event EventHandler? PersistenceStateChanged;
 
     public ViewportPaneViewModel Viewport { get; }
 
@@ -133,6 +215,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     public ObservableCollection<CustomModelAnimationClipItemViewModel> Animations { get; } = [];
 
     public ObservableCollection<CustomModelDiagnosticItemViewModel> Diagnostics { get; } = [];
+
+    public ObservableCollection<DeveloperToolsDeploymentArtifactItemViewModel> DeploymentArtifacts { get; } = [];
 
     public IReadOnlyList<CustomModelRigMode> RigModes { get; } = Enum.GetValues<CustomModelRigMode>();
 
@@ -166,11 +250,25 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     public IRelayCommand SelectModelCompilerCommand { get; }
 
+    public IRelayCommand SelectDeveloperToolsProjectCommand { get; }
+
     public IAsyncRelayCommand BuildModelRpackCommand { get; }
 
     public IAsyncRelayCommand ExportAnimationRpackCommand { get; }
 
     public IAsyncRelayCommand OpenSelectedAnimationInAnimateCommand { get; }
+
+    public IRelayCommand OpenDeveloperToolsProjectCommand { get; }
+
+    public IRelayCommand OpenDeployedAnimationScriptCommand { get; }
+
+    public IRelayCommand OpenDeploymentReceiptCommand { get; }
+
+    public IAsyncRelayCommand DeployToDeveloperToolsProjectCommand { get; }
+
+    public IAsyncRelayCommand RollBackDeploymentCommand { get; }
+
+    public IAsyncRelayCommand BackUpLegacyOutputsCommand { get; }
 
     public IRelayCommand FrameModelCommand { get; }
 
@@ -179,6 +277,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand CancelCommand { get; }
 
     public bool HasModel => _model is not null;
+
+    internal long PersistenceRevision => Volatile.Read(ref _authoringRevision);
 
     public bool CanChangeRigMode => !HasModel && !IsBusy;
 
@@ -235,9 +335,33 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         get => _resourceName;
         set
         {
-            if (SetProperty(ref _resourceName, value ?? string.Empty))
+            string previousResourceName = _resourceName;
+            string nextResourceName = value ?? string.Empty;
+            if (SetProperty(ref _resourceName, nextResourceName))
             {
+                if (!_characterIdWasExplicitlyEdited ||
+                    string.IsNullOrWhiteSpace(_characterId) ||
+                    string.Equals(_characterId, previousResourceName, StringComparison.OrdinalIgnoreCase))
+                {
+                    SetProperty(ref _characterId, nextResourceName, nameof(CharacterId));
+                }
+
                 MarkAuthoringChanged();
+                InvalidateDeploymentPreflight();
+            }
+        }
+    }
+
+    public string CharacterId
+    {
+        get => _characterId;
+        set
+        {
+            if (SetProperty(ref _characterId, value ?? string.Empty))
+            {
+                _characterIdWasExplicitlyEdited = true;
+                MarkAuthoringChanged();
+                InvalidateDeploymentPreflight();
             }
         }
     }
@@ -250,6 +374,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _surfaceName, value ?? string.Empty))
             {
                 MarkAuthoringChanged();
+                InvalidateDeploymentPreflight();
             }
         }
     }
@@ -262,8 +387,87 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _animationScriptAlias, value ?? string.Empty))
             {
                 MarkAuthoringChanged();
+                InvalidateDeploymentPreflight();
             }
         }
+    }
+
+    public string DeveloperToolsProjectRoot
+    {
+        get => _developerToolsProjectRoot;
+        private set
+        {
+            if (SetProperty(ref _developerToolsProjectRoot, value ?? string.Empty))
+            {
+                OnPropertyChanged(nameof(DeveloperToolsProjectStatus));
+                InvalidateDeploymentPreflight();
+                OpenDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
+                NotifyCommands();
+            }
+        }
+    }
+
+    public string DeveloperToolsProjectStatus => Directory.Exists(DeveloperToolsProjectRoot)
+        ? DeveloperToolsProjectRoot
+        : "No Developer Tools project selected. This machine-local choice is not stored in .dlrmodel files.";
+
+    public bool InstallLooseAnm2
+    {
+        get => _installLooseAnm2;
+        set
+        {
+            if (SetProperty(ref _installLooseAnm2, value))
+            {
+                InvalidateDeploymentPreflight();
+            }
+        }
+    }
+
+    public bool ExportPortableAnimationRpack
+    {
+        get => _exportPortableAnimationRpack;
+        set
+        {
+            if (SetProperty(ref _exportPortableAnimationRpack, value))
+            {
+                InvalidateDeploymentPreflight();
+            }
+        }
+    }
+
+    public string DeploymentPathPreview
+    {
+        get
+        {
+            string character = DisplaySafeCharacterId(CharacterId, ResourceName);
+            string model = DisplaySafeIdentity(ResourceName, "custom_model", "model");
+            string library = DisplaySafeIdentity(AnimationScriptAlias, model, "animation_library");
+            int animationCount = Animations.Count(static item => item.Included && item.DecodedClip is not null);
+            var lines = new List<string>
+            {
+                $"data/characters/{character}/{model}.msh, .chr, .bscr, .ascr",
+                $"data/characters/animations/animscripts/{library}.scr",
+                $"assets_pc/characters/{character}/{model}.msh_obj",
+                $"assets_pc/characters/animations/<clip>.anm2_obj ({animationCount:N0})",
+            };
+            if (InstallLooseAnm2)
+            {
+                lines.Add("data/characters/animations/<clip>.anm2");
+            }
+
+            if (ExportPortableAnimationRpack)
+            {
+                lines.Add($"out/ReAnimated/{model}/{library}_pc.rpack (portable; not auto-mounted)");
+            }
+
+            return string.Join(Environment.NewLine, lines);
+        }
+    }
+
+    public string DeploymentPreflightSummary
+    {
+        get => _deploymentPreflightSummary;
+        private set => SetProperty(ref _deploymentPreflightSummary, value);
     }
 
     public CustomModelPreviewModeChoice SelectedPreviewMode
@@ -274,6 +478,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             ArgumentNullException.ThrowIfNull(value);
             if (SetProperty(ref _selectedPreviewMode, value) && HasModel)
             {
+                MarkAuthoringChanged();
                 RefreshPreview();
                 FrameModel();
             }
@@ -326,13 +531,15 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             if (SetProperty(ref _compilerExecutablePath, value ?? string.Empty))
             {
                 OnPropertyChanged(nameof(CompilerStatus));
+                InvalidateDeploymentPreflight();
+                DeployToDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
             }
         }
     }
 
     public string CompilerStatus => File.Exists(CompilerExecutablePath)
         ? $"Developer Tools compiler: {CompilerExecutablePath}"
-        : "Developer Tools compiler not selected. Loose sources and animation RPack export remain available.";
+        : "Developer Tools compiler not selected. Loose-source export remains available; standalone animation RPacks are portable and are not automatically mounted.";
 
     public string Summary
     {
@@ -353,6 +560,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _showMeshes, value))
             {
+                if (HasModel)
+                {
+                    MarkAuthoringChanged();
+                }
+
                 Viewport.SceneSource.SetMeshVisibility(value);
             }
         }
@@ -365,6 +577,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _showBones, value))
             {
+                if (HasModel)
+                {
+                    MarkAuthoringChanged();
+                }
+
                 RefreshPreview();
             }
         }
@@ -377,6 +594,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _showHelpers, value))
             {
+                if (HasModel)
+                {
+                    MarkAuthoringChanged();
+                }
+
                 ApplySkeletonVisibility();
             }
         }
@@ -389,6 +611,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _showCameraHelpers, value))
             {
+                if (HasModel)
+                {
+                    MarkAuthoringChanged();
+                }
+
                 ApplySkeletonVisibility();
             }
         }
@@ -401,6 +628,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _showPropHelpers, value))
             {
+                if (HasModel)
+                {
+                    MarkAuthoringChanged();
+                }
+
                 ApplySkeletonVisibility();
             }
         }
@@ -413,6 +645,11 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedAnimation, value))
             {
+                if (HasModel)
+                {
+                    MarkAuthoringChanged();
+                }
+
                 RefreshTimeline();
                 RefreshPreview();
                 OpenSelectedAnimationInAnimateCommand.NotifyCanExecuteChanged();
@@ -849,6 +1086,363 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    private void SelectDeveloperToolsProject()
+    {
+        try
+        {
+            string? path = _fileDialogs.ShowSelectDl1DeveloperToolsProjectDialog(
+                Directory.Exists(DeveloperToolsProjectRoot)
+                    ? DeveloperToolsProjectRoot
+                    : _packagePath ?? _sourcePath);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            path = Path.GetFullPath(path);
+            _developerToolsSettings.SaveProjectRoot(path);
+            DeveloperToolsProjectRoot = path;
+            RestoreLatestDeploymentActions();
+            BuildStatus = "Selected Developer Tools project. Review the derived deployment paths before deploying.";
+            _setStatus(BuildStatus);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or IOException or UnauthorizedAccessException or
+            InvalidOperationException or NotSupportedException)
+        {
+            BuildStatus = $"Developer Tools project selection failed: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+    }
+
+    private bool CanDeployToDeveloperToolsProject() =>
+        HasModel &&
+        !IsBusy &&
+        Directory.Exists(DeveloperToolsProjectRoot) &&
+        Animations.Any(static clip => clip.Included && clip.DecodedClip is not null);
+
+    private Dl1DeveloperToolsDeploymentRequest CreateDeveloperToolsDeploymentRequest(
+        ImmutableDictionary<string, Dl1DeploymentConflictResolution>? conflictResolutions = null)
+    {
+        FbxModelAuthoringImportResult model = _model ??
+            throw new InvalidOperationException("Import or open a custom model before deployment.");
+        string? retailData0PakPath = _getRetailData0PakPath();
+        if (string.IsNullOrWhiteSpace(retailData0PakPath))
+        {
+            throw new FileNotFoundException(
+                "Retail DL1 Data0.pak is unavailable. Configure a complete Dying Light 1 installation before deployment.");
+        }
+
+        return new Dl1DeveloperToolsDeploymentRequest
+        {
+            Model = model,
+            ProjectRoot = DeveloperToolsProjectRoot,
+            CompilerExecutablePath = CompilerExecutablePath,
+            RetailData0PakPath = retailData0PakPath,
+            CharacterId = CharacterId,
+            ModelResourceName = ResourceName,
+            SurfaceName = SurfaceName,
+            AnimationLibraryName = AnimationScriptAlias,
+            AnimationSelections = Animations
+                .Select(static animation => animation.ToContract())
+                .ToImmutableArray(),
+            InstallLooseAnm2 = InstallLooseAnm2,
+            ExportPortableAnimationRpack = ExportPortableAnimationRpack,
+            ConflictResolutions = conflictResolutions ??
+                ImmutableDictionary<string, Dl1DeploymentConflictResolution>.Empty
+                    .WithComparers(StringComparer.OrdinalIgnoreCase),
+        };
+    }
+
+    private async Task DeployToDeveloperToolsProjectAsync()
+    {
+        if (_model is null || !Directory.Exists(DeveloperToolsProjectRoot))
+        {
+            return;
+        }
+
+        if (!File.Exists(CompilerExecutablePath))
+        {
+            SelectModelCompiler();
+            if (!File.Exists(CompilerExecutablePath))
+            {
+                BuildStatus = "Developer Tools deployment canceled: select Techland's compiler first.";
+                return;
+            }
+        }
+
+        long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
+        try
+        {
+            SyncDocument();
+            BuildStatus = "Preparing canonical Developer Tools deployment preflight...";
+            _setStatus(BuildStatus);
+            Dl1DeveloperToolsDeploymentRequest request = CreateDeveloperToolsDeploymentRequest();
+            Dl1DeveloperToolsDeploymentPlan plan = await Dl1DeveloperToolsProjectDeployer.PreflightAsync(
+                request,
+                token);
+            EnsureCurrent(generation, token);
+            PublishDeploymentPlan(plan);
+
+            if (!plan.CanDeploy)
+            {
+                var resolutionBuilder = ImmutableDictionary.CreateBuilder<string, Dl1DeploymentConflictResolution>(
+                    StringComparer.OrdinalIgnoreCase);
+                foreach (Dl1DeveloperToolsDeploymentConflict conflict in plan.Conflicts)
+                {
+                    DeveloperToolsDeploymentConflictDecision decision =
+                        _fileDialogs.ResolveDeveloperToolsDeploymentConflict(
+                            conflict.RelativePath,
+                            conflict.Message,
+                            conflict.CanSkip);
+                    if (decision == DeveloperToolsDeploymentConflictDecision.Cancel)
+                    {
+                        BuildStatus =
+                            "Developer Tools deployment canceled at conflict review; the project was not changed.";
+                        return;
+                    }
+
+                    resolutionBuilder[conflict.RelativePath] = decision ==
+                        DeveloperToolsDeploymentConflictDecision.BackUpAndReplace
+                            ? Dl1DeploymentConflictResolution.BackUpAndReplace
+                            : Dl1DeploymentConflictResolution.Skip;
+                }
+
+                request = CreateDeveloperToolsDeploymentRequest(resolutionBuilder.ToImmutable());
+                plan = await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request, token);
+                EnsureCurrent(generation, token);
+                PublishDeploymentPlan(plan);
+                if (!plan.CanDeploy)
+                {
+                    throw new Dl1DeveloperToolsDeploymentConflictException(plan);
+                }
+            }
+
+            if (!_fileDialogs.ConfirmDeveloperToolsDeployment(
+                    DeveloperToolsProjectRoot,
+                    plan.Artifacts.Length,
+                    plan.AnimationNames.Length))
+            {
+                BuildStatus = "Developer Tools deployment canceled after preflight; the project was not changed.";
+                return;
+            }
+
+            BuildStatus = "Compiling and validating the staged Developer Tools deployment...";
+            _setStatus(BuildStatus);
+            Dl1DeveloperToolsDeploymentResult result = await Dl1DeveloperToolsProjectDeployer.DeployAsync(
+                request,
+                token);
+            EnsureCurrent(generation, token);
+            PublishDeploymentPlan(result.Plan);
+            _lastDeploymentManifestPath = Path.GetFullPath(result.ReceiptPath);
+            _lastDeployedAnimationScriptPath = ResolveProjectRelativePath(
+                DeveloperToolsProjectRoot,
+                result.Receipt.AnimationScriptRelativePath);
+            _canRollbackLastDeployment = true;
+            OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
+            OpenDeploymentReceiptCommand.NotifyCanExecuteChanged();
+            RollBackDeploymentCommand.NotifyCanExecuteChanged();
+
+            int looseAnimationCount = result.Receipt.Artifacts.Count(static artifact =>
+                artifact.Role == Dl1DeploymentArtifactRole.Source &&
+                artifact.RelativePath.EndsWith(".anm2", StringComparison.OrdinalIgnoreCase));
+            int compiledAnimationCount = result.Receipt.Artifacts.Count(static artifact =>
+                artifact.Role == Dl1DeploymentArtifactRole.Compiled &&
+                artifact.RelativePath.EndsWith(".anm2_obj", StringComparison.OrdinalIgnoreCase));
+            string duplicateNote = result.Plan.StaleDuplicateResources.IsEmpty
+                ? "No stale duplicate resources were found."
+                : $"{result.Plan.StaleDuplicateResources.Length:N0} stale duplicate resource(s) remain; review the preflight details.";
+            BuildStatus =
+                $"Developer Tools deployment complete. {result.Receipt.ModelResourceName}.ascr resolves to " +
+                $"{result.Receipt.AnimationLibraryName}.scr at {result.Receipt.AnimationScriptRelativePath}; " +
+                $"installed {looseAnimationCount:N0} loose and " +
+                $"{compiledAnimationCount:N0} compiled animation(s). " +
+                (result.Plan.ExportPortableAnimationRpack
+                    ? "The animation RPack is portable-only and is not automatically mounted. "
+                    : "Portable animation RPack export was disabled. ") +
+                duplicateNote +
+                (result.Plan.StaleDuplicateResources.IsEmpty
+                    ? string.Empty
+                    : " " + string.Join("; ", result.Plan.StaleDuplicateResources));
+            _setStatus(BuildStatus);
+        }
+        catch (OperationCanceledException)
+        {
+            BuildStatus = "Developer Tools deployment canceled; the previous project state was retained.";
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or
+            IOException or UnauthorizedAccessException or OverflowException or TimeoutException or
+            Win32Exception or NotSupportedException)
+        {
+            BuildStatus =
+                $"Developer Tools deployment failed; the previous project state was retained: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+        finally
+        {
+            EndOperation(generation);
+        }
+    }
+
+    private async Task RollBackDeploymentAsync()
+    {
+        string receiptPath = _lastDeploymentManifestPath;
+        if (!File.Exists(receiptPath) ||
+            !_fileDialogs.ConfirmDeveloperToolsDeploymentRollback(receiptPath))
+        {
+            return;
+        }
+
+        long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
+        try
+        {
+            BuildStatus = "Validating and rolling back the last Developer Tools deployment...";
+            await Dl1DeveloperToolsProjectDeployer.RollbackAsync(receiptPath, token);
+            EnsureCurrent(generation, token);
+            _canRollbackLastDeployment = false;
+            RollBackDeploymentCommand.NotifyCanExecuteChanged();
+            BuildStatus = "Developer Tools deployment rolled back. The receipt records the completed rollback.";
+            _setStatus(BuildStatus);
+        }
+        catch (OperationCanceledException)
+        {
+            BuildStatus = "Deployment rollback canceled; the Developer Tools project was retained.";
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or
+            IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            BuildStatus = $"Deployment rollback failed without replacing modified project files: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+        finally
+        {
+            EndOperation(generation);
+        }
+    }
+
+    private async Task BackUpLegacyOutputsAsync()
+    {
+        ImmutableArray<string> paths = _legacyOutputPaths;
+        if (paths.IsEmpty ||
+            !_fileDialogs.ConfirmLegacyDeveloperToolsOutputBackup(
+                DeveloperToolsProjectRoot,
+                paths))
+        {
+            return;
+        }
+
+        long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
+        try
+        {
+            BuildStatus = "Moving legacy nested output into a recoverable project-local backup...";
+            Dl1DeveloperToolsLegacyBackupResult result =
+                await Dl1DeveloperToolsProjectDeployer.BackUpLegacyOutputsAsync(
+                    DeveloperToolsProjectRoot,
+                    token);
+            EnsureCurrent(generation, token);
+            _legacyOutputPaths = [];
+            BackUpLegacyOutputsCommand.NotifyCanExecuteChanged();
+            DeploymentPreflightSummary =
+                $"Backed up {result.BackedUpRelativePaths.Length:N0} legacy output director{(result.BackedUpRelativePaths.Length == 1 ? "y" : "ies")} " +
+                $"under {result.BackupRootRelativePath}. Run deployment again for a fresh preflight.";
+            BuildStatus = "Legacy nested output was moved to a recoverable backup; no files were deleted.";
+            _setStatus(BuildStatus);
+        }
+        catch (OperationCanceledException)
+        {
+            BuildStatus = "Legacy-output backup canceled; the project was retained.";
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidDataException or InvalidOperationException or
+            IOException or UnauthorizedAccessException or NotSupportedException)
+        {
+            BuildStatus = $"Legacy-output backup failed without deleting project data: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+        finally
+        {
+            EndOperation(generation);
+        }
+    }
+
+    private void RestoreLatestDeploymentActions()
+    {
+        _lastDeploymentManifestPath = string.Empty;
+        _lastDeployedAnimationScriptPath = string.Empty;
+        _canRollbackLastDeployment = false;
+        if (Directory.Exists(DeveloperToolsProjectRoot))
+        {
+            Dl1DeveloperToolsDeploymentReceipt? receipt =
+                Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(DeveloperToolsProjectRoot);
+            if (receipt is not null)
+            {
+                _lastDeploymentManifestPath = receipt.ManifestPath;
+                _lastDeployedAnimationScriptPath = ResolveProjectRelativePath(
+                    DeveloperToolsProjectRoot,
+                    receipt.AnimationScriptRelativePath);
+                _canRollbackLastDeployment = true;
+            }
+        }
+
+        OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
+        OpenDeploymentReceiptCommand.NotifyCanExecuteChanged();
+        RollBackDeploymentCommand.NotifyCanExecuteChanged();
+    }
+
+    private void PublishDeploymentPlan(Dl1DeveloperToolsDeploymentPlan plan)
+    {
+        DeploymentArtifacts.Clear();
+        foreach (Dl1DeveloperToolsDeploymentArtifact artifact in plan.Artifacts)
+        {
+            DeploymentArtifacts.Add(new DeveloperToolsDeploymentArtifactItemViewModel(artifact));
+        }
+
+        var lines = new List<string>
+        {
+            $"ASCR redirect: {plan.ModelResourceName}.ascr -> {plan.AnimationLibraryName}.scr",
+            $"SCR: {plan.AnimationScriptRelativePath}",
+            $"Animation mapping ({plan.Animations.Length:N0}):",
+            $"Artifacts: {plan.Artifacts.Length:N0}; conflicts: {plan.Conflicts.Length:N0}",
+        };
+        lines.AddRange(plan.Animations.Select(static animation =>
+            $"  {animation.SourceName} -> {animation.Anm2FileName}; {animation.ScrSequence}"));
+        lines.Add(plan.PortableRpackRelativePath is null
+            ? "Portable animation RPack: disabled"
+            : $"Portable animation RPack: {plan.PortableRpackRelativePath} (not automatically mounted)");
+        _legacyOutputPaths = plan.LegacyOutputPaths;
+        BackUpLegacyOutputsCommand.NotifyCanExecuteChanged();
+        if (!plan.LegacyOutputWarnings.IsEmpty)
+        {
+            lines.Add("Legacy/unmounted output: " + string.Join("; ", plan.LegacyOutputWarnings));
+        }
+
+        if (!plan.StaleDuplicateResources.IsEmpty)
+        {
+            lines.Add("Duplicate resources: " + string.Join("; ", plan.StaleDuplicateResources));
+        }
+
+        DeploymentPreflightSummary = string.Join(Environment.NewLine, lines);
+    }
+
+    private void InvalidateDeploymentPreflight()
+    {
+        DeploymentArtifacts.Clear();
+        _legacyOutputPaths = [];
+        BackUpLegacyOutputsCommand.NotifyCanExecuteChanged();
+        DeploymentPreflightSummary =
+            "Authoring or deployment settings changed. Deploy will run a fresh staged preflight before writing.";
+        OnPropertyChanged(nameof(DeploymentPathPreview));
+        DeployToDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
+    }
+
+    private static string ResolveProjectRelativePath(string projectRoot, string relativePath) =>
+        Path.GetFullPath(
+            Path.Combine(
+                projectRoot,
+                relativePath.Replace('/', Path.DirectorySeparatorChar)));
+
     private async Task BuildModelRpackAsync()
     {
         if (_model is null)
@@ -890,6 +1484,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                     RetailData0PakPath = _getRetailData0PakPath(),
                     OutputRpackPath = path,
                     ResourceName = resourceName,
+                    CharacterId = CharacterId,
                     SurfaceName = SurfaceName,
                     AnimationScriptAlias = string.IsNullOrWhiteSpace(AnimationScriptAlias)
                         ? null
@@ -1031,12 +1626,246 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
     }
 
+    internal ModelsWorkspacePersistencePayload? CreatePersistencePayload()
+    {
+        if (_model is null)
+        {
+            return null;
+        }
+
+        SyncDocument();
+        CustomModelPackage package = _model.Package;
+        string portableName = Dl1SourceModelWriter.SanitizeName(
+            string.IsNullOrWhiteSpace(ResourceName)
+                ? package.Document.Name
+                : ResourceName,
+            55);
+        return new ModelsWorkspacePersistencePayload(
+            package.Document.ModelId,
+            $"{portableName}.dlrmodel",
+            CustomModelPackageSerializer.Serialize(package),
+            SelectedAnimation?.Id,
+            SelectedPreviewMode.Mode == CustomModelPreviewMode.SourceFbx
+                ? ProjectCustomModelPreviewMode.SourceFbx
+                : ProjectCustomModelPreviewMode.Dl1Output,
+            ShowMeshes,
+            ShowBones,
+            ShowHelpers,
+            ShowCameraHelpers,
+            ShowPropHelpers);
+    }
+
+    internal async Task<PreparedModelsWorkspaceRestore> PrepareProjectRestoreAsync(
+        string packagePath,
+        ProjectModelsWorkspaceState state,
+        CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+        ArgumentNullException.ThrowIfNull(state);
+        string fullPath = Path.GetFullPath(packagePath);
+        FbxModelAuthoringImportResult imported = await Task.Run(
+            () =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                CustomModelPackage package = CustomModelPackageSerializer.Load(fullPath);
+                FbxModelAuthoringImportResult decoded =
+                    FbxModelAuthoringImporter.ImportPackage(package, cancellationToken);
+                if (state.SelectedAnimationClipId is { } selectedClipId &&
+                    decoded.Package.Document.AnimationClips.All(clip => clip.Id != selectedClipId))
+                {
+                    throw new InvalidDataException(
+                        "The saved Models-workspace animation is not present in its custom-model package.");
+                }
+
+                return decoded;
+            },
+            cancellationToken).ConfigureAwait(true);
+        return new PreparedModelsWorkspaceRestore(imported, fullPath, state);
+    }
+
+    internal ModelsWorkspaceSessionSnapshot CaptureProjectSession()
+    {
+        if (_model is not null)
+        {
+            SyncDocument();
+        }
+
+        return new ModelsWorkspaceSessionSnapshot(
+            _model,
+            _sourcePath,
+            _packagePath,
+            SelectedAnimation?.Id,
+            SelectedPreviewMode.Mode,
+            ShowMeshes,
+            ShowBones,
+            ShowHelpers,
+            ShowCameraHelpers,
+            ShowPropHelpers,
+            PersistenceRevision);
+    }
+
+    internal void CommitProjectRestore(PreparedModelsWorkspaceRestore prepared)
+    {
+        ArgumentNullException.ThrowIfNull(prepared);
+        ApplyRestoredSession(
+            prepared.Model,
+            sourcePath: null,
+            prepared.PackagePath,
+            prepared.State.SelectedAnimationClipId,
+            prepared.State.PreviewMode == ProjectCustomModelPreviewMode.SourceFbx
+                ? CustomModelPreviewMode.SourceFbx
+                : CustomModelPreviewMode.Dl1Output,
+            prepared.State.ShowMeshes,
+            prepared.State.ShowBones,
+            prepared.State.ShowHelpers,
+            prepared.State.ShowCameraHelpers,
+            prepared.State.ShowPropHelpers,
+            authoringRevision: 0);
+    }
+
+    internal void RestoreProjectSession(ModelsWorkspaceSessionSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Model is null)
+        {
+            ClearProjectSession(snapshot.AuthoringRevision);
+            return;
+        }
+
+        ApplyRestoredSession(
+            snapshot.Model,
+            snapshot.SourcePath,
+            snapshot.PackagePath,
+            snapshot.SelectedAnimationClipId,
+            snapshot.PreviewMode,
+            snapshot.ShowMeshes,
+            snapshot.ShowBones,
+            snapshot.ShowHelpers,
+            snapshot.ShowCameraHelpers,
+            snapshot.ShowPropHelpers,
+            snapshot.AuthoringRevision);
+    }
+
+    internal void ClearProjectSession(long authoringRevision = 0)
+    {
+        _operationCancellation?.Cancel();
+        _operationCancellation?.Dispose();
+        _operationCancellation = null;
+        Interlocked.Increment(ref _operationGeneration);
+
+        _suppressPersistenceNotifications = true;
+        _suppressPreviewRefresh = true;
+        try
+        {
+            foreach (CustomModelAnimationClipItemViewModel animation in Animations)
+            {
+                animation.PropertyChanged -= OnAnimationItemPropertyChanged;
+            }
+
+            _model = null;
+            _previewSession = null;
+            _sourcePath = null;
+            _packagePath = null;
+            _modelName = "No custom model loaded";
+            _selectedRigMode = CustomModelRigMode.Auto;
+            _resourceName = "custom_model";
+            _characterId = "custom_model";
+            _characterIdWasExplicitlyEdited = false;
+            _surfaceName = "default";
+            _animationScriptAlias = string.Empty;
+            _flipTextureCoordinateV = true;
+            _selectedPreviewMode = PreviewModeChoicesValue[0];
+            _selectedAnimation = null;
+            _selectedMaterial = null;
+            _selectedBone = null;
+            Bones.Clear();
+            RootBoneNames.Clear();
+            Materials.Clear();
+            Animations.Clear();
+            Diagnostics.Clear();
+            Summary = "Import a binary FBX to inspect its mesh, exact hierarchy, materials, and animation stacks.";
+            BuildStatus = "Not built";
+            Timeline.EndFrame = 1;
+            Timeline.CurrentFrame = 0;
+            Timeline.ReplaceTracks([]);
+            Timeline.ReplaceCurves([]);
+            Viewport.SceneSource.SetScene([], null, []);
+            Viewport.SetDiagnosticOverlay(null);
+            IsBusy = false;
+            OnPropertyChanged(nameof(ModelName));
+            OnPropertyChanged(nameof(SelectedRigMode));
+            OnPropertyChanged(nameof(ResourceName));
+            OnPropertyChanged(nameof(CharacterId));
+            OnPropertyChanged(nameof(SurfaceName));
+            OnPropertyChanged(nameof(AnimationScriptAlias));
+            OnPropertyChanged(nameof(FlipTextureCoordinateV));
+            OnPropertyChanged(nameof(SelectedPreviewMode));
+            OnPropertyChanged(nameof(SelectedAnimation));
+            OnPropertyChanged(nameof(SelectedMaterial));
+            OnPropertyChanged(nameof(SelectedBone));
+            OnPropertyChanged(nameof(HasModel));
+            OnPropertyChanged(nameof(CanChangeRigMode));
+        }
+        finally
+        {
+            _suppressPreviewRefresh = false;
+            _suppressPersistenceNotifications = false;
+            Interlocked.Exchange(ref _authoringRevision, authoringRevision);
+        }
+
+        NotifyCommands();
+    }
+
+    private void ApplyRestoredSession(
+        FbxModelAuthoringImportResult model,
+        string? sourcePath,
+        string? packagePath,
+        Guid? selectedAnimationClipId,
+        CustomModelPreviewMode previewMode,
+        bool showMeshes,
+        bool showBones,
+        bool showHelpers,
+        bool showCameraHelpers,
+        bool showPropHelpers,
+        long authoringRevision)
+    {
+        _suppressPersistenceNotifications = true;
+        _suppressPreviewRefresh = true;
+        try
+        {
+            CommitModel(model, sourcePath, packagePath, markAuthoringChanged: false);
+            SelectedAnimation = selectedAnimationClipId is { } selectedId
+                ? Animations.FirstOrDefault(animation => animation.Id == selectedId)
+                : SelectedAnimation;
+            SelectedPreviewMode = PreviewModeChoicesValue.First(choice => choice.Mode == previewMode);
+            ShowMeshes = showMeshes;
+            ShowBones = showBones;
+            ShowHelpers = showHelpers;
+            ShowCameraHelpers = showCameraHelpers;
+            ShowPropHelpers = showPropHelpers;
+        }
+        finally
+        {
+            _suppressPreviewRefresh = false;
+            _suppressPersistenceNotifications = false;
+            Interlocked.Exchange(ref _authoringRevision, authoringRevision);
+        }
+
+        RefreshTimeline();
+        RefreshPreview();
+        FrameModel();
+    }
+
     private void CommitModel(
         FbxModelAuthoringImportResult imported,
         string? sourcePath,
-        string? packagePath)
+        string? packagePath,
+        bool markAuthoringChanged = true)
     {
         imported = NormalizeBuildReceipt(imported, out string buildStatus);
+        bool previousPersistenceSuppression = _suppressPersistenceNotifications;
+        _suppressPersistenceNotifications = true;
         _suppressPreviewRefresh = true;
         try
         {
@@ -1047,6 +1876,14 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             ModelName = imported.Package.Document.Name;
             SetProperty(ref _selectedRigMode, imported.Package.Document.RigMode, nameof(SelectedRigMode));
             ResourceName = imported.Package.Document.BuildSettings.ResourceName;
+            _characterIdWasExplicitlyEdited =
+                !string.IsNullOrWhiteSpace(imported.Package.Document.BuildSettings.CharacterId);
+            SetProperty(
+                ref _characterId,
+                _characterIdWasExplicitlyEdited
+                    ? imported.Package.Document.BuildSettings.CharacterId
+                    : imported.Package.Document.BuildSettings.ResourceName,
+                nameof(CharacterId));
             SurfaceName = imported.Package.Document.BuildSettings.SurfaceName;
             AnimationScriptAlias = imported.Package.Document.BuildSettings.AnimationScriptAlias ?? string.Empty;
             _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
@@ -1097,10 +1934,15 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         finally
         {
             _suppressPreviewRefresh = false;
+            _suppressPersistenceNotifications = previousPersistenceSuppression;
         }
 
         RefreshPreview();
         FrameModel();
+        if (markAuthoringChanged)
+        {
+            MarkAuthoringChanged();
+        }
     }
 
     private void PopulateMaterials()
@@ -1188,6 +2030,9 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             .ToImmutableArray();
         CustomModelBuildSettings buildSettings = new()
         {
+            CharacterId = string.IsNullOrWhiteSpace(CharacterId)
+                ? Dl1SourceModelWriter.SanitizeName(ResourceName, 55)
+                : CharacterId.Trim(),
             ResourceName = Dl1SourceModelWriter.SanitizeName(ResourceName, 55),
             SurfaceName = Dl1SourceModelWriter.SanitizeName(SurfaceName, 63),
             AnimationScriptAlias = string.IsNullOrWhiteSpace(AnimationScriptAlias)
@@ -1380,6 +2225,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     {
         MarkAuthoringChanged();
         ExportAnimationRpackCommand.NotifyCanExecuteChanged();
+        InvalidateDeploymentPreflight();
         if (args.PropertyName is nameof(CustomModelAnimationClipItemViewModel.FrameRateNumerator) or
             nameof(CustomModelAnimationClipItemViewModel.FrameRateDenominator))
         {
@@ -1421,7 +2267,16 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     private void Cancel() => _operationCancellation?.Cancel();
 
-    private void MarkAuthoringChanged() => Interlocked.Increment(ref _authoringRevision);
+    private void MarkAuthoringChanged()
+    {
+        if (_suppressPersistenceNotifications)
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref _authoringRevision);
+        PersistenceStateChanged?.Invoke(this, EventArgs.Empty);
+    }
 
     private void ClearLastBuildReceipt()
     {
@@ -1473,9 +2328,16 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         BuildCompletePackageCommand.NotifyCanExecuteChanged();
         BuildLooseFilesCommand.NotifyCanExecuteChanged();
         SelectModelCompilerCommand.NotifyCanExecuteChanged();
+        SelectDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
         BuildModelRpackCommand.NotifyCanExecuteChanged();
         ExportAnimationRpackCommand.NotifyCanExecuteChanged();
         OpenSelectedAnimationInAnimateCommand.NotifyCanExecuteChanged();
+        OpenDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
+        OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
+        OpenDeploymentReceiptCommand.NotifyCanExecuteChanged();
+        DeployToDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
+        RollBackDeploymentCommand.NotifyCanExecuteChanged();
+        BackUpLegacyOutputsCommand.NotifyCanExecuteChanged();
         FrameModelCommand.NotifyCanExecuteChanged();
         CancelCommand.NotifyCanExecuteChanged();
     }
@@ -1498,6 +2360,50 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         ".tga" => "image/x-tga",
         _ => "application/octet-stream",
     };
+
+    private static string DisplaySafeIdentity(string? value, string? fallback, string finalFallback)
+    {
+        string candidate = string.IsNullOrWhiteSpace(value) ? fallback ?? string.Empty : value;
+        candidate = candidate.Trim();
+        return string.IsNullOrWhiteSpace(candidate) ? finalFallback : candidate;
+    }
+
+    private static string DisplaySafeCharacterId(string? value, string? fallback)
+    {
+        try
+        {
+            return Dl1DeveloperToolsProjectDeployer.NormalizeCharacterId(
+                DisplaySafeIdentity(value, fallback, "character"));
+        }
+        catch (ArgumentException)
+        {
+            return "<invalid-character-id>";
+        }
+    }
+
+    private void OpenPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || (!Directory.Exists(path) && !File.Exists(path)))
+        {
+            BuildStatus = "The selected deployment path is no longer available.";
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = path,
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or Win32Exception or IOException)
+        {
+            BuildStatus = $"Could not open deployment path: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+    }
 
     public void Dispose()
     {
@@ -1600,4 +2506,18 @@ public sealed record CustomModelDiagnosticItemViewModel(CustomModelImportDiagnos
     public string Code => Contract.Code;
     public string Message => Contract.Message;
     public string? Subject => Contract.Subject;
+}
+
+public sealed record DeveloperToolsDeploymentArtifactItemViewModel(
+    Dl1DeveloperToolsDeploymentArtifact Contract)
+{
+    public string RelativePath => Contract.RelativePath;
+
+    public string Role => Contract.Role.ToString();
+
+    public string Disposition => Contract.Disposition.ToString();
+
+    public string Required => Contract.Required ? "Required" : "Optional";
+
+    public string Description => Contract.Description;
 }

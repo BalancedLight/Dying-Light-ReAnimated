@@ -29,6 +29,65 @@ public enum ProjectPreviewMode
     Raw,
 }
 
+/// <summary>
+/// Selects which representation of a project-owned custom-model package is
+/// shown in the independent Models workspace.
+/// </summary>
+public enum ProjectCustomModelPreviewMode
+{
+    Dl1Output,
+    SourceFbx,
+}
+
+/// <summary>
+/// Optional schema-1 state for the independent Models workspace. The model
+/// itself remains in a project-relative, fingerprinted .dlrmodel asset; this
+/// record contains only the UI state needed to resume that authoring session.
+/// </summary>
+public sealed record ProjectModelsWorkspaceState
+{
+    public Guid PackageAssetId { get; init; }
+
+    public Guid? SelectedAnimationClipId { get; init; }
+
+    public ProjectCustomModelPreviewMode PreviewMode { get; init; } =
+        ProjectCustomModelPreviewMode.Dl1Output;
+
+    public bool ShowMeshes { get; init; } = true;
+
+    public bool ShowBones { get; init; } = true;
+
+    public bool ShowHelpers { get; init; } = true;
+
+    public bool ShowCameraHelpers { get; init; } = true;
+
+    public bool ShowPropHelpers { get; init; } = true;
+
+    internal void Validate(
+        IReadOnlyDictionary<Guid, ProjectAssetKind> assetKinds)
+    {
+        if (PackageAssetId == Guid.Empty ||
+            !assetKinds.TryGetValue(PackageAssetId, out ProjectAssetKind kind) ||
+            kind != ProjectAssetKind.CustomModelSource)
+        {
+            throw new ProjectFormatException(
+                "The Models workspace must reference a project-owned custom-model source asset.");
+        }
+
+        if (SelectedAnimationClipId == Guid.Empty)
+        {
+            throw new ProjectFormatException(
+                "The selected Models-workspace animation identifier cannot be empty.");
+        }
+
+        if (!Enum.IsDefined(PreviewMode))
+        {
+            throw new ProjectFormatException(
+                $"Unsupported Models-workspace preview mode '{PreviewMode}'.");
+        }
+    }
+}
+
 public sealed record ProjectRetailAssetIdentity
 {
     public string InstallFingerprint { get; init; } = string.Empty;
@@ -990,6 +1049,8 @@ public sealed record DlraProject
 
     public Guid? ActiveAnimationId { get; init; }
 
+    public ProjectModelsWorkspaceState? ModelsWorkspace { get; init; }
+
     public Dl1ProjectSettings Dl1Settings { get; init; } = new();
 
     public ProjectPreviewMode PreviewMode { get; init; } =
@@ -1065,6 +1126,8 @@ public sealed record DlraProject
         {
             animation.Validate(assetKinds, nameof(Animations));
         }
+
+        ModelsWorkspace?.Validate(assetKinds);
 
         if (Animations.Select(static animation => animation.Id).Distinct().Count() !=
             Animations.Length)

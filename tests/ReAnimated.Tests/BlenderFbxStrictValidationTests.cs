@@ -18,6 +18,9 @@ public sealed class BlenderFbxStrictValidationTests :
             Path.GetTempPath(),
             $"ReAnimated-FbxStrict-{Guid.NewGuid():N}");
 
+    internal static byte[] CreateValidModelFixture() =>
+        Serialize(BuildFixture(FixtureCorruption.None));
+
     [Fact]
     public async Task
         AcceptsCompleteHierarchyMeshSkinMaterialAndAnimation()

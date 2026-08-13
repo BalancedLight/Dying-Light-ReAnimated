@@ -83,6 +83,35 @@ public sealed class ViewModelWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public void ProjectWithModelsSessionStartsInModelsWorkspace()
+    {
+        Guid packageAssetId = Guid.NewGuid();
+        DlraProject project = DlraProject.Create("Model authoring") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = packageAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "Sources/synthetic.dlrmodel",
+                    ResourceId =
+                        $"custom-model:{Guid.NewGuid():N}:synthetic",
+                    ContentSha256 = new string('c', 64),
+                },
+            ],
+            ModelsWorkspace = new ProjectModelsWorkspaceState
+            {
+                PackageAssetId = packageAssetId,
+            },
+        };
+
+        Assert.Equal(
+            EditorWorkspaceMode.Models,
+            MainWindowViewModel.ResolveStartupWorkspace(project));
+    }
+
+    [Fact]
     public async Task ViewportInspectionBackgroundsRemainReadableAndDistinct()
     {
         Directory.CreateDirectory(_temporaryDirectory);

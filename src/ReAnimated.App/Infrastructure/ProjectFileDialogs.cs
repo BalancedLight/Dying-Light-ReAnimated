@@ -11,6 +11,13 @@ public enum LocalAnm2SourceBindingDecision
     Cancel,
 }
 
+public enum DeveloperToolsDeploymentConflictDecision
+{
+    BackUpAndReplace,
+    SkipSkippable,
+    Cancel,
+}
+
 public sealed record LocalAnm2ImportPreflight(
     string AnimationName,
     string SourceModelName,
@@ -74,6 +81,25 @@ public interface IProjectFileDialogService
         string? initialPath) => null;
 
     string? ShowSelectCustomModelOutputDirectory(string? initialPath) => null;
+
+    string? ShowSelectDl1DeveloperToolsProjectDialog(string? initialPath) => null;
+
+    DeveloperToolsDeploymentConflictDecision ResolveDeveloperToolsDeploymentConflict(
+        string relativePath,
+        string conflict,
+        bool canSkip) =>
+        DeveloperToolsDeploymentConflictDecision.Cancel;
+
+    bool ConfirmLegacyDeveloperToolsOutputBackup(
+        string projectRoot,
+        IReadOnlyList<string> relativePaths) => false;
+
+    bool ConfirmDeveloperToolsDeployment(
+        string projectRoot,
+        int artifactCount,
+        int animationCount) => false;
+
+    bool ConfirmDeveloperToolsDeploymentRollback(string receiptPath) => false;
 
     string? ShowOpenCustomModelTextureDialog(string? initialPath) => null;
 
@@ -464,6 +490,92 @@ public sealed class WindowsProjectFileDialogService :
         return ShowOwnedDialog(dialog) == true ? dialog.FolderName : null;
     }
 
+    public string? ShowSelectDl1DeveloperToolsProjectDialog(string? initialPath)
+    {
+        OpenFolderDialog dialog = new()
+        {
+            Multiselect = false,
+            Title = "Select a Dying Light Developer Tools project",
+        };
+        string? initialDirectory = Directory.Exists(initialPath)
+            ? initialPath
+            : Path.GetDirectoryName(initialPath);
+        if (!string.IsNullOrWhiteSpace(initialDirectory) && Directory.Exists(initialDirectory))
+        {
+            dialog.InitialDirectory = initialDirectory;
+        }
+
+        return ShowOwnedDialog(dialog) == true ? dialog.FolderName : null;
+    }
+
+    public DeveloperToolsDeploymentConflictDecision ResolveDeveloperToolsDeploymentConflict(
+        string relativePath,
+        string conflict,
+        bool canSkip)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(relativePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(conflict);
+        string choices = canSkip
+            ? "Yes: back up and replace this file.\nNo: keep and skip this optional artifact.\nCancel: make no changes."
+            : "Yes: back up and replace this required file.\nNo or Cancel: make no changes. Required files cannot be skipped.";
+        MessageBoxResult result = MessageBox.Show(
+            $"Destination: {relativePath}\n\n{conflict}\n\n{choices}",
+            "Resolve Developer Tools deployment conflict",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Warning,
+            MessageBoxResult.Cancel);
+        return result switch
+        {
+            MessageBoxResult.Yes => DeveloperToolsDeploymentConflictDecision.BackUpAndReplace,
+            MessageBoxResult.No when canSkip => DeveloperToolsDeploymentConflictDecision.SkipSkippable,
+            _ => DeveloperToolsDeploymentConflictDecision.Cancel,
+        };
+    }
+
+    public bool ConfirmLegacyDeveloperToolsOutputBackup(
+        string projectRoot,
+        IReadOnlyList<string> relativePaths)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        ArgumentNullException.ThrowIfNull(relativePaths);
+        string listed = string.Join(Environment.NewLine, relativePaths.Select(static path => $"  - {path}"));
+        return MessageBox.Show(
+            $"Move these legacy or unmounted output directories into a recoverable project-local backup?\n\n" +
+            $"{listed}\n\nProject: {projectRoot}\n\nNothing is permanently deleted.",
+            "Back up legacy Developer Tools output",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+    }
+
+    public bool ConfirmDeveloperToolsDeployment(
+        string projectRoot,
+        int artifactCount,
+        int animationCount)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        return MessageBox.Show(
+            $"The preflight passed for {artifactCount:N0} artifact(s) and {animationCount:N0} animation(s).\n\n" +
+            $"Project: {projectRoot}\n\n" +
+            "Every destination is listed in the Build / diagnostics panel. Continue with the transactional deployment?",
+            "Deploy to Dying Light Developer Tools project",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+    }
+
+    public bool ConfirmDeveloperToolsDeploymentRollback(string receiptPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(receiptPath);
+        return MessageBox.Show(
+            $"Roll back the deployment recorded by:\n{receiptPath}\n\n" +
+            "Rollback stops if any deployed file was changed after deployment.",
+            "Roll back Developer Tools deployment",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+    }
+
     public string? ShowOpenCustomModelTextureDialog(string? initialPath)
     {
         OpenFileDialog dialog = new()
@@ -490,7 +602,7 @@ public sealed class WindowsProjectFileDialogService :
             FileName = $"{MakeSafeFileName(suggestedName)}_animations.rpack",
             Filter = RpackFilter,
             OverwritePrompt = true,
-            Title = "Export selected model animations to one DL1 RPack",
+            Title = "Export portable animation RPack (not automatically mounted)",
         };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;

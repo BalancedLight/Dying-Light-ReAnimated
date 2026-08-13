@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -40,6 +41,41 @@ public sealed record CustomModelAnimationLibraryResult(
     ImmutableArray<string> AnimationNames,
     ImmutableArray<string> Warnings);
 
+public sealed record PreparedCustomModelAnimation(
+    string Name,
+    string Anm2FileName,
+    byte[] Payload,
+    int FrameCount,
+    int FramesPerSecond,
+    string SourceName,
+    string SourceFingerprint,
+    Dl1RootMotionMode RootMotionMode,
+    string? RootBoneName);
+
+public sealed record PreparedCustomModelAnimationLibrary(
+    string AnimationScriptName,
+    ImmutableArray<PreparedCustomModelAnimation> Animations,
+    ImmutableArray<AnimationScrSequence> Sequences,
+    string LooseScriptText,
+    ImmutableArray<string> Warnings)
+{
+    public byte[] BuildPortableRpack()
+    {
+        AnimationScrSections sections = AnimationScrCodec.Build(Sequences);
+        return Rp6lAnimationLibraryCodec.Build(
+            Animations.ToDictionary(
+                static animation => animation.Name,
+                static animation => animation.Payload,
+                StringComparer.OrdinalIgnoreCase),
+            new Dictionary<string, Rp6lAnimationScript>(StringComparer.OrdinalIgnoreCase)
+            {
+                [AnimationScriptName] = new Rp6lAnimationScript(
+                    sections.RecordsAndNames,
+                    sections.IndexAndNames),
+            });
+    }
+}
+
 /// <summary>
 /// Exports every selected FBX animation stack through the same authoritative
 /// DL1 evaluation/ANM2 path used by the editor, then builds one deterministic
@@ -58,13 +94,12 @@ public static class CustomModelAnimationLibraryExporter
         WriteIndented = true,
     };
 
-    public static async Task<CustomModelAnimationLibraryResult> ExportAsync(
+    public static async Task<PreparedCustomModelAnimationLibrary> PrepareAsync(
         CustomModelAnimationLibraryRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
-        ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputPath);
         request.Model.Package.Document.Validate();
         if (request.Model.Rig is null || request.Model.Package.Document.Bones.IsEmpty)
         {
@@ -77,7 +112,7 @@ public static class CustomModelAnimationLibraryExporter
         CustomModelAnimationClip[] included = selections.Where(static clip => clip.Included).ToArray();
         if (included.Length == 0)
         {
-            throw new InvalidOperationException("Select at least one decoded FBX animation stack for RPack export.");
+            throw new InvalidOperationException("Select at least one decoded FBX animation stack for export.");
         }
 
         string? requestedAlias = string.IsNullOrWhiteSpace(request.AnimationScriptAlias)
@@ -86,34 +121,27 @@ public static class CustomModelAnimationLibraryExporter
         if (string.IsNullOrWhiteSpace(requestedAlias))
         {
             throw new InvalidOperationException(
-                "Selected animation stacks require an animation script identity so the model .ascr can resolve the type-322 RPack resource.");
+                "Selected animation stacks require an animation library/script name so the model ASCR and loose SCR resolve the same identity.");
         }
 
         string scriptName = Dl1SourceModelWriter.RequireExactResourceName(
             requestedAlias,
             63,
-            "animation script alias");
-
-        Guid[] duplicateIds = included.GroupBy(static clip => clip.Id)
-            .Where(static group => group.Count() > 1)
-            .Select(static group => group.Key)
-            .ToArray();
-        if (duplicateIds.Length > 0)
+            "animation library/script name");
+        if (included.GroupBy(static clip => clip.Id).Any(static group => group.Count() > 1))
         {
             throw new InvalidDataException("Animation stack selections contain duplicate identities.");
         }
 
-        Dl1PreparedAuthoredRig preparedRig = Dl1CustomModelRigPreparer.Prepare(
-            request.Model,
-            cancellationToken);
+        Dl1PreparedAuthoredRig preparedRig = Dl1CustomModelRigPreparer.Prepare(request.Model, cancellationToken);
         RigDefinition rig = preparedRig.PreviewRig;
         ImmutableArray<uint> descriptorOrder = rig.Bones
             .Select(static bone => bone.DescriptorHash!.Value)
             .ToImmutableArray();
-        var animations = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
-        var scriptSequences = new List<AnimationScrSequence>(included.Length);
+        var preparedAnimations = ImmutableArray.CreateBuilder<PreparedCustomModelAnimation>(included.Length);
+        var sequences = ImmutableArray.CreateBuilder<AnimationScrSequence>(included.Length);
         var warnings = ImmutableArray.CreateBuilder<string>();
-        var rows = new List<object>();
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var exporter = new Dl1AnimationExporter(new Anm2EvaluationAdapter(new AnimationEvaluator()));
         foreach (CustomModelAnimationClip selection in included)
         {
@@ -128,28 +156,39 @@ public static class CustomModelAnimationLibraryExporter
             if (selection.RootMotionMode == Dl1RootMotionMode.MotionAccumulator)
             {
                 throw new InvalidOperationException(
-                    $"Animation stack '{selection.DisplayName}' requests generated 0xCCC3CDDF accumulator output. The current verified ANM2 exporter preserves recorded, InPlace, and Bip01 policies; it will not fabricate an unverified auxiliary accumulator track.");
+                    $"Animation stack '{selection.DisplayName}' requests generated 0xCCC3CDDF accumulator output. The verified writer does not fabricate that auxiliary track.");
             }
 
             string name = Dl1SourceModelWriter.SanitizeName(selection.DisplayName, 63);
-            if (animations.ContainsKey(name))
+            if (!names.Add(name))
             {
                 throw new InvalidOperationException(
                     $"Selected animation names collide after DL1 resource-name normalization: '{name}'. Rename one stack in the Models workspace.");
+            }
+
+            int integerFramesPerSecond = checked((int)Math.Round(
+                selection.FrameRate.FramesPerSecond,
+                MidpointRounding.AwayFromZero));
+            if (integerFramesPerSecond is < 1 or > 240)
+            {
+                throw new InvalidOperationException(
+                    $"Animation stack '{selection.DisplayName}' resolves to unsupported integer cadence {integerFramesPerSecond} FPS.");
+            }
+
+            var outputFrameRate = new FrameRate(integerFramesPerSecond, 1);
+            if (selection.FrameRate != outputFrameRate)
+            {
+                warnings.Add(
+                    $"Animation stack '{selection.DisplayName}' was deterministically resampled from " +
+                    $"{selection.FrameRate.Numerator}/{selection.FrameRate.Denominator} FPS to {integerFramesPerSecond} FPS for matching ANM2 and SCR timing.");
             }
 
             AnimationClip clip = RebaseToAuthoredRig(
                 imported,
                 preparedRig,
                 name,
-                selection.FrameRate,
+                outputFrameRate,
                 cancellationToken);
-            if (clip.FrameCount > ushort.MaxValue)
-            {
-                throw new InvalidOperationException(
-                    $"Animation stack '{selection.DisplayName}' resamples to {clip.FrameCount:N0} frames at " +
-                    $"{selection.FrameRate.Numerator}/{selection.FrameRate.Denominator} FPS; DL1 ANM2 permits at most {ushort.MaxValue:N0}.");
-            }
             AnimationRootMode rootMode = selection.RootMotionMode switch
             {
                 Dl1RootMotionMode.Recorded => AnimationRootMode.Recorded,
@@ -181,53 +220,87 @@ public static class CustomModelAnimationLibraryExporter
                 cancellationToken);
             byte[] payload = result.BodyAnm2 ?? throw new InvalidOperationException(
                 $"Animation stack '{selection.DisplayName}' produced no body ANM2 payload.");
-            animations.Add(name, payload);
-            float framesPerSecond = checked((float)selection.FrameRate.FramesPerSecond);
-            if (!float.IsFinite(framesPerSecond) || framesPerSecond <= 0.0f)
-            {
-                throw new InvalidOperationException(
-                    $"Animation stack '{selection.DisplayName}' has a frame rate that cannot be represented by DL1 AnimationScr.");
-            }
-
-            scriptSequences.Add(new AnimationScrSequence(
+            string anm2FileName = $"{name}.anm2";
+            preparedAnimations.Add(new PreparedCustomModelAnimation(
                 name,
-                $"{name}.anm2",
-                0.0f,
-                clip.FrameCount - 1,
-                framesPerSecond,
-                Enabled: 1,
-                Blend: 0.5f));
-            rows.Add(new
-            {
-                name,
+                anm2FileName,
+                payload,
+                checked((int)clip.FrameCount),
+                integerFramesPerSecond,
                 selection.SourceName,
                 selection.SourceFingerprint,
-                selection.FrameRate.Numerator,
-                selection.FrameRate.Denominator,
-                frameCount = clip.FrameCount,
-                rootPolicy = selection.RootMotionMode.ToString(),
-                selection.RootBoneName,
-                sha256 = Sha256(payload),
-            });
+                selection.RootMotionMode,
+                selection.RootBoneName));
+            sequences.Add(new AnimationScrSequence(
+                name,
+                anm2FileName,
+                0.0f,
+                clip.FrameCount - 1,
+                integerFramesPerSecond,
+                Enabled: 1,
+                Blend: 0.5f));
         }
 
-        if (animations.ContainsKey(scriptName))
+        if (names.Contains(scriptName))
         {
             throw new InvalidOperationException(
-                $"Animation script alias '{scriptName}' collides with an exported animation resource name. Choose a distinct alias.");
+                $"Animation library/script name '{scriptName}' collides with an exported animation resource name.");
         }
 
-        AnimationScrSections scriptSections = AnimationScrCodec.Build(scriptSequences);
-        var scripts = new Dictionary<string, Rp6lAnimationScript>(StringComparer.OrdinalIgnoreCase)
-        {
-            [scriptName] = new Rp6lAnimationScript(
-                scriptSections.RecordsAndNames,
-                scriptSections.IndexAndNames),
-        };
+        ImmutableArray<AnimationScrSequence> sequenceRows = sequences.MoveToImmutable();
+        return new PreparedCustomModelAnimationLibrary(
+            scriptName,
+            preparedAnimations.MoveToImmutable(),
+            sequenceRows,
+            BuildLooseAnimationScript(sequenceRows),
+            warnings.ToImmutable());
+    }
 
-        byte[] rpack = Rp6lAnimationLibraryCodec.Build(
-            animations,
-            scripts);
+    public static string BuildLooseAnimationScript(IEnumerable<AnimationScrSequence> sequences)
+    {
+        ArgumentNullException.ThrowIfNull(sequences);
+        AnimationScrSequence[] ordered = sequences
+            .OrderBy(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        _ = AnimationScrCodec.Build(ordered);
+        var builder = new StringBuilder("// Generated by DL ReAnimated. Source timing matches compiled ANM2 output.\n");
+        foreach (AnimationScrSequence sequence in ordered)
+        {
+            builder.Append("SeqTrack( \"")
+                .Append(sequence.Name)
+                .Append("\", \"")
+                .Append(sequence.Anm2Name)
+                .Append("\", ")
+                .Append(sequence.StartFrame.ToString("0", CultureInfo.InvariantCulture))
+                .Append(", ")
+                .Append(sequence.EndFrame.ToString("0", CultureInfo.InvariantCulture))
+                .Append(", ")
+                .Append(sequence.FramesPerSecond.ToString("0", CultureInfo.InvariantCulture))
+                .Append(", ")
+                .Append(sequence.Enabled.ToString(CultureInfo.InvariantCulture))
+                .Append(", ")
+                .Append(sequence.Blend.ToString("0.###", CultureInfo.InvariantCulture))
+                .Append(" )\n");
+        }
+
+        return builder.ToString();
+    }
+
+    public static async Task<CustomModelAnimationLibraryResult> ExportAsync(
+        CustomModelAnimationLibraryRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Model);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputPath);
+        PreparedCustomModelAnimationLibrary prepared = await PrepareAsync(
+            request,
+            cancellationToken).ConfigureAwait(false);
+        byte[] rpack = prepared.BuildPortableRpack();
+        Dictionary<string, byte[]> animations = prepared.Animations.ToDictionary(
+            static animation => animation.Name,
+            static animation => animation.Payload,
+            StringComparer.OrdinalIgnoreCase);
         string outputPath = Path.GetFullPath(request.OutputPath);
         if (!string.Equals(Path.GetExtension(outputPath), ".rpack", StringComparison.OrdinalIgnoreCase))
         {
@@ -238,10 +311,13 @@ public static class CustomModelAnimationLibraryExporter
             outputPath,
             rpack,
             animations,
-            scriptName,
-            scriptSequences,
+            prepared.AnimationScriptName,
+            prepared.Sequences,
             cancellationToken).ConfigureAwait(false);
         string manifestPath = Path.ChangeExtension(outputPath, ".animations.json");
+        Dl1PreparedAuthoredRig preparedRig = Dl1CustomModelRigPreparer.Prepare(
+            request.Model,
+            cancellationToken);
         byte[] manifest = JsonSerializer.SerializeToUtf8Bytes(new
         {
             format = "dl-reanimated-csharp-custom-animation-library",
@@ -259,10 +335,10 @@ public static class CustomModelAnimationLibraryExporter
             outputSha256 = Sha256(rpack),
             animationScript = new
             {
-                name = scriptName,
+                name = prepared.AnimationScriptName,
                 resourceType = Rp6lResourceTypes.AnimationScript,
-                sequenceCount = scriptSequences.Count,
-                sequences = scriptSequences.Select(static sequence => new
+                sequenceCount = prepared.Sequences.Length,
+                sequences = prepared.Sequences.Select(static sequence => new
                 {
                     sequence.Name,
                     sequence.Anm2Name,
@@ -273,17 +349,29 @@ public static class CustomModelAnimationLibraryExporter
                     sequence.Blend,
                 }),
             },
-            animations = rows,
+            animations = prepared.Animations.Select(static animation => new
+            {
+                animation.Name,
+                animation.Anm2FileName,
+                animation.SourceName,
+                animation.SourceFingerprint,
+                frameCount = animation.FrameCount,
+                framesPerSecond = animation.FramesPerSecond,
+                rootPolicy = animation.RootMotionMode.ToString(),
+                animation.RootBoneName,
+                sha256 = Sha256(animation.Payload),
+            }),
             limitations = ManifestLimitations,
         }, JsonOptions);
         await Rp6lAnimationLibraryCodec.WriteAtomicAsync(manifestPath, manifest, cancellationToken).ConfigureAwait(false);
+        var warnings = prepared.Warnings.ToBuilder();
         warnings.Add(
-            $"The RPack contains {animations.Count:N0} animation resource(s) plus extensionless type-322 script '{scriptName}'. The model .ascr resolves it as '{Dl1SourceModelWriter.AnimationScriptFileName(scriptName)}'.");
+            $"The portable RPack contains {animations.Count:N0} animation resource(s) plus extensionless type-322 script '{prepared.AnimationScriptName}'. Developer Tools does not automatically mount arbitrary animation RPacks; deploy the loose SCR and compiled ANM2 objects for editor use.");
         return new CustomModelAnimationLibraryResult(
             outputPath,
             manifestPath,
             Sha256(rpack),
-            scriptName,
+            prepared.AnimationScriptName,
             animations.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
             warnings.ToImmutable());
     }

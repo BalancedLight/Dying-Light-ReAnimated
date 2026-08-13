@@ -332,6 +332,98 @@ public sealed class CoreAnimationProjectTests : IDisposable
     }
 
     [Fact]
+    public void ModelsWorkspaceRoundTripsProjectRelativeCustomModelSession()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string path = Path.Combine(
+            _temporaryDirectory,
+            "models-workspace.dlraproj");
+        Guid packageAssetId = Guid.NewGuid();
+        Guid selectedClipId = Guid.NewGuid();
+        DlraProject project = DlraProject.Create("Custom model authoring") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = packageAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "Sources/synthetic-model.dlrmodel",
+                    ResourceId =
+                        $"custom-model:{Guid.NewGuid():N}:synthetic-model",
+                    ContentSha256 = new string('a', 64),
+                },
+            ],
+            ModelsWorkspace = new ProjectModelsWorkspaceState
+            {
+                PackageAssetId = packageAssetId,
+                SelectedAnimationClipId = selectedClipId,
+                PreviewMode = ProjectCustomModelPreviewMode.SourceFbx,
+                ShowMeshes = true,
+                ShowBones = false,
+                ShowHelpers = true,
+                ShowCameraHelpers = false,
+                ShowPropHelpers = true,
+            },
+        };
+
+        ProjectSerializer.SaveAtomic(project, path);
+        string json = File.ReadAllText(path);
+        DlraProject loaded = ProjectSerializer.Load(path);
+
+        ProjectModelsWorkspaceState state =
+            Assert.IsType<ProjectModelsWorkspaceState>(
+                loaded.ModelsWorkspace);
+        Assert.Equal(packageAssetId, state.PackageAssetId);
+        Assert.Equal(selectedClipId, state.SelectedAnimationClipId);
+        Assert.Equal(
+            ProjectCustomModelPreviewMode.SourceFbx,
+            state.PreviewMode);
+        Assert.True(state.ShowMeshes);
+        Assert.False(state.ShowBones);
+        Assert.True(state.ShowHelpers);
+        Assert.False(state.ShowCameraHelpers);
+        Assert.True(state.ShowPropHelpers);
+        Assert.Contains("\"modelsWorkspace\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"previewMode\": \"sourceFbx\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            Path.GetFullPath(_temporaryDirectory),
+            json,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ModelsWorkspaceRejectsNonCustomModelAssetReference()
+    {
+        Guid packageAssetId = Guid.NewGuid();
+        DlraProject project = DlraProject.Create("Invalid Models state") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = packageAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "Sources/not-a-model.fbx",
+                    ContentSha256 = new string('b', 64),
+                },
+            ],
+            ModelsWorkspace = new ProjectModelsWorkspaceState
+            {
+                PackageAssetId = packageAssetId,
+            },
+        };
+
+        ProjectFormatException exception = Assert.Throws<ProjectFormatException>(
+            project.Validate);
+
+        Assert.Contains(
+            "custom-model source asset",
+            exception.Message,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void FacialFbxSourceIdentityRoundTripsAndExcludesMimicAnm2()
     {
         Directory.CreateDirectory(_temporaryDirectory);

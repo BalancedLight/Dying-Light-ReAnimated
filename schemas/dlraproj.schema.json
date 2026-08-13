@@ -48,6 +48,9 @@
       "type": "string",
       "format": "uuid"
     },
+    "modelsWorkspace": {
+      "$ref": "#/$defs/modelsWorkspace"
+    },
     "dl1Settings": {
       "type": "object",
       "required": [
@@ -98,6 +101,50 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "modelsWorkspace": {
+      "type": "object",
+      "required": [
+        "packageAssetId",
+        "previewMode",
+        "showMeshes",
+        "showBones",
+        "showHelpers",
+        "showCameraHelpers",
+        "showPropHelpers"
+      ],
+      "properties": {
+        "packageAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "selectedAnimationClipId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "previewMode": {
+          "enum": [
+            "dl1Output",
+            "sourceFbx"
+          ]
+        },
+        "showMeshes": {
+          "type": "boolean"
+        },
+        "showBones": {
+          "type": "boolean"
+        },
+        "showHelpers": {
+          "type": "boolean"
+        },
+        "showCameraHelpers": {
+          "type": "boolean"
+        },
+        "showPropHelpers": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "fppProjectionCapture": {
       "type": "object",
       "required": [

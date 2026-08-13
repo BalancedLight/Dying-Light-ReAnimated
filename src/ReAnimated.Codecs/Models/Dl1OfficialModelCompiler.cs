@@ -29,9 +29,23 @@ public sealed record Dl1OfficialModelCompilerRequest
 
     public required string ResourceName { get; init; }
 
+    /// <summary>
+    /// One safe Developer Tools directory component under data/characters.
+    /// When omitted, the resource name is used for backward compatibility.
+    /// </summary>
+    public string? CharacterId { get; init; }
+
     public string SurfaceName { get; init; } = "default";
 
     public string? AnimationScriptAlias { get; init; }
+
+    /// <summary>
+    /// Optional existing Developer Tools material database. When supplied it
+    /// is staged into the isolated compiler project and updated in place by
+    /// Techland's material compiler; every pre-existing material record must
+    /// survive validation before the result is published.
+    /// </summary>
+    public string? ExistingMaterialDatabasePath { get; init; }
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(10);
 }
@@ -45,6 +59,27 @@ public sealed record Dl1OfficialModelCompilerResult(
     string CompilerFingerprint,
     ImmutableArray<string> ResourceNames,
     CustomModelBuildReceipt BuildReceipt,
+    string CompilerLog)
+{
+    public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
+}
+
+public sealed record Dl1OfficialAnimationCompilerRequest
+{
+    public required PreparedCustomModelAnimationLibrary Library { get; init; }
+
+    public required string CompilerExecutablePath { get; init; }
+
+    public required string RetailData0PakPath { get; init; }
+
+    public required string OutputDirectory { get; init; }
+
+    public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(10);
+}
+
+public sealed record Dl1OfficialAnimationCompilerResult(
+    ImmutableDictionary<string, string> CompiledObjectPaths,
+    string CompilerFingerprint,
     string CompilerLog);
 
 /// <summary>
@@ -59,7 +94,7 @@ public sealed record Dl1OfficialModelCompilerResult(
 public static class Dl1OfficialModelCompiler
 {
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-chr-local-ascr-filename-v6";
+        "dl-reanimated-csharp-model-compiler-character-dir-material-preserve-animation-v11";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -182,6 +217,8 @@ public static class Dl1OfficialModelCompiler
         string materialCompilerPath = ResolveMaterialCompilerExecutable(compilerPath);
         string outputRpackPath = Path.GetFullPath(request.OutputRpackPath);
         string resourceName = Dl1SourceModelWriter.SanitizeName(request.ResourceName, 55);
+        string characterId = Dl1DeveloperToolsProjectDeployer.NormalizeCharacterId(
+            string.IsNullOrWhiteSpace(request.CharacterId) ? resourceName : request.CharacterId);
         string compilerFingerprint = await Sha256FileAsync(compilerPath, cancellationToken).ConfigureAwait(false);
         string materialCompilerFingerprint = await Sha256FileAsync(
             materialCompilerPath,
@@ -196,7 +233,7 @@ public static class Dl1OfficialModelCompiler
         string workshopDirectory = Path.Combine(jobDirectory, "Workshop");
         string projectName = $"_DLReAnimatedModelImporter_{jobId[..8]}";
         string projectDirectory = Path.Combine(workshopDirectory, projectName);
-        string virtualDirectory = $"data/characters/dl_reanimated/imported/{resourceName}";
+        string virtualDirectory = $"data/characters/{characterId}";
         string virtualMshPath = $"{virtualDirectory}/{resourceName}.msh";
         string stagedSourceDirectory = Path.Combine(
             projectDirectory,
@@ -266,7 +303,28 @@ public static class Dl1OfficialModelCompiler
                     stagedSourceDirectory,
                     $"{Path.GetFileNameWithoutExtension(reference)}.dmt")))
                 .ToArray();
+            string? existingMaterialDatabasePath = string.IsNullOrWhiteSpace(
+                request.ExistingMaterialDatabasePath)
+                ? null
+                : Path.GetFullPath(request.ExistingMaterialDatabasePath);
             string? compiledMaterialDatabase = null;
+            if (existingMaterialDatabasePath is not null)
+            {
+                if (!File.Exists(existingMaterialDatabasePath))
+                {
+                    throw new FileNotFoundException(
+                        "The requested base local_dx11.mp material database was not found.",
+                        existingMaterialDatabasePath);
+                }
+
+                compiledMaterialDatabase = Path.Combine(
+                    projectDirectory,
+                    "Assets_PC",
+                    "local_dx11.mp");
+                Directory.CreateDirectory(Path.GetDirectoryName(compiledMaterialDatabase)!);
+                File.Copy(existingMaterialDatabasePath, compiledMaterialDatabase, overwrite: true);
+            }
+
             if (locallyAuthoredMaterialReferences.Length > 0)
             {
                 AppendBounded(compilerLog, "Material compiler stage\r\n");
@@ -275,7 +333,8 @@ public static class Dl1OfficialModelCompiler
                     CreateMaterialCompilerCommand(
                         projectDirectory,
                         workshopDirectory,
-                        virtualDirectory),
+                        virtualDirectory,
+                        forceRebuild: existingMaterialDatabasePath is null),
                     projectDirectory,
                     request.Timeout,
                     cancellationToken).ConfigureAwait(false);
@@ -295,6 +354,12 @@ public static class Dl1OfficialModelCompiler
                     compiledMaterialDatabase,
                     locallyAuthoredMaterialReferences,
                     sourceBuild.TextureSourceFiles);
+                if (existingMaterialDatabasePath is not null)
+                {
+                    ValidateCompiledMaterialDatabasePreserves(
+                        existingMaterialDatabasePath,
+                        compiledMaterialDatabase);
+                }
             }
 
             ImmutableArray<CompilerResourceUnit> units = CreateCompilerResourceUnits(
@@ -482,6 +547,18 @@ public static class Dl1OfficialModelCompiler
                 : Path.Combine(outputDirectory, "local_dx11.mp");
             await PublishFileAtomicallyAsync(compiledRpack, outputRpackPath, cancellationToken).ConfigureAwait(false);
             await PublishFileAtomicallyAsync(compiledMeshObject, outputObjectPath, cancellationToken).ConfigureAwait(false);
+            var outputTextureObjectPaths = ImmutableArray.CreateBuilder<string>(Math.Max(0, compiledObjects.Count - 1));
+            foreach (string compiledTextureObject in compiledObjects.Skip(1))
+            {
+                string outputTextureObjectPath = Path.Combine(
+                    outputDirectory,
+                    Path.GetFileName(compiledTextureObject));
+                await PublishFileAtomicallyAsync(
+                    compiledTextureObject,
+                    outputTextureObjectPath,
+                    cancellationToken).ConfigureAwait(false);
+                outputTextureObjectPaths.Add(outputTextureObjectPath);
+            }
             if (compiledMaterialDatabase is not null && outputMaterialDatabasePath is not null)
             {
                 await PublishFileAtomicallyAsync(
@@ -586,7 +663,10 @@ public static class Dl1OfficialModelCompiler
                 compilerFingerprint,
                 archive.Resources.Select(static resource => resource.Name).ToImmutableArray(),
                 buildReceipt,
-                compilerLog.ToString());
+                compilerLog.ToString())
+            {
+                CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
+            };
         }
         catch (Exception exception)
         {
@@ -595,6 +675,217 @@ public static class Dl1OfficialModelCompiler
                 $"Model compilation failed: {exception.GetType().Name}: {exception.Message}\r\n" +
                 $"Diagnostic job retained at {jobDirectory}\r\n");
             throw;
+        }
+        finally
+        {
+            if (completedSuccessfully)
+            {
+                DeleteOwnedJobDirectory(jobContainer, jobDirectory);
+            }
+            else if (Directory.Exists(jobDirectory))
+            {
+                try
+                {
+                    File.WriteAllText(
+                        Path.Combine(jobDirectory, "COMPILER_FAILURE.log"),
+                        compilerLog.ToString(),
+                        new UTF8Encoding(false));
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+    }
+
+    public static async Task<Dl1OfficialAnimationCompilerResult> CompileAnimationsAsync(
+        Dl1OfficialAnimationCompilerRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Library);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.CompilerExecutablePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.RetailData0PakPath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputDirectory);
+        if (!File.Exists(request.CompilerExecutablePath) || !File.Exists(request.RetailData0PakPath))
+        {
+            throw new FileNotFoundException(
+                "Techland's compiler or the retail Data0.pak bootstrap was not found.");
+        }
+
+        if (request.Library.Animations.IsEmpty)
+        {
+            throw new InvalidOperationException("No prepared animation is available for compilation.");
+        }
+
+        string compilerPath = Path.GetFullPath(request.CompilerExecutablePath);
+        string compilerFingerprint = await Sha256FileAsync(compilerPath, cancellationToken).ConfigureAwait(false);
+        string jobContainer = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "DLReAnimated",
+            "AnimationCompiler",
+            "Jobs");
+        string jobId = Guid.NewGuid().ToString("N");
+        string jobDirectory = Path.Combine(jobContainer, jobId);
+        string workshopDirectory = Path.Combine(jobDirectory, "Workshop");
+        string projectName = $"_DLReAnimatedAnimationImporter_{jobId[..8]}";
+        string projectDirectory = Path.Combine(workshopDirectory, projectName);
+        string animationDirectory = Path.Combine(projectDirectory, "data", "characters", "animations");
+        string rulesPath = Path.Combine(projectDirectory, "animation_resource.rules");
+        var compilerLog = new StringBuilder();
+        bool completedSuccessfully = false;
+        Directory.CreateDirectory(animationDirectory);
+        try
+        {
+            CopyCompilerBootstrap(ResolveDeveloperToolsDataDirectory(compilerPath), projectDirectory);
+            await CopyRetailCompilerBootstrapAsync(
+                request.RetailData0PakPath,
+                projectDirectory,
+                cancellationToken).ConfigureAwait(false);
+            string dataDirectory = Path.Combine(projectDirectory, "data");
+            await File.WriteAllTextAsync(
+                Path.Combine(dataDirectory, "resourcepackfolders.scr"),
+                CreateAnimationResourcePackFoldersScript(),
+                Encoding.ASCII,
+                cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(
+                Path.Combine(dataDirectory, "common_ovr.scr"),
+                CreateCommonOverrideScript(),
+                Encoding.ASCII,
+                cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(
+                Path.Combine(projectDirectory, "common_ovr.scr"),
+                CreateCommonOverrideScript(),
+                Encoding.ASCII,
+                cancellationToken).ConfigureAwait(false);
+            await File.WriteAllTextAsync(
+                rulesPath,
+                CreateAnimationResourceRules(),
+                new UTF8Encoding(false),
+                cancellationToken).ConfigureAwait(false);
+
+            string outputDirectory = Path.GetFullPath(request.OutputDirectory);
+            Directory.CreateDirectory(outputDirectory);
+            PreparedCustomModelAnimation[] orderedAnimations = request.Library.Animations
+                .OrderBy(static animation => animation.Name, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            var compiledObjects = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+            string? previousSourcePath = null;
+            for (int index = 0; index < orderedAnimations.Length; index++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                PreparedCustomModelAnimation animation = orderedAnimations[index];
+
+                // ResPackCompiler has been observed to schedule every entry in an RSRC even when
+                // -update names one source. Keep both the staged source set and RSRC to one resource
+                // per process so a faulty clip cannot contaminate a sibling compilation.
+                if (previousSourcePath is not null && File.Exists(previousSourcePath))
+                {
+                    File.Delete(previousSourcePath);
+                }
+
+                string sourcePath = Path.Combine(animationDirectory, animation.Anm2FileName);
+                await File.WriteAllBytesAsync(
+                    sourcePath,
+                    animation.Payload,
+                    cancellationToken).ConfigureAwait(false);
+                previousSourcePath = sourcePath;
+
+                string rsrcPath = Path.Combine(projectDirectory, $"animation_resource_{index:D3}.rsrc");
+                await File.WriteAllTextAsync(
+                    rsrcPath,
+                    CreateAnimationResourceScript([animation]),
+                    new UTF8Encoding(false),
+                    cancellationToken).ConfigureAwait(false);
+
+                string compilerOutputDirectory = Path.Combine(jobDirectory, $"CompilerAnimation_{index:D3}");
+                Directory.CreateDirectory(compilerOutputDirectory);
+                AppendBounded(
+                    compilerLog,
+                    $"Animation compiler isolated resource {index + 1}/{orderedAnimations.Length}: {animation.Name}\r\n");
+                ProcessResult process = await RunCompilerStageAsync(
+                    compilerPath,
+                    CreateAnimationCompilerCommand(
+                        projectName,
+                        workshopDirectory,
+                        compilerOutputDirectory,
+                        rulesPath,
+                        rsrcPath,
+                        $"{Dl1SourceModelWriter.SanitizeName(animation.Name, 48)}_PC.rpack"),
+                    projectDirectory,
+                    request.Timeout,
+                    cancellationToken).ConfigureAwait(false);
+                AppendBounded(compilerLog, process.Output);
+
+                string expectedName = $"{animation.Name}.anm2_obj";
+                string? emittedObject = TryFindCompilerOutput(compilerOutputDirectory, expectedName) ??
+                    TryFindCompilerOutput(projectDirectory, expectedName);
+                ValidateAnimationCompilerExitCode(
+                    process.ExitCode,
+                    emittedObject is null ? 0 : 1,
+                    animation.Name);
+                if (process.ExitCode != 0)
+                {
+                    string exceptionName = process.ExitCode == WindowsAccessViolationExitCode
+                        ? "access violation 0xC0000005"
+                        : "illegal instruction 0xC000001D";
+                    AppendBounded(
+                        compilerLog,
+                        $"Techland animation compiler exited with {exceptionName} after emitting {expectedName}. " +
+                        "The isolated object will be admitted only if bounded type-320 normalization and archive validation both pass.\r\n");
+                }
+
+                compiledObjects.Add(
+                    animation.Name,
+                    emittedObject ?? FindCompilerOutput(projectDirectory, expectedName));
+            }
+
+            var published = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+            var validatedObjects = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+            string validationDirectory = Path.Combine(jobDirectory, "AnimationValidation");
+            Directory.CreateDirectory(validationDirectory);
+            foreach (PreparedCustomModelAnimation animation in orderedAnimations)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string expectedName = $"{animation.Name}.anm2_obj";
+                string emittedObject = compiledObjects[animation.Name];
+                string validationRpack = Path.Combine(
+                    validationDirectory,
+                    $"{animation.Name}.validated.rpack");
+                string objectContract = await ValidateCompiledAnimationObjectAsync(
+                    emittedObject,
+                    animation,
+                    validationRpack,
+                    cancellationToken).ConfigureAwait(false);
+                AppendBounded(
+                    compilerLog,
+                    $"Validated {expectedName} as {objectContract}; its type-{Rp6lResourceTypes.Animation} payload matches the staged ANM2 byte-for-byte.\r\n");
+
+                validatedObjects.Add(animation.Name, emittedObject);
+            }
+
+            // Do not publish any clip until every isolated compiler process and every object
+            // validation has passed. Known post-emission Techland crashes are admitted only
+            // after the exact emitted object has passed the same bounded type-320 checks.
+            foreach (PreparedCustomModelAnimation animation in orderedAnimations)
+            {
+                string expectedName = $"{animation.Name}.anm2_obj";
+                string destination = Path.Combine(outputDirectory, expectedName);
+                await PublishFileAtomicallyAsync(
+                    validatedObjects[animation.Name],
+                    destination,
+                    cancellationToken).ConfigureAwait(false);
+                published.Add(animation.Name, destination);
+            }
+
+            completedSuccessfully = true;
+            return new Dl1OfficialAnimationCompilerResult(
+                published.ToImmutable(),
+                compilerFingerprint,
+                compilerLog.ToString());
         }
         finally
         {
@@ -680,6 +971,16 @@ public static class Dl1OfficialModelCompiler
         "    resources(_MESH_, _TEXTURE_);\n" +
         "}\n";
 
+    internal static string CreateAnimationResourcePackFoldersScript() =>
+        "import \"enginedefs.mth\"\n" +
+        "import \"ResourcePackCfg.scr\"\n\n" +
+        "sub main()\n" +
+        "{\n" +
+        "    default(MF_DEFAULT);\n" +
+        "    path(\"data\\\\characters\\\\animations\", MF_DEFAULT);\n" +
+        "    resources(_ANIMATION_);\n" +
+        "}\n";
+
     internal static ImmutableArray<ImmutableArray<string>> CreateCompilerCommands(
         string compilerPath,
         string projectName,
@@ -706,7 +1007,8 @@ public static class Dl1OfficialModelCompiler
     internal static ImmutableArray<string> CreateMaterialCompilerCommand(
         string projectDirectory,
         string workshopDirectory,
-        string virtualDirectory)
+        string virtualDirectory,
+        bool forceRebuild = true)
     {
         string projectName = Path.GetFileName(
             projectDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
@@ -717,14 +1019,22 @@ public static class Dl1OfficialModelCompiler
                 nameof(projectDirectory));
         }
 
-        return
+        var arguments = ImmutableArray.CreateBuilder<string>();
+        arguments.AddRange((IEnumerable<string>)
         [
             "-u",
             "local",
             "-p",
             "dx11",
             "-savedeps",
-            "-rebuild",
+        ]);
+        if (forceRebuild)
+        {
+            arguments.Add("-rebuild");
+        }
+
+        arguments.AddRange((IEnumerable<string>)
+        [
             "-logfile",
             "Assets_PC/dl-reanimated-materials.log",
             "-game",
@@ -732,7 +1042,8 @@ public static class Dl1OfficialModelCompiler
             "-gamedir",
             workshopDirectory.Replace('\\', '/').TrimEnd('/') + "/",
             $"{virtualDirectory.TrimEnd('/')}/*.dmt",
-        ];
+        ]);
+        return arguments.ToImmutable();
     }
 
     private static ImmutableArray<string> CreateCompilerCommand(
@@ -766,6 +1077,257 @@ public static class Dl1OfficialModelCompiler
             resourceFilter,
         ];
     }
+
+    internal static ImmutableArray<string> CreateAnimationCompilerCommand(
+        string projectName,
+        string workshopDirectory,
+        string outputDirectory,
+        string rulesPath,
+        string rsrcPath,
+        string outputName)
+    {
+        string workshop = workshopDirectory.Replace('\\', '/').TrimEnd('/') + "/";
+        return
+        [
+            $"dn={projectName}",
+            "platform=PC",
+            $"output={outputName}",
+            $"out={outputDirectory}",
+            "/Verbose",
+            "/ShowFiles",
+            "/ShowMissingFiles",
+            "/SaveDependencies",
+            "/FC-",
+            "/FS-",
+            $"/WorkshopDir={workshop}",
+            $"/ScriptRules={rulesPath}",
+            "/LooseResources",
+            "/LooseGpuResources",
+            $"-updatefromrscr={rsrcPath}",
+            "-update",
+            "*.*",
+        ];
+    }
+
+    internal static void ValidateAnimationCompilerExitCode(
+        int exitCode,
+        int emittedObjectCount,
+        string? animationName = null)
+    {
+        if (exitCode == 0)
+        {
+            return;
+        }
+
+        if ((exitCode == WindowsAccessViolationExitCode ||
+             exitCode == WindowsIllegalInstructionExitCode) &&
+            emittedObjectCount == 1)
+        {
+            return;
+        }
+
+        string resource = string.IsNullOrWhiteSpace(animationName)
+            ? string.Empty
+            : $" for animation '{animationName}'";
+        throw new InvalidDataException(
+            $"Techland animation compiler exited with code {exitCode}{resource}. " +
+            $"All {emittedObjectCount} emitted animation object(s), if any, were rejected.");
+    }
+
+    /// <summary>
+    /// Validates the two animation-object layouts emitted by supported
+    /// Developer Tools builds. Some builds emit an ordinary, absolute-addressed
+    /// RP6L <c>.anm2_obj</c>; others emit the compiler-addressed variant used by
+    /// mesh objects. Neither layout is trusted until its isolated type-320 item
+    /// matches the staged ANM2 byte-for-byte.
+    /// </summary>
+    internal static async Task<string> ValidateCompiledAnimationObjectAsync(
+        string compilerObjectPath,
+        PreparedCustomModelAnimation animation,
+        string normalizedValidationPath,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(compilerObjectPath);
+        ArgumentNullException.ThrowIfNull(animation);
+        ArgumentException.ThrowIfNullOrWhiteSpace(normalizedValidationPath);
+        if (!File.Exists(compilerObjectPath))
+        {
+            throw new FileNotFoundException(
+                "The emitted Techland animation object was not found.",
+                compilerObjectPath);
+        }
+
+        Rp6lArchive? ordinaryArchive = null;
+        try
+        {
+            ordinaryArchive = await Rp6lArchive.OpenAsync(
+                compilerObjectPath,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            // Compiler-addressed RP6L objects may not be readable until their
+            // zero-relative chunks and resource type bit are normalized.
+        }
+
+        bool hasCompilerResourceType = ordinaryArchive?.Resources.Any(
+            static resource =>
+                resource.ResourceType != Rp6lResourceTypes.BuilderInformation &&
+                (unchecked((ushort)resource.ResourceType) & 0x8000) != 0) == true;
+        if (ordinaryArchive is not null && !hasCompilerResourceType)
+        {
+            await ValidateOrdinaryAnimationObjectAsync(
+                ordinaryArchive,
+                animation,
+                cancellationToken).ConfigureAwait(false);
+            return "an absolute-addressed Techland animation object";
+        }
+
+        await Rp6lCompilerObjectNormalizer.NormalizeAtomicAsync(
+            compilerObjectPath,
+            normalizedValidationPath,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        Rp6lArchive normalizedArchive = await Rp6lArchive.OpenAsync(
+            normalizedValidationPath,
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+        await ValidateOrdinaryAnimationObjectAsync(
+            normalizedArchive,
+            animation,
+            cancellationToken).ConfigureAwait(false);
+        return "a normalized compiler-addressed Techland animation object";
+    }
+
+    private static async Task ValidateOrdinaryAnimationObjectAsync(
+        Rp6lArchive archive,
+        PreparedCustomModelAnimation animation,
+        CancellationToken cancellationToken)
+    {
+        Rp6lResourceDescriptor[] animationResources = archive.Resources
+            .Where(static resource =>
+                resource.ResourceType == Rp6lResourceTypes.Animation)
+            .ToArray();
+        Rp6lResourceDescriptor[] builderResources = archive.Resources
+            .Where(static resource =>
+                resource.ResourceType == Rp6lResourceTypes.BuilderInformation)
+            .ToArray();
+        if (animationResources.Length != 1 ||
+            builderResources.Length != 1 ||
+            archive.Resources.Count != 2)
+        {
+            throw new InvalidDataException(
+                $"The isolated animation object must contain exactly one type-{Rp6lResourceTypes.Animation} resource and its _ANIMATION_ builder record.");
+        }
+
+        Rp6lResourceDescriptor animationResource = animationResources[0];
+        Rp6lResourceDescriptor builderResource = builderResources[0];
+        if (!string.Equals(
+                animationResource.Name,
+                animation.Name,
+                StringComparison.OrdinalIgnoreCase) ||
+            animationResource.Items.Count != 1)
+        {
+            throw new InvalidDataException(
+                $"The isolated animation object does not contain exactly one type-{Rp6lResourceTypes.Animation} item named '{animation.Name}'.");
+        }
+
+        if (!string.Equals(
+                builderResource.Name,
+                "_ANIMATION_",
+                StringComparison.OrdinalIgnoreCase) ||
+            builderResource.Items.Count != 1)
+        {
+            throw new InvalidDataException(
+                "The isolated animation object has no single _ANIMATION_ builder record.");
+        }
+
+        string validationCacheDirectory = Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(archive.Path)) ??
+                Path.GetTempPath(),
+            $".dlr-animation-validation-{Guid.NewGuid():N}");
+        try
+        {
+            await using var cache = new Rp6lChunkCache(
+                new Rp6lChunkCacheOptions
+                {
+                    CacheDirectory = validationCacheDirectory,
+                    MaximumMemoryBytes = 64L * 1024L * 1024L,
+                    MaximumMemoryEntryBytes = 64 * 1024 * 1024,
+                    MaximumDiskBytes = 512L * 1024L * 1024L,
+                });
+            byte[] emittedPayload = await archive.ReadItemBytesAsync(
+                animationResource.Items[0],
+                cache,
+                maximumBytes: Math.Max(animation.Payload.Length, 1),
+                cancellationToken).ConfigureAwait(false);
+            if (!emittedPayload.AsSpan().SequenceEqual(animation.Payload))
+            {
+                throw new InvalidDataException(
+                    $"The emitted type-{Rp6lResourceTypes.Animation} resource '{animationResource.Name}' does not match the staged ANM2 payload.");
+            }
+
+            byte[] builderPayload = await archive.ReadItemBytesAsync(
+                builderResource.Items[0],
+                cache,
+                maximumBytes: 4096,
+                cancellationToken).ConfigureAwait(false);
+            string builderDirective;
+            try
+            {
+                builderDirective = new UTF8Encoding(false, true)
+                    .GetString(builderPayload)
+                    .TrimEnd('\0', '\r', '\n');
+            }
+            catch (DecoderFallbackException exception)
+            {
+                throw new InvalidDataException(
+                    "The _ANIMATION_ builder record is not valid UTF-8.",
+                    exception);
+            }
+
+            string expectedDirective = animationResource.Name;
+            if (builderDirective.Length != expectedDirective.Length + 1 ||
+                builderDirective[0] is not ('+' or '-') ||
+                !string.Equals(
+                    builderDirective[1..],
+                    expectedDirective,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"The _ANIMATION_ builder record does not identify '{animationResource.Name}'.");
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(validationCacheDirectory))
+            {
+                Directory.Delete(validationCacheDirectory, recursive: true);
+            }
+        }
+    }
+
+    internal static string CreateAnimationResourceScript(
+        IEnumerable<PreparedCustomModelAnimation> animations)
+    {
+        ArgumentNullException.ThrowIfNull(animations);
+        PreparedCustomModelAnimation[] rows = animations
+            .OrderBy(static animation => animation.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var builder = new StringBuilder()
+            .Append("import \"ResourcePackCfg.scr\"\n\n")
+            .Append("sub main()\n{\n  configuration(cfg_common)\n  {\n");
+        foreach (PreparedCustomModelAnimation animation in rows)
+        {
+            builder.Append("    res( _ANIMATION_, \"")
+                .Append(EscapeScript(animation.Name))
+                .Append("\", \"data/characters/animations/")
+                .Append(EscapeScript(animation.Anm2FileName))
+                .Append("\", \"\", true, \"\");\n");
+        }
+
+        return builder.Append("  }\n  configuration(cfg_PC)\n  {\n  }\n}\n").ToString();
+    }
+
+    internal static string CreateAnimationResourceRules() => "ResourceRule(\"*.anm2\")\n";
 
     private static ImmutableArray<CompilerResourceUnit> CreateCompilerResourceUnits(
         string resourceName,
@@ -886,6 +1448,44 @@ public static class Dl1OfficialModelCompiler
             throw new InvalidDataException(
                 $"Techland's compiled materials do not reference authored texture resource(s): {string.Join(", ", missingTextures)}. " +
                 "No model bundle was published.");
+        }
+    }
+
+    internal static void ValidateCompiledMaterialDatabasePreserves(
+        string previousDatabasePath,
+        string updatedDatabasePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(previousDatabasePath);
+        ArgumentException.ThrowIfNullOrWhiteSpace(updatedDatabasePath);
+        Dictionary<uint, CompiledMaterialRecord> previous;
+        Dictionary<uint, CompiledMaterialRecord> updated;
+        using (var stream = new FileStream(previousDatabasePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            previous = ReadCompiledMaterialRecords(stream);
+        }
+
+        using (var stream = new FileStream(updatedDatabasePath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            updated = ReadCompiledMaterialRecords(stream);
+        }
+
+        uint[] missing = previous.Keys.Where(hash => !updated.ContainsKey(hash)).Take(16).ToArray();
+        uint[] changed = previous
+            .Where(pair => updated.TryGetValue(pair.Key, out CompiledMaterialRecord? value) &&
+                           (!pair.Value.TextureNameHashes.SequenceEqual(value.TextureNameHashes) ||
+                            !string.Equals(
+                                pair.Value.PayloadSha256,
+                                value.PayloadSha256,
+                                StringComparison.OrdinalIgnoreCase)))
+            .Select(static pair => pair.Key)
+            .Take(16)
+            .ToArray();
+        if (missing.Length > 0 || changed.Length > 0)
+        {
+            throw new InvalidDataException(
+                "Techland's staged material update did not preserve the existing local_dx11.mp inventory " +
+                $"({missing.Length} missing and {changed.Length} changed record(s) in the bounded report). " +
+                "The Developer Tools project was not modified.");
         }
     }
 
@@ -1013,7 +1613,11 @@ public static class Dl1OfficialModelCompiler
                 textureHashes.Add(BinaryPrimitives.ReadUInt32LittleEndian(payload.AsSpan(rowOffset + 4)));
             }
 
-            materials.Add(hash, new CompiledMaterialRecord(textureHashes.ToImmutable()));
+            materials.Add(
+                hash,
+                new CompiledMaterialRecord(
+                    textureHashes.ToImmutable(),
+                    Convert.ToHexStringLower(SHA256.HashData(payload))));
             previousHash = hash;
         }
 
@@ -1164,6 +1768,17 @@ public static class Dl1OfficialModelCompiler
         ArgumentException.ThrowIfNullOrWhiteSpace(request.CompilerExecutablePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputRpackPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResourceName);
+        if (!string.IsNullOrWhiteSpace(request.CharacterId))
+        {
+            _ = Dl1DeveloperToolsProjectDeployer.NormalizeCharacterId(request.CharacterId);
+        }
+        if (!string.IsNullOrWhiteSpace(request.ExistingMaterialDatabasePath) &&
+            !File.Exists(request.ExistingMaterialDatabasePath))
+        {
+            throw new FileNotFoundException(
+                "The requested existing material database was not found.",
+                request.ExistingMaterialDatabasePath);
+        }
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SurfaceName);
         if (!File.Exists(request.CompilerExecutablePath))
         {
@@ -1623,7 +2238,8 @@ public static class Dl1OfficialModelCompiler
             .Replace("\"", "\\\"", StringComparison.Ordinal);
 
     private sealed record CompiledMaterialRecord(
-        ImmutableArray<uint> TextureNameHashes);
+        ImmutableArray<uint> TextureNameHashes,
+        string PayloadSha256);
 
     private sealed record ProcessResult(int ExitCode, string Output);
 

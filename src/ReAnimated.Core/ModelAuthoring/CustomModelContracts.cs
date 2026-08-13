@@ -456,6 +456,13 @@ public sealed record CustomModelBuildReceipt
 
 public sealed record CustomModelBuildSettings
 {
+    /// <summary>
+    /// Canonical Developer Tools character-directory identity. An empty value
+    /// means derive it from <see cref="ResourceName"/> for schema-1 packages
+    /// written before this field was introduced.
+    /// </summary>
+    public string CharacterId { get; init; } = string.Empty;
+
     public string ResourceName { get; init; } = "custom_model";
 
     public string SurfaceName { get; init; } = "default";
@@ -475,6 +482,19 @@ public sealed record CustomModelBuildSettings
 
     internal void Validate(string parameterName)
     {
+        if (!string.IsNullOrEmpty(CharacterId))
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(CharacterId, parameterName);
+            if (CharacterId is "." or ".." ||
+                CharacterId.IndexOfAny(['/', '\\', ':']) >= 0 ||
+                Path.IsPathRooted(CharacterId))
+            {
+                throw new ArgumentException(
+                    "Custom-model character IDs must be one safe directory component.",
+                    parameterName);
+            }
+        }
+
         ArgumentException.ThrowIfNullOrWhiteSpace(ResourceName, parameterName);
         ArgumentException.ThrowIfNullOrWhiteSpace(SurfaceName, parameterName);
         if (Encoding.UTF8.GetByteCount(ResourceName) > 55 ||

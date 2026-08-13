@@ -396,6 +396,7 @@ public sealed partial class MainWindowViewModel :
     private Guid? _activeAnimationId;
     private DlraProject _project = DlraProject.Create("Untitled");
     private DlraProject? _savedProject;
+    private long _savedModelsRevision;
     private ImportedAnimationSession? _sourceAnimation;
     private ImportedMimicSession? _mimicAnimation;
     private ImportedFacialFbxSession? _facialFbxAnimation;
@@ -559,6 +560,8 @@ public sealed partial class MainWindowViewModel :
             value => StatusText = value,
             OpenCustomModelAnimationInAnimateAsync,
             ResolveRetailData0PakPath);
+        Models.PersistenceStateChanged += OnModelsPersistenceStateChanged;
+        _savedModelsRevision = Models.PersistenceRevision;
 
         NewWorkspaceCommand = new RelayCommand(
             NewWorkspace,
@@ -2308,6 +2311,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         _disposed = true;
+        Models.PersistenceStateChanged -= OnModelsPersistenceStateChanged;
         Models.Dispose();
         CancelAutomaticAssetPreview();
         _lifetimeSource.Cancel();
@@ -2595,6 +2599,9 @@ public sealed partial class MainWindowViewModel :
 
         AnimationRuntimeSnapshot previous =
             CaptureAnimationRuntimeSnapshot();
+        ModelsWorkspaceSessionSnapshot previousModels =
+            Models.CaptureProjectSession();
+        long previousSavedModelsRevision = _savedModelsRevision;
         string? previousProjectPath = ProjectPath;
         try
         {
@@ -2616,7 +2623,20 @@ public sealed partial class MainWindowViewModel :
                 };
             }
 
+            PreparedModelsWorkspaceRestore? preparedModels =
+                snapshot.Project is null
+                    ? null
+                    : await PrepareModelsWorkspaceRestoreAsync(
+                        snapshot.Project,
+                        snapshot.ProjectPath,
+                        CancellationToken.None);
+
             RestoreSnapshot(snapshot);
+            CommitModelsWorkspaceRestore(preparedModels);
+            _savedModelsRevision = snapshot.IsProjectDirty
+                ? -1
+                : Models.PersistenceRevision;
+            UpdateDirtyState();
             ProjectAnimation? activeAnimation = GetActiveAnimation();
             if (activeAnimation is not null)
             {
@@ -2666,6 +2686,7 @@ public sealed partial class MainWindowViewModel :
         }
         catch (Exception exception) when (
             exception is ArgumentException or
+            CustomModelFormatException or
             InvalidDataException or
             InvalidOperationException or
             IOException or
@@ -2673,6 +2694,9 @@ public sealed partial class MainWindowViewModel :
         {
             ProjectPath = previousProjectPath;
             RestoreAnimationRuntimeSnapshot(previous);
+            Models.RestoreProjectSession(previousModels);
+            _savedModelsRevision = previousSavedModelsRevision;
+            UpdateDirtyState();
             NotifyProjectChanged();
             AddDiagnostic(
                 "Error",
@@ -2705,6 +2729,8 @@ public sealed partial class MainWindowViewModel :
 
     private void NewWorkspace()
     {
+        Models.ClearProjectSession();
+        _savedModelsRevision = Models.PersistenceRevision;
         SetProject(
             DlraProject.Create("Untitled"),
             markSaved: true,
@@ -2831,6 +2857,9 @@ public sealed partial class MainWindowViewModel :
 
         AnimationRuntimeSnapshot previous =
             CaptureAnimationRuntimeSnapshot();
+        ModelsWorkspaceSessionSnapshot previousModels =
+            Models.CaptureProjectSession();
+        long previousSavedModelsRevision = _savedModelsRevision;
         string? previousProjectPath = ProjectPath;
         IsBusy = true;
         StatusText = $"Opening {Path.GetFileName(path)}…";
@@ -2838,11 +2867,19 @@ public sealed partial class MainWindowViewModel :
         {
             DlraProject loaded = await Task.Run(
                 () => ProjectSerializer.Load(path));
+            PreparedModelsWorkspaceRestore? preparedModels =
+                await PrepareModelsWorkspaceRestoreAsync(
+                    loaded,
+                    path,
+                    CancellationToken.None);
             SetProject(
                 loaded,
                 markSaved: true,
                 clearHistory: true,
                 clearPreview: true);
+            CommitModelsWorkspaceRestore(preparedModels);
+            _savedModelsRevision = Models.PersistenceRevision;
+            UpdateDirtyState();
             ProjectPath = path;
             AddRecentProjectPath(path);
             ProjectAnimation? activeAnimation = GetActiveAnimation();
@@ -2879,6 +2916,9 @@ public sealed partial class MainWindowViewModel :
         {
             ProjectPath = previousProjectPath;
             RestoreAnimationRuntimeSnapshot(previous);
+            Models.RestoreProjectSession(previousModels);
+            _savedModelsRevision = previousSavedModelsRevision;
+            UpdateDirtyState();
             NotifyProjectChanged();
             AddDiagnostic(
                 "Error",
@@ -2889,6 +2929,7 @@ public sealed partial class MainWindowViewModel :
         }
         catch (Exception exception) when (
             exception is ProjectFormatException
+            or CustomModelFormatException
             or InvalidDataException
             or InvalidOperationException
             or IOException
@@ -2896,6 +2937,9 @@ public sealed partial class MainWindowViewModel :
         {
             ProjectPath = previousProjectPath;
             RestoreAnimationRuntimeSnapshot(previous);
+            Models.RestoreProjectSession(previousModels);
+            _savedModelsRevision = previousSavedModelsRevision;
+            UpdateDirtyState();
             NotifyProjectChanged();
             AddDiagnostic(
                 "Error",
@@ -3607,18 +3651,24 @@ public sealed partial class MainWindowViewModel :
         {
             DlraProject projectToSave =
                 CreateProjectWithCurrentPreviewConfiguration();
+            projectToSave = await PersistModelsWorkspaceAsync(
+                projectToSave,
+                path,
+                CancellationToken.None);
             projectToSave.Validate();
             string savedPath = await Task.Run(
                 () => ProjectSerializer.SaveAtomic(projectToSave, path));
             ProjectPath = savedPath;
             _project = projectToSave;
             _savedProject = projectToSave;
+            _savedModelsRevision = Models.PersistenceRevision;
             UpdateDirtyState();
             AddRecentProjectPath(savedPath);
             StatusText = $"Saved {Path.GetFileName(savedPath)}";
         }
         catch (Exception exception) when (
             exception is ProjectFormatException
+            or CustomModelFormatException
             or IOException
             or UnauthorizedAccessException
             or ArgumentException
@@ -3636,6 +3686,189 @@ public sealed partial class MainWindowViewModel :
             IsBusy = false;
         }
     }
+
+    private void OnModelsPersistenceStateChanged(
+        object? sender,
+        EventArgs args) =>
+        UpdateDirtyState();
+
+    private async Task<DlraProject> PersistModelsWorkspaceAsync(
+        DlraProject project,
+        string projectPath,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+
+        ModelsWorkspacePersistencePayload? payload =
+            Models.CreatePersistencePayload();
+        ProjectModelsWorkspaceState? previousState =
+            project.ModelsWorkspace;
+        if (payload is null)
+        {
+            if (previousState is null)
+            {
+                return project;
+            }
+
+            ImmutableArray<ProjectAssetReference> retainedAssets =
+                IsAssetReferencedByAnimation(
+                    project,
+                    previousState.PackageAssetId)
+                    ? project.Assets
+                    : project.Assets
+                        .Where(asset =>
+                            asset.Id != previousState.PackageAssetId)
+                        .ToImmutableArray();
+            DlraProject cleared = project with
+            {
+                Assets = retainedAssets,
+                ModelsWorkspace = null,
+            };
+            cleared.Validate();
+            return cleared;
+        }
+
+        ImportedProjectSource imported =
+            await ProjectSourceImporter.ImportBytesAsync(
+                payload.PackageBytes.ToArray(),
+                payload.SuggestedFileName,
+                projectPath,
+                cancellationToken);
+        string resourceId = CreateCustomModelResourceId(
+            payload.ModelId,
+            Path.GetFileNameWithoutExtension(
+                payload.SuggestedFileName));
+
+        ProjectAssetReference? exactAsset = project.Assets
+            .FirstOrDefault(asset =>
+                asset.Kind == ProjectAssetKind.CustomModelSource &&
+                string.Equals(
+                    asset.ResourceId,
+                    resourceId,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    asset.ContentSha256,
+                    imported.Sha256,
+                    StringComparison.OrdinalIgnoreCase));
+        ProjectAssetReference? previousAsset = previousState is null
+            ? null
+            : project.Assets.FirstOrDefault(asset =>
+                asset.Id == previousState.PackageAssetId);
+        bool previousAssetMayBeReplaced =
+            previousAsset is not null &&
+            !IsAssetReferencedByAnimation(project, previousAsset.Id);
+        Guid packageAssetId = exactAsset?.Id ??
+            (previousAssetMayBeReplaced
+                ? previousAsset!.Id
+                : Guid.NewGuid());
+        var packageAsset = new ProjectAssetReference
+        {
+            Id = packageAssetId,
+            Kind = ProjectAssetKind.CustomModelSource,
+            RelativePath = imported.ProjectRelativePath,
+            ResourceId = resourceId,
+            ContentSha256 = imported.Sha256,
+        };
+
+        ImmutableArray<ProjectAssetReference> assets = project.Assets
+            .Where(asset => asset.Id != packageAssetId)
+            .Where(asset =>
+                previousState is null ||
+                asset.Id != previousState.PackageAssetId ||
+                IsAssetReferencedByAnimation(project, asset.Id))
+            .Append(packageAsset)
+            .ToImmutableArray();
+        DlraProject updated = project with
+        {
+            Assets = assets,
+            ModelsWorkspace = payload.CreateProjectState(
+                packageAssetId),
+        };
+        updated.Validate();
+        return updated;
+    }
+
+    private async Task<PreparedModelsWorkspaceRestore?>
+        PrepareModelsWorkspaceRestoreAsync(
+            DlraProject project,
+            string? projectPath,
+            CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        if (project.ModelsWorkspace is not { } state)
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            throw new InvalidDataException(
+                "The saved Models workspace requires a project path so its project-relative custom-model package can be restored.");
+        }
+
+        ProjectAssetReference packageAsset = project.Assets
+            .SingleOrDefault(asset => asset.Id == state.PackageAssetId) ??
+            throw new InvalidDataException(
+                "The saved Models workspace custom-model asset is missing.");
+        if (packageAsset.Kind != ProjectAssetKind.CustomModelSource ||
+            !TryParseCustomModelResourceId(
+                packageAsset.ResourceId,
+                out Guid expectedModelId))
+        {
+            throw new InvalidDataException(
+                "The saved Models workspace custom-model identity is invalid.");
+        }
+
+        string projectDirectory = Path.GetDirectoryName(
+                Path.GetFullPath(projectPath)) ??
+            throw new InvalidOperationException(
+                "The project path has no parent directory.");
+        string packagePath = ResolveProjectAssetPath(
+            projectDirectory,
+            packageAsset,
+            "Models-workspace custom-model package");
+        await VerifyLocalProjectAssetHashAsync(
+            packageAsset,
+            packagePath,
+            "Models-workspace custom-model package",
+            cancellationToken);
+        PreparedModelsWorkspaceRestore prepared =
+            await Models.PrepareProjectRestoreAsync(
+                packagePath,
+                state,
+                cancellationToken);
+        if (prepared.Model.Package.Document.ModelId != expectedModelId)
+        {
+            throw new InvalidDataException(
+                "The Models-workspace .dlrmodel identity differs from its saved project asset.");
+        }
+
+        return prepared;
+    }
+
+    private void CommitModelsWorkspaceRestore(
+        PreparedModelsWorkspaceRestore? prepared)
+    {
+        if (prepared is null)
+        {
+            Models.ClearProjectSession();
+            return;
+        }
+
+        Models.CommitProjectRestore(prepared);
+    }
+
+    private static bool IsAssetReferencedByAnimation(
+        DlraProject project,
+        Guid assetId) =>
+        project.Animations.Any(animation =>
+            animation.SourceAssetId == assetId ||
+            animation.MimicAssetId == assetId ||
+            animation.FacialSourceAssetId == assetId ||
+            animation.TargetAssetId == assetId ||
+            animation.Attachments.Any(attachment =>
+                attachment.AssetId == assetId));
 
     private async Task ImportAnimationAsync()
     {
@@ -3910,6 +4143,21 @@ public sealed partial class MainWindowViewModel :
         Guid modelId,
         Guid clipId) =>
         $"custom-model:{modelId:N}:stack:{clipId:N}";
+
+    private static bool TryParseCustomModelResourceId(
+        string? resourceId,
+        out Guid modelId)
+    {
+        modelId = Guid.Empty;
+        string[] parts = resourceId?.Split(':') ?? [];
+        return parts.Length == 3 &&
+               string.Equals(
+                   parts[0],
+                   "custom-model",
+                   StringComparison.Ordinal) &&
+               Guid.TryParseExact(parts[1], "N", out modelId) &&
+               !string.IsNullOrWhiteSpace(parts[2]);
+    }
 
     private static bool TryParseCustomModelStackResourceId(
         string? resourceId,
@@ -7804,7 +8052,9 @@ public sealed partial class MainWindowViewModel :
             : project.Animations.FirstOrDefault();
         if (active is null)
         {
-            return EditorWorkspaceMode.Browse;
+            return project.ModelsWorkspace is null
+                ? EditorWorkspaceMode.Browse
+                : EditorWorkspaceMode.Models;
         }
 
         bool crossRig = !string.Equals(
@@ -9305,7 +9555,8 @@ public sealed partial class MainWindowViewModel :
     private void UpdateDirtyState()
     {
         IsDirty = _savedProject is null
-            || !ReferenceEquals(_project, _savedProject);
+            || !ReferenceEquals(_project, _savedProject)
+            || Models.PersistenceRevision != _savedModelsRevision;
     }
 
     private void AddRecentProjectPath(string path)
