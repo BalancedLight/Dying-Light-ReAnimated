@@ -14,6 +14,8 @@ public sealed record FbxAnimationStackInspection(
     int LayerCount,
     int CurveCount,
     int BoneCurveCount,
+    int BlendShapeCurveCount,
+    ImmutableHashSet<string> BlendShapeChannelNames,
     ImmutableHashSet<long> CurveModelIds,
     long? MinimumKeyTick,
     long? MaximumKeyTick);
@@ -53,6 +55,7 @@ public sealed record FbxMeshGeometryInspection(
     long? MeshModelId,
     string? MeshModelName,
     ImmutableArray<FbxSkinInspection> Skins,
+    ImmutableHashSet<string> BlendShapeChannelNames,
     ImmutableHashSet<long> MaterialIds,
     ImmutableHashSet<long> TextureIds,
     ImmutableHashSet<long> VideoIds,
@@ -78,7 +81,11 @@ public sealed record FbxStrictExportInspection(
     ImmutableArray<FbxEmbeddedVideoInspection> EmbeddedVideos,
     ImmutableArray<FbxExternalFileReferenceInspection>
         ExternalFileReferences,
-    ImmutableHashSet<string> ReferencedFileNames);
+    ImmutableHashSet<string> ReferencedFileNames)
+{
+    public ImmutableHashSet<string> CameraModelNames { get; init; } =
+        ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+}
 
 /// <summary>
 /// Strict, read-only inspection of binary FBX objects written by an external
@@ -245,7 +252,16 @@ public static class FbxStrictExportInspector
             objects.FindChildren("Video").Count(),
             embeddedVideos,
             externalFileReferences,
-            referencedFiles.ToImmutable());
+            referencedFiles.ToImmutable())
+        {
+            CameraModelNames = scene.Models.Values
+                .Where(static model => string.Equals(
+                    model.Subtype,
+                    "Camera",
+                    StringComparison.Ordinal))
+                .Select(static model => model.Name)
+                .ToImmutableHashSet(StringComparer.Ordinal),
+        };
     }
 
     private static ImmutableDictionary<long, FbxNode>
@@ -309,6 +325,77 @@ public static class FbxStrictExportInspector
                     out FbxModelObject? model) &&
                 model.IsLimb)
             .ToArray();
+        ImmutableDictionary<long, FbxNode> objects =
+            scene.ObjectNodes;
+        var blendShapeNames = ImmutableHashSet
+            .CreateBuilder<string>(StringComparer.Ordinal);
+        int blendShapeCurveCount = 0;
+        foreach (FbxConnection layerConnection in
+                 scene.GetChildren(stack.LayerIds[0]))
+        {
+            if (!string.Equals(
+                    layerConnection.Kind,
+                    "OO",
+                    StringComparison.Ordinal) ||
+                !objects.TryGetValue(
+                    layerConnection.ChildId,
+                    out FbxNode? curveNode) ||
+                !string.Equals(
+                    curveNode.Name,
+                    "AnimationCurveNode",
+                    StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            long[] channels = scene.GetParents(
+                    layerConnection.ChildId)
+                .Where(connection =>
+                    string.Equals(
+                        connection.Kind,
+                        "OP",
+                        StringComparison.Ordinal) &&
+                    string.Equals(
+                        connection.PropertyName,
+                        "DeformPercent",
+                        StringComparison.Ordinal) &&
+                    objects.TryGetValue(
+                        connection.ParentId,
+                        out FbxNode? channel) &&
+                    IsObjectSubtype(
+                        objects,
+                        connection.ParentId,
+                        "Deformer",
+                        "BlendShapeChannel"))
+                .Select(static connection =>
+                    connection.ParentId)
+                .Distinct()
+                .ToArray();
+            if (channels.Length != 1)
+            {
+                continue;
+            }
+
+            int curveCount = scene.GetChildren(
+                    layerConnection.ChildId)
+                .Count(connection =>
+                    string.Equals(
+                        connection.Kind,
+                        "OP",
+                        StringComparison.Ordinal) &&
+                    objects.TryGetValue(
+                        connection.ChildId,
+                        out FbxNode? curve) &&
+                    string.Equals(
+                        curve.Name,
+                        "AnimationCurve",
+                        StringComparison.Ordinal));
+            blendShapeCurveCount = checked(
+                blendShapeCurveCount + curveCount);
+            blendShapeNames.Add(ReadObjectName(
+                objects[channels[0]],
+                "BlendShapeChannel"));
+        }
         long? minimum = bindings.IsEmpty
             ? null
             : bindings.Min(static binding =>
@@ -325,6 +412,8 @@ public static class FbxStrictExportInspector
             stack.LayerIds.Length,
             bindings.Length,
             boneBindings.Length,
+            blendShapeCurveCount,
+            blendShapeNames.ToImmutable(),
             boneBindings
                 .Select(static binding =>
                     binding.ModelId)
@@ -384,6 +473,11 @@ public static class FbxStrictExportInspector
                 vertexCount,
                 scene,
                 objectsById);
+        ImmutableHashSet<string> blendShapeChannelNames =
+            InspectBlendShapeChannels(
+                objectId,
+                scene,
+                objectsById);
         (
             ImmutableHashSet<long> materialIds,
             ImmutableHashSet<long> textureIds,
@@ -409,6 +503,7 @@ public static class FbxStrictExportInspector
             modelId,
             modelName,
             skins,
+            blendShapeChannelNames,
             materialIds,
             textureIds,
             videoIds,
@@ -768,6 +863,56 @@ public static class FbxStrictExportInspector
                     skinId,
                     clusters.ToImmutable(),
                     coveredVertices.Count));
+        }
+
+        return result.ToImmutable();
+    }
+
+    private static ImmutableHashSet<string>
+        InspectBlendShapeChannels(
+            long geometryId,
+            FbxSemanticScene scene,
+            ImmutableDictionary<long, FbxNode> objectsById)
+    {
+        var result = ImmutableHashSet.CreateBuilder<string>(
+            StringComparer.Ordinal);
+        long[] blendShapeIds = scene.GetChildren(geometryId)
+            .Where(connection =>
+                string.Equals(
+                    connection.Kind,
+                    "OO",
+                    StringComparison.Ordinal) &&
+                IsObjectSubtype(
+                    objectsById,
+                    connection.ChildId,
+                    "Deformer",
+                    "BlendShape"))
+            .Select(static connection =>
+                connection.ChildId)
+            .Distinct()
+            .ToArray();
+        foreach (long blendShapeId in blendShapeIds)
+        {
+            foreach (FbxConnection connection in
+                     scene.GetChildren(blendShapeId))
+            {
+                if (!string.Equals(
+                        connection.Kind,
+                        "OO",
+                        StringComparison.Ordinal) ||
+                    !IsObjectSubtype(
+                        objectsById,
+                        connection.ChildId,
+                        "Deformer",
+                        "BlendShapeChannel"))
+                {
+                    continue;
+                }
+
+                result.Add(ReadObjectName(
+                    objectsById[connection.ChildId],
+                    "BlendShapeChannel"));
+            }
         }
 
         return result.ToImmutable();

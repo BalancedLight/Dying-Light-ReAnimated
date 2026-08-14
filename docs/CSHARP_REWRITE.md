@@ -209,7 +209,7 @@ Important gaps remain visible and fail closed:
   atomic canonical writes, hash/frame gating, malformed huge-number handling,
   exact endpoints, and shortest-hemisphere quaternion continuity.
 - Retail type-272 morph names, entity/LOD channel mappings, and target-major
-  SHORT4 position deltas are decoded at the proven `1 / 16384` scale and reach
+  PC HALF4 position deltas are decoded as IEEE-754 binary16 values and reach
   the D3D11 morph-before-skinning path. See
   `docs/DL1_RETAIL_MORPH_EVIDENCE.md`. Normal-delta payloads are not present in
   this compact row, and game-validated facial deformation still requires

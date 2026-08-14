@@ -28,13 +28,17 @@ public static class ProjectMorphBindingResolver
             throw new ArgumentOutOfRangeException(nameof(mode));
         }
 
+        ImmutableArray<ProjectMorphBinding> currentBindings =
+            ProjectMorphSuggestionScorer.RevalidateAssistedApprovals(
+                bindings,
+                exactTargetRig);
         Dictionary<string, MorphChannelDefinition> targetMorphs =
             exactTargetRig.MorphChannels.ToDictionary(
                 static morph => morph.Name,
                 StringComparer.OrdinalIgnoreCase);
         var result =
             ImmutableArray.CreateBuilder<MorphChannelBinding>();
-        foreach (ProjectMorphBinding binding in bindings)
+        foreach (ProjectMorphBinding binding in currentBindings)
         {
             if (mode == ProjectMorphBindingResolutionMode.Export &&
                 binding.Enabled &&

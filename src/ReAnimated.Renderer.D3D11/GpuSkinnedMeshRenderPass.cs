@@ -18,7 +18,7 @@ public sealed class GpuSkinnedMeshRenderPass : ID3D11RenderPass, IDisposable
 {
     private static readonly int MeshVertexStride =
         Marshal.SizeOf<MeshVertex>();
-    private const string ShaderSource =
+    internal const string ShaderSource =
         """
         cbuffer MeshConstants : register(b0)
         {

@@ -23,8 +23,12 @@ public sealed class BlenderFbxExportService :
     public const int HandoffSchemaVersion = 1;
     public const string FidelityLabel =
         "DL1 retail mesh; base-color-only material";
+    public const string CustomModelFidelityLabel =
+        "Project-owned custom model; base-color-only material";
     public const string RedistributionWarning =
         "This export contains local Dying Light retail mesh and texture data. Keep it local and do not redistribute it.";
+    public const string CustomModelOwnershipNotice =
+        "This export contains the project-owned custom model and evaluated animation variant identified by this manifest.";
     internal const string BundleCommitFormat =
         "dl-reanimated-blender-bundle-commit";
     internal const int BundleCommitSchemaVersion = 1;
@@ -35,6 +39,7 @@ public sealed class BlenderFbxExportService :
     private const int MaximumClipCount = 64;
     private const int MaximumMeshCount = 8_192;
     private const long MaximumOutputTransforms = 1_000_000;
+    private const long MaximumOutputMorphSamples = 1_000_000;
     private const long MaximumAggregateVertexCount = 2_000_000;
     private const long MaximumAggregateIndexCount = 6_000_000;
     private const long MaximumTexturePayloadBytes =
@@ -152,9 +157,13 @@ public sealed class BlenderFbxExportService :
         bool preserveStageDirectory = false;
         try
         {
-            bool hasAnimations = request.Anm2Paths.Count > 0;
+            bool hasEvaluatedAnimations =
+                request.EvaluatedClips.Count > 0;
+            bool hasAnimations =
+                request.Anm2Paths.Count > 0 ||
+                hasEvaluatedAnimations;
             PreparedClipInfo[] clipInfo;
-            if (hasAnimations)
+            if (request.Anm2Paths.Count > 0)
             {
                 progress?.Report(new BlenderFbxExportProgress(
                     "Reading ANM2",
@@ -177,7 +186,10 @@ public sealed class BlenderFbxExportService :
             }
 
             double outputFps = hasAnimations
-                ? clipInfo[0].Timing.SourceFbxFps
+                ? hasEvaluatedAnimations
+                    ? request.EvaluatedClips[0]
+                        .FrameRate.FramesPerSecond
+                    : clipInfo[0].Timing.SourceFbxFps
                 : 30.0;
             BlenderFbxJobBone[] bones = request.Rig is { } rig
                 ? BuildJobBones(rig)
@@ -188,23 +200,26 @@ public sealed class BlenderFbxExportService :
                 .Select(static bone =>
                     bone.Descriptor!.Value)
                 .ToHashSet();
-            long transformCount = clipInfo.Sum(info =>
-            {
-                int unresolvedCount = info.Descriptors
-                    .Distinct()
-                    .Count(descriptor =>
-                        !rigDescriptors.Contains(descriptor));
-                Anm2TemporalResamplePlan resamplePlan =
-                    Anm2TemporalResampler.CreatePlan(
-                        info.SourceFrameCount,
-                        info.Timing.SampleFps,
-                        outputFps);
-                return checked(
-                    (long)resamplePlan.OutputFrameCount *
-                    bones.Length +
-                    (long)info.SourceFrameCount *
-                    unresolvedCount);
-            });
+            long transformCount = hasEvaluatedAnimations
+                ? request.EvaluatedClips.Sum(clip =>
+                    checked((long)clip.Frames.Count * bones.Length))
+                : clipInfo.Sum(info =>
+                {
+                    int unresolvedCount = info.Descriptors
+                        .Distinct()
+                        .Count(descriptor =>
+                            !rigDescriptors.Contains(descriptor));
+                    Anm2TemporalResamplePlan resamplePlan =
+                        Anm2TemporalResampler.CreatePlan(
+                            info.SourceFrameCount,
+                            info.Timing.SampleFps,
+                            outputFps);
+                    return checked(
+                        (long)resamplePlan.OutputFrameCount *
+                        bones.Length +
+                        (long)info.SourceFrameCount *
+                        unresolvedCount);
+                });
             if (transformCount > MaximumOutputTransforms)
             {
                 throw new InvalidDataException(
@@ -240,7 +255,17 @@ public sealed class BlenderFbxExportService :
                     ? $"Decoding {clipInfo.Length:N0} ANM2 clip(s)"
                     : "Writing rig, geometry, skin weights, and textures"));
             IReadOnlyList<BlenderFbxJobClip> clips;
-            if (hasAnimations)
+            if (hasEvaluatedAnimations)
+            {
+                clips = WriteEvaluatedClips(
+                    request.EvaluatedClips,
+                    bones,
+                    outputFps,
+                    workDirectory,
+                    progress,
+                    cancellationToken);
+            }
+            else if (hasAnimations)
             {
                 clips = await WriteClipsAsync(
                         clipInfo,
@@ -259,6 +284,17 @@ public sealed class BlenderFbxExportService :
             {
                 clips = [];
             }
+            clips = EnsureMorphTrackInventory(
+                clips,
+                meshes);
+            long stagedMorphSamples = clips.Sum(clip =>
+                clip.MorphTracks.Sum(track =>
+                    checked((long)track.Values.Count)));
+            if (stagedMorphSamples > MaximumOutputMorphSamples)
+            {
+                throw new InvalidDataException(
+                    $"The Blender handoff requires {stagedMorphSamples:N0} target morph samples; the safety limit is {MaximumOutputMorphSamples:N0}.");
+            }
             string helperPath =
                 await _helperResource.ExtractAsync(
                     workDirectory,
@@ -269,7 +305,7 @@ public sealed class BlenderFbxExportService :
                 JobSchemaVersion,
                 stageFbxPath,
                 outputFps,
-                FidelityLabel,
+                ResolveFidelityLabel(request.Provenance),
                 new BlenderFbxJobAsset(
                     request.Asset.StableKey,
                     request.Asset.ProviderId,
@@ -297,14 +333,14 @@ public sealed class BlenderFbxExportService :
                 "Starting Blender",
                 55.0,
                 hasAnimations
-                    ? "Creating retail mesh, BindPose, and animation Actions"
+                    ? "Creating target mesh, BindPose, and evaluated animation Actions"
                     : request.Rig is null
                         ? request.EmbedTextures
-                            ? "Creating a static retail mesh with embedded textures"
-                            : "Creating a static retail mesh"
+                            ? "Creating a static target mesh with embedded textures"
+                            : "Creating a static target mesh"
                         : request.EmbedTextures
-                            ? "Creating retail mesh and BindPose with embedded textures"
-                            : "Creating retail mesh and BindPose"));
+                            ? "Creating target mesh and BindPose with embedded textures"
+                            : "Creating target mesh and BindPose"));
             BlenderProcessResult processResult =
                 await _processRunner.RunAsync(
                     new BlenderProcessRequest(
@@ -326,7 +362,7 @@ public sealed class BlenderFbxExportService :
             progress?.Report(new BlenderFbxExportProgress(
                 "Validating FBX",
                 94.0,
-                "Reading written stacks, BindPose, retail geometry, and textures"));
+                "Reading written stacks, BindPose, target geometry, cameras, morphs, and textures"));
             await _outputValidator.ValidateAsync(
                     stageFbxPath,
                     bones,
@@ -353,22 +389,29 @@ public sealed class BlenderFbxExportService :
                     : textureFileNames;
             string[] limitations =
             [
-                hasAnimations
+                hasEvaluatedAnimations
+                    ? "The Action is sampled from the active variant's authoritative export evaluation; it does not depend on an arbitrary external ANM2 selection or legacy round-trip sidecar."
+                    : hasAnimations
                     ? "Each Action is an inspection/editing take. A multi-action FBX cannot use the legacy one-clip .fbx.dlrroundtrip.json contract."
                     : "This mesh-only FBX contains no ANM2 Actions.",
-                hasAnimations
+                hasEvaluatedAnimations
+                    ? "All target-rig bones/helpers and target morph channels are represented directly in the FBX take; no unresolved source-track sidecars are emitted."
+                    : hasAnimations
                     ? "Unresolved transform tracks are preserved in hash-validated, frame-major .dlrtracks sidecars referenced by this manifest. Blender does not expose those unresolved tracks as editable armature bones."
                     : "No animation-track sidecars are present in a mesh-only FBX.",
                 request.EmbedTextures
                     ? "Each decoded base-color texture is embedded in the binary FBX; no loose DDS texture dependencies are committed."
                     : "Only the decoded base-color texture is emitted; DL1 shader techniques, normal/specular/mask maps, cloth, and physics are not reproduced.",
-                "Morph targets are not exported in this first Blender handoff.",
+                request.Meshes.Any(static mesh =>
+                    mesh.MorphTargets.Count > 0)
+                    ? "Decoded target morph deltas are exported as shape keys. Active evaluated-variant morph weights are exported as shape-key animation curves."
+                    : "The target mesh contains no decoded morph targets.",
             ];
             var manifest = new BlenderFbxHandoffManifest(
                 HandoffFormat,
                 HandoffSchemaVersion,
-                FidelityLabel,
-                RedistributionWarning,
+                ResolveFidelityLabel(request.Provenance),
+                ResolveOwnershipNotice(request.Provenance),
                 job.Asset,
                 Path.GetFileName(outputPath),
                 externalTextureFiles,
@@ -384,13 +427,19 @@ public sealed class BlenderFbxExportService :
                         clip.FbxFrameCount,
                         clip.SourceDescriptors,
                         clip.HelperTracks,
-                        clip.MotionAccumulator))
+                        clip.MotionAccumulator)
+                    {
+                        MorphTracks = clip.MorphTracks
+                            .Select(static track => track.Name)
+                            .ToArray(),
+                    })
                     .ToArray(),
                 "child_pivot_display_v1",
                 "armature_edit_rest_with_roundtrip_guard",
                 limitations)
             {
                 TexturesEmbedded = request.EmbedTextures,
+                Provenance = request.Provenance,
                 EmbeddedTextureFiles = request.EmbedTextures
                     ? textureFileNames
                     : [],
@@ -512,6 +561,23 @@ public sealed class BlenderFbxExportService :
         ArgumentNullException.ThrowIfNull(request.Asset);
         ArgumentNullException.ThrowIfNull(request.Meshes);
         ArgumentNullException.ThrowIfNull(request.Anm2Paths);
+        ArgumentNullException.ThrowIfNull(
+            request.EvaluatedClips);
+        if (!Enum.IsDefined(request.Provenance))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                "The Blender export provenance is unsupported.");
+        }
+
+        if (request.Anm2Paths.Count > 0 &&
+            request.EvaluatedClips.Count > 0)
+        {
+            throw new ArgumentException(
+                "Select either legacy ANM2 inputs or authoritative editor-evaluated Actions, never both.",
+                nameof(request));
+        }
+
         if (request.Meshes.Count == 0 ||
             request.Meshes.Count > MaximumMeshCount)
         {
@@ -527,6 +593,13 @@ public sealed class BlenderFbxExportService :
                 $"Select at most {MaximumClipCount:N0} ANM2 clips.");
         }
 
+        if (request.EvaluatedClips.Count > MaximumClipCount)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request),
+                $"Select at most {MaximumClipCount:N0} evaluated Actions.");
+        }
+
         if (request.Anm2Paths.Count > 0 &&
             request.Rig is null)
         {
@@ -535,12 +608,120 @@ public sealed class BlenderFbxExportService :
                 nameof(request));
         }
 
+        if (request.EvaluatedClips.Count > 0 &&
+            request.Rig is null)
+        {
+            throw new ArgumentException(
+                "An evaluated Action requires its exact target rig.",
+                nameof(request));
+        }
+
+        if (request.EvaluatedClips.Count > 0)
+        {
+            ValidateEvaluatedClips(
+                request.EvaluatedClips,
+                request.Rig!,
+                request.Meshes);
+            FrameRate cadence = request.EvaluatedClips[0].FrameRate;
+            if (request.EvaluatedClips.Any(clip =>
+                    clip.FrameRate != cadence))
+            {
+                throw new ArgumentException(
+                    "Evaluated Blender Actions must share one exact output cadence.",
+                    nameof(request));
+            }
+
+            long distinctMorphCount = request.Meshes
+                .SelectMany(static mesh => mesh.MorphTargets)
+                .Select(static morph => morph.Name)
+                .Distinct(StringComparer.Ordinal)
+                .LongCount();
+            long morphSampleCount = request.EvaluatedClips.Sum(clip =>
+                checked((long)clip.Frames.Count *
+                    distinctMorphCount));
+            if (morphSampleCount > MaximumOutputMorphSamples)
+            {
+                throw new InvalidDataException(
+                    $"The evaluated Actions require {morphSampleCount:N0} target morph samples; the safety limit is {MaximumOutputMorphSamples:N0}.");
+            }
+        }
+
         if (request.Rig is null &&
             request.Meshes.Any(static mesh => mesh.IsSkinned))
         {
             throw new ArgumentException(
-                "A skinned retail mesh requires its decoded skeleton.",
+                "A skinned target mesh requires its exact decoded skeleton.",
                 nameof(request));
+        }
+    }
+
+    private static void ValidateEvaluatedClips(
+        IReadOnlyList<BlenderFbxEvaluatedClip> clips,
+        RigDefinition rig,
+        IReadOnlyList<MeshRenderData> meshes)
+    {
+        HashSet<string> exportedMorphNames = meshes
+            .SelectMany(static mesh => mesh.MorphTargets)
+            .Select(static morph => morph.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var actionNames = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (BlenderFbxEvaluatedClip clip in clips)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                clip.ActionName);
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                clip.SourceName);
+            if (!actionNames.Add(clip.ActionName))
+            {
+                throw new ArgumentException(
+                    $"Evaluated Action name '{clip.ActionName}' is duplicated.",
+                    nameof(clips));
+            }
+
+            if (clip.SourceFingerprint.Length != 64 ||
+                clip.SourceFingerprint.Any(static character =>
+                    !Uri.IsHexDigit(character)))
+            {
+                throw new ArgumentException(
+                    $"Evaluated Action '{clip.ActionName}' requires an exact source SHA-256 fingerprint.",
+                    nameof(clips));
+            }
+
+            if (clip.Frames is null ||
+                clip.Frames.Count <= 0)
+            {
+                throw new ArgumentException(
+                    $"Evaluated Action '{clip.ActionName}' contains no frames.",
+                    nameof(clips));
+            }
+
+            foreach (BlenderFbxEvaluatedFrame frame in
+                     clip.Frames)
+            {
+                ArgumentNullException.ThrowIfNull(
+                    frame.BoneLocals);
+                ArgumentNullException.ThrowIfNull(
+                    frame.MorphWeights);
+                if (frame.BoneLocals.Count != rig.BoneCount)
+                {
+                    throw new ArgumentException(
+                        $"Evaluated Action '{clip.ActionName}' does not contain exactly {rig.BoneCount:N0} target-rig transforms per frame.",
+                        nameof(clips));
+                }
+
+                if (frame.BoneLocals.Any(static local =>
+                        !local.IsFinite) ||
+                    frame.MorphWeights.Any(pair =>
+                        string.IsNullOrWhiteSpace(pair.Key) ||
+                        !double.IsFinite(pair.Value) ||
+                        !exportedMorphNames.Contains(pair.Key)))
+                {
+                    throw new ArgumentException(
+                        $"Evaluated Action '{clip.ActionName}' contains a non-finite transform/morph weight or refers to a morph that has no exported target shape.",
+                        nameof(clips));
+                }
+            }
         }
     }
 
@@ -580,13 +761,13 @@ public sealed class BlenderFbxExportService :
         if (vertexCount > MaximumAggregateVertexCount)
         {
             throw new InvalidDataException(
-                $"The selected retail mesh has {vertexCount:N0} vertices; the Blender handoff limit is {MaximumAggregateVertexCount:N0}.");
+                $"The selected target model has {vertexCount:N0} vertices; the Blender handoff limit is {MaximumAggregateVertexCount:N0}.");
         }
 
         if (indexCount > MaximumAggregateIndexCount)
         {
             throw new InvalidDataException(
-                $"The selected retail mesh has {indexCount:N0} indices; the Blender handoff limit is {MaximumAggregateIndexCount:N0}.");
+                $"The selected target model has {indexCount:N0} indices; the Blender handoff limit is {MaximumAggregateIndexCount:N0}.");
         }
 
         if (textureBytes > MaximumTexturePayloadBytes)
@@ -774,7 +955,9 @@ public sealed class BlenderFbxExportService :
             bone.Kind is BoneKind.Helper or
                 BoneKind.Camera or
                 BoneKind.Prop,
-            bone.SemanticRole ?? string.Empty);
+            bone.Kind == BoneKind.Camera
+                ? "camera"
+                : bone.SemanticRole ?? string.Empty);
     }
 
     private static BlenderFbxJobTexture[]
@@ -812,7 +995,7 @@ public sealed class BlenderFbxExportService :
                         StringComparison.Ordinal))
                 {
                     throw new InvalidDataException(
-                        $"Decoded texture key '{texture.Id}' resolves to inconsistent base-color payloads within the selected retail mesh.");
+                        $"Decoded texture key '{texture.Id}' resolves to inconsistent base-color payloads within the selected target model.");
                 }
 
                 continue;
@@ -932,11 +1115,294 @@ public sealed class BlenderFbxExportService :
                 MeshVertexStrideFloats,
                 mesh.IsSkinned,
                 ToColumnMatrixArray(mesh.LocalToWorld),
-                textureKey);
+                textureKey)
+            {
+                MorphTargets = WriteMorphTargets(
+                    mesh,
+                    meshIndex,
+                    workDirectory,
+                    cancellationToken),
+            };
         }
 
         return result;
     }
+
+    private static BlenderFbxJobMorphTarget[]
+        WriteMorphTargets(
+            MeshRenderData mesh,
+            int meshIndex,
+            string workDirectory,
+            CancellationToken cancellationToken)
+    {
+        var usedNames = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        var result = new BlenderFbxJobMorphTarget[
+            mesh.MorphTargets.Count];
+        for (int morphIndex = 0;
+             morphIndex < mesh.MorphTargets.Count;
+             morphIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            MorphTargetRenderData morph =
+                mesh.MorphTargets[morphIndex];
+            if (morph.PositionDeltas.Length !=
+                mesh.Vertices.Length ||
+                morph.NormalDeltas.Length != 0 &&
+                morph.NormalDeltas.Length !=
+                    mesh.Vertices.Length)
+            {
+                throw new InvalidDataException(
+                    $"Morph target '{morph.Name}' does not match mesh '{mesh.Id}'s expanded vertex count.");
+            }
+
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                morph.Name);
+            if (!usedNames.Add(morph.Name))
+            {
+                throw new InvalidDataException(
+                    $"Mesh '{mesh.Id}' repeats morph target name '{morph.Name}'. Shape-key names must remain exact for evaluated animation binding.");
+            }
+            string name = morph.Name;
+            string binaryPath = Path.Combine(
+                workDirectory,
+                $"morph-{meshIndex:D4}-{morphIndex:D4}.bin");
+            using FileStream stream = new(
+                binaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            using var writer = new BinaryWriter(
+                stream,
+                Encoding.UTF8,
+                leaveOpen: false);
+            int vertexIndex = 0;
+            foreach (Vector3 delta in
+                     morph.PositionDeltas.Span)
+            {
+                if ((vertexIndex++ & 0x3fff) == 0)
+                {
+                    cancellationToken
+                        .ThrowIfCancellationRequested();
+                }
+
+                if (!float.IsFinite(delta.X) ||
+                    !float.IsFinite(delta.Y) ||
+                    !float.IsFinite(delta.Z))
+                {
+                    throw new InvalidDataException(
+                        $"Morph target '{morph.Name}' contains a non-finite position delta.");
+                }
+
+                WriteVector3(writer, delta);
+            }
+
+            result[morphIndex] =
+                new BlenderFbxJobMorphTarget(
+                    name,
+                    binaryPath,
+                    mesh.Vertices.Length);
+        }
+
+        return result;
+    }
+
+    private static BlenderFbxJobClip[]
+        WriteEvaluatedClips(
+            IReadOnlyList<BlenderFbxEvaluatedClip> evaluatedClips,
+            BlenderFbxJobBone[] bones,
+            double outputFps,
+            string workDirectory,
+            IProgress<BlenderFbxExportProgress>? progress,
+            CancellationToken cancellationToken)
+    {
+        var usedActionNames = new HashSet<string>(
+            StringComparer.OrdinalIgnoreCase);
+        var results = new BlenderFbxJobClip[
+            evaluatedClips.Count];
+        for (int clipIndex = 0;
+             clipIndex < evaluatedClips.Count;
+             clipIndex++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            BlenderFbxEvaluatedClip clip =
+                evaluatedClips[clipIndex];
+            string actionName = CreateUniqueActionName(
+                clip.ActionName,
+                usedActionNames);
+            string binaryPath = Path.Combine(
+                workDirectory,
+                $"evaluated-clip-{clipIndex:D4}.bin");
+            using FileStream stream = new(
+                binaryPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            using var writer = new BinaryWriter(
+                stream,
+                Encoding.UTF8,
+                leaveOpen: false);
+            writer.Write("DLRANM1\0"u8);
+            writer.Write(clip.Frames.Count);
+            writer.Write(bones.Length);
+            foreach (BlenderFbxEvaluatedFrame frame in
+                     clip.Frames)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (frame.BoneLocals.Count != bones.Length)
+                {
+                    throw new InvalidDataException(
+                        $"Evaluated Action '{actionName}' has {frame.BoneLocals.Count:N0} bone transforms; the target rig requires {bones.Length:N0}.");
+                }
+
+                foreach (TransformTRS local in
+                         frame.BoneLocals)
+                {
+                    if (!local.IsFinite)
+                    {
+                        throw new InvalidDataException(
+                            $"Evaluated Action '{actionName}' contains a non-finite bone transform.");
+                    }
+
+                    WriteTransform(writer, local);
+                }
+            }
+
+            string[] morphNames = clip.Frames
+                .SelectMany(static frame =>
+                    frame.MorphWeights.Keys)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static name => name,
+                    StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            BlenderFbxJobMorphTrack[] morphTracks =
+                morphNames.Select(name =>
+                    new BlenderFbxJobMorphTrack(
+                        name,
+                        clip.Frames.Select(frame =>
+                            frame.MorphWeights.TryGetValue(
+                                name,
+                                out double value)
+                                ? ValidateMorphWeight(
+                                    value,
+                                    name,
+                                    actionName)
+                                : 0.0)
+                            .ToArray()))
+                .ToArray();
+            results[clipIndex] = new BlenderFbxJobClip(
+                actionName,
+                clip.SourceName,
+                clip.SourceFingerprint,
+                "editor_evaluated_variant",
+                clip.FrameRate.FramesPerSecond,
+                outputFps,
+                clip.Frames.Count,
+                clip.Frames.Count,
+                binaryPath,
+                [],
+                [],
+                new BlenderFbxJobMotionAccumulator(
+                    Present: false,
+                    Active: false,
+                    BakedIntoRoot: false,
+                    RootName: null))
+            {
+                MorphTracks = morphTracks,
+            };
+            progress?.Report(new BlenderFbxExportProgress(
+                "Preparing evaluated Action",
+                28.0 +
+                22.0 * (clipIndex + 1) /
+                evaluatedClips.Count,
+                $"{actionName}: {clip.Frames.Count:N0} frames"));
+        }
+
+        return results;
+    }
+
+    private static double ValidateMorphWeight(
+        double value,
+        string morphName,
+        string actionName)
+    {
+        if (!double.IsFinite(value))
+        {
+            throw new InvalidDataException(
+                $"Evaluated Action '{actionName}' morph '{morphName}' contains a non-finite weight.");
+        }
+
+        return value;
+    }
+
+    private static IReadOnlyList<BlenderFbxJobClip>
+        EnsureMorphTrackInventory(
+            IReadOnlyList<BlenderFbxJobClip> clips,
+            IReadOnlyList<BlenderFbxJobMesh> meshes)
+    {
+        string[] targetMorphNames = meshes
+            .SelectMany(static mesh => mesh.MorphTargets)
+            .Select(static morph => morph.Name)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToArray();
+        if (targetMorphNames.Length == 0 || clips.Count == 0)
+        {
+            return clips;
+        }
+
+        return clips.Select(clip =>
+        {
+            Dictionary<string, BlenderFbxJobMorphTrack> existing = clip
+                .MorphTracks
+                .ToDictionary(
+                    static track => track.Name,
+                    StringComparer.Ordinal);
+            if (existing.Keys.Any(name =>
+                    !targetMorphNames.Contains(
+                        name,
+                        StringComparer.Ordinal)))
+            {
+                throw new InvalidDataException(
+                    $"Action '{clip.ActionName}' refers to a morph track that has no target mesh shape.");
+            }
+
+            BlenderFbxJobMorphTrack[] complete = targetMorphNames
+                .Select(name => existing.TryGetValue(
+                        name,
+                        out BlenderFbxJobMorphTrack? track)
+                    ? track
+                    : new BlenderFbxJobMorphTrack(
+                        name,
+                        new double[clip.FbxFrameCount]))
+                .ToArray();
+            return clip with { MorphTracks = complete };
+        }).ToArray();
+    }
+
+    private static string ResolveFidelityLabel(
+        BlenderFbxExportProvenance provenance) =>
+        provenance switch
+        {
+            BlenderFbxExportProvenance.RetailLocal =>
+                FidelityLabel,
+            BlenderFbxExportProvenance.CustomUserOwned =>
+                CustomModelFidelityLabel,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(provenance)),
+        };
+
+    private static string ResolveOwnershipNotice(
+        BlenderFbxExportProvenance provenance) =>
+        provenance switch
+        {
+            BlenderFbxExportProvenance.RetailLocal =>
+                RedistributionWarning,
+            BlenderFbxExportProvenance.CustomUserOwned =>
+                CustomModelOwnershipNotice,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(provenance)),
+        };
 
     private static async Task<IReadOnlyList<BlenderFbxJobClip>>
         WriteClipsAsync(

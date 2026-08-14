@@ -2,9 +2,11 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
+using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
@@ -14,6 +16,13 @@ namespace ReAnimated.Tests;
 
 public sealed class Dl1DeveloperToolsDeploymentTests
 {
+    private static readonly JsonSerializerOptions LegacyReceiptJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelDeployment")]
@@ -202,7 +211,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
         {
             Dl1DeveloperToolsDeploymentRequest request = CreateDeploymentRequest(
                 directory,
-                installLooseAnm2: false,
+                installLooseAnm2: true,
                 exportPortableAnimationRpack: false);
             string legacyFile = Path.Combine(
                 request.ProjectRoot,
@@ -241,14 +250,34 @@ public sealed class Dl1DeveloperToolsDeploymentTests
         }
     }
 
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task AliasModeRejectsDisabledLooseAnm2()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            InvalidOperationException error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                Dl1DeveloperToolsProjectDeployer.PreflightAsync(
+                    CreateDeploymentRequest(
+                        directory,
+                        installLooseAnm2: false,
+                        exportPortableAnimationRpack: false)));
+            Assert.Contains("require loose ANM2", error.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
     [Theory]
     [InlineData(true, true)]
     [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(false, false)]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelDeployment")]
-    public async Task PreflightHonorsOptionalLooseAnimationAndPortableRpack(
+    public async Task PreflightRequiresLooseAnimationAndHonorsOptionalPortableRpack(
         bool installLooseAnm2,
         bool exportPortableAnimationRpack)
     {
@@ -297,7 +326,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
         {
             Dl1DeveloperToolsDeploymentRequest blockedRequest = CreateDeploymentRequest(
                 directory,
-                installLooseAnm2: false,
+                installLooseAnm2: true,
                 exportPortableAnimationRpack: false);
             string relativePath = "data/characters/generic_character/GenericModel.ascr";
             string existingPath = Path.Combine(
@@ -350,7 +379,135 @@ public sealed class Dl1DeveloperToolsDeploymentTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelDeployment")]
-    public async Task PreflightAllowsExplicitSkipOnlyForUnownedOptionalArtifact()
+    public async Task PreflightBlocksAliasAndDirectScriptAmbiguity()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest request = CreateDeploymentRequest(
+                directory,
+                installLooseAnm2: true,
+                exportPortableAnimationRpack: false);
+            const string directScript = "data/characters/generic_character/GenericModel.scr";
+            await WriteProjectFileAsync(request.ProjectRoot, directScript, "legacy direct script");
+
+            Dl1DeveloperToolsDeploymentPlan plan =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+
+            Assert.False(plan.CanDeploy);
+            Dl1DeveloperToolsDeploymentConflict conflict = Assert.Single(
+                plan.Conflicts.Where(item =>
+                    string.Equals(item.RelativePath, directScript, StringComparison.OrdinalIgnoreCase)));
+            Assert.False(conflict.CanSkip);
+            Assert.Contains("cannot coexist", conflict.Message, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task PreflightBlocksActiveRpackResourceIdentityConflicts()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest request = CreateDeploymentRequest(
+                directory,
+                installLooseAnm2: true,
+                exportPortableAnimationRpack: false);
+            const string rpackRelative = "data/generic_existing_pc.rpack";
+            string rpackPath = ResolveProjectFile(request.ProjectRoot, rpackRelative);
+            Directory.CreateDirectory(Path.GetDirectoryName(rpackPath)!);
+            await File.WriteAllBytesAsync(
+                rpackPath,
+                Rp6lAnimationLibraryCodec.Build(
+                    new Dictionary<string, byte[]>
+                    {
+                        ["idle_loop"] = "ANM2"u8.ToArray(),
+                    },
+                    new Dictionary<string, Rp6lAnimationScript>
+                    {
+                        ["GenericLibrary"] = new("header"u8.ToArray(), "body"u8.ToArray()),
+                    }));
+
+            Dl1DeveloperToolsDeploymentPlan plan =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+
+            Assert.False(plan.CanDeploy);
+            Dl1DeveloperToolsDeploymentConflict conflict = Assert.Single(
+                plan.Conflicts.Where(item =>
+                    string.Equals(item.RelativePath, rpackRelative, StringComparison.OrdinalIgnoreCase)));
+            Assert.False(conflict.CanSkip);
+            Assert.Contains("type-320:idle_loop", conflict.Message, StringComparison.Ordinal);
+            Assert.Contains("type-322:GenericLibrary", conflict.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task LegacySchemaOneReceiptRemainsReadableAndRollbackCompatible()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string projectRoot = Path.Combine(directory, "project");
+            const string deploymentId = "0123456789abcdef01234567";
+            string receiptPath = ResolveProjectFile(
+                projectRoot,
+                $".dl-reanimated/deployments/{deploymentId}.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(receiptPath)!);
+            var legacy = new Dl1DeveloperToolsDeploymentReceipt
+            {
+                SchemaVersion = 1,
+                DeploymentId = deploymentId,
+                CharacterId = "generic_character",
+                ModelResourceName = "GenericModel",
+                AnimationLibraryName = "GenericLibrary",
+                AnimationScriptRelativePath =
+                    "data/characters/animations/animscripts/GenericLibrary.scr",
+                ModelCompilerFingerprint = new string('a', 64),
+                AnimationCompilerFingerprint = new string('b', 64),
+                CompletedUtc = DateTimeOffset.UnixEpoch,
+                Artifacts = [],
+                ValidationResults = ["Legacy deployment receipt."],
+                Warnings = [],
+            };
+            await File.WriteAllTextAsync(
+                receiptPath,
+                JsonSerializer.Serialize(legacy, LegacyReceiptJsonOptions));
+
+            Dl1DeveloperToolsDeploymentReceipt loaded = Assert.IsType<Dl1DeveloperToolsDeploymentReceipt>(
+                Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(projectRoot));
+            Assert.Equal(1, loaded.SchemaVersion);
+            Assert.Equal(receiptPath, loaded.ManifestPath);
+            Assert.False(loaded.IsStale);
+
+            await Dl1DeveloperToolsProjectDeployer.RollbackAsync(receiptPath);
+
+            Assert.Null(Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(projectRoot));
+            using JsonDocument rolledBack = JsonDocument.Parse(await File.ReadAllTextAsync(receiptPath));
+            Assert.NotEqual(
+                JsonValueKind.Null,
+                rolledBack.RootElement.GetProperty("rolledBackUtc").ValueKind);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task PreflightRejectsSkippingReferencedLooseAnimation()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();
         try
@@ -373,7 +530,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Dl1DeveloperToolsDeploymentConflict conflict = Assert.Single(
                 blocked.Conflicts.Where(item =>
                     string.Equals(item.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase)));
-            Assert.True(conflict.CanSkip);
+            Assert.False(conflict.CanSkip);
 
             Dl1DeveloperToolsDeploymentRequest skipRequest = blockedRequest with
             {
@@ -384,12 +541,12 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Dl1DeveloperToolsDeploymentPlan skipped =
                 await Dl1DeveloperToolsProjectDeployer.PreflightAsync(skipRequest);
 
-            Assert.True(skipped.CanDeploy);
+            Assert.False(skipped.CanDeploy);
             Dl1DeveloperToolsDeploymentArtifact artifact = Assert.Single(
                 skipped.Artifacts.Where(item =>
                     string.Equals(item.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase)));
-            Assert.Equal(Dl1DeploymentArtifactDisposition.Skip, artifact.Disposition);
-            Assert.False(artifact.Required);
+            Assert.Equal(Dl1DeploymentArtifactDisposition.Conflict, artifact.Disposition);
+            Assert.True(artifact.Required);
             Assert.False(artifact.ExistingFileIsOwned);
         }
         finally
@@ -431,6 +588,78 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Assert.Equal(
                 "data/characters/animations/animscripts/GenericLibrary.scr",
                 deployed.Receipt.AnimationScriptRelativePath);
+            Assert.Equal(2, deployed.Receipt.SchemaVersion);
+            Assert.False(restored.IsStale);
+            string contentManifestRelative = Assert.IsType<string>(
+                deployed.Receipt.AnimationContentManifestRelativePath);
+            string contentManifestSha256 = Assert.IsType<string>(
+                deployed.Receipt.AnimationContentManifestSha256);
+            string runtimePackRelative = Assert.IsType<string>(
+                deployed.Receipt.AnimationRuntimePackRelativePath);
+            string runtimePackSha256 = Assert.IsType<string>(
+                deployed.Receipt.AnimationRuntimePackSha256);
+            Assert.Equal(
+                $".dl-reanimated/animation-refresh/manifests/{deployed.Receipt.DeploymentId}.json",
+                contentManifestRelative);
+            Assert.Equal(
+                $".dl-reanimated/animation-refresh/packages/{runtimePackSha256}.rpack",
+                runtimePackRelative);
+            Assert.Equal(
+                contentManifestSha256,
+                Convert.ToHexStringLower(SHA256.HashData(
+                    await File.ReadAllBytesAsync(
+                        ResolveProjectFile(request.ProjectRoot, contentManifestRelative)))));
+            Assert.Equal(
+                runtimePackSha256,
+                Convert.ToHexStringLower(SHA256.HashData(
+                    await File.ReadAllBytesAsync(
+                        ResolveProjectFile(request.ProjectRoot, runtimePackRelative)))));
+            using (JsonDocument animationManifest = JsonDocument.Parse(
+                       await File.ReadAllTextAsync(
+                           ResolveProjectFile(request.ProjectRoot, contentManifestRelative))))
+            {
+                Assert.Equal(
+                    "dl-reanimated-animation-content-manifest",
+                    animationManifest.RootElement.GetProperty("format").GetString());
+                Assert.Equal(
+                    deployed.Receipt.DeploymentId,
+                    animationManifest.RootElement.GetProperty("deploymentId").GetString());
+                Assert.Equal(
+                    ["AliasScript", "AnimationScript", "Animation", "AnimationRuntimePack"],
+                    animationManifest.RootElement.GetProperty("artifacts")
+                        .EnumerateArray()
+                        .Select(static artifact => artifact.GetProperty("role").GetString()!)
+                        .ToArray());
+            }
+            Assert.Contains(
+                deployed.Receipt.Artifacts,
+                artifact =>
+                    artifact.RelativePath == contentManifestRelative &&
+                    artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
+                    artifact.CreatedByDeployment);
+            Assert.Contains(
+                deployed.Receipt.Artifacts,
+                artifact =>
+                    artifact.RelativePath == runtimePackRelative &&
+                    artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
+                    artifact.CreatedByDeployment);
+            Assert.Contains(
+                deployed.Receipt.Artifacts,
+                static artifact =>
+                    artifact.RelativePath ==
+                        "assets_pc/characters/generic_character/GenericModel.msh_obj_dep" &&
+                    artifact.Role == Dl1DeploymentArtifactRole.Compiled &&
+                    artifact.CreatedByDeployment);
+            Assert.Contains(
+                deployed.Receipt.Artifacts,
+                static artifact =>
+                    artifact.RelativePath ==
+                        "assets_pc/characters/animations/idle_loop.anm2_obj_dep" &&
+                    artifact.Role == Dl1DeploymentArtifactRole.Compiled &&
+                    artifact.CreatedByDeployment);
+            Assert.False(ProjectFileExists(
+                request.ProjectRoot,
+                "data/characters/animations/GenericLibrary_pc.rpack"));
             Assert.Contains(
                 deployed.Receipt.Artifacts,
                 static artifact =>
@@ -470,6 +699,14 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Assert.False(ProjectFileExists(
                 request.ProjectRoot,
                 "out/ReAnimated/GenericModel/GenericLibrary_pc.rpack"));
+            Assert.False(ProjectFileExists(request.ProjectRoot, contentManifestRelative));
+            Assert.False(ProjectFileExists(request.ProjectRoot, runtimePackRelative));
+            Assert.False(ProjectFileExists(
+                request.ProjectRoot,
+                "assets_pc/characters/generic_character/GenericModel.msh_obj_dep"));
+            Assert.False(ProjectFileExists(
+                request.ProjectRoot,
+                "assets_pc/characters/animations/idle_loop.anm2_obj_dep"));
 
             using JsonDocument receipt = JsonDocument.Parse(await File.ReadAllTextAsync(deployed.ReceiptPath));
             Assert.NotEqual(
@@ -1096,13 +1333,26 @@ public sealed class Dl1DeveloperToolsDeploymentTests
         string directory = Path.GetDirectoryName(request.OutputRpackPath)!;
         Directory.CreateDirectory(directory);
         string meshObject = Path.Combine(directory, $"{request.ResourceName}.msh_obj");
+        string meshSidecar = meshObject + "_dep";
         string materialDatabase = Path.Combine(directory, "local_dx11.mp");
         string receipt = Path.Combine(directory, "compiler-receipt.json");
         await WriteTextAsync(request.OutputRpackPath, "synthetic rpack", cancellationToken);
         await WriteTextAsync(meshObject, "synthetic mesh object", cancellationToken);
+        await WriteTextAsync(meshSidecar, "synthetic mesh dependency", cancellationToken);
         await WriteTextAsync(materialDatabase, "synthetic material database", cancellationToken);
         await WriteTextAsync(receipt, "{}", cancellationToken);
         string fingerprint = new('a', 64);
+        string toolFingerprint =
+            Dl1OfficialModelCompiler.CurrentToolFingerprint;
+        string outputRpackSha256 = Convert.ToHexStringLower(
+            SHA256.HashData(await File.ReadAllBytesAsync(
+                request.OutputRpackPath,
+                cancellationToken)));
+        string meshSidecarSha256 = Convert.ToHexStringLower(
+            SHA256.HashData(await File.ReadAllBytesAsync(
+                meshSidecar,
+                cancellationToken)));
+
         return new Dl1OfficialModelCompilerResult(
             request.ResourceName,
             request.OutputRpackPath,
@@ -1114,13 +1364,35 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             new CustomModelBuildReceipt
             {
                 InputFingerprint = fingerprint,
-                ToolFingerprint = fingerprint,
+                ToolFingerprint = toolFingerprint,
                 CompilerFingerprint = fingerprint,
                 OutputManifestFingerprint = fingerprint,
                 State = CustomModelBuildState.CompilerValidated,
                 CompletedUtc = DateTimeOffset.UnixEpoch,
             },
-            "Synthetic compiler completed.");
+            "Synthetic compiler completed.")
+        {
+            DependencySidecars =
+            [
+                new(
+                    Path.GetFileName(meshObject),
+                    Path.GetFileName(meshSidecar),
+                    meshSidecar,
+                    meshSidecarSha256),
+            ],
+            CompilerEvidence = new Dl1OfficialModelCompilerEvidence
+            {
+                OutputRpackSha256 = outputRpackSha256,
+                CompilerFingerprint = fingerprint,
+                ToolFingerprint = toolFingerprint,
+                BuildReceiptInputFingerprint = fingerprint,
+                BuildReceiptOutputManifestFingerprint = fingerprint,
+                BuildState = CustomModelBuildState.CompilerValidated,
+                VerifiedMorphChannelCount = 0,
+                VerifiedMorphBindingCount = 0,
+                MorphDeltaFormat = null,
+            },
+        };
     }
 
     private static async Task<Dl1OfficialAnimationCompilerResult> WriteSyntheticAnimationsAsync(
@@ -1129,17 +1401,29 @@ public sealed class Dl1DeveloperToolsDeploymentTests
     {
         Directory.CreateDirectory(request.OutputDirectory);
         var paths = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        var sidecars = ImmutableArray.CreateBuilder<Dl1OfficialCompilerDependencySidecar>();
         foreach (PreparedCustomModelAnimation animation in request.Library.Animations)
         {
             string path = Path.Combine(request.OutputDirectory, $"{animation.Name}.anm2_obj");
+            string sidecar = path + "_dep";
             await WriteTextAsync(path, $"compiled {animation.Name}", cancellationToken);
+            await WriteTextAsync(sidecar, $"dependency {animation.Name}", cancellationToken);
             paths.Add(animation.Name, path);
+            sidecars.Add(new Dl1OfficialCompilerDependencySidecar(
+                Path.GetFileName(path),
+                Path.GetFileName(sidecar),
+                sidecar,
+                Convert.ToHexStringLower(
+                    SHA256.HashData(await File.ReadAllBytesAsync(sidecar, cancellationToken)))));
         }
 
         return new Dl1OfficialAnimationCompilerResult(
             paths.ToImmutable(),
             new string('b', 64),
-            "Synthetic animation compiler completed.");
+            "Synthetic animation compiler completed.")
+        {
+            DependencySidecars = sidecars.ToImmutable(),
+        };
     }
 
     private static async Task<ImmutableDictionary<string, ImmutableArray<byte>>> SnapshotProjectAsync(

@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         ModelsWorkspaceSurface.DataContext = _viewModel.Models;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         ApplyWorkspaceSurfaceLayout();
+        ApplyWorkflowAirspaceLayout();
         ApplyViewportColumnLayout();
         Loaded += OnWindowLoaded;
         Closing += OnWindowClosing;
@@ -84,11 +85,19 @@ public partial class MainWindow : Window
         bool workspaceSurfaceChanged =
             string.Equals(
                 args.PropertyName,
+                nameof(MainWindowViewModel.IsCustomModelAuthoringSurfaceVisible),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
                 nameof(MainWindowViewModel.IsModelsWorkspace),
                 StringComparison.Ordinal) ||
             string.Equals(
                 args.PropertyName,
                 nameof(MainWindowViewModel.IsAnimationWorkspaceSurfaceVisible),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsExportWorkspace),
                 StringComparison.Ordinal);
         bool viewportLayoutChanged = string.Equals(
             args.PropertyName,
@@ -120,6 +129,7 @@ public partial class MainWindow : Window
         if (workspaceSurfaceChanged)
         {
             ApplyWorkspaceSurfaceLayout();
+            ApplyWorkflowAirspaceLayout();
         }
 
         if (viewportLayoutChanged)
@@ -131,11 +141,11 @@ public partial class MainWindow : Window
     private void ApplyWorkspaceSurfaceLayout()
     {
         FrameworkElement activeSurface =
-            _viewModel.IsModelsWorkspace
+            _viewModel.IsCustomModelAuthoringSurfaceVisible
                 ? ModelsWorkspaceSurface
                 : AnimationWorkspaceSurface;
         FrameworkElement inactiveSurface =
-            _viewModel.IsModelsWorkspace
+            _viewModel.IsCustomModelAuthoringSurfaceVisible
                 ? AnimationWorkspaceSurface
                 : ModelsWorkspaceSurface;
 
@@ -158,6 +168,59 @@ public partial class MainWindow : Window
 
         EditorRootGrid.InvalidateMeasure();
         EditorRootGrid.InvalidateArrange();
+    }
+
+    private void ApplyWorkflowAirspaceLayout()
+    {
+        bool animationSurfaceIsAttached =
+            EditorRootGrid.Children.Contains(AnimationWorkspaceSurface);
+        bool modelsOwnViewport =
+            animationSurfaceIsAttached && _viewModel.IsModelsWorkspace;
+        bool authoringOwnsViewport =
+            animationSurfaceIsAttached &&
+            !_viewModel.IsModelsWorkspace &&
+            !_viewModel.IsExportWorkspace;
+
+        // HwndHost always wins over WPF z-order. The Models and Export tabs are
+        // workflow surfaces, not translucent covers for the authoring view, so
+        // the authoring viewport must leave the visual tree while either tab is
+        // active. Otherwise its native target window punches through the tab.
+        if (authoringOwnsViewport)
+        {
+            if (!ViewportRegionGrid.Children.Contains(ViewportGrid))
+            {
+                Grid.SetRow(ViewportGrid, 0);
+                ViewportRegionGrid.Children.Add(ViewportGrid);
+            }
+        }
+        else
+        {
+            ViewportRegionGrid.Children.Remove(ViewportGrid);
+        }
+
+        // The Models workflow owns a separate selection-only preview HwndHost.
+        // Remove that whole surface on every other tab so its native child is
+        // torn down before Export or the authoring viewport is arranged.
+        if (modelsOwnViewport)
+        {
+            if (!AnimationWorkspaceSurface.Children.Contains(
+                    ModelsWorkflowSurface))
+            {
+                Grid.SetColumnSpan(ModelsWorkflowSurface, 5);
+                AnimationWorkspaceSurface.Children.Add(
+                    ModelsWorkflowSurface);
+            }
+        }
+        else
+        {
+            AnimationWorkspaceSurface.Children.Remove(
+                ModelsWorkflowSurface);
+        }
+
+        ViewportRegionGrid.InvalidateMeasure();
+        ViewportRegionGrid.InvalidateArrange();
+        AnimationWorkspaceSurface.InvalidateMeasure();
+        AnimationWorkspaceSurface.InvalidateArrange();
     }
 
     private void ApplyViewportColumnLayout()

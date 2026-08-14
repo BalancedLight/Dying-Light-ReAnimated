@@ -130,11 +130,13 @@ public sealed class RetargetCompatibilityTests
                 reviewed.Entries,
                 entry => entry.TargetBoneIndex == 0)
                 .IsReviewed);
-        Assert.True(
-            Assert.Single(
-                reviewed.Entries,
-                entry => entry.TargetBoneIndex == 1)
-                .IsReviewed);
+        BoneMapEntry explicitlyReviewed = Assert.Single(
+            reviewed.Entries,
+            entry => entry.TargetBoneIndex == 1);
+        Assert.True(explicitlyReviewed.IsReviewed);
+        Assert.Equal(
+            MappingReviewOrigin.Explicit,
+            explicitlyReviewed.ReviewOrigin);
         Assert.Equal(
             [2, 4],
             reviewed.ReviewedTargetBindBoneIndices

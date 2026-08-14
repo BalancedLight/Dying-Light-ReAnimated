@@ -8,6 +8,8 @@ using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.Anm2;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.Project;
+using ReAnimated.Evaluation;
 using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.Tests;
@@ -98,6 +100,22 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             StringComparison.Ordinal);
         Assert.Contains(
             "keyframe_points.foreach_set(\"co\"",
+            helper,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "driver.variables.new()",
+            helper,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "dlr_morph_tracks",
+            helper,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "create_camera_objects",
+            helper,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "install_shape_key_actions",
             helper,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -333,6 +351,185 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             "legacy one-clip .fbx.dlrroundtrip.json",
             manifestJson,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ActiveVariantEvaluatorSamplesAuthoredBoneAndMorphState()
+    {
+        RigDefinition rig = CreateRig();
+        AnimationClip clip = new(
+            "Authored",
+            new FrameRate(30, 1),
+            2,
+            CreateClip("Authored", rig, 2, 1.0).TransformTracks,
+            [
+                new ScalarTrack(
+                    "jaw_open",
+                    [
+                        new ScalarKeyframe(0, 0.0),
+                        new ScalarKeyframe(1, 0.75),
+                    ]),
+            ]);
+        ProjectAnimation animation = new()
+        {
+            Name = "Authored Variant",
+            SourceAssetId = Guid.NewGuid(),
+            TargetRigId = rig.Id,
+            FrameRate = clip.FrameRate,
+            FrameCount = clip.FrameCount,
+        };
+        var template = new EvaluationRequest(
+            rig,
+            rig,
+            clip,
+            0,
+            PreviewProfile.RawAuthoring,
+            playbackMode: PlaybackMode.Clamp,
+            purpose: EvaluationPurpose.Export);
+
+        BlenderFbxEvaluatedClip evaluated =
+            BlenderFbxActiveVariantEvaluator.Evaluate(
+                animation,
+                "authored-source.fbx",
+                new string('a', 64),
+                template,
+                CancellationToken.None);
+
+        Assert.Equal(2, evaluated.Frames.Count);
+        Assert.Equal(
+            1.0,
+            evaluated.Frames[1]
+                .BoneLocals[0].Translation.X,
+            10);
+        Assert.Equal(
+            0.75,
+            evaluated.Frames[1]
+                .MorphWeights["jaw_open"],
+            10);
+    }
+
+    [Fact]
+    public async Task ServiceStagesCustomEvaluatedVariantMorphCameraContract()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        RigDefinition rig = CreateCustomExportRig();
+        MeshRenderData mesh = CreateMorphMesh();
+        string blenderPath = Path.Combine(
+            _temporaryDirectory,
+            "blender.exe");
+        File.WriteAllBytes(blenderPath, []);
+        string outputPath = Path.Combine(
+            _temporaryDirectory,
+            "Output",
+            "custom-variant.fbx");
+        var runner = new RecordingBlenderRunner();
+        var service = new BlenderFbxExportService(
+            runner,
+            outputValidator: new AcceptingFbxOutputValidator(),
+            timeout: TimeSpan.FromSeconds(5));
+        BlenderFbxEvaluatedFrame[] frames =
+        [
+            new(
+                rig.CreateBindPose().LocalTransforms,
+                new Dictionary<string, double>
+                {
+                    ["jaw_open"] = 0.0,
+                }),
+            new(
+                rig.CreateBindPose().LocalTransforms.SetItem(
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0.5, 0, 0),
+                        QuaternionD.Identity,
+                        Vector3D.One)),
+                new Dictionary<string, double>
+                {
+                    ["jaw_open"] = 0.8,
+                }),
+        ];
+
+        BlenderFbxExportResult result = await service.ExportAsync(
+            new BlenderFbxExportRequest(
+                blenderPath,
+                outputPath,
+                new BlenderFbxAssetIdentity(
+                    "custom:model",
+                    "project-custom-model",
+                    "Generic Character",
+                    new string('b', 64)),
+                rig,
+                [mesh],
+                [])
+            {
+                EmbedTextures = true,
+                Provenance =
+                    BlenderFbxExportProvenance.CustomUserOwned,
+                EvaluatedClips =
+                [
+                    new BlenderFbxEvaluatedClip(
+                        "Walk Edited",
+                        "generic-animation.fbx",
+                        new string('c', 64),
+                        new FrameRate(30, 1),
+                        frames),
+                ],
+            },
+            cancellationToken: CancellationToken.None);
+
+        Assert.Equal(["Walk_Edited"], result.AnimationStacks);
+        Assert.NotNull(runner.JobJson);
+        using JsonDocument jobDocument =
+            JsonDocument.Parse(runner.JobJson);
+        JsonElement job = jobDocument.RootElement;
+        JsonElement camera = job.GetProperty("bones")
+            .EnumerateArray()
+            .Single(row => row.GetProperty("name").GetString() ==
+                "EyeCamera");
+        Assert.Equal(
+            "camera",
+            camera.GetProperty("semantic").GetString());
+        JsonElement jobMesh = job.GetProperty("meshes")[0];
+        Assert.Equal(
+            "jaw_open",
+            jobMesh.GetProperty("morph_targets")[0]
+                .GetProperty("name").GetString());
+        Assert.Equal(1, runner.StagedMorphCount);
+        Assert.Equal(
+            3 * 3 * sizeof(float),
+            runner.FirstStagedMorphBinary!.Length);
+        JsonElement stagedClip = job.GetProperty("clips")[0];
+        Assert.Equal(
+            "editor_evaluated_variant",
+            stagedClip.GetProperty("timing_metadata_status")
+                .GetString());
+        Assert.Equal(
+            [0.0, 0.8],
+            stagedClip.GetProperty("morph_tracks")[0]
+                .GetProperty("values")
+                .EnumerateArray()
+                .Select(static value => value.GetDouble())
+                .ToArray());
+
+        string manifestJson = await File.ReadAllTextAsync(
+            result.HandoffManifestPath,
+            CancellationToken.None);
+        using JsonDocument manifestDocument =
+            JsonDocument.Parse(manifestJson);
+        Assert.Equal(
+            (int)BlenderFbxExportProvenance.CustomUserOwned,
+            manifestDocument.RootElement
+                .GetProperty("provenance")
+                .GetInt32());
+        Assert.Contains(
+            "project-owned custom model",
+            manifestDocument.RootElement
+                .GetProperty("redistribution_warning")
+                .GetString()!,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(
+            "do not redistribute",
+            manifestJson,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1731,6 +1928,37 @@ public sealed class BlenderFbxHandoffTests : IDisposable
                     descriptorHash: MimicDescriptor),
             ]);
 
+    private static RigDefinition CreateCustomExportRig() =>
+        new(
+            "generic-custom-rig",
+            "Generic Custom Rig",
+            [
+                new BoneDefinition(
+                    0,
+                    "Root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: RootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "EyeCamera",
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0, 1.6, 0.1),
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Camera,
+                    descriptorHash: HelperDescriptor,
+                    semanticRole: "camera"),
+            ],
+            [
+                new MorphChannelDefinition(
+                    0,
+                    "jaw_open",
+                    descriptorHash: MimicDescriptor),
+            ]);
+
     private static RigDefinition CreateHelperBeforeRootRig() =>
         new(
             "helper-before-root",
@@ -2156,6 +2384,23 @@ public sealed class BlenderFbxHandoffTests : IDisposable
         };
     }
 
+    private static MeshRenderData CreateMorphMesh() =>
+        CreateTexturedMesh() with
+        {
+            MorphTargets =
+            [
+                new MorphTargetRenderData(
+                    "jaw_open",
+                    new Vector3[]
+                    {
+                        Vector3.Zero,
+                        new(0.01f, 0.0f, 0.0f),
+                        new(0.0f, 0.01f, 0.0f),
+                    },
+                    ReadOnlyMemory<Vector3>.Empty),
+            ],
+        };
+
     private static string ComputeSha256(string path)
     {
         using FileStream stream = File.OpenRead(path);
@@ -2258,6 +2503,10 @@ public sealed class BlenderFbxHandoffTests : IDisposable
 
         public byte[]? FirstStagedClipBinary { get; private set; }
 
+        public int StagedMorphCount { get; private set; }
+
+        public byte[]? FirstStagedMorphBinary { get; private set; }
+
         public async Task<BlenderProcessResult> RunAsync(
             BlenderProcessRequest request,
             Action<string>? outputLine,
@@ -2291,6 +2540,20 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             StagedClipCount = clips.Length;
             StagedMeshCount = meshes.Length;
             StagedTextureCount = textures.Length;
+            string[] morphPaths = meshes
+                .SelectMany(mesh => mesh
+                    .GetProperty("morph_targets")
+                    .EnumerateArray())
+                .Select(morph => morph
+                    .GetProperty("binary_path")
+                    .GetString()!)
+                .ToArray();
+            StagedMorphCount = morphPaths.Length;
+            FirstStagedMorphBinary = morphPaths.Length == 0
+                ? null
+                : await File.ReadAllBytesAsync(
+                    morphPaths[0],
+                    cancellationToken);
             FirstStagedClipBinary = clips.Length == 0
                 ? null
                 : await File.ReadAllBytesAsync(
@@ -2316,6 +2579,9 @@ public sealed class BlenderFbxHandoffTests : IDisposable
                     File.Exists(
                         texture.GetProperty("file_path")
                             .GetString())));
+            Assert.All(
+                morphPaths,
+                path => Assert.True(File.Exists(path)));
 
             string outputPath = root
                 .GetProperty("output_path")

@@ -123,9 +123,9 @@ public sealed class CoreAnimationProjectTests : IDisposable
                     SourceAssetId = assetId,
                     TargetAssetId = propAssetId,
                     TargetRigId = "builtin:male_npc_infected",
-                    SourceRigSignature = "source-rig-sha256",
-                    TargetRigSignature = "target-rig-sha256",
-                    MappingFingerprint = "mapping-sha256",
+                    SourceRigSignature = new string('D', 64),
+                    TargetRigSignature = new string('E', 64),
+                    MappingFingerprint = new string('F', 64),
                     FrameRate = new FrameRate(30, 1),
                     FrameCount = 2,
                     RootMotionMode = Dl1RootMotionMode.Bip01,
@@ -234,7 +234,7 @@ public sealed class CoreAnimationProjectTests : IDisposable
         DlraProject loaded = ProjectSerializer.Load(savedPath);
 
         Assert.Contains("\"format\": \"dl-reanimated-csharp-project\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"schemaVersion\": 1", json, StringComparison.Ordinal);
+        Assert.Contains("\"schemaVersion\": 2", json, StringComparison.Ordinal);
         Assert.Contains("\"game\": \"dying-light-1\"", json, StringComparison.Ordinal);
         Assert.Contains("\"previewMode\": \"raw\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("schema_version", json, StringComparison.Ordinal);
@@ -294,11 +294,11 @@ public sealed class CoreAnimationProjectTests : IDisposable
 
         JsonObject earlierSchemaOne = Assert.IsType<JsonObject>(
             JsonNode.Parse(json));
-        JsonArray animations = Assert.IsType<JsonArray>(
-            earlierSchemaOne["animations"]);
-        JsonObject animation = Assert.IsType<JsonObject>(animations[0]);
+        JsonArray variants = Assert.IsType<JsonArray>(
+            earlierSchemaOne["animationVariants"]);
+        JsonObject variant = Assert.IsType<JsonObject>(variants[0]);
         JsonArray editLayers = Assert.IsType<JsonArray>(
-            animation["editLayers"]);
+            variant["editLayers"]);
         JsonObject storedLayer = Assert.IsType<JsonObject>(editLayers[0]);
         JsonArray tracks = Assert.IsType<JsonArray>(storedLayer["tracks"]);
         JsonObject storedTrack = Assert.IsType<JsonObject>(tracks[0]);

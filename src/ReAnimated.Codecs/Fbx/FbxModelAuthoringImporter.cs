@@ -6,6 +6,7 @@ using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Codecs.Models;
+using ReAnimated.Codecs.Anm2;
 using ReAnimated.Core.Project;
 
 namespace ReAnimated.Codecs.Fbx;
@@ -19,6 +20,12 @@ public sealed record FbxModelAuthoringImportOptions
     public int MaximumMaterials { get; init; } = 65_536;
 
     public int MaximumExpandedVertices { get; init; } = 20_000_000;
+
+    public int MaximumMorphChannels { get; init; } = 4_096;
+
+    public int MaximumMorphAffectedControlPoints { get; init; } = 20_000_000;
+
+    public long MaximumDecodedMorphDeltaBytes { get; init; } = 256L * 1024 * 1024;
 
     public int MaximumAnimationFramesPerStack { get; init; } = 1_000_000;
 
@@ -43,7 +50,17 @@ public sealed record FbxModelSurface(
     ImmutableArray<uint> Indices,
     ImmutableArray<int> PaletteBoneIndices,
     ImmutableArray<TransformMatrix> InverseBindMatrices,
-    bool IsSkinned);
+    bool IsSkinned)
+{
+    public ImmutableArray<FbxModelMorphTarget> MorphTargets { get; init; } = [];
+}
+
+public sealed record FbxModelMorphTarget(
+    string Name,
+    uint DescriptorHash,
+    long BlendShapeChannelObjectId,
+    long ShapeObjectId,
+    ImmutableArray<Vector3D> PositionDeltas);
 
 public sealed record FbxModelAuthoringImportResult(
     CustomModelPackage Package,
@@ -51,6 +68,37 @@ public sealed record FbxModelAuthoringImportResult(
     ImmutableArray<FbxModelSurface> Surfaces,
     ImmutableDictionary<Guid, AnimationClip> AnimationClips,
     FbxStrictExportInspection Inspection);
+
+[Flags]
+public enum CustomModelReimportContractChange
+{
+    None = 0,
+    Rig = 1 << 0,
+    Morph = 1 << 1,
+}
+
+/// <summary>
+/// Read-only validation result for a proposed FBX replacement. Callers keep
+/// project variants intact and use the explicit change flags to mark only the
+/// affected bone/helper or facial mappings stale before committing bytes.
+/// </summary>
+public sealed record CustomModelReimportPreview(
+    FbxModelAuthoringImportResult Replacement,
+    string ExistingSourceRigSignature,
+    string ReplacementSourceRigSignature,
+    string ExistingMorphSignature,
+    string ReplacementMorphSignature,
+    CustomModelReimportContractChange Changes)
+{
+    public bool CanPreserveVariantReviews =>
+        Changes == CustomModelReimportContractChange.None;
+
+    public bool BoneAndHelperMappingsBecomeStale =>
+        Changes.HasFlag(CustomModelReimportContractChange.Rig);
+
+    public bool FacialMappingsBecomeStale =>
+        Changes.HasFlag(CustomModelReimportContractChange.Morph);
+}
 
 /// <summary>
 /// Bounded binary-FBX model importer. It retains an immutable source snapshot,
@@ -158,7 +206,8 @@ public static class FbxModelAuthoringImporter
 
         ImmutableArray<CustomModelMeshPart> meshParts;
         ImmutableArray<FbxModelSurface> surfaces;
-        (meshParts, surfaces) = ReadMeshes(
+        ImmutableArray<CustomModelMorphChannel> morphChannels;
+        (meshParts, surfaces, morphChannels) = ReadMeshes(
             scene,
             objects,
             inspection,
@@ -175,6 +224,29 @@ public static class FbxModelAuthoringImporter
             diagnostics,
             cancellationToken);
 
+        if (rig is not null)
+        {
+            var runtimeDocument = new CustomModelDocument
+            {
+                ModelId = modelId,
+                Name = Path.GetFileNameWithoutExtension(originalFileName),
+                RigMode = resolvedRigMode,
+                Source = new CustomModelSourceIdentity
+                {
+                    OriginalFileName = Path.GetFileName(originalFileName),
+                    ContentSha256 = sourceSha256,
+                    FbxVersion = checked((int)binary.Version),
+                },
+                RigSignature = CustomModelContractSignatures.ComputeRig(bones),
+                MorphSignature = ComputeMorphSignature(morphChannels, surfaces),
+                Bones = bones,
+                MorphChannels = morphChannels,
+                Meshes = meshParts,
+                Materials = materials,
+            };
+            rig = runtimeDocument.CreateRigDefinition();
+        }
+
         (ImmutableArray<CustomModelAnimationClip> clipMetadata,
          ImmutableDictionary<Guid, AnimationClip> clips) = ReadAnimationClips(
             binary,
@@ -186,9 +258,8 @@ public static class FbxModelAuthoringImporter
             diagnostics,
             cancellationToken);
 
-        string rigSignature = rig is null
-            ? ComputeStaticRigSignature(sourceSha256)
-            : RigSignature.Compute(rig);
+        string rigSignature = CustomModelContractSignatures.ComputeRig(bones);
+        string morphSignature = ComputeMorphSignature(morphChannels, surfaces);
         var document = new CustomModelDocument
         {
             ModelId = modelId,
@@ -202,7 +273,9 @@ public static class FbxModelAuthoringImporter
             },
             AxisSystem = ReadAxisSystem(scene),
             RigSignature = rigSignature,
+            MorphSignature = morphSignature,
             Bones = bones,
+            MorphChannels = morphChannels,
             Meshes = meshParts,
             Materials = materials,
             AnimationClips = clipMetadata,
@@ -226,7 +299,9 @@ public static class FbxModelAuthoringImporter
     /// Re-decodes the immutable FBX snapshot and reapplies only the authored
     /// model-package state. Geometry, hierarchy, binds, and animation samples
     /// always come from the embedded FBX bytes; editable material bindings and
-    /// stack settings come from the validated schema-1 package manifest.
+    /// stack settings, authored helpers, and preview camera selection come from
+    /// the validated schema-2 package manifest. Schema-1 packages are migrated
+    /// in memory before reaching this boundary.
     /// </summary>
     public static FbxModelAuthoringImportResult ImportPackage(
         CustomModelPackage package,
@@ -281,13 +356,176 @@ public static class FbxModelAuthoringImporter
             AnimationClips = animations,
             Diagnostics = normalizedDiagnostics.ToImmutable(),
             BuildSettings = package.Document.BuildSettings,
-            LastBuildReceipt = package.Document.LastBuildReceipt,
+            LastBuildReceipt = null,
         };
+        document = ReapplyAuthoredHierarchyLayer(package.Document, document);
+        bool buildReceiptCompatible = string.Equals(
+                package.Document.RigSignature,
+                document.RigSignature,
+                StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(
+                package.Document.MorphSignature,
+                document.MorphSignature,
+                StringComparison.OrdinalIgnoreCase);
+        document = document with
+        {
+            LastBuildReceipt = buildReceiptCompatible
+                ? package.Document.LastBuildReceipt
+                : null,
+        };
+        RigDefinition? reopenedRig = document.Bones.IsEmpty
+            ? null
+            : document.CreateRigDefinition();
         document.Validate();
         return decoded with
         {
             Package = new CustomModelPackage(document, package.SourceFbx, package.TexturePayloads),
+            Rig = reopenedRig,
         };
+    }
+
+    public static CustomModelReimportPreview PreviewReimport(
+        CustomModelPackage existing,
+        ReadOnlySpan<byte> replacementFbx,
+        string replacementFileName,
+        FbxModelAuthoringImportOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(existing);
+        existing.Document.Validate();
+        ArgumentException.ThrowIfNullOrWhiteSpace(replacementFileName);
+        FbxModelAuthoringImportOptions effectiveOptions =
+            (options ?? new FbxModelAuthoringImportOptions()) with
+            {
+                RigMode = existing.Document.RigMode,
+            };
+        FbxModelAuthoringImportResult replacement = Import(
+            replacementFbx,
+            replacementFileName,
+            effectiveOptions,
+            cancellationToken);
+        string existingSourceRigSignature =
+            CustomModelContractSignatures.ComputeRig(existing.Document.Bones);
+        string replacementSourceRigSignature =
+            CustomModelContractSignatures.ComputeRig(
+                replacement.Package.Document.Bones);
+        CustomModelReimportContractChange changes =
+            CustomModelReimportContractChange.None;
+        if (!string.Equals(
+                existingSourceRigSignature,
+                replacementSourceRigSignature,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            changes |= CustomModelReimportContractChange.Rig;
+        }
+
+        if (!string.Equals(
+                existing.Document.MorphSignature,
+                replacement.Package.Document.MorphSignature,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            changes |= CustomModelReimportContractChange.Morph;
+        }
+
+        CustomModelDocument replacementDocument = ReapplyAuthoredHierarchyLayer(
+            existing.Document,
+            replacement.Package.Document with
+            {
+                ModelId = existing.Document.ModelId,
+                Name = existing.Document.Name,
+                BuildSettings = existing.Document.BuildSettings,
+                LastBuildReceipt = null,
+            });
+        replacement = replacement with
+        {
+            Package = new CustomModelPackage(
+                replacementDocument,
+                replacement.Package.SourceFbx,
+                replacement.Package.TexturePayloads),
+            Rig = replacementDocument.Bones.IsEmpty
+                ? null
+                : replacementDocument.CreateRigDefinition(),
+        };
+
+        return new CustomModelReimportPreview(
+            replacement,
+            existingSourceRigSignature,
+            replacementSourceRigSignature,
+            existing.Document.MorphSignature,
+            replacement.Package.Document.MorphSignature,
+            changes);
+    }
+
+    /// <summary>
+    /// Reparents the separate authored-helper layer by stable hierarchy name.
+    /// Imported FBX row indexes are decode details and must never be persisted
+    /// as the only reimport identity. A missing parent fails the validation
+    /// preview before any package replacement can occur.
+    /// </summary>
+    internal static CustomModelDocument ReapplyAuthoredHierarchyLayer(
+        CustomModelDocument existing,
+        CustomModelDocument replacement)
+    {
+        ImmutableArray<CustomModelBone> existingEffective =
+            existing.CreateEffectiveBones();
+        var replacementIndexes = new Dictionary<string, int>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (CustomModelBone bone in replacement.Bones)
+        {
+            replacementIndexes.Add(bone.Name, bone.Index);
+        }
+
+        var helpers = ImmutableArray.CreateBuilder<CustomModelAuthoredHelper>(
+            existing.AuthoredHelpers.Length);
+        foreach (CustomModelAuthoredHelper helper in existing.AuthoredHelpers)
+        {
+            if ((uint)helper.ParentNodeIndex >= (uint)existingEffective.Length)
+            {
+                throw new InvalidDataException(
+                    $"Authored helper '{helper.Name}' has an invalid saved parent row.");
+            }
+
+            string parentName = existingEffective[helper.ParentNodeIndex].Name;
+            if (!replacementIndexes.TryGetValue(parentName, out int replacementParentIndex))
+            {
+                throw new InvalidDataException(
+                    $"Cannot reimport the model because authored helper '{helper.Name}' " +
+                    $"was parented to '{parentName}', and that stable node name is absent " +
+                    "from the replacement hierarchy.");
+            }
+
+            CustomModelAuthoredHelper remapped = helper with
+            {
+                ParentNodeIndex = replacementParentIndex,
+            };
+            helpers.Add(remapped);
+            replacementIndexes.Add(
+                remapped.Name,
+                checked(replacement.Bones.Length + helpers.Count - 1));
+        }
+
+        string? previewNodeName = existing.Camera.ActivePreviewNodeName;
+        if (previewNodeName is not null &&
+            !replacementIndexes.ContainsKey(previewNodeName))
+        {
+            throw new InvalidDataException(
+                $"Cannot reimport the model because preview camera node " +
+                $"'{previewNodeName}' is absent from the replacement hierarchy.");
+        }
+
+        CustomModelDocument layered = replacement with
+        {
+            AuthoredHelpers = helpers.MoveToImmutable(),
+            Camera = existing.Camera,
+            LastBuildReceipt = null,
+        };
+        layered = layered with
+        {
+            RigSignature = CustomModelContractSignatures.ComputeRig(
+                layered.CreateEffectiveBones()),
+        };
+        layered.Validate();
+        return layered;
     }
 
     private static void ValidateOptions(FbxModelAuthoringImportOptions options)
@@ -296,6 +534,9 @@ public static class FbxModelAuthoringImporter
             options.MaximumMeshes <= 0 ||
             options.MaximumMaterials <= 0 ||
             options.MaximumExpandedVertices <= 0 ||
+            options.MaximumMorphChannels <= 0 ||
+            options.MaximumMorphAffectedControlPoints <= 0 ||
+            options.MaximumDecodedMorphDeltaBytes <= 0 ||
             options.MaximumAnimationFramesPerStack <= 0 ||
             options.MaximumSampledTransformKeysPerStack <= 0)
         {
@@ -749,7 +990,10 @@ public static class FbxModelAuthoringImporter
         _ => "application/octet-stream",
     };
 
-    private static (ImmutableArray<CustomModelMeshPart> MeshParts, ImmutableArray<FbxModelSurface> Surfaces)
+    private static (
+        ImmutableArray<CustomModelMeshPart> MeshParts,
+        ImmutableArray<FbxModelSurface> Surfaces,
+        ImmutableArray<CustomModelMorphChannel> MorphChannels)
         ReadMeshes(
             FbxSemanticScene scene,
             ImmutableDictionary<long, FbxNode> objects,
@@ -791,6 +1035,11 @@ public static class FbxModelAuthoringImporter
             .ToImmutableArray();
         var meshParts = ImmutableArray.CreateBuilder<CustomModelMeshPart>(geometries.Length);
         var surfaces = ImmutableArray.CreateBuilder<FbxModelSurface>();
+        var morphChannels = ImmutableArray.CreateBuilder<CustomModelMorphChannel>();
+        var morphNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var morphDescriptors = new Dictionary<uint, string>();
+        long affectedMorphControlPointCount = 0;
+        long decodedMorphDeltaBytes = 0;
         long expandedVertexTotal = 0;
         foreach ((long geometryObjectId, FbxNode geometry) in geometries)
         {
@@ -867,6 +1116,22 @@ public static class FbxModelAuthoringImporter
                 : TransformMatrix.Identity;
             TransformMatrix rawBake = rawMeshGlobal * geometric;
             TransformMatrix rawNormalTransform = rawBake.InvertedAffine();
+            ImmutableArray<FbxGeometryMorphDraft> geometryMorphs = ReadGeometryMorphs(
+                scene,
+                objects,
+                geometryObjectId,
+                geometryName,
+                controlPoints.Count,
+                rawBake,
+                metersPerUnit,
+                basis,
+                options,
+                morphChannels,
+                morphNames,
+                morphDescriptors,
+                ref affectedMorphControlPointCount,
+                ref decodedMorphDeltaBytes,
+                cancellationToken);
             var transformedControlPoints = ImmutableArray.CreateBuilder<Vector3D>(controlPoints.Count);
             foreach (Vector3D controlPoint in controlPoints)
             {
@@ -950,7 +1215,8 @@ public static class FbxModelAuthoringImporter
                             modelMaterialIds[materialGroup.Key],
                             pending,
                             palette,
-                            rigInverseBindGlobals));
+                            rigInverseBindGlobals,
+                            geometryMorphs));
                         pending.Clear();
                         palette.Clear();
                     }
@@ -974,7 +1240,8 @@ public static class FbxModelAuthoringImporter
                         modelMaterialIds[materialGroup.Key],
                         pending,
                         palette,
-                        rigInverseBindGlobals));
+                        rigInverseBindGlobals,
+                        geometryMorphs));
                 }
             }
 
@@ -1011,7 +1278,7 @@ public static class FbxModelAuthoringImporter
             });
         }
 
-        return (meshParts.ToImmutable(), surfaces.ToImmutable());
+        return (meshParts.ToImmutable(), surfaces.ToImmutable(), morphChannels.ToImmutable());
     }
 
     private static ImmutableArray<TransformMatrix> ComputeExactBindGlobals(
@@ -1037,7 +1304,8 @@ public static class FbxModelAuthoringImporter
         Guid materialId,
         IReadOnlyList<FbxExpandedTriangle> triangles,
         HashSet<int> paletteSet,
-        ImmutableArray<TransformMatrix> globalInverseBindMatrices)
+        ImmutableArray<TransformMatrix> globalInverseBindMatrices,
+        ImmutableArray<FbxGeometryMorphDraft> geometryMorphs)
     {
         ImmutableArray<int> palette = paletteSet.Order().ToImmutableArray();
         ImmutableDictionary<int, int> localPaletteIndices = palette
@@ -1045,12 +1313,14 @@ public static class FbxModelAuthoringImporter
             .ToImmutableDictionary(static pair => pair.globalIndex, static pair => pair.localIndex);
         var vertices = ImmutableArray.CreateBuilder<FbxModelVertex>(triangles.Count * 3);
         var indices = ImmutableArray.CreateBuilder<uint>(triangles.Count * 3);
+        var expandedControlPoints = ImmutableArray.CreateBuilder<int>(triangles.Count * 3);
         foreach (FbxExpandedTriangle triangle in triangles)
         {
             foreach (FbxExpandedCorner corner in triangle.Corners)
             {
                 uint index = checked((uint)vertices.Count);
                 indices.Add(index);
+                expandedControlPoints.Add(corner.ControlPointIndex);
                 vertices.Add(new FbxModelVertex(
                     corner.Position,
                     corner.Normal,
@@ -1064,6 +1334,7 @@ public static class FbxModelAuthoringImporter
         ImmutableArray<TransformMatrix> inverseBinds = palette
             .Select(index => globalInverseBindMatrices[index])
             .ToImmutableArray();
+        ImmutableArray<int> expandedControlPointArray = expandedControlPoints.ToImmutable();
         return new FbxModelSurface(
             $"{meshName}/material-{materialIndex}/draw-{partitionIndex}",
             meshName,
@@ -1072,7 +1343,20 @@ public static class FbxModelAuthoringImporter
             indices.ToImmutable(),
             palette,
             inverseBinds,
-            !palette.IsEmpty);
+            !palette.IsEmpty)
+        {
+            MorphTargets = geometryMorphs.Select(morph => new FbxModelMorphTarget(
+                morph.Name,
+                morph.DescriptorHash,
+                morph.BlendShapeChannelObjectId,
+                morph.ShapeObjectId,
+                expandedControlPointArray
+                    .Select(controlPoint => morph.DeltasByControlPoint.GetValueOrDefault(
+                        controlPoint,
+                        Vector3D.Zero))
+                    .ToImmutableArray()))
+                .ToImmutableArray(),
+        };
     }
 
     private readonly record struct FbxPolygonCorner(int ControlPointIndex, int PolygonVertexIndex);
@@ -1095,6 +1379,7 @@ public static class FbxModelAuthoringImporter
     private readonly record struct FbxBoneInfluence(int BoneIndex, double Weight);
 
     private sealed record FbxExpandedCorner(
+        int ControlPointIndex,
         Vector3D Position,
         Vector3D Normal,
         double U,
@@ -1108,6 +1393,176 @@ public static class FbxModelAuthoringImporter
         FbxExpandedCorner Third)
     {
         public ImmutableArray<FbxExpandedCorner> Corners => [First, Second, Third];
+    }
+
+    private sealed record FbxGeometryMorphDraft(
+        string Name,
+        uint DescriptorHash,
+        long BlendShapeChannelObjectId,
+        long ShapeObjectId,
+        ImmutableDictionary<int, Vector3D> DeltasByControlPoint);
+
+    private static ImmutableArray<FbxGeometryMorphDraft> ReadGeometryMorphs(
+        FbxSemanticScene scene,
+        ImmutableDictionary<long, FbxNode> objects,
+        long geometryObjectId,
+        string geometryName,
+        int controlPointCount,
+        TransformMatrix rawBake,
+        double metersPerUnit,
+        TransformMatrix basis,
+        FbxModelAuthoringImportOptions options,
+        ImmutableArray<CustomModelMorphChannel>.Builder morphChannels,
+        HashSet<string> morphNames,
+        Dictionary<uint, string> morphDescriptors,
+        ref long affectedControlPointCount,
+        ref long decodedDeltaBytes,
+        CancellationToken cancellationToken)
+    {
+        var result = ImmutableArray.CreateBuilder<FbxGeometryMorphDraft>();
+        long[] blendShapeIds = scene.GetChildren(geometryObjectId)
+            .Where(connection =>
+                string.Equals(connection.Kind, "OO", StringComparison.Ordinal) &&
+                objects.TryGetValue(connection.ChildId, out FbxNode? node) &&
+                IsObject(node, "Deformer", "BlendShape"))
+            .Select(static connection => connection.ChildId)
+            .Distinct()
+            .ToArray();
+
+        foreach (long blendShapeId in blendShapeIds)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            long[] channelIds = scene.GetChildren(blendShapeId)
+                .Where(connection =>
+                    string.Equals(connection.Kind, "OO", StringComparison.Ordinal) &&
+                    objects.TryGetValue(connection.ChildId, out FbxNode? node) &&
+                    IsObject(node, "Deformer", "BlendShapeChannel"))
+                .Select(static connection => connection.ChildId)
+                .Distinct()
+                .ToArray();
+
+            foreach (long channelId in channelIds)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (morphChannels.Count >= options.MaximumMorphChannels)
+                {
+                    throw new InvalidDataException(
+                        $"FBX contains more than {options.MaximumMorphChannels:N0} morph channels.");
+                }
+
+                FbxNode channel = objects[channelId];
+                string channelName = ReadObjectName(
+                    channel,
+                    $"BlendShapeChannel {channelId}");
+                long[] shapeIds = scene.GetChildren(channelId)
+                    .Where(connection =>
+                        string.Equals(connection.Kind, "OO", StringComparison.Ordinal) &&
+                        objects.TryGetValue(connection.ChildId, out FbxNode? node) &&
+                        IsObject(node, "Geometry", "Shape"))
+                    .Select(static connection => connection.ChildId)
+                    .Distinct()
+                    .ToArray();
+                ImmutableArray<double> fullWeights = FbxSemanticValues.ReadDoubleArray(
+                    channel.FindChild("FullWeights"),
+                    $"BlendShapeChannel '{channelName}' FullWeights");
+                if (shapeIds.Length != 1 || fullWeights.Length > 1)
+                {
+                    throw new InvalidDataException(
+                        $"BlendShapeChannel '{channelName}' uses progressive or multiple shapes; " +
+                        "bake it to one shape per channel before import.");
+                }
+
+                long shapeId = shapeIds[0];
+                FbxNode shape = objects[shapeId];
+                ImmutableArray<long> indexes = FbxSemanticValues.ReadInt64Array(
+                    shape.FindChild("Indexes"),
+                    $"Shape '{channelName}' Indexes");
+                ImmutableArray<double> vertices = FbxSemanticValues.ReadDoubleArray(
+                    shape.FindChild("Vertices"),
+                    $"Shape '{channelName}' Vertices");
+                if (indexes.IsEmpty || vertices.IsEmpty ||
+                    vertices.Length % 3 != 0 ||
+                    indexes.Length != vertices.Length / 3 ||
+                    vertices.Any(static value => !double.IsFinite(value)))
+                {
+                    throw new InvalidDataException(
+                        $"Shape '{channelName}' must contain matching finite Indexes and XYZ delta arrays.");
+                }
+
+                affectedControlPointCount = checked(affectedControlPointCount + indexes.Length);
+                decodedDeltaBytes = checked(decodedDeltaBytes + (vertices.Length * sizeof(double)));
+                if (affectedControlPointCount > options.MaximumMorphAffectedControlPoints ||
+                    decodedDeltaBytes > options.MaximumDecodedMorphDeltaBytes)
+                {
+                    throw new InvalidDataException(
+                        $"FBX morph deltas exceed the configured bounded allocation budget " +
+                        $"({options.MaximumMorphAffectedControlPoints:N0} affected control points, " +
+                        $"{options.MaximumDecodedMorphDeltaBytes:N0} decoded bytes).");
+                }
+
+                if (!morphNames.Add(channelName))
+                {
+                    throw new InvalidDataException(
+                        $"FBX BlendShapeChannel name '{channelName}' is duplicated; " +
+                        "channel names must be unique for DL1 morph descriptors.");
+                }
+
+                uint descriptor = Dl1NameHash.Compute(channelName);
+                if (morphDescriptors.TryGetValue(descriptor, out string? collidingName))
+                {
+                    throw new InvalidDataException(
+                        $"FBX BlendShapeChannels '{collidingName}' and '{channelName}' collide at " +
+                        $"DL1 descriptor 0x{descriptor:X8}; rename one channel before import.");
+                }
+
+                morphDescriptors.Add(descriptor, channelName);
+                var deltas = ImmutableDictionary.CreateBuilder<int, Vector3D>();
+                for (int deltaIndex = 0; deltaIndex < indexes.Length; deltaIndex++)
+                {
+                    long rawControlPointIndex = indexes[deltaIndex];
+                    if (rawControlPointIndex < 0 || rawControlPointIndex >= controlPointCount)
+                    {
+                        throw new InvalidDataException(
+                            $"Shape '{channelName}' index {rawControlPointIndex} is outside Geometry " +
+                            $"'{geometryName}'s {controlPointCount:N0}-control-point buffer.");
+                    }
+
+                    int controlPointIndex = checked((int)rawControlPointIndex);
+                    Vector3D rawDelta = new(
+                        vertices[(deltaIndex * 3) + 0],
+                        vertices[(deltaIndex * 3) + 1],
+                        vertices[(deltaIndex * 3) + 2]);
+                    Vector3D normalizedDelta = basis.TransformDirection(
+                        rawBake.TransformDirection(rawDelta) * metersPerUnit);
+                    if (!normalizedDelta.IsFinite ||
+                        !deltas.TryAdd(controlPointIndex, normalizedDelta))
+                    {
+                        throw new InvalidDataException(
+                            $"Shape '{channelName}' contains a non-finite delta or duplicate control-point index " +
+                            $"{controlPointIndex}.");
+                    }
+                }
+
+                var draft = new FbxGeometryMorphDraft(
+                    channelName,
+                    descriptor,
+                    channelId,
+                    shapeId,
+                    deltas.ToImmutable());
+                result.Add(draft);
+                morphChannels.Add(new CustomModelMorphChannel
+                {
+                    Index = morphChannels.Count,
+                    BlendShapeChannelObjectId = channelId,
+                    ShapeObjectId = shapeId,
+                    Name = channelName,
+                    DescriptorHash = descriptor,
+                    GeometryObjectIds = [geometryObjectId],
+                });
+            }
+        }
+
+        return result.ToImmutable();
     }
 
     private static long? ResolveMeshModel(FbxSemanticScene scene, long geometryObjectId)
@@ -1320,6 +1775,7 @@ public static class FbxModelAuthoringImporter
         }
 
         return new FbxExpandedCorner(
+            corner.ControlPointIndex,
             position,
             normal,
             u,
@@ -1720,6 +2176,8 @@ public static class FbxModelAuthoringImporter
             }
 
             AnimationClip? decoded = null;
+            bool hasSkeletalTracks = activity.SkeletalBindingCount > 0;
+            bool hasMorphTracks = false;
             if (included && options.DecodeAnimationClips)
             {
                 try
@@ -1745,6 +2203,53 @@ public static class FbxModelAuthoringImporter
                     }
 
                     decoded = imported.Clip;
+                    if (!rig.MorphChannels.IsEmpty)
+                    {
+                        FbxFacialAnimationImportResult facial =
+                            FbxFacialAnimationAdapter.Import(
+                                binary,
+                                new FbxFacialAnimationImportOptions
+                                {
+                                    AnimationStackName = stack.Name,
+                                    SamplingFrameRate = timebase.FrameRate,
+                                    DefaultSourceValueUnit =
+                                        FbxFacialSourceValueUnit.Percent,
+                                    MaximumChannels = options.MaximumMorphChannels,
+                                    MaximumRawCurveKeys =
+                                        options.MaximumSampledTransformKeysPerStack,
+                                    MaximumSampleFrames =
+                                        options.MaximumAnimationFramesPerStack,
+                                    MaximumSampledScalarKeys =
+                                        options.MaximumSampledTransformKeysPerStack,
+                                },
+                                cancellationToken);
+                        HashSet<string> rigMorphNames = rig.MorphChannels
+                            .Select(static morph => morph.Name)
+                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        HashSet<string> boundMorphNames = facial.Channels
+                            .Where(static channel => channel.Binding is not null)
+                            .Select(static channel => channel.Name)
+                            .Where(rigMorphNames.Contains)
+                            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                        ImmutableArray<ScalarTrack> selectedFacialTracks =
+                            facial.Clip.ScalarTracks
+                                .Where(track => boundMorphNames.Contains(
+                                    track.ChannelName))
+                                .ToImmutableArray();
+                        hasMorphTracks = !selectedFacialTracks.IsEmpty;
+                        if (hasMorphTracks)
+                        {
+                            var facialClip = new AnimationClip(
+                                facial.Clip.Name,
+                                facial.Clip.FrameRate,
+                                facial.Clip.FrameCount,
+                                scalarTracks: selectedFacialTracks);
+                            decoded = AnimationClipSynchronization.Synchronize(
+                                decoded,
+                                facialClip);
+                        }
+                    }
+
                     frameCount = decoded.FrameCount;
                     clips.Add(clipId, decoded);
                 }
@@ -1775,6 +2280,9 @@ public static class FbxModelAuthoringImporter
                 RootMotionMode = Dl1RootMotionMode.Recorded,
                 RootBoneName = rig?.Bones.FirstOrDefault(static bone => bone.ParentIndex < 0)?.Name,
                 SourceFingerprint = clipFingerprint,
+                HasSkeletalTracks = hasSkeletalTracks,
+                HasMorphTracks = hasMorphTracks,
+                FacialSourceValueUnit = "percent",
             });
         }
 
@@ -1885,9 +2393,43 @@ public static class FbxModelAuthoringImporter
         return new Guid(bytes);
     }
 
-    private static string ComputeStaticRigSignature(string sourceSha256) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
-            $"dlra-static-model-v1\0{sourceSha256}"))).ToLowerInvariant();
+    private static string ComputeMorphSignature(
+        ImmutableArray<CustomModelMorphChannel> channels,
+        ImmutableArray<FbxModelSurface> surfaces)
+    {
+        if (channels.IsEmpty)
+        {
+            return CustomModelDocument.EmptyMorphSignature;
+        }
+
+        var canonical = new StringBuilder("dlra-custom-morph-v1\0");
+        foreach (CustomModelMorphChannel channel in channels)
+        {
+            canonical.Append(channel.Index).Append('\0')
+                .Append(channel.Name).Append('\0')
+                .Append(channel.DescriptorHash.ToString("X8", CultureInfo.InvariantCulture)).Append('\0');
+        }
+
+        foreach (FbxModelSurface surface in surfaces)
+        {
+            canonical.Append(surface.Id).Append('\0');
+            foreach (FbxModelMorphTarget target in surface.MorphTargets)
+            {
+                canonical.Append(target.DescriptorHash.ToString("X8", CultureInfo.InvariantCulture)).Append('\0');
+                foreach (Vector3D delta in target.PositionDeltas)
+                {
+                    canonical.Append(delta.X.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                        .Append(delta.Y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                        .Append(delta.Z.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+                }
+
+                canonical.Append('\0');
+            }
+        }
+
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())))
+            .ToLowerInvariant();
+    }
 
     private static bool IsObject(FbxNode node, string name, string? subtype = null)
     {

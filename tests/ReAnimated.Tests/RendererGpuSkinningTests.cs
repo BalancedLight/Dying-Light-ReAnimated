@@ -6,6 +6,27 @@ namespace ReAnimated.Tests;
 public sealed class RendererGpuSkinningTests
 {
     [Fact]
+    public void VertexShaderMorphsBeforeSkinningLikeTheCpuReference()
+    {
+        string shader = GpuSkinnedMeshRenderPass.ShaderSource;
+        int morphStage = shader.IndexOf(
+            "morphedPosition += delta.Position * weight;",
+            StringComparison.Ordinal);
+        int localStage = shader.IndexOf(
+            "float4 localPosition = float4(morphedPosition, 1.0f);",
+            StringComparison.Ordinal);
+        int skinStage = shader.IndexOf(
+            "mul(localPosition, SkinMatrices[indexes.x])",
+            StringComparison.Ordinal);
+
+        Assert.True(morphStage >= 0, "The GPU morph stage is missing.");
+        Assert.True(localStage > morphStage,
+            "The GPU local position must consume the morphed position.");
+        Assert.True(skinStage > localStage,
+            "The GPU skin palette must run after model-local morphing.");
+    }
+
+    [Fact]
     public void PaletteComposesInverseBindPoseAndMeshTransforms()
     {
         MeshRenderData mesh = CreateTriangle(

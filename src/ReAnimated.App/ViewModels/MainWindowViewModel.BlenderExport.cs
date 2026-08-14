@@ -1,7 +1,10 @@
 using System.IO;
 using CommunityToolkit.Mvvm.Input;
 using ReAnimated.App.Infrastructure;
+using ReAnimated.Core.Domain;
+using ReAnimated.Core.Project;
 using ReAnimated.DL1.Assets.Catalog;
+using ReAnimated.Evaluation;
 
 namespace ReAnimated.App.ViewModels;
 
@@ -16,7 +19,7 @@ public sealed partial class MainWindowViewModel
     private RelayCommand? _configureBlenderCommand;
     private JobViewModel? _blenderExportJob;
     private string _blenderExportStatus =
-        "Select a decoded skinned retail mesh to create a Blender handoff.";
+        "Load an export-ready animation variant and target model to create a self-contained FBX.";
 
     public AsyncRelayCommand ExportSelectedMeshToBlenderFbxCommand =>
         _exportSelectedMeshToBlenderFbxCommand ??=
@@ -55,13 +58,11 @@ public sealed partial class MainWindowViewModel
     private bool CanExportSelectedMeshToBlenderFbx() =>
         !IsBusy &&
         _blenderExportJob is null &&
-        _blenderExportPayload is
-        {
-            Source.Rig: not null,
-            Skeleton: not null,
-        } payload &&
-        payload.Meshes.Count > 0 &&
-        _blenderExportRetailAsset is not null;
+        _targetRig is not null &&
+        _targetBaseMeshes.Length > 0 &&
+        _targetProjectAsset is not null &&
+        GetActiveAnimation() is not null &&
+        CanExportAnimation();
 
     private bool CanExportSelectedBrowserMeshToFbx() =>
         !IsBusy &&
@@ -80,9 +81,7 @@ public sealed partial class MainWindowViewModel
         ArgumentNullException.ThrowIfNull(retailAsset);
         _blenderExportPayload = payload;
         _blenderExportRetailAsset = retailAsset;
-        BlenderExportStatus = payload.Source.Rig is null
-            ? "The selected retail mesh is static and has no animation rig."
-            : $"Ready: {retailAsset.DisplayName} / {payload.Source.Rig.BoneCount:N0} bones / {payload.Meshes.Count:N0} mesh parts";
+        RefreshActiveVariantBlenderStatus();
         ExportSelectedMeshToBlenderFbxCommand
             .NotifyCanExecuteChanged();
         ExportSelectedBrowserMeshToFbxCommand
@@ -95,14 +94,35 @@ public sealed partial class MainWindowViewModel
         _blenderExportRetailAsset = null;
         if (_blenderExportJob is null)
         {
-            BlenderExportStatus =
-                "Select a decoded skinned retail mesh to create a Blender handoff.";
+            RefreshActiveVariantBlenderStatus();
         }
 
         ExportSelectedMeshToBlenderFbxCommand
             .NotifyCanExecuteChanged();
         ExportSelectedBrowserMeshToFbxCommand
             .NotifyCanExecuteChanged();
+    }
+
+    private void RefreshActiveVariantBlenderStatus()
+    {
+        if (_blenderExportJob is not null)
+        {
+            return;
+        }
+
+        ProjectAnimation? animation = GetActiveAnimation();
+        if (animation is not null &&
+            _targetRig is { } rig &&
+            _targetBaseMeshes.Length > 0 &&
+            _targetProjectAsset is not null)
+        {
+            BlenderExportStatus =
+                $"Active variant: {animation.Name} / {ActiveTargetModelLabel} / {rig.BoneCount:N0} rig nodes / {_targetBaseMeshes.Length:N0} mesh parts. Export remains fail-closed until body and facial reviews are current.";
+            return;
+        }
+
+        BlenderExportStatus =
+            "Load an export-ready animation variant and target model to create a self-contained FBX.";
     }
 
     private void ConfigureBlender()
@@ -341,30 +361,39 @@ public sealed partial class MainWindowViewModel
 
     private async Task ExportSelectedMeshToBlenderFbxAsync()
     {
-        if (_blenderExportPayload is not
-            {
-                Source.Rig: not null,
-                Skeleton: not null,
-            } payload ||
-            _blenderExportRetailAsset is not { } retailAsset)
+        if (_targetRig is not { } targetRig ||
+            _targetBaseMeshes.Length == 0 ||
+            _targetProjectAsset is not { } targetAsset ||
+            GetActiveAnimation() is not { } animation ||
+            !CanExportAnimation())
         {
             return;
         }
 
-        IReadOnlyList<string> anm2Paths =
-            _fileDialogs.ShowOpenAnm2ForBlenderDialog(
-                _pendingAnm2SourcePath ??
-                ProjectPath);
-        if (anm2Paths.Count == 0)
+        if (animation.TargetAssetId != targetAsset.Id ||
+            !string.Equals(
+                animation.TargetRigSignature,
+                RigSignature.Compute(targetRig),
+                StringComparison.OrdinalIgnoreCase))
         {
+            AddDiagnostic(
+                "Error",
+                "Blender FBX",
+                "Active variant target identity changed",
+                "Reload the exact project target before exporting FBX.");
             return;
         }
 
         string? blenderPath = ResolveBlenderForFbxExport();
-
+        ProjectModelEntry? model = _project.Models.FirstOrDefault(
+            candidate => candidate.AssetId == targetAsset.Id);
+        string targetName = model?.Name ??
+            targetAsset.RetailIdentity?.ResourceName ??
+            targetAsset.ResourceId ??
+            Path.GetFileNameWithoutExtension(targetAsset.RelativePath);
         string? outputPath =
             _fileDialogs.ShowSaveBlenderFbxDialog(
-                retailAsset.DisplayName,
+                $"{targetName}_{animation.Name}",
                 ProjectPath);
         if (outputPath is null ||
             blenderPath is null)
@@ -372,19 +401,22 @@ public sealed partial class MainWindowViewModel
             return;
         }
 
-        if (!_fileDialogs.ConfirmRetailFbxExport(
-                retailAsset.DisplayName,
-                anm2Paths.Count))
+        bool retailTarget = targetAsset.Kind ==
+            ProjectAssetKind.RetailGameResource;
+        if (!_fileDialogs.ConfirmActiveVariantFbxExport(
+                targetName,
+                animation.Name,
+                retailTarget))
         {
             BlenderExportStatus =
-                "Local retail-asset export canceled.";
+                "Active-variant FBX export canceled.";
             return;
         }
 
         JobViewModel job = AddJob(
-            $"Blender handoff: {retailAsset.DisplayName}",
+            $"Blender handoff: {animation.Name}",
             "Preparing",
-            "Reading selected ANM2 clips");
+            "Evaluating the active project variant");
         _blenderExportJob = job;
         ExportSelectedMeshToBlenderFbxCommand
             .NotifyCanExecuteChanged();
@@ -392,22 +424,49 @@ public sealed partial class MainWindowViewModel
             .NotifyCanExecuteChanged();
         ConfigureBlenderCommand.NotifyCanExecuteChanged();
         BlenderExportStatus =
-            $"Exporting {anm2Paths.Count:N0} Action(s) with decoded base color...";
+            $"Evaluating {animation.FrameCount:N0} authored frame(s) for the exact target rig...";
         try
         {
+            string sourceFingerprint = ResolveActiveBlenderSourceFingerprint(
+                animation);
+            EvaluationRequest template = CreateEvaluationRequest(
+                animation,
+                0,
+                PreviewProfile.RawAuthoring,
+                PlaybackMode.Clamp,
+                EvaluationPurpose.Export);
+            BlenderFbxEvaluatedClip evaluatedClip = await Task.Run(
+                () => BlenderFbxActiveVariantEvaluator.Evaluate(
+                    animation,
+                    ResolveActiveBlenderSourceName(animation),
+                    sourceFingerprint,
+                    template,
+                    job.CancellationToken),
+                job.CancellationToken);
+            string targetFingerprint = targetAsset.ContentSha256 ??
+                throw new InvalidOperationException(
+                    "The active target model has no content fingerprint.");
             var request = new BlenderFbxExportRequest(
                 blenderPath,
                 outputPath,
                 new BlenderFbxAssetIdentity(
-                    retailAsset.Id.StableKey,
-                    retailAsset.Source.ProviderId,
-                    retailAsset.DisplayName,
-                    payload.ResourceSha256
-                        ?? throw new InvalidDataException(
-                            "The decoded retail mesh has no content fingerprint.")),
-                payload.Source.Rig,
-                payload.Meshes,
-                anm2Paths);
+                    targetAsset.RetailIdentity?.InstallFingerprint ??
+                        targetAsset.ResourceId ??
+                        targetAsset.Id.ToString("N"),
+                    targetAsset.RetailIdentity?.ProviderId ??
+                        "project-custom-model",
+                    targetName,
+                    targetFingerprint),
+                targetRig,
+                _targetBaseMeshes,
+                [])
+            {
+                EmbedTextures = true,
+                EvaluatedClips = [evaluatedClip],
+                Provenance = retailTarget
+                    ? BlenderFbxExportProvenance.RetailLocal
+                    : BlenderFbxExportProvenance.CustomUserOwned,
+            };
             var progress =
                 new Progress<BlenderFbxExportProgress>(value =>
                 {
@@ -429,8 +488,10 @@ public sealed partial class MainWindowViewModel
             AddDiagnostic(
                 "Info",
                 "Blender FBX",
-                $"Created a local retail-mesh FBX with {result.AnimationStacks.Count:N0} Action(s)",
-                $"{result.OutputFbxPath}. Base-color DDS textures and {result.HandoffManifestPath} were written beside it. Do not redistribute this retail-data bundle.");
+                $"Created a self-contained target-model FBX with the evaluated active variant '{animation.Name}'",
+                retailTarget
+                    ? $"{result.OutputFbxPath}. The companion manifest is {result.HandoffManifestPath}. This contains retail model bytes; do not redistribute it."
+                    : $"{result.OutputFbxPath}. The companion manifest is {result.HandoffManifestPath}.");
             foreach (string warning in result.Warnings)
             {
                 AddDiagnostic(
@@ -454,7 +515,7 @@ public sealed partial class MainWindowViewModel
             AddDiagnostic(
                 "Error",
                 "Blender FBX",
-                "Could not create the local retail-mesh FBX handoff",
+                "Could not create the active-variant self-contained FBX",
                 exception.Message);
         }
         finally
@@ -470,5 +531,36 @@ public sealed partial class MainWindowViewModel
                 .NotifyCanExecuteChanged();
             ConfigureBlenderCommand.NotifyCanExecuteChanged();
         }
+    }
+
+    private string ResolveActiveBlenderSourceFingerprint(
+        ProjectAnimation animation)
+    {
+        ProjectAnimationVariant? variant = _project.AnimationVariants
+            .FirstOrDefault(candidate => candidate.Id == animation.Id);
+        ProjectAnimationSource? source = variant is null
+            ? null
+            : _project.AnimationSources.FirstOrDefault(candidate =>
+                candidate.Id == variant.SourceId);
+        string? fingerprint = source?.EmbeddedCustomModelStack
+            ?.StackFingerprint ??
+            FindProjectAsset(animation.SourceAssetId)?.ContentSha256;
+        return fingerprint ?? throw new InvalidOperationException(
+            "The active animation source has no immutable content fingerprint.");
+    }
+
+    private string ResolveActiveBlenderSourceName(
+        ProjectAnimation animation)
+    {
+        ProjectAnimationVariant? variant = _project.AnimationVariants
+            .FirstOrDefault(candidate => candidate.Id == animation.Id);
+        ProjectAnimationSource? source = variant is null
+            ? null
+            : _project.AnimationSources.FirstOrDefault(candidate =>
+                candidate.Id == variant.SourceId);
+        return source?.Name ??
+            Path.GetFileName(
+                FindProjectAsset(animation.SourceAssetId)?.RelativePath) ??
+            animation.Name;
     }
 }

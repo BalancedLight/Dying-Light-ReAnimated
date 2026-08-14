@@ -65,23 +65,28 @@ public sealed class Dl1AuthoredRigContract
     public Dl1AuthoredRigContract(
         string sourceModelName,
         string sourceFbxSha256,
-        IEnumerable<Dl1AuthoredRigNode> nodes)
+        IEnumerable<Dl1AuthoredRigNode> nodes,
+        IEnumerable<MorphChannelDefinition>? morphChannels = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceModelName);
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceFbxSha256);
         ArgumentNullException.ThrowIfNull(nodes);
 
         ImmutableArray<Dl1AuthoredRigNode> nodeArray = nodes.ToImmutableArray();
-        Validate(nodeArray);
+        ImmutableArray<MorphChannelDefinition> morphArray =
+            morphChannels?.ToImmutableArray() ?? [];
+        Validate(nodeArray, morphArray);
 
         SourceModelName = sourceModelName;
         SourceFbxSha256 = sourceFbxSha256;
         Nodes = nodeArray;
+        MorphChannels = morphArray;
         SourceToPhysicalIndices = BuildSourceToPhysical(nodeArray);
         BindFingerprint = HashBind(nodeArray);
         SkeletonFingerprint = HashSkeleton(nodeArray);
         DescriptorFingerprint = HashDescriptors(nodeArray);
-        ContractId = $"authored:{HashComposite(BindFingerprint, SkeletonFingerprint, DescriptorFingerprint)[..24]}";
+        MorphFingerprint = HashMorphs(morphArray);
+        ContractId = $"authored:{HashComposite(BindFingerprint, SkeletonFingerprint, DescriptorFingerprint, MorphFingerprint)[..24]}";
     }
 
     public string SourceModelName { get; }
@@ -90,6 +95,8 @@ public sealed class Dl1AuthoredRigContract
 
     public ImmutableArray<Dl1AuthoredRigNode> Nodes { get; }
 
+    public ImmutableArray<MorphChannelDefinition> MorphChannels { get; }
+
     public ImmutableArray<int> SourceToPhysicalIndices { get; }
 
     public string BindFingerprint { get; }
@@ -97,6 +104,8 @@ public sealed class Dl1AuthoredRigContract
     public string SkeletonFingerprint { get; }
 
     public string DescriptorFingerprint { get; }
+
+    public string MorphFingerprint { get; }
 
     public string ContractId { get; }
 
@@ -119,13 +128,16 @@ public sealed class Dl1AuthoredRigContract
             ContractId,
             SourceModelName,
             bones.MoveToImmutable(),
+            MorphChannels,
             sourceAssetFingerprint: new SourceAssetFingerprint(
                 "source/model.fbx",
                 SourceFbxSha256,
                 ContractId));
     }
 
-    private static void Validate(ImmutableArray<Dl1AuthoredRigNode> nodes)
+    private static void Validate(
+        ImmutableArray<Dl1AuthoredRigNode> nodes,
+        ImmutableArray<MorphChannelDefinition> morphChannels)
     {
         if (nodes.IsEmpty)
         {
@@ -188,6 +200,34 @@ public sealed class Dl1AuthoredRigContract
             }
 
             descriptors.Add(node.DescriptorHash, node.Name);
+        }
+
+        var morphNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int index = 0; index < morphChannels.Length; index++)
+        {
+            MorphChannelDefinition morph = morphChannels[index];
+            if (morph.Index != index || !morphNames.Add(morph.Name))
+            {
+                throw new ArgumentException(
+                    "Authored-rig morph channels must have contiguous indexes and unique names.",
+                    nameof(morphChannels));
+            }
+
+            if (morph.DescriptorHash is not { } descriptor)
+            {
+                throw new ArgumentException(
+                    $"Authored-rig morph '{morph.Name}' has no DL1 descriptor.",
+                    nameof(morphChannels));
+            }
+
+            if (descriptors.TryGetValue(descriptor, out string? existing))
+            {
+                throw new ArgumentException(
+                    $"Authored-rig entities '{existing}' and '{morph.Name}' collide at descriptor 0x{descriptor:X8}.",
+                    nameof(morphChannels));
+            }
+
+            descriptors.Add(descriptor, morph.Name);
         }
 
         if (sourceIndexes.Count != nodes.Length || sourceIndexes.Max() != nodes.Length - 1)
@@ -261,6 +301,18 @@ public sealed class Dl1AuthoredRigContract
             {
                 writer.Write(node.PhysicalIndex);
                 writer.Write(node.DescriptorHash);
+            }
+        });
+
+    private static string HashMorphs(ImmutableArray<MorphChannelDefinition> morphChannels) =>
+        Hash(writer =>
+        {
+            foreach (MorphChannelDefinition morph in morphChannels)
+            {
+                writer.Write(morph.Index);
+                writer.Write(morph.Name.Normalize(NormalizationForm.FormKC).ToUpperInvariant());
+                writer.Write(morph.DescriptorHash ?? 0u);
+                writer.Write(morph.SemanticRole ?? string.Empty);
             }
         });
 

@@ -10,13 +10,18 @@
     "name",
     "game",
     "assets",
+    "models",
+    "animationSources",
+    "animationVariants",
     "animations",
+    "workflow",
     "dl1Settings",
+    "previewMode",
     "previewProfile"
   ],
   "properties": {
     "schemaVersion": {
-      "const": 1
+      "const": 2
     },
     "format": {
       "const": "dl-reanimated-csharp-project"
@@ -38,6 +43,24 @@
         "$ref": "#/$defs/asset"
       }
     },
+    "models": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/modelEntry"
+      }
+    },
+    "animationSources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/animationSource"
+      }
+    },
+    "animationVariants": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/animationVariant"
+      }
+    },
     "animations": {
       "type": "array",
       "items": {
@@ -50,6 +73,9 @@
     },
     "modelsWorkspace": {
       "$ref": "#/$defs/modelsWorkspace"
+    },
+    "workflow": {
+      "$ref": "#/$defs/workflow"
     },
     "dl1Settings": {
       "type": "object",
@@ -101,6 +127,357 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "workflow": {
+      "type": "object",
+      "required": [
+        "activeTab"
+      ],
+      "properties": {
+        "activeTab": {
+          "enum": [
+            "models",
+            "animations",
+            "playback",
+            "retargetEdit",
+            "export"
+          ]
+        },
+        "selectedModelId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "selectedAnimationSourceId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "selectedAnimationVariantId": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "additionalProperties": false
+    },
+    "modelEntry": {
+      "type": "object",
+      "required": [
+        "id",
+        "assetId",
+        "name",
+        "isStatic"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "assetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rigSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "morphSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "isStatic": {
+          "type": "boolean"
+        },
+        "exportableEyeCameraHelperCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "previewCameraNodeName": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "isStatic": {
+                "const": false
+              }
+            },
+            "required": [
+              "isStatic"
+            ]
+          },
+          "then": {
+            "required": [
+              "rigSignature"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "embeddedAnimationStack": {
+      "type": "object",
+      "required": [
+        "clipId",
+        "fbxObjectId",
+        "stackFingerprint",
+        "sourceRigSignature",
+        "roles",
+        "facialSourceValueUnit"
+      ],
+      "properties": {
+        "clipId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "fbxObjectId": {
+          "type": "integer"
+        },
+        "stackFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "sourceRigSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "roles": {
+          "enum": [
+            "body",
+            "facial",
+            "auxiliary",
+            "body, facial",
+            "body, auxiliary",
+            "facial, auxiliary",
+            "body, facial, auxiliary"
+          ]
+        },
+        "facialSourceValueUnit": {
+          "enum": [
+            "normalized",
+            "percent"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "animationSource": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "sourceAssetId",
+        "requiresSourceRebind",
+        "frameRate",
+        "frameCount",
+        "sourceRigSignature"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceBinding": {
+          "$ref": "#/$defs/animationSourceBinding"
+        },
+        "embeddedCustomModelStack": {
+          "$ref": "#/$defs/embeddedAnimationStack"
+        },
+        "requiresSourceRebind": {
+          "type": "boolean"
+        },
+        "legacySourceRigSignature": {
+          "type": "string",
+          "maxLength": 512
+        },
+        "mimicAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "facialAnimationSourceBinding": {
+          "$ref": "#/$defs/animationSourceBinding"
+        },
+        "facialSourceAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "facialSourceValueUnit": {
+          "enum": [
+            "normalized",
+            "percent"
+          ]
+        },
+        "facialTiming": {
+          "$ref": "#/$defs/facialClipTiming"
+        },
+        "frameRate": {
+          "$ref": "#/$defs/frameRate"
+        },
+        "frameCount": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "legacyVariantGroupId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "migrationNote": {
+          "type": "string",
+          "maxLength": 1024
+        },
+        "sourceRigSignature": {
+          "type": "string",
+          "readOnly": true
+        }
+      },
+      "oneOf": [
+        {
+          "required": [
+            "sourceBinding"
+          ]
+        },
+        {
+          "required": [
+            "embeddedCustomModelStack"
+          ]
+        },
+        {
+          "required": [
+            "requiresSourceRebind"
+          ],
+          "properties": {
+            "requiresSourceRebind": {
+              "const": true
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "animationVariant": {
+      "type": "object",
+      "required": [
+        "id",
+        "sourceId",
+        "name",
+        "targetModelId",
+        "targetRigId",
+        "rootMotionMode",
+        "previewMotionAccumulationEnabled",
+        "boneMappings",
+        "targetBindReviews",
+        "editLayers",
+        "morphBindings",
+        "morphEditLayers",
+        "ikLayers",
+        "attachments",
+        "includeInPackage"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetModelId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "targetRigId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetRigSignature": {
+          "type": "string"
+        },
+        "mappingFingerprint": {
+          "type": "string"
+        },
+        "mimicProfileId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mimicMappingFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "rootMotionMode": {
+          "enum": [
+            "recorded",
+            "inPlace",
+            "bip01",
+            "motionAccumulator"
+          ]
+        },
+        "rootBoneName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "previewMotionAccumulationEnabled": {
+          "type": "boolean"
+        },
+        "boneMappings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/boneMapping"
+          }
+        },
+        "targetBindReviews": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/targetBindReview"
+          }
+        },
+        "editLayers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/editLayer"
+          }
+        },
+        "morphBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/morphBinding"
+          }
+        },
+        "morphEditLayers": {
+          "type": "array"
+        },
+        "ikLayers": {
+          "type": "array"
+        },
+        "attachments": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "$ref": "#/$defs/attachment"
+          }
+        },
+        "includeInPackage": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "modelsWorkspace": {
       "type": "object",
       "required": [
@@ -307,6 +684,10 @@
           "type": "string",
           "format": "uuid"
         },
+        "variantGroupId": {
+          "type": "string",
+          "format": "uuid"
+        },
         "name": {
           "type": "string",
           "minLength": 1
@@ -419,6 +800,10 @@
               "enabled",
               "confidence",
               "method",
+              "evidence",
+              "reviewOrigin",
+              "scorerVersion",
+              "evidenceFingerprint",
               "isReviewed",
               "isLocked"
             ],
@@ -459,6 +844,27 @@
               "method": {
                 "type": "string",
                 "minLength": 1
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048
+              },
+              "reviewOrigin": {
+                "enum": [
+                  "none",
+                  "explicit",
+                  "assisted"
+                ]
+              },
+              "scorerVersion": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "evidenceFingerprint": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{64}$"
               },
               "isReviewed": {
                 "type": "boolean"
@@ -593,7 +999,8 @@
         },
         "retailSourceModelAssetId": {
           "type": "string",
-          "format": "uuid"
+          "format": "uuid",
+          "description": "Historical property name for the exact model asset used to partition ANM2. Schema 2 permits a fingerprinted retail model or project-owned custom-model asset."
         },
         "timingProvenance": {
           "enum": [
@@ -773,12 +1180,103 @@
       },
       "additionalProperties": false
     },
+    "morphBinding": {
+      "type": "object",
+      "required": [
+        "sourceChannel",
+        "sourceValueUnit",
+        "targetMorph",
+        "weight",
+        "bias",
+        "enabled",
+        "confidence",
+        "method",
+        "evidence",
+        "reviewOrigin",
+        "scorerVersion",
+        "evidenceFingerprint",
+        "isReviewed",
+        "isLocked"
+      ],
+      "properties": {
+        "sourceChannel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "sourceValueUnit": {
+          "enum": [
+            "normalized",
+            "percent"
+          ]
+        },
+        "targetMorph": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetDescriptorHash": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "weight": {
+          "type": "number"
+        },
+        "bias": {
+          "type": "number"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "reviewOrigin": {
+          "enum": [
+            "none",
+            "explicit",
+            "assisted"
+          ]
+        },
+        "scorerVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "evidenceFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "isReviewed": {
+          "type": "boolean"
+        },
+        "isLocked": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "boneMapping": {
       "type": "object",
       "required": [
         "sourceBoneName",
         "targetBoneName",
         "method",
+        "confidence",
+        "evidence",
+        "reviewOrigin",
+        "scorerVersion",
+        "evidenceFingerprint",
         "isLocked",
         "isReviewed"
       ],
@@ -794,6 +1292,32 @@
         "method": {
           "type": "string",
           "minLength": 1
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048
+        },
+        "reviewOrigin": {
+          "enum": [
+            "none",
+            "explicit",
+            "assisted"
+          ]
+        },
+        "scorerVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "evidenceFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
         },
         "isLocked": {
           "type": "boolean"

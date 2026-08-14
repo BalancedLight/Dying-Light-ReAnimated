@@ -25,7 +25,7 @@ On a configured installation the test uses production code to:
   controls only when the candidate is not skinned, morph-capable, and backed
   by a fully decoded position-delta target;
 - decode real hierarchy, geometry, skin palettes, morph inventory, rig, and
-  mapped entity/LOD SHORT4 position deltas;
+  mapped entity/LOD PC HALF4 position deltas;
 - bind the resource content SHA-256 and full retail identity into the target
   rig and retarget-map fingerprint;
 - round-trip generated body and mimic ANM2 through import on one rational

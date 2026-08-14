@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Core.Domain;
@@ -875,6 +876,176 @@ public sealed class FbxFacialAnimationAdapterTests
             "exact retail rig",
             error.Message,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TargetInventoryProfileMapsCustomMorphNamesWithoutRetailAssumptions()
+    {
+        FbxFacialAnimationImportResult imported =
+            FbxFacialAnimationAdapter.Import(
+                SingleCurveDocument(
+                    "DeformPercent",
+                    "d|DeformPercent",
+                    "genericSmile"),
+                PercentOptions());
+        uint descriptor = Dl1NameHash.Compute("genericSmile");
+        var customTarget = new RigDefinition(
+            "custom:facial-control",
+            "Custom facial control",
+            [
+                new BoneDefinition(
+                    0,
+                    "root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root),
+            ],
+            [
+                new MorphChannelDefinition(
+                    0,
+                    "genericSmile",
+                    descriptor,
+                    "genericSmile"),
+            ]);
+
+        Dl1MimicProfile profile = FbxFacialProjectReviewService
+            .CreateTargetInventoryProfile(customTarget);
+        FbxFacialProjectReview review =
+            FbxFacialProjectReviewService.Create(
+                new FbxFacialProjectReviewRequest
+                {
+                    SourcePath = "Sources/generic-face.fbx",
+                    Import = imported,
+                    BodyTiming = new AnimationTiming(
+                        new FrameRate(30, 1),
+                        2),
+                    Profile = profile,
+                    ExactTargetRig = customTarget,
+                });
+
+        ProjectMorphBinding suggestion =
+            Assert.Single(review.SuggestedBindings);
+        Assert.StartsWith(
+            FbxFacialProjectReviewService.TargetInventoryProfilePrefix,
+            review.ProfileId,
+            StringComparison.Ordinal);
+        Assert.Equal("genericSmile", suggestion.TargetMorph);
+        Assert.Equal(descriptor, suggestion.TargetDescriptorHash);
+        Assert.Equal(1.0, suggestion.Confidence);
+        Assert.False(suggestion.IsReviewed);
+        Assert.False(suggestion.IsLocked);
+    }
+
+    [Fact]
+    public void CombinedExternalStackCreatesDraftCustomTargetMorphVariantAndTypedUnit()
+    {
+        FbxFacialAnimationImportResult facial =
+            FbxFacialAnimationAdapter.Import(
+                SingleCurveDocument(
+                    "DeformPercent",
+                    "d|DeformPercent",
+                    "genericSmile"),
+                PercentOptions());
+        uint descriptor = Dl1NameHash.Compute("genericSmile");
+        var rig = new RigDefinition(
+            "custom:combined-target",
+            "Combined target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root),
+            ],
+            [
+                new MorphChannelDefinition(
+                    0,
+                    "genericSmile",
+                    descriptor,
+                    "genericSmile"),
+            ]);
+        var stack = new FbxExternalAnimationStackDescriptor
+        {
+            StackObjectId = facial.AnimationStack.ObjectId,
+            Name = facial.AnimationStack.Name,
+            LayerNames = facial.AnimationStack.LayerNames,
+            SourceStartTick = facial.AnimationStack.StartTick,
+            SourceStopTick = facial.AnimationStack.StopTick,
+            FrameCount = facial.Clip.FrameCount,
+            Roles = AnimationSourceRoles.Body |
+                AnimationSourceRoles.Facial,
+            StackFingerprint = new string('a', 64),
+        };
+        var take = new FbxExternalAnimationImportResult(
+            stack,
+            rig,
+            facial.Clip,
+            Body: null,
+            Facial: facial,
+            FacialSourceValueUnit:
+                FbxFacialSourceValueUnit.Percent);
+        var sourceAsset = new ProjectAssetReference
+        {
+            Kind = ProjectAssetKind.SourceAnimation,
+            RelativePath = "assets/combined.fbx",
+            ContentSha256 = new string('1', 64),
+        };
+        var targetAsset = new ProjectAssetReference
+        {
+            Kind = ProjectAssetKind.CustomModelSource,
+            RelativePath = "models/combined.dlrmodel",
+            ContentSha256 = new string('2', 64),
+        };
+
+        MainWindowViewModel.ExternalFbxTargetVariantBatch batch =
+            MainWindowViewModel.CreateExternalFbxTargetVariants(
+                take,
+                sourceAsset,
+                "assets/combined.fbx",
+                [
+                    new MainWindowViewModel.ExternalFbxVariantTarget(
+                        targetAsset,
+                        rig),
+                ]);
+
+        ProjectAnimation animation = Assert.Single(batch.Animations);
+        ProjectMorphBinding binding =
+            Assert.Single(animation.MorphBindings);
+        Assert.Equal(
+            ProjectMorphSourceValueUnit.Percent,
+            animation.FacialSourceValueUnit);
+        Assert.Equal("genericSmile", binding.TargetMorph);
+        Assert.False(binding.IsReviewed);
+        Assert.False(binding.IsLocked);
+        Assert.StartsWith(
+            FbxFacialProjectReviewService.TargetInventoryProfilePrefix,
+            animation.MimicProfileId,
+            StringComparison.Ordinal);
+
+        var model = new ProjectModelEntry
+        {
+            AssetId = targetAsset.Id,
+            Name = "Combined target",
+            RigSignature = RigSignature.Compute(rig),
+        };
+        DlraProject before = DlraProject.Create("Combined") with
+        {
+            Assets = [sourceAsset, targetAsset],
+            Models = [model],
+        };
+        DlraProject schema2 = MainWindowViewModel
+            .SynchronizeSchema2FromCompatibilityAnimations(
+                before,
+                before with
+                {
+                    Animations = [animation],
+                });
+        Assert.Equal(
+            ProjectMorphSourceValueUnit.Percent,
+            Assert.Single(schema2.AnimationSources)
+                .FacialSourceValueUnit);
+        schema2.Validate();
     }
 
     private static RigDefinition FacialTargetRig(

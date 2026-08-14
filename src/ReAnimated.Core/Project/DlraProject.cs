@@ -40,6 +40,620 @@ public enum ProjectCustomModelPreviewMode
 }
 
 /// <summary>
+/// Stable schema-2 workflow destinations. Face authoring is part of
+/// Retarget/Edit and first-person preview is a Playback presentation mode, so
+/// neither is persisted as an independent top-level workspace.
+/// </summary>
+public enum ProjectWorkflowTab
+{
+    Models,
+    Animations,
+    Playback,
+    RetargetEdit,
+    Export,
+}
+
+public enum ProjectMappingReviewOrigin
+{
+    None,
+    Explicit,
+    Assisted,
+}
+
+public sealed record ProjectModelEntry
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public Guid AssetId { get; init; }
+
+    public string Name { get; init; } = string.Empty;
+
+    public string? RigSignature { get; init; }
+
+    public string? MorphSignature { get; init; }
+
+    public bool IsStatic { get; init; }
+
+    /// <summary>
+    /// Number of exportable, unweighted camera helpers named exactly
+    /// EyeCamera in the model contract. Preview camera selection is editor
+    /// state and deliberately does not affect this export-readiness fact.
+    /// </summary>
+    public int ExportableEyeCameraHelperCount { get; init; }
+
+    /// <summary>
+    /// An editor camera may use any rig node. Game-ready FPP export still
+    /// requires a separately authored helper named exactly EyeCamera.
+    /// </summary>
+    public string? PreviewCameraNodeName { get; init; }
+
+    internal void Validate(
+        IReadOnlyDictionary<Guid, ProjectAssetKind> assetKinds,
+        string parameterName)
+    {
+        if (Id == Guid.Empty || AssetId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "Project model and model-asset identifiers cannot be empty.",
+                parameterName);
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(Name, parameterName);
+        if (!assetKinds.TryGetValue(AssetId, out ProjectAssetKind kind) ||
+            kind is not (
+                ProjectAssetKind.RetailGameResource or
+                ProjectAssetKind.CustomModelSource))
+        {
+            throw new ArgumentException(
+                $"Project model '{Name}' must reference a retail or custom-model asset.",
+                parameterName);
+        }
+
+        if (!IsStatic && string.IsNullOrWhiteSpace(RigSignature))
+        {
+            throw new ArgumentException(
+                $"Rigged project model '{Name}' requires a persisted rig signature.",
+                parameterName);
+        }
+
+        ValidateOptionalSha256(RigSignature, "rig", parameterName);
+        ValidateOptionalSha256(MorphSignature, "morph", parameterName);
+        ArgumentOutOfRangeException.ThrowIfNegative(
+            ExportableEyeCameraHelperCount,
+            parameterName);
+        if (PreviewCameraNodeName is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                PreviewCameraNodeName,
+                parameterName);
+        }
+    }
+
+    private static void ValidateOptionalSha256(
+        string? value,
+        string description,
+        string parameterName)
+    {
+        if (value is not null)
+        {
+            try
+            {
+                ProjectAssetReference.ValidateSha256(value, parameterName);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new ArgumentException(
+                    $"A project model {description} signature must be a SHA-256 value.",
+                    parameterName,
+                    exception);
+            }
+        }
+    }
+}
+
+/// <summary>
+/// Stable identity of one animation stack embedded in a project-owned custom
+/// model package. The model package is the source asset; no duplicate
+/// SourceAnimation asset is created for the stack.
+/// </summary>
+public sealed record ProjectEmbeddedAnimationStackIdentity
+{
+    public Guid ClipId { get; init; }
+
+    public long FbxObjectId { get; init; }
+
+    public string StackFingerprint { get; init; } = string.Empty;
+
+    public string SourceRigSignature { get; init; } = string.Empty;
+
+    public AnimationSourceRoles Roles { get; init; } =
+        AnimationSourceRoles.Body;
+
+    public ProjectMorphSourceValueUnit FacialSourceValueUnit { get; init; } =
+        ProjectMorphSourceValueUnit.Percent;
+
+    internal void Validate(string parameterName)
+    {
+        if (ClipId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "An embedded animation stack requires a stable clip identifier.",
+                parameterName);
+        }
+
+        ProjectAssetReference.ValidateSha256(
+            StackFingerprint,
+            parameterName);
+        ProjectAssetReference.ValidateSha256(
+            SourceRigSignature,
+            parameterName);
+        const AnimationSourceRoles knownRoles =
+            AnimationSourceRoles.Body |
+            AnimationSourceRoles.Facial |
+            AnimationSourceRoles.Auxiliary;
+        if (Roles == AnimationSourceRoles.None ||
+            (Roles & ~knownRoles) != 0 ||
+            !Enum.IsDefined(FacialSourceValueUnit))
+        {
+            throw new ArgumentException(
+                "An embedded animation stack contains unsupported roles or facial units.",
+                parameterName);
+        }
+    }
+}
+
+public sealed record ProjectAnimationSource
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public string Name { get; init; } = string.Empty;
+
+    public Guid SourceAssetId { get; init; }
+
+    public ProjectAnimationSourceBinding? SourceBinding { get; init; }
+
+    public ProjectEmbeddedAnimationStackIdentity? EmbeddedCustomModelStack
+    { get; init; }
+
+    /// <summary>
+    /// Schema-1 local ANM2 documents could omit their exact source-model
+    /// binding. They remain visible after migration but cannot become
+    /// authoritative until Rebind Source replaces this fail-closed marker.
+    /// </summary>
+    public bool RequiresSourceRebind { get; init; }
+
+    public string? LegacySourceRigSignature { get; init; }
+
+    public Guid? MimicAssetId { get; init; }
+
+    public ProjectAnimationSourceBinding? FacialAnimationSourceBinding
+    { get; init; }
+
+    public Guid? FacialSourceAssetId { get; init; }
+
+    public ProjectMorphSourceValueUnit? FacialSourceValueUnit { get; init; }
+
+    public FacialClipTiming? FacialTiming { get; init; }
+
+    public FrameRate FrameRate { get; init; } = new(30, 1);
+
+    public long FrameCount { get; init; } = 1;
+
+    /// <summary>
+    /// Retains a schema-1 grouping marker for migration diagnostics. Multiple
+    /// schema-2 sources may carry the same value when a legacy group contained
+    /// conflicting immutable source identities.
+    /// </summary>
+    public Guid? LegacyVariantGroupId { get; init; }
+
+    public string? MigrationNote { get; init; }
+
+    public string SourceRigSignature =>
+        SourceBinding?.SourceRigSignature ??
+        EmbeddedCustomModelStack?.SourceRigSignature ??
+        LegacySourceRigSignature ??
+        string.Empty;
+
+    internal void Validate(
+        IReadOnlyDictionary<Guid, ProjectAssetKind> assetKinds,
+        string parameterName)
+    {
+        if (Id == Guid.Empty || SourceAssetId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "Animation-source identifiers cannot be empty.",
+                parameterName);
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(Name, parameterName);
+        if (FrameRate.Numerator <= 0 ||
+            FrameRate.Denominator <= 0 ||
+            FrameCount <= 0)
+        {
+            throw new ArgumentException(
+                $"Animation source '{Name}' has invalid timing.",
+                parameterName);
+        }
+
+        bool ordinary = SourceBinding is not null;
+        bool embedded = EmbeddedCustomModelStack is not null;
+        if ((!RequiresSourceRebind && ordinary == embedded) ||
+            (RequiresSourceRebind && (ordinary || embedded)))
+        {
+            throw new ArgumentException(
+                $"Animation source '{Name}' must declare exactly one ordinary, embedded-stack, or unresolved legacy identity.",
+                parameterName);
+        }
+
+        if (ordinary)
+        {
+            SourceBinding!.Validate(assetKinds, parameterName);
+            if (SourceBinding.AssetId != SourceAssetId)
+            {
+                throw new ArgumentException(
+                    $"Animation source '{Name}' binding disagrees with its source asset.",
+                    parameterName);
+            }
+        }
+        else if (embedded)
+        {
+            if (!assetKinds.TryGetValue(
+                    SourceAssetId,
+                    out ProjectAssetKind sourceKind) ||
+                sourceKind != ProjectAssetKind.CustomModelSource)
+            {
+                throw new ArgumentException(
+                    $"Embedded animation source '{Name}' must reference its custom-model package directly.",
+                    parameterName);
+            }
+
+            EmbeddedCustomModelStack!.Validate(parameterName);
+        }
+        else if (!assetKinds.TryGetValue(
+                     SourceAssetId,
+                     out ProjectAssetKind unresolvedKind) ||
+                 unresolvedKind != ProjectAssetKind.SourceAnimation)
+        {
+            throw new ArgumentException(
+                $"Unresolved animation source '{Name}' must reference a local source-animation asset.",
+                parameterName);
+        }
+
+        if (LegacySourceRigSignature is { } legacySignature &&
+            legacySignature.Length > 512)
+        {
+            throw new ArgumentException(
+                "A legacy source-rig signature cannot exceed 512 characters.",
+                parameterName);
+        }
+
+        if (LegacyVariantGroupId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "A legacy variant-group identifier cannot be empty.",
+                parameterName);
+        }
+
+        if (MigrationNote is { Length: > 1_024 })
+        {
+            throw new ArgumentException(
+                "An animation-source migration note cannot exceed 1024 characters.",
+                parameterName);
+        }
+
+        ValidateFacialSource(assetKinds, parameterName);
+    }
+
+    private void ValidateFacialSource(
+        IReadOnlyDictionary<Guid, ProjectAssetKind> assetKinds,
+        string parameterName)
+    {
+        ProjectAssetKind? mimicKind = null;
+        if (MimicAssetId is { } mimicAssetId)
+        {
+            if (!assetKinds.TryGetValue(
+                    mimicAssetId,
+                    out ProjectAssetKind resolvedMimicKind))
+            {
+                throw new ArgumentException(
+                    $"Animation source '{Name}' refers to an unknown mimic asset.",
+                    parameterName);
+            }
+
+            mimicKind = resolvedMimicKind;
+        }
+
+        if (FacialAnimationSourceBinding is { } facialBinding)
+        {
+            facialBinding.Validate(assetKinds, parameterName);
+            if (MimicAssetId != facialBinding.AssetId ||
+                (facialBinding.Roles & AnimationSourceRoles.Facial) == 0)
+            {
+                throw new ArgumentException(
+                    $"Animation source '{Name}' facial binding disagrees with its mimic asset or has no facial role.",
+                    parameterName);
+            }
+        }
+        else if (MimicAssetId is not null &&
+                 mimicKind != ProjectAssetKind.SourceAnimation)
+        {
+            throw new ArgumentException(
+                $"Animation source '{Name}' has a retail facial source without an immutable facial binding.",
+                parameterName);
+        }
+
+        if (FacialSourceAssetId is { } facialSourceAssetId)
+        {
+            if (!assetKinds.TryGetValue(
+                    facialSourceAssetId,
+                    out ProjectAssetKind facialKind) ||
+                facialKind != ProjectAssetKind.SourceAnimation)
+            {
+                throw new ArgumentException(
+                    $"Animation source '{Name}' refers to an unknown facial FBX source asset.",
+                    parameterName);
+            }
+
+            if (MimicAssetId is not null ||
+                FacialAnimationSourceBinding is not null)
+            {
+                throw new ArgumentException(
+                    $"Animation source '{Name}' cannot use both a facial FBX and mimic ANM2.",
+                    parameterName);
+            }
+
+            if (FacialSourceValueUnit is not { } valueUnit ||
+                !Enum.IsDefined(valueUnit))
+            {
+                throw new ArgumentException(
+                    $"Animation source '{Name}' requires an explicit facial FBX source-value unit.",
+                    parameterName);
+            }
+        }
+        else if (FacialSourceValueUnit is { } primaryValueUnit &&
+                 (!Enum.IsDefined(primaryValueUnit) ||
+                  !IsPrimaryFbxFacialSource()))
+        {
+            throw new ArgumentException(
+                $"Animation source '{Name}' declares facial units without a facial FBX primary or attached source.",
+                parameterName);
+        }
+
+        FacialTiming?.Validate(FrameCount);
+    }
+
+    private bool IsPrimaryFbxFacialSource() =>
+        SourceBinding is
+        {
+            Kind: AnimationSourceKind.LocalFbx,
+        } binding &&
+        (binding.Roles & AnimationSourceRoles.Facial) != 0 ||
+        EmbeddedCustomModelStack is { } embedded &&
+        (embedded.Roles & AnimationSourceRoles.Facial) != 0;
+}
+
+public sealed record ProjectAnimationVariant
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public Guid SourceId { get; init; }
+
+    public string Name { get; init; } = string.Empty;
+
+    public Guid TargetModelId { get; init; }
+
+    public string TargetRigId { get; init; } = string.Empty;
+
+    public string? TargetRigSignature { get; init; }
+
+    public string? MappingFingerprint { get; init; }
+
+    public string? MimicProfileId { get; init; }
+
+    public string? MimicMappingFingerprint { get; init; }
+
+    public Dl1RootMotionMode RootMotionMode { get; init; } =
+        Dl1RootMotionMode.Recorded;
+
+    public string? RootBoneName { get; init; }
+
+    public bool PreviewMotionAccumulationEnabled { get; init; }
+
+    public ImmutableArray<ProjectBoneMapping> BoneMappings { get; init; } = [];
+
+    public ImmutableArray<ProjectTargetBindReview> TargetBindReviews { get; init; } = [];
+
+    public ImmutableArray<BoneEditLayer> EditLayers { get; init; } = [];
+
+    public ImmutableArray<ProjectMorphBinding> MorphBindings { get; init; } = [];
+
+    public ImmutableArray<MorphEditLayer> MorphEditLayers { get; init; } = [];
+
+    public ImmutableArray<ProjectIkLayer> IkLayers { get; init; } = [];
+
+    public ImmutableArray<AttachmentBinding> Attachments { get; init; } = [];
+
+    public bool IncludeInPackage { get; init; } = true;
+
+    internal void Validate(
+        IReadOnlyDictionary<Guid, ProjectAssetKind> assetKinds,
+        IReadOnlyDictionary<Guid, ProjectModelEntry> models,
+        IReadOnlyDictionary<Guid, ProjectAnimationSource> sources,
+        string parameterName)
+    {
+        if (Id == Guid.Empty || SourceId == Guid.Empty ||
+            TargetModelId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "Animation-variant, source, and target-model identifiers cannot be empty.",
+                parameterName);
+        }
+
+        if (!sources.TryGetValue(
+                SourceId,
+                out ProjectAnimationSource? source))
+        {
+            throw new ArgumentException(
+                $"Animation variant '{Name}' refers to an unknown immutable source.",
+                parameterName);
+        }
+
+        if (!models.TryGetValue(
+                TargetModelId,
+                out ProjectModelEntry? model))
+        {
+            throw new ArgumentException(
+                $"Animation variant '{Name}' refers to an unknown project model.",
+                parameterName);
+        }
+
+        if (model.IsStatic || string.IsNullOrWhiteSpace(model.RigSignature))
+        {
+            throw new ArgumentException(
+                $"Animation variant '{Name}' cannot target model '{model.Name}' without a valid rig contract.",
+                parameterName);
+        }
+
+        Guid targetAssetId = model.AssetId;
+
+        Dictionary<Guid, ProjectAssetKind> validationKinds =
+            new(assetKinds);
+        ProjectAnimationSourceBinding? sourceBinding;
+        if (source.SourceBinding is { } ordinaryBinding)
+        {
+            sourceBinding = ordinaryBinding;
+        }
+        else if (source.EmbeddedCustomModelStack is { } embedded)
+        {
+            // Reuse the mature legacy variant validator while treating the
+            // package-backed stack as an FBX animation source in this local
+            // validation view. The persisted asset remains CustomModelSource.
+            Guid embeddedValidationAssetId = embedded.ClipId;
+            if (validationKinds.ContainsKey(embeddedValidationAssetId))
+            {
+                embeddedValidationAssetId = new Guid(
+                    embeddedValidationAssetId.ToByteArray()
+                        .Select(static value => (byte)(value ^ 0x5a))
+                        .ToArray());
+            }
+
+            validationKinds[embeddedValidationAssetId] =
+                ProjectAssetKind.SourceAnimation;
+            sourceBinding = new ProjectAnimationSourceBinding
+            {
+                Kind = AnimationSourceKind.LocalFbx,
+                AssetId = embeddedValidationAssetId,
+                Roles = embedded.Roles,
+                SourceRigSignature = embedded.SourceRigSignature,
+                TimingProvenance =
+                    AnimationTimingProvenance.EmbeddedFbx,
+                SourceRangeStartFrame = 0,
+                SourceRangeEndFrame = source.FrameCount - 1,
+                TimingDetail =
+                    $"Embedded custom-model stack {embedded.FbxObjectId}",
+            };
+        }
+        else
+        {
+            sourceBinding = null;
+        }
+
+        var compatibility = new ProjectAnimation
+        {
+            Id = Id,
+            VariantGroupId = SourceId,
+            Name = Name,
+            SourceAssetId = sourceBinding?.AssetId ??
+                source.SourceAssetId,
+            SourceBinding = sourceBinding,
+            MimicAssetId = source.MimicAssetId,
+            FacialAnimationSourceBinding =
+                source.FacialAnimationSourceBinding,
+            FacialSourceAssetId = source.FacialSourceAssetId,
+            FacialSourceValueUnit = source.FacialSourceValueUnit,
+            FacialTiming = source.FacialTiming,
+            TargetAssetId = targetAssetId,
+            TargetRigId = TargetRigId,
+            SourceRigSignature = source.SourceRigSignature,
+            TargetRigSignature = TargetRigSignature,
+            MappingFingerprint = MappingFingerprint,
+            MimicProfileId = MimicProfileId,
+            MimicMappingFingerprint = MimicMappingFingerprint,
+            FrameRate = source.FrameRate,
+            FrameCount = source.FrameCount,
+            RootMotionMode = RootMotionMode,
+            RootBoneName = RootBoneName,
+            PreviewMotionAccumulationEnabled =
+                PreviewMotionAccumulationEnabled,
+            BoneMappings = BoneMappings,
+            TargetBindReviews = TargetBindReviews,
+            EditLayers = EditLayers,
+            MorphBindings = MorphBindings,
+            MorphEditLayers = MorphEditLayers,
+            IkLayers = IkLayers,
+            Attachments = Attachments,
+        };
+        compatibility.Validate(validationKinds, parameterName);
+    }
+}
+
+public sealed record ProjectWorkflowState
+{
+    public ProjectWorkflowTab ActiveTab { get; init; } =
+        ProjectWorkflowTab.Models;
+
+    public Guid? SelectedModelId { get; init; }
+
+    public Guid? SelectedAnimationSourceId { get; init; }
+
+    public Guid? SelectedAnimationVariantId { get; init; }
+
+    internal void Validate(
+        IReadOnlyDictionary<Guid, ProjectModelEntry> models,
+        IReadOnlyDictionary<Guid, ProjectAnimationSource> sources,
+        IReadOnlyDictionary<Guid, ProjectAnimationVariant> variants)
+    {
+        if (!Enum.IsDefined(ActiveTab))
+        {
+            throw new ProjectFormatException(
+                $"Unsupported project workflow tab '{ActiveTab}'.");
+        }
+
+        if (SelectedModelId is { } modelId &&
+            !models.ContainsKey(modelId))
+        {
+            throw new ProjectFormatException(
+                "The selected workflow model does not exist in the project model library.");
+        }
+
+        if (SelectedAnimationSourceId is { } sourceId &&
+            !sources.ContainsKey(sourceId))
+        {
+            throw new ProjectFormatException(
+                "The selected workflow animation source does not exist.");
+        }
+
+        if (SelectedAnimationVariantId is { } variantId)
+        {
+            if (!variants.TryGetValue(
+                    variantId,
+                    out ProjectAnimationVariant? variant))
+            {
+                throw new ProjectFormatException(
+                    "The selected workflow animation variant does not exist.");
+            }
+
+            if (SelectedAnimationSourceId is { } selectedSourceId &&
+                variant.SourceId != selectedSourceId)
+            {
+                throw new ProjectFormatException(
+                    "The selected workflow variant does not belong to the selected source.");
+            }
+        }
+    }
+}
+
+/// <summary>
 /// Optional schema-1 state for the independent Models workspace. The model
 /// itself remains in a project-relative, fingerprinted .dlrmodel asset; this
 /// record contains only the UI state needed to resume that authoring session.
@@ -178,7 +792,8 @@ public sealed record ProjectAssetReference
 
     internal static void ValidateSha256(string value, string parameterName)
     {
-        if (value.Length != 64 ||
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.Length != 64 ||
             value.Any(static character => !Uri.IsHexDigit(character)))
         {
             throw new ArgumentException(
@@ -195,6 +810,17 @@ public sealed record ProjectBoneMapping
     public string TargetBoneName { get; init; } = string.Empty;
 
     public string Method { get; init; } = "manual";
+
+    public double Confidence { get; init; }
+
+    public string Evidence { get; init; } =
+        "No mapping evidence recorded.";
+
+    public ProjectMappingReviewOrigin ReviewOrigin { get; init; }
+
+    public string ScorerVersion { get; init; } = "unscored-v1";
+
+    public string EvidenceFingerprint { get; init; } = new('0', 64);
 
     public bool IsLocked { get; init; }
 
@@ -214,12 +840,91 @@ public sealed record ProjectBoneMapping
         ArgumentException.ThrowIfNullOrWhiteSpace(SourceBoneName, parameterName);
         ArgumentException.ThrowIfNullOrWhiteSpace(TargetBoneName, parameterName);
         ArgumentException.ThrowIfNullOrWhiteSpace(Method, parameterName);
+        ValidateMappingProvenance(
+            Confidence,
+            Evidence,
+            ReviewOrigin,
+            ScorerVersion,
+            EvidenceFingerprint,
+            IsReviewed,
+            IsLocked,
+            parameterName);
         if (!Enum.IsDefined(MappingKind) ||
             !Enum.IsDefined(TransferPolicy) ||
             !Enum.IsDefined(ComponentPolicy))
         {
             throw new ArgumentException(
                 "Bone mappings contain an unsupported mapping, transfer, or component policy.",
+                parameterName);
+        }
+    }
+
+    internal static void ValidateMappingProvenance(
+        double confidence,
+        string evidence,
+        ProjectMappingReviewOrigin reviewOrigin,
+        string scorerVersion,
+        string evidenceFingerprint,
+        bool isReviewed,
+        bool isLocked,
+        string parameterName)
+    {
+        if (!double.IsFinite(confidence) ||
+            confidence is < 0 or > 1)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                "Mapping confidence must be between zero and one.");
+        }
+
+        if (string.IsNullOrWhiteSpace(evidence) ||
+            evidence.Length > 2_048)
+        {
+            throw new ArgumentException(
+                "Mapping evidence must contain between 1 and 2048 characters.",
+                parameterName);
+        }
+
+        if (!Enum.IsDefined(reviewOrigin) ||
+            string.IsNullOrWhiteSpace(scorerVersion) ||
+            scorerVersion.Length > 128)
+        {
+            throw new ArgumentException(
+                "Mapping review origin and scorer version must be valid.",
+                parameterName);
+        }
+
+        ProjectAssetReference.ValidateSha256(
+            evidenceFingerprint,
+            parameterName);
+        if (isLocked && !isReviewed)
+        {
+            throw new ArgumentException(
+                "A mapping cannot be locked until it has been reviewed.",
+                parameterName);
+        }
+
+        if (reviewOrigin == ProjectMappingReviewOrigin.None &&
+            (isReviewed || isLocked))
+        {
+            throw new ArgumentException(
+                "A reviewed mapping must record whether review was explicit or assisted.",
+                parameterName);
+        }
+
+        if (reviewOrigin == ProjectMappingReviewOrigin.Explicit &&
+            !isReviewed)
+        {
+            throw new ArgumentException(
+                "An explicit mapping review origin requires a reviewed row.",
+                parameterName);
+        }
+
+        if (reviewOrigin == ProjectMappingReviewOrigin.Assisted &&
+            (!isReviewed || !isLocked || confidence < 0.90))
+        {
+            throw new ArgumentException(
+                "An assisted mapping approval must be reviewed, locked, and score at least 0.90.",
                 parameterName);
         }
     }
@@ -272,6 +977,15 @@ public sealed record ProjectMorphBinding
 
     public double Confidence { get; init; } = 1.0;
 
+    public string Evidence { get; init; } =
+        "No mapping evidence recorded.";
+
+    public ProjectMappingReviewOrigin ReviewOrigin { get; init; }
+
+    public string ScorerVersion { get; init; } = "unscored-v1";
+
+    public string EvidenceFingerprint { get; init; } = new('0', 64);
+
     public string Method { get; init; } = "manual";
 
     /// <summary>
@@ -308,20 +1022,15 @@ public sealed record ProjectMorphBinding
                 "Morph binding weights and biases must be finite.");
         }
 
-        if (!double.IsFinite(Confidence) ||
-            Confidence is < 0 or > 1)
-        {
-            throw new ArgumentOutOfRangeException(
-                parameterName,
-                "Morph binding confidence must be between zero and one.");
-        }
-
-        if (IsLocked && !IsReviewed)
-        {
-            throw new ArgumentException(
-                "A morph binding cannot be locked until it has been reviewed.",
-                parameterName);
-        }
+        ProjectBoneMapping.ValidateMappingProvenance(
+            Confidence,
+            Evidence,
+            ReviewOrigin,
+            ScorerVersion,
+            EvidenceFingerprint,
+            IsReviewed,
+            IsLocked,
+            parameterName);
     }
 }
 
@@ -627,11 +1336,19 @@ public sealed record ProjectAnimation
                 parameterName);
         }
 
-        if (FacialSourceAssetId.HasValue !=
-            FacialSourceValueUnit.HasValue)
+        bool primaryFbxFacial = SourceBinding is
+            {
+                Kind: AnimationSourceKind.LocalFbx,
+            } primaryBinding &&
+            (primaryBinding.Roles & AnimationSourceRoles.Facial) != 0;
+        if (FacialSourceAssetId.HasValue &&
+            !FacialSourceValueUnit.HasValue ||
+            !FacialSourceAssetId.HasValue &&
+            FacialSourceValueUnit.HasValue &&
+            !primaryFbxFacial)
         {
             throw new ArgumentException(
-                $"Animation '{Name}' must store both its facial FBX asset and explicit source-value unit.",
+                $"Animation '{Name}' must bind an explicit facial FBX source-value unit to either its attached facial FBX or its primary combined FBX source.",
                 parameterName);
         }
 
@@ -1027,7 +1744,7 @@ public sealed record Dl1MovieReferenceCameraCapture
 
 public sealed record DlraProject
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
 
     public const string FormatIdentifier = "dl-reanimated-csharp-project";
 
@@ -1045,11 +1762,25 @@ public sealed record DlraProject
 
     public ImmutableArray<ProjectAssetReference> Assets { get; init; } = [];
 
+    public ImmutableArray<ProjectModelEntry> Models { get; init; } = [];
+
+    public ImmutableArray<ProjectAnimationSource> AnimationSources { get; init; } = [];
+
+    public ImmutableArray<ProjectAnimationVariant> AnimationVariants { get; init; } = [];
+
+    /// <summary>
+    /// Compatibility projection used while the WPF surface moves to the
+    /// schema-2 source/variant domain. Package-backed embedded stacks exist
+    /// only in AnimationSources and therefore never require a duplicate
+    /// SourceAnimation asset or legacy projection row.
+    /// </summary>
     public ImmutableArray<ProjectAnimation> Animations { get; init; } = [];
 
     public Guid? ActiveAnimationId { get; init; }
 
     public ProjectModelsWorkspaceState? ModelsWorkspace { get; init; }
+
+    public ProjectWorkflowState Workflow { get; init; } = new();
 
     public Dl1ProjectSettings Dl1Settings { get; init; } = new();
 
@@ -1067,10 +1798,27 @@ public sealed record DlraProject
 
     public void Validate()
     {
-        if (SchemaVersion != CurrentSchemaVersion)
+        if (SchemaVersion is not (1 or CurrentSchemaVersion))
         {
             throw new ProjectFormatException(
-                $"Only fresh schema-{CurrentSchemaVersion} projects are supported.");
+                $"Only C# schema-1 and schema-{CurrentSchemaVersion} projects are supported in memory.");
+        }
+
+        if (SchemaVersion == CurrentSchemaVersion &&
+            Models.IsEmpty &&
+            AnimationSources.IsEmpty &&
+            AnimationVariants.IsEmpty &&
+            (!Animations.IsEmpty || ModelsWorkspace is not null))
+        {
+            // Transitional WPF builds still construct the schema-1 projection
+            // on a fresh project. Validate the same deterministic migration
+            // that SaveAtomic will persist instead of making those callers
+            // manufacture partially synchronized schema-2 records.
+            ProjectSerializer.MigrateSchema1(
+                    this with { SchemaVersion = 1 },
+                    preserveSourceOnlyCompatibilityRows: true)
+                .Validate();
+            return;
         }
 
         if (!string.Equals(Format, FormatIdentifier, StringComparison.Ordinal))
@@ -1090,13 +1838,24 @@ public sealed record DlraProject
                 "The first C# project format accepts Dying Light 1 projects only.");
         }
 
-        if (Assets.IsDefault || Animations.IsDefault)
+        if (SchemaVersion == 1)
+        {
+            ValidateSchema1Compatibility();
+            return;
+        }
+
+        if (Assets.IsDefault ||
+            Models.IsDefault ||
+            AnimationSources.IsDefault ||
+            AnimationVariants.IsDefault ||
+            Animations.IsDefault)
         {
             throw new ProjectFormatException("Project collections must be initialized.");
         }
 
         ArgumentNullException.ThrowIfNull(PreviewProfile);
         ArgumentNullException.ThrowIfNull(Dl1Settings);
+        ArgumentNullException.ThrowIfNull(Workflow);
         if (!Enum.IsDefined(PreviewMode))
         {
             throw new ProjectFormatException(
@@ -1127,12 +1886,118 @@ public sealed record DlraProject
             animation.Validate(assetKinds, nameof(Animations));
         }
 
+        foreach (ProjectModelEntry model in Models)
+        {
+            model.Validate(assetKinds, nameof(Models));
+        }
+
+        Dictionary<Guid, ProjectModelEntry> models;
+        Dictionary<Guid, ProjectAnimationSource> sources;
+        Dictionary<Guid, ProjectAnimationVariant> variants;
+        try
+        {
+            models = Models.ToDictionary(static model => model.Id);
+            sources = AnimationSources.ToDictionary(
+                static source => source.Id);
+            variants = AnimationVariants.ToDictionary(
+                static variant => variant.Id);
+        }
+        catch (ArgumentException)
+        {
+            throw new ProjectFormatException(
+                "Project model, animation-source, and animation-variant identifiers must be unique within their libraries.");
+        }
+
+        if (Models
+            .Select(static model => model.AssetId)
+            .Distinct()
+            .Count() != Models.Length)
+        {
+            throw new ProjectFormatException(
+                "A project asset cannot appear more than once in the model library.");
+        }
+
+        foreach (ProjectAnimationSource source in AnimationSources)
+        {
+            source.Validate(assetKinds, nameof(AnimationSources));
+        }
+
+        foreach (ProjectAnimationVariant variant in AnimationVariants)
+        {
+            variant.Validate(
+                assetKinds,
+                models,
+                sources,
+                nameof(AnimationVariants));
+        }
+
+        Workflow.Validate(models, sources, variants);
+
         ModelsWorkspace?.Validate(assetKinds);
 
         if (Animations.Select(static animation => animation.Id).Distinct().Count() !=
             Animations.Length)
         {
             throw new ProjectFormatException("Project animation identifiers must be unique.");
+        }
+
+        if (ActiveAnimationId is { } activeAnimationId &&
+            Animations.All(animation => animation.Id != activeAnimationId) &&
+            AnimationVariants.All(variant => variant.Id != activeAnimationId))
+        {
+            throw new ProjectFormatException(
+                "The active animation identifier does not exist in the project animation library.");
+        }
+    }
+
+    private void ValidateSchema1Compatibility()
+    {
+        if (Assets.IsDefault || Animations.IsDefault)
+        {
+            throw new ProjectFormatException(
+                "Schema-1 project collections must be initialized.");
+        }
+
+        ArgumentNullException.ThrowIfNull(PreviewProfile);
+        ArgumentNullException.ThrowIfNull(Dl1Settings);
+        if (!Enum.IsDefined(PreviewMode))
+        {
+            throw new ProjectFormatException(
+                $"Unsupported preview mode '{PreviewMode}'.");
+        }
+
+        Dl1Settings.Validate();
+        foreach (ProjectAssetReference asset in Assets)
+        {
+            asset.Validate(nameof(Assets));
+        }
+
+        Dictionary<Guid, ProjectAssetKind> assetKinds;
+        try
+        {
+            assetKinds = Assets.ToDictionary(
+                static asset => asset.Id,
+                static asset => asset.Kind);
+        }
+        catch (ArgumentException)
+        {
+            throw new ProjectFormatException(
+                "Project asset identifiers must be unique.");
+        }
+
+        foreach (ProjectAnimation animation in Animations)
+        {
+            animation.Validate(assetKinds, nameof(Animations));
+        }
+
+        ModelsWorkspace?.Validate(assetKinds);
+        if (Animations
+                .Select(static animation => animation.Id)
+                .Distinct()
+                .Count() != Animations.Length)
+        {
+            throw new ProjectFormatException(
+                "Project animation identifiers must be unique.");
         }
 
         if (ActiveAnimationId is { } activeAnimationId &&

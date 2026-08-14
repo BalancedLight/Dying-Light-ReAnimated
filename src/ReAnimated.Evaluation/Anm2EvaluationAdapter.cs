@@ -135,25 +135,7 @@ public sealed class Anm2EvaluationAdapter : IAnm2EvaluationAdapter
         AnimationClip clip,
         ImmutableArray<MorphChannelBinding> bindings)
     {
-        BoneDefinition[] missingRequired = rig.Bones
-            .Where(static bone => bone.RequiredForExport && bone.DescriptorHash is null)
-            .ToArray();
-        if (missingRequired.Length > 0)
-        {
-            throw new InvalidOperationException(
-                "Required target bones lack authoritative DL1 descriptors: " +
-                string.Join(", ", missingRequired.Select(static bone => bone.Name)));
-        }
-
-        uint[] descriptors = rig.Bones
-            .Where(static bone => bone.DescriptorHash.HasValue)
-            .Select(static bone => bone.DescriptorHash!.Value)
-            .ToArray();
-        if (descriptors.Distinct().Count() != descriptors.Length)
-        {
-            throw new InvalidOperationException(
-                "Target bone descriptor hashes must be unique for ANM2 export.");
-        }
+        ValidateTargetDescriptorInventory(rig);
 
         Dictionary<string, MorphChannelDefinition> morphs = rig.MorphChannels
             .ToDictionary(static morph => morph.Name, StringComparer.OrdinalIgnoreCase);
@@ -202,5 +184,56 @@ public sealed class Anm2EvaluationAdapter : IAnm2EvaluationAdapter
                     $"Animated morph '{track.ChannelName}' lacks a DL1 descriptor hash.");
             }
         }
+    }
+
+    /// <summary>
+    /// Validates the complete descriptor namespace used by DL1 ANM2 output.
+    /// This is public so UI readiness and transaction preflight use exactly
+    /// the same fail-closed rule as the final encoder.
+    /// </summary>
+    public static void ValidateTargetDescriptorInventory(RigDefinition rig)
+    {
+        ArgumentNullException.ThrowIfNull(rig);
+        BoneDefinition[] missingRequired = rig.Bones
+            .Where(static bone => bone.RequiredForExport && bone.DescriptorHash is null)
+            .ToArray();
+        if (missingRequired.Length > 0)
+        {
+            throw new InvalidOperationException(
+                "Required target bones lack authoritative DL1 descriptors: " +
+                string.Join(", ", missingRequired.Select(static bone => bone.Name)));
+        }
+
+        var descriptorOwners = new Dictionary<uint, string>();
+        foreach (BoneDefinition bone in rig.Bones)
+        {
+            if (bone.DescriptorHash is not { } descriptor)
+            {
+                continue;
+            }
+
+            if (!descriptorOwners.TryAdd(descriptor, $"bone '{bone.Name}'"))
+            {
+                throw new InvalidOperationException(
+                    $"Target rig entities {descriptorOwners[descriptor]} and bone '{bone.Name}' " +
+                    $"collide at DL1 descriptor 0x{descriptor:X8}; descriptors must be unique for ANM2 export.");
+            }
+        }
+
+        foreach (MorphChannelDefinition morph in rig.MorphChannels)
+        {
+            if (morph.DescriptorHash is not { } descriptor)
+            {
+                continue;
+            }
+
+            if (!descriptorOwners.TryAdd(descriptor, $"morph '{morph.Name}'"))
+            {
+                throw new InvalidOperationException(
+                    $"Target rig entities {descriptorOwners[descriptor]} and morph '{morph.Name}' " +
+                    $"collide at DL1 descriptor 0x{descriptor:X8}; descriptors must be unique for ANM2 export.");
+            }
+        }
+
     }
 }

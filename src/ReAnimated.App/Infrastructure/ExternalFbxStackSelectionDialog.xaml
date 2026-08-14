@@ -1,0 +1,123 @@
+<Window x:Class="ReAnimated.App.Infrastructure.ExternalFbxStackSelectionDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Select FBX animation stacks"
+        Width="1060"
+        Height="760"
+        MinWidth="820"
+        MinHeight="440"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel>
+            <TextBlock FontSize="17"
+                       FontWeight="SemiBold"
+                       Text="{Binding TitleText}" />
+            <TextBlock Margin="0,4,0,10"
+                       Foreground="#666666"
+                       Text="Check every immutable take to add. Layered takes remain visible but must be baked to one layer before import."
+                       TextWrapping="Wrap" />
+        </StackPanel>
+
+        <StackPanel Grid.Row="1"
+                    Margin="0,0,0,10"
+                    Orientation="Horizontal">
+            <TextBlock VerticalAlignment="Center"
+                       FontWeight="SemiBold"
+                       Text="DeformPercent source unit:" />
+            <ComboBox Width="150"
+                      Margin="8,0,0,0"
+                      ItemsSource="{Binding FacialSourceValueUnits}"
+                      SelectedItem="{Binding FacialSourceValueUnit}" />
+            <TextBlock Margin="10,0,0,0"
+                       VerticalAlignment="Center"
+                       Foreground="#666666"
+                       Text="Explicit and persisted; values are never range-inferred. Default: Percent." />
+        </StackPanel>
+
+        <DataGrid Grid.Row="2"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  CanUserDeleteRows="False"
+                  HeadersVisibility="Column"
+                  IsReadOnly="False"
+                  ItemsSource="{Binding Rows}"
+                  SelectionMode="Extended">
+            <DataGrid.Columns>
+                <DataGridTemplateColumn Header="Add" Width="46">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <CheckBox HorizontalAlignment="Center"
+                                      IsChecked="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}"
+                                      IsEnabled="{Binding CanImport}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTextColumn Header="Stack" Binding="{Binding Name}" Width="150" IsReadOnly="True" />
+                <DataGridTextColumn Header="Timing" Binding="{Binding Timing}" Width="150" IsReadOnly="True" />
+                <DataGridTextColumn Header="Roles" Binding="{Binding Roles}" Width="90" IsReadOnly="True" />
+                <DataGridTextColumn Header="Source rig" Binding="{Binding SourceRig}" Width="155" IsReadOnly="True" />
+                <DataGridTextColumn Header="Layers" Binding="{Binding Layers}" Width="110" IsReadOnly="True" />
+                <DataGridTextColumn Header="Diagnostics / bake guidance" Binding="{Binding Diagnostics}" Width="*" IsReadOnly="True" />
+            </DataGrid.Columns>
+        </DataGrid>
+
+        <StackPanel Grid.Row="3" Margin="0,12,0,0">
+            <TextBlock FontWeight="SemiBold"
+                       Text="Target project models" />
+            <TextBlock Margin="0,2,0,5"
+                       Foreground="#666666"
+                       Text="One independent variant is created per checked model. Static models remain visible but cannot be animation targets."
+                       TextWrapping="Wrap" />
+            <DataGrid MaxHeight="170"
+                      AutoGenerateColumns="False"
+                      CanUserAddRows="False"
+                      CanUserDeleteRows="False"
+                      HeadersVisibility="Column"
+                      ItemsSource="{Binding TargetRows}">
+                <DataGrid.Columns>
+                    <DataGridTemplateColumn Header="Target" Width="58">
+                        <DataGridTemplateColumn.CellTemplate>
+                            <DataTemplate>
+                                <CheckBox HorizontalAlignment="Center"
+                                          IsChecked="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}"
+                                          IsEnabled="{Binding CanTarget}" />
+                            </DataTemplate>
+                        </DataGridTemplateColumn.CellTemplate>
+                    </DataGridTemplateColumn>
+                    <DataGridTextColumn Header="Model" Binding="{Binding Name}" Width="190" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="160" IsReadOnly="True" />
+                    <DataGridTextColumn Header="Rig contract" Binding="{Binding Contract}" Width="*" IsReadOnly="True" />
+                </DataGrid.Columns>
+            </DataGrid>
+        </StackPanel>
+
+        <Grid Grid.Row="4" Margin="0,12,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock VerticalAlignment="Center"
+                       Foreground="#666666"
+                       Text="{Binding SelectionSummary}" />
+            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                <Button MinWidth="92"
+                        Margin="0,0,8,0"
+                        IsCancel="True"
+                        Content="Cancel" />
+                <Button MinWidth="110"
+                        IsDefault="True"
+                        Click="Import_Click"
+                        Content="Add checked" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

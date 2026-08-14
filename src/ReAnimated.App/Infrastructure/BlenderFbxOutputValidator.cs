@@ -35,7 +35,7 @@ public sealed class BlenderFbxOutputValidator :
         if (expectedMeshes.Count == 0)
         {
             throw new ArgumentException(
-                "At least one expected retail mesh is required.",
+                "At least one expected target mesh is required.",
                 nameof(expectedMeshes));
         }
 
@@ -60,6 +60,9 @@ public sealed class BlenderFbxOutputValidator :
             expectedClips,
             expectedBones);
         ValidateBonesAndBindPose(
+            inspection,
+            expectedBones);
+        ValidateCameras(
             inspection,
             expectedBones);
         ValidateRetailGeometry(
@@ -166,7 +169,29 @@ public sealed class BlenderFbxOutputValidator :
                 expectedBoneIds))
         {
             throw new InvalidDataException(
-                $"Written FBX Action '{expectedClip.ActionName}' does not contain animation curves for the exact retail bone set.");
+                $"Written FBX Action '{expectedClip.ActionName}' does not contain animation curves for the exact target bone set.");
+        }
+
+        string[] expectedMorphTracks = expectedClip
+            .MorphTracks
+            .Select(static track => track.Name)
+            .ToArray();
+        if (expectedMorphTracks.Length == 0)
+        {
+            if (stack.BlendShapeCurveCount != 0 ||
+                !stack.BlendShapeChannelNames.IsEmpty)
+            {
+                throw new InvalidDataException(
+                    $"Written FBX Action '{expectedClip.ActionName}' unexpectedly contains shape-key curves.");
+            }
+        }
+        else if (stack.BlendShapeCurveCount <
+                     expectedMorphTracks.Length ||
+                 !stack.BlendShapeChannelNames.SetEquals(
+                     expectedMorphTracks))
+        {
+            throw new InvalidDataException(
+                $"Written FBX Action '{expectedClip.ActionName}' shape-key curves do not match the evaluated morph tracks.");
         }
 
         double frameTicks =
@@ -230,7 +255,7 @@ public sealed class BlenderFbxOutputValidator :
                 .Count() != expectedBones.Count)
         {
             throw new InvalidDataException(
-                "Requested retail bones must have unique non-empty names and unique indices.");
+                "Requested target bones must have unique non-empty names and unique indices.");
         }
 
         if (inspection.LimbModelIds.Count !=
@@ -240,7 +265,7 @@ public sealed class BlenderFbxOutputValidator :
                 .SetEquals(expectedNames))
         {
             throw new InvalidDataException(
-                $"Written FBX LimbNode set does not exactly match the expected {expectedNames.Length:N0}-bone retail armature.");
+                $"Written FBX LimbNode set does not exactly match the expected {expectedNames.Length:N0}-bone target armature.");
         }
 
         HashSet<long> expectedIds = expectedNames
@@ -261,7 +286,7 @@ public sealed class BlenderFbxOutputValidator :
             expectedIds.Contains(armatureModelId.Value))
         {
             throw new InvalidDataException(
-                "Written FBX does not expose one non-limb armature Model parent for the retail Root LimbNode.");
+                "Written FBX does not expose one non-limb armature Model parent for the target Root LimbNode.");
         }
 
         Dictionary<int, BlenderFbxJobBone> expectedByIndex =
@@ -292,7 +317,7 @@ public sealed class BlenderFbxOutputValidator :
                         out BlenderFbxJobBone? expectedParent))
                 {
                     throw new InvalidDataException(
-                        $"Requested retail bone '{bone.Name}' refers to missing parent index {bone.ParentIndex}.");
+                        $"Requested target bone '{bone.Name}' refers to missing parent index {bone.ParentIndex}.");
                 }
 
                 expectedParentId =
@@ -321,7 +346,30 @@ public sealed class BlenderFbxOutputValidator :
         if (!complete)
         {
             throw new InvalidDataException(
-                $"Written FBX has no finite, nonsingular BindPose matrix table covering the exact {expectedIds.Count:N0}-bone retail armature plus its armature Model.");
+                $"Written FBX has no finite, nonsingular BindPose matrix table covering the exact {expectedIds.Count:N0}-bone target armature plus its armature Model.");
+        }
+    }
+
+    private static void ValidateCameras(
+        FbxStrictExportInspection inspection,
+        IReadOnlyList<BlenderFbxJobBone> expectedBones)
+    {
+        HashSet<string> expected = expectedBones
+            .Where(static bone =>
+                string.Equals(
+                    bone.Semantic,
+                    "camera",
+                    StringComparison.OrdinalIgnoreCase) ||
+                bone.Helper && string.Equals(
+                    bone.Name,
+                    "EyeCamera",
+                    StringComparison.Ordinal))
+            .Select(static bone => bone.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        if (!inspection.CameraModelNames.SetEquals(expected))
+        {
+            throw new InvalidDataException(
+                $"Written FBX Camera Model set does not match the target rig's exportable camera helpers. Expected [{string.Join(", ", expected)}]; found [{string.Join(", ", inspection.CameraModelNames)}].");
         }
     }
 
@@ -357,7 +405,7 @@ public sealed class BlenderFbxOutputValidator :
                 expectedGeometry))
         {
             throw new InvalidDataException(
-                "Written FBX mesh Model/Geometry sets do not exactly match the requested retail parts plus the BindPose guard.");
+                "Written FBX mesh Model/Geometry sets do not exactly match the requested target parts plus the BindPose guard.");
         }
 
         var texturesByKey =
@@ -428,6 +476,16 @@ public sealed class BlenderFbxOutputValidator :
                 geometry,
                 expectedMesh,
                 expectedBoneIds);
+            HashSet<string> expectedMorphs = expectedMesh
+                .MorphTargets
+                .Select(static morph => morph.Name)
+                .ToHashSet(StringComparer.Ordinal);
+            if (!geometry.BlendShapeChannelNames.SetEquals(
+                    expectedMorphs))
+            {
+                throw new InvalidDataException(
+                    $"Written FBX Geometry '{geometryName}' shape-key inventory does not match its decoded target morphs.");
+            }
             ValidateMeshTexture(
                 geometry,
                 expectedMesh,
@@ -474,7 +532,7 @@ public sealed class BlenderFbxOutputValidator :
                 .Count() != skin.Clusters.Length)
         {
             throw new InvalidDataException(
-                $"Written skinned FBX Geometry '{geometry.Name}' has incomplete, duplicate, or non-retail Cluster bindings.");
+                $"Written skinned FBX Geometry '{geometry.Name}' has incomplete, duplicate, or non-target Cluster bindings.");
         }
     }
 

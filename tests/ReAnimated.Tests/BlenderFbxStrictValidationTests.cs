@@ -72,6 +72,42 @@ public sealed class BlenderFbxStrictValidationTests :
 
     [Fact]
     public async Task
+        AcceptsExactCameraShapeInventoryAndMorphCurves()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string path = Path.Combine(
+            _temporaryDirectory,
+            "camera-morph.fbx");
+        await File.WriteAllBytesAsync(
+            path,
+            Serialize(BuildFixture(
+                FixtureCorruption.None,
+                includeCameraAndMorph: true)));
+        var validator = new BlenderFbxOutputValidator();
+
+        await validator.ValidateAsync(
+            path,
+            ExpectedBones(includeCamera: true),
+            ExpectedClips(includeMorph: true),
+            ExpectedMeshes(includeMorph: true),
+            ExpectedTextures(),
+            CancellationToken.None);
+
+        FbxStrictExportInspection inspection =
+            await FbxStrictExportInspector.InspectFileAsync(path);
+        Assert.Equal(["EyeCamera"], inspection.CameraModelNames);
+        Assert.Equal(
+            ["jaw_open"],
+            inspection.MeshGeometries["RetailMesh_Mesh"]
+                .BlendShapeChannelNames);
+        FbxAnimationStackInspection stack =
+            inspection.AnimationStacks["Idle"];
+        Assert.Equal(1, stack.BlendShapeCurveCount);
+        Assert.Equal(["jaw_open"], stack.BlendShapeChannelNames);
+    }
+
+    [Fact]
+    public async Task
         RejectsWrongNonRootHierarchyDespiteMatchingNamesAndBindPose()
     {
         string path = await WriteFixtureAsync(
@@ -495,7 +531,8 @@ public sealed class BlenderFbxStrictValidationTests :
     }
 
     private static FbxBinaryDocument BuildFixture(
-        FixtureCorruption corruption)
+        FixtureCorruption corruption,
+        bool includeCameraAndMorph = false)
     {
         long animationStop =
             corruption ==
@@ -661,6 +698,29 @@ public sealed class BlenderFbxStrictValidationTests :
                 [0, animationStop / 2, animationStop],
                 [0.0, 0.0, 0.0]),
         };
+        if (includeCameraAndMorph)
+        {
+            objects.AddRange(
+            [
+                Model(6, "EyeCamera", "LimbNode"),
+                Model(7, "EyeCamera", "Camera"),
+                Deformer(33, "RetailMeshBlendShape", "BlendShape"),
+                Deformer(34, "jaw_open", "BlendShapeChannel"),
+                CurveNode(62, "DeformPercent"),
+                CurveNode(63, "Lcl Translation"),
+                Curve(
+                    72,
+                    [0, animationStop / 2, animationStop],
+                    [0.0, 50.0, 100.0]),
+                Curve(
+                    73,
+                    [0, animationStop / 2, animationStop],
+                    [0.0, 0.0, 0.0]),
+            ]);
+            int bindPoseIndex = objects.FindIndex(static node =>
+                string.Equals(node.Name, "Pose", StringComparison.Ordinal));
+            objects[bindPoseIndex] = BindPose(20, [1, 2, 3, 6]);
+        }
         var connections = new List<FbxNode>
         {
             Connection("OO", 2, 1),
@@ -700,6 +760,23 @@ public sealed class BlenderFbxStrictValidationTests :
             ]);
         }
 
+        if (includeCameraAndMorph)
+        {
+            connections.AddRange(
+            [
+                Connection("OO", 6, 2),
+                Connection("OO", 7, 6),
+                Connection("OO", 33, 10),
+                Connection("OO", 34, 33),
+                Connection("OO", 62, 51),
+                Connection("OP", 72, 62, "d|DeformPercent"),
+                Connection("OP", 62, 34, "DeformPercent"),
+                Connection("OO", 63, 51),
+                Connection("OP", 73, 63, "d|X"),
+                Connection("OP", 63, 6, "Lcl Translation"),
+            ]);
+        }
+
         if (corruption !=
             FixtureCorruption.DisconnectedVideo)
         {
@@ -726,9 +803,11 @@ public sealed class BlenderFbxStrictValidationTests :
                 Property70("TimeMode", 6)));
     }
 
-    private static IReadOnlyList<BlenderFbxJobBone>
-        ExpectedBones() =>
-    [
+    private static List<BlenderFbxJobBone>
+        ExpectedBones(bool includeCamera = false)
+    {
+        var bones = new List<BlenderFbxJobBone>
+        {
         new(
             0,
             "Root",
@@ -753,12 +832,30 @@ public sealed class BlenderFbxStrictValidationTests :
             true,
             false,
             "child"),
-    ];
+        };
+        if (includeCamera)
+        {
+            bones.Add(new BlenderFbxJobBone(
+                2,
+                "EyeCamera",
+                0,
+                0x33333333,
+                [0.0, 1.6, 0.1],
+                [1.0, 0.0, 0.0, 0.0],
+                [1.0, 1.0, 1.0],
+                false,
+                false,
+                true,
+                "camera"));
+        }
+
+        return bones;
+    }
 
     private static IReadOnlyList<BlenderFbxJobClip>
-        ExpectedClips() =>
-    [
-        new(
+        ExpectedClips(bool includeMorph = false)
+    {
+        BlenderFbxJobClip clip = new(
             "Idle",
             "idle.anm2",
             new string('a', 64),
@@ -774,13 +871,27 @@ public sealed class BlenderFbxStrictValidationTests :
                 false,
                 false,
                 false,
-                null)),
-    ];
+                null));
+        return
+        [
+            includeMorph
+                ? clip with
+                {
+                    MorphTracks =
+                    [
+                        new BlenderFbxJobMorphTrack(
+                            "jaw_open",
+                            [0.0, 0.5, 1.0]),
+                    ],
+                }
+                : clip,
+        ];
+    }
 
     private static IReadOnlyList<BlenderFbxJobMesh>
-        ExpectedMeshes() =>
-    [
-        new(
+        ExpectedMeshes(bool includeMorph = false)
+    {
+        BlenderFbxJobMesh mesh = new(
             "RetailMesh",
             "unused.bin",
             3,
@@ -793,8 +904,23 @@ public sealed class BlenderFbxStrictValidationTests :
                 0.0f, 0.0f, 1.0f, 0.0f,
                 0.0f, 0.0f, 0.0f, 1.0f,
             ],
-            "tex"),
-    ];
+            "tex");
+        return
+        [
+            includeMorph
+                ? mesh with
+                {
+                    MorphTargets =
+                    [
+                        new BlenderFbxJobMorphTarget(
+                            "jaw_open",
+                            "unused-morph.bin",
+                            3),
+                    ],
+                }
+                : mesh,
+        ];
+    }
 
     private static IReadOnlyList<BlenderFbxJobTexture>
         ExpectedTextures() =>

@@ -112,7 +112,8 @@ public static class Dl1CustomModelRigPreparer
         model.Package.Document.Validate();
         RigDefinition sourceRig = model.Rig ?? throw new InvalidOperationException(
             "A static custom model has no authored animation rig.");
-        ImmutableArray<CustomModelBone> sourceBones = model.Package.Document.Bones;
+        ImmutableArray<CustomModelBone> sourceBones =
+            model.Package.Document.CreateEffectiveBones();
         if (sourceBones.Length != sourceRig.BoneCount)
         {
             throw new InvalidDataException("The imported custom-model rig and source-bone table disagree.");
@@ -198,7 +199,8 @@ public static class Dl1CustomModelRigPreparer
         var contract = new Dl1AuthoredRigContract(
             model.Package.Document.Name,
             model.Package.Document.Source.ContentSha256,
-            nodes.MoveToImmutable());
+            nodes.MoveToImmutable(),
+            sourceRig.MorphChannels);
         var preparedSurfaces = ImmutableArray.CreateBuilder<Dl1PreparedSkinSurface>(model.Surfaces.Length);
         foreach (FbxModelSurface surface in model.Surfaces)
         {

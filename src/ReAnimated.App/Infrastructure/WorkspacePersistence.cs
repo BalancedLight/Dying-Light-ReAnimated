@@ -1,4 +1,5 @@
 using System.IO;
+using System.Collections.Immutable;
 using System.Text.Json;
 using System.Windows.Threading;
 using ReAnimated.App.ViewModels;
@@ -21,9 +22,12 @@ public sealed record WorkspaceSnapshot(
     DlraProject? Project = null,
     bool IsProjectDirty = false,
     bool? MeshesVisible = null,
-    bool? SkeletonOverlayVisible = null)
+    bool? SkeletonOverlayVisible = null,
+    ImmutableArray<PendingProjectAssetReceipt> PendingAssets = default)
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+
+    public const int LegacySchemaVersion = 1;
 }
 
 public interface IWorkspaceSnapshotProvider
@@ -61,7 +65,15 @@ public sealed class JsonWorkspaceStateStore
         }
 
         Directory.CreateDirectory(directory);
-        string json = JsonSerializer.Serialize(snapshot, SerializerOptions);
+        WorkspaceSnapshot normalized = snapshot with
+        {
+            SchemaVersion = WorkspaceSnapshot.CurrentSchemaVersion,
+            PendingAssets = PendingProjectAssetStore.ValidateSnapshotReceipts(
+                snapshot.PendingAssets.IsDefault
+                    ? null
+                    : snapshot.PendingAssets),
+        };
+        string json = JsonSerializer.Serialize(normalized, SerializerOptions);
         AtomicFileWriter.WriteAllText(FilePath, json);
     }
 
@@ -75,13 +87,21 @@ public sealed class JsonWorkspaceStateStore
         string json = File.ReadAllText(FilePath);
         WorkspaceSnapshot? snapshot =
             JsonSerializer.Deserialize<WorkspaceSnapshot>(json, SerializerOptions);
-        if (snapshot is null
-            || snapshot.SchemaVersion != WorkspaceSnapshot.CurrentSchemaVersion)
+        if (snapshot is null ||
+            snapshot.SchemaVersion is not (
+                WorkspaceSnapshot.LegacySchemaVersion or
+                WorkspaceSnapshot.CurrentSchemaVersion))
         {
             return null;
         }
 
-        return snapshot;
+        return snapshot with
+        {
+            SchemaVersion = WorkspaceSnapshot.CurrentSchemaVersion,
+            PendingAssets = snapshot.PendingAssets.IsDefault
+                ? []
+                : snapshot.PendingAssets,
+        };
     }
 
     public string BackupCurrent()

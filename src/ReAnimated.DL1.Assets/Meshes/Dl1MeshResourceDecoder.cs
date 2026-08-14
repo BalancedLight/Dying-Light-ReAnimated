@@ -313,7 +313,7 @@ public static class Dl1MeshResourceDecoder
             diagnostics.Add(new Dl1MeshDiagnostic(
                 "DL1MESH012",
                 Dl1MeshDiagnosticSeverity.Information,
-                $"{decodedTargetCount} of {geometry.MorphChannels.Count} morph channels have decoded per-vertex SHORT4 position deltas; channel names and per-node/per-LOD associations are retained."));
+                $"{decodedTargetCount} of {geometry.MorphChannels.Count} morph channels have decoded per-vertex PC HALF4 position deltas; channel names and per-node/per-LOD associations are retained."));
         }
 
         var decodedMesh = new Dl1MeshData(
@@ -655,8 +655,15 @@ public static class Dl1MeshResourceDecoder
                         row.Binding.VertexCount,
                         row.Binding.DeltaByteStride,
                         row.Binding.PayloadByteOffset,
-                        Dl1MorphDeltaEncoding
-                            .SignedShort4Scale16384,
+                        row.Binding.DeltaFormat switch
+                        {
+                            CompiledMorphDeltaFormat.PcHalf4 =>
+                                Dl1MorphDeltaEncoding.PcHalf4,
+                            CompiledMorphDeltaFormat.X360SignedShort4Scale16384 =>
+                                Dl1MorphDeltaEncoding.X360SignedShort4Scale16384,
+                            _ => throw new InvalidDataException(
+                                $"Unsupported compiled morph delta encoding {row.Binding.DeltaFormat}."),
+                        },
                         row.Targets
                             .Select(static target =>
                                 target.LocalTargetIndex)

@@ -79,11 +79,15 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
                 includeCamera: false));
 
         Assert.Contains(
-            "EyeCamera helper",
+            "Preview camera",
+            viewModel.SourceViewport.DiagnosticOverlay,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "missing or unavailable",
             viewModel.SourceViewport.DiagnosticOverlay,
             StringComparison.Ordinal);
         Assert.Equal(
-            "FPP EyeCamera unavailable",
+            "Preview camera EyeCamera unavailable",
             viewModel.SourceViewport.Title);
         Assert.Equal(
             RenderCameraNavigationResult.Applied,
@@ -138,7 +142,7 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         Assert.Null(projection.HandsProjection);
         Assert.Contains(fppHands, cameraFrame.Meshes);
         Assert.Equal(
-            "DL1 Target / EyeCamera",
+            "Target / EyeCamera",
             viewModel.SourceViewport.Title);
         Assert.Contains(
             "hands projection unavailable",
@@ -321,7 +325,7 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
                 viewModel.SourceViewport.FidelityLabel,
                 StringComparison.OrdinalIgnoreCase);
             Assert.Equal(
-                "DL1 Target / EyeCamera",
+                "Target / EyeCamera",
                 viewModel.SourceViewport.Title);
             Assert.Equal(
                 "DL1 Target / External Orbit",

@@ -77,7 +77,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         Assert.False(second.ShowMeshes);
         Assert.False(second.ShowSkeletonOverlay);
         Assert.Contains(
-            "FPP profile is active",
+            "Playback camera 'EyeCamera' is requested",
             second.FacialFpp.PreviewStatus,
             StringComparison.Ordinal);
     }

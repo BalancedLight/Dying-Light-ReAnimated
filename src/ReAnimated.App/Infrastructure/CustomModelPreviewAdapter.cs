@@ -105,6 +105,51 @@ public sealed class CustomModelPreviewSession
         return CorePreviewAdapter.ToRenderSkeleton(previewPose, previewSelectedBone);
     }
 
+    public RenderCamera? CreatePreviewCamera(
+        AnimationClip? clip,
+        int frame,
+        string? nodeName)
+    {
+        if (_model.Rig is not { } rig || string.IsNullOrWhiteSpace(nodeName))
+        {
+            return null;
+        }
+
+        SkeletonPose sourcePose = clip is null
+            ? rig.CreateBindPose()
+            : clip.SamplePose(
+                rig,
+                clip.FrameRate.SecondsForFrame(
+                    Math.Clamp(
+                        frame,
+                        0,
+                        checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))),
+                PlaybackMode.Clamp);
+        SkeletonPose previewPose = _authoredRig?.RebasePose(sourcePose) ?? sourcePose;
+        int nodeIndex = previewPose.Rig.GetBoneIndex(nodeName);
+        if (nodeIndex < 0)
+        {
+            return null;
+        }
+
+        TransformMatrix world = previewPose.GlobalMatrices[nodeIndex];
+        Vector3 eye = ToVector3(world.Translation);
+        Vector3 forward = ToVector3(world.TransformDirection(Vector3D.UnitZ));
+        Vector3 up = ToVector3(world.TransformDirection(-Vector3D.UnitY));
+        if (!IsUsableDirection(forward) || !IsUsableDirection(up))
+        {
+            return null;
+        }
+
+        return new RenderCamera(
+            eye,
+            eye + Vector3.Normalize(forward),
+            Vector3.Normalize(up),
+            60.0f,
+            0.02f,
+            2_000.0f);
+    }
+
     public CustomModelPreviewPayload CreatePayload(
         AnimationClip? clip,
         int frame,
@@ -113,6 +158,17 @@ public sealed class CustomModelPreviewSession
             Meshes,
             CreateSkeleton(clip, frame, selectedBoneIndex),
             Diagnostics);
+
+    private static Vector3 ToVector3(Vector3D value) => new(
+        checked((float)value.X),
+        checked((float)value.Y),
+        checked((float)value.Z));
+
+    private static bool IsUsableDirection(Vector3 value) =>
+        float.IsFinite(value.X) &&
+        float.IsFinite(value.Y) &&
+        float.IsFinite(value.Z) &&
+        value.LengthSquared() > 1.0e-8f;
 }
 
 /// <summary>
@@ -240,6 +296,9 @@ public static class CustomModelPreviewAdapter
             Matrix4x4[] inverseBinds = preparedInverseBinds
                 .Select(static matrix => CorePreviewAdapter.ToSystemMatrix(matrix))
                 .ToArray();
+            MorphTargetRenderData[] morphTargets = surface.MorphTargets
+                .Select(target => ToRenderMorphTarget(surface, target))
+                .ToArray();
             TextureRenderData? baseColor = null;
             if (materials.TryGetValue(surface.MaterialId, out CustomModelMaterial? material))
             {
@@ -270,6 +329,7 @@ public static class CustomModelPreviewAdapter
                 Tint = baseColor is null
                     ? new Vector4(0.66f, 0.69f, 0.72f, 1.0f)
                     : Vector4.One,
+                MorphTargets = morphTargets,
             });
         }
 
@@ -318,6 +378,29 @@ public static class CustomModelPreviewAdapter
                     : vertex.TextureCoordinateV))),
             new Vector4(weights[0], weights[1], weights[2], weights[3]),
             new Vector4(indices[0], indices[1], indices[2], indices[3]));
+    }
+
+    private static MorphTargetRenderData ToRenderMorphTarget(
+        FbxModelSurface surface,
+        FbxModelMorphTarget target)
+    {
+        if (target.PositionDeltas.Length != surface.Vertices.Length ||
+            target.PositionDeltas.Any(static delta => !delta.IsFinite))
+        {
+            throw new InvalidDataException(
+                $"Morph target '{target.Name}' does not match surface '{surface.Id}'s expanded vertex buffer.");
+        }
+
+        Vector3[] positions = target.PositionDeltas
+            .Select(static delta => new Vector3(
+                checked((float)delta.X),
+                checked((float)delta.Y),
+                checked((float)delta.Z)))
+            .ToArray();
+        return new MorphTargetRenderData(
+            target.Name,
+            positions,
+            new Vector3[positions.Length]);
     }
 
     private static TextureRenderData? TryDecodeTexture(

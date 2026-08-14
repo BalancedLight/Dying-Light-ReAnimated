@@ -229,6 +229,11 @@ public static class Dl1CustomModelPackageBuilder
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        if (!request.Model.Package.Document.Bones.IsEmpty)
+        {
+            _ = request.Model.Package.Document
+                .CreateDl1AnimationRigDefinition();
+        }
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ParentOutputDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.CompilerExecutablePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResourceName);

@@ -18,7 +18,8 @@ public enum TargetBindingStatus
 
 /// <summary>
 /// Content-addressed identity for one immutable animation source interpreted
-/// against one exact retail target. Names are intentionally excluded.
+/// against one exact retail or project-owned model. Names are intentionally
+/// excluded.
 /// </summary>
 public readonly record struct AnimationVariantKey
 {

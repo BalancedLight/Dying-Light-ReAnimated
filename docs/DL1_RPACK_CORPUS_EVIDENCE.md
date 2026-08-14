@@ -74,7 +74,7 @@ On the validated 1.55 install, the final Release corpus run on
   morph-binding checks far enough to produce a local result, then passed the
   adapter/render-contract gate or one of the 22 exact non-display
   classifications;
-- 2,665 of 2,674 declared morph channels decoded bound SHORT4 vertex deltas;
+- 2,665 of 2,674 declared morph channels decoded bound PC HALF4 vertex deltas;
   the remaining nine are explicitly reported as channel-only inventory on
   Hellraid's `warrior`, not silently treated as decoded deltas; and
 - zero resources were blocked and the error-code maps were empty;

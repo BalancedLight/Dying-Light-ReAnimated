@@ -46,7 +46,7 @@ public sealed record PreparedCustomModelAnimation(
     string Anm2FileName,
     byte[] Payload,
     int FrameCount,
-    int FramesPerSecond,
+    float FramesPerSecond,
     string SourceName,
     string SourceFingerprint,
     Dl1RootMotionMode RootMotionMode,
@@ -101,6 +101,11 @@ public static class CustomModelAnimationLibraryExporter
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        if (!request.Model.Package.Document.Bones.IsEmpty)
+        {
+            _ = request.Model.Package.Document
+                .CreateDl1AnimationRigDefinition();
+        }
         if (request.Model.Rig is null || request.Model.Package.Document.Bones.IsEmpty)
         {
             throw new InvalidOperationException("A static custom model has no rig for animation-library export.");

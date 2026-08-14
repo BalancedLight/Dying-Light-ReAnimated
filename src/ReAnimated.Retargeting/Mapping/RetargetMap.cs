@@ -16,6 +16,33 @@ public enum BoneMappingMethod
     Distributed,
 }
 
+public enum MappingReviewOrigin
+{
+    None,
+    Explicit,
+    Assisted,
+}
+
+public enum MappingEvidenceKind
+{
+    DescriptorIdentity,
+    ExactName,
+    NormalizedName,
+    DeclaredSemanticRole,
+    InferredHumanoidRole,
+    SideAgreement,
+    ParentChainAgreement,
+    TransferPolicyAgreement,
+    StructuralSignature,
+    HelperFallback,
+    DistributedFanOut,
+    ManualSelection,
+}
+
+public sealed record MappingEvidence(
+    MappingEvidenceKind Kind,
+    string Detail);
+
 public sealed record BoneMapEntry
 {
     public BoneMapEntry(
@@ -29,7 +56,11 @@ public sealed record BoneMapEntry
         RetargetTransferPolicy transferPolicy =
             RetargetTransferPolicy.GlobalBindBasis,
         RetargetComponentPolicy componentPolicy =
-            RetargetComponentPolicy.FullTransform)
+            RetargetComponentPolicy.FullTransform,
+        IEnumerable<MappingEvidence>? evidence = null,
+        MappingReviewOrigin reviewOrigin = MappingReviewOrigin.None,
+        string scorerVersion = "",
+        string evidenceFingerprint = "")
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sourceBoneIndex);
         ArgumentOutOfRangeException.ThrowIfNegative(targetBoneIndex);
@@ -42,7 +73,8 @@ public sealed record BoneMapEntry
 
         if (!Enum.IsDefined(mappingKind) ||
             !Enum.IsDefined(transferPolicy) ||
-            !Enum.IsDefined(componentPolicy))
+            !Enum.IsDefined(componentPolicy) ||
+            !Enum.IsDefined(reviewOrigin))
         {
             throw new ArgumentException(
                 "The mapping kind, transfer policy, and component policy must be supported values.");
@@ -57,6 +89,36 @@ public sealed record BoneMapEntry
         MappingKind = mappingKind;
         TransferPolicy = transferPolicy;
         ComponentPolicy = componentPolicy;
+        Evidence = evidence?.ToImmutableArray() ?? [];
+        if (Evidence.Any(static row =>
+                !Enum.IsDefined(row.Kind) ||
+                string.IsNullOrWhiteSpace(row.Detail)))
+        {
+            throw new ArgumentException(
+                "Mapping evidence must use supported kinds and non-empty details.",
+                nameof(evidence));
+        }
+
+        if (reviewOrigin == MappingReviewOrigin.Assisted &&
+            (!isReviewed || !isLocked ||
+             string.IsNullOrWhiteSpace(scorerVersion) ||
+             string.IsNullOrWhiteSpace(evidenceFingerprint)))
+        {
+            throw new ArgumentException(
+                "An assisted mapping approval must be reviewed, locked, and bound to scorer evidence.",
+                nameof(reviewOrigin));
+        }
+
+        if (reviewOrigin == MappingReviewOrigin.Explicit && !isReviewed)
+        {
+            throw new ArgumentException(
+                "An explicit mapping review origin requires a reviewed row.",
+                nameof(reviewOrigin));
+        }
+
+        ReviewOrigin = reviewOrigin;
+        ScorerVersion = scorerVersion ?? string.Empty;
+        EvidenceFingerprint = evidenceFingerprint ?? string.Empty;
     }
 
     public int SourceBoneIndex { get; }
@@ -76,6 +138,14 @@ public sealed record BoneMapEntry
     public RetargetTransferPolicy TransferPolicy { get; }
 
     public RetargetComponentPolicy ComponentPolicy { get; }
+
+    public ImmutableArray<MappingEvidence> Evidence { get; }
+
+    public MappingReviewOrigin ReviewOrigin { get; }
+
+    public string ScorerVersion { get; }
+
+    public string EvidenceFingerprint { get; }
 }
 
 /// <summary>
@@ -225,7 +295,7 @@ public static class RetargetMapBuilder
             entries,
             mappedTargets);
 
-        return new RetargetMap(
+        RetargetMap proposal = new(
             source.Id,
             target.Id,
             entries
@@ -236,6 +306,7 @@ public static class RetargetMapBuilder
                         target))
                 .OrderBy(static entry => entry.TargetBoneIndex)
                 .ToImmutableArray());
+        return RetargetSuggestionScorer.Score(source, target, proposal);
     }
 
     private static void AddDistributedFingerMatches(
@@ -469,7 +540,7 @@ public static class RetargetMapBuilder
                         : RetargetComponentPolicy.FullTransform));
         }
 
-        return new RetargetMap(
+        RetargetMap proposal = new(
             source.Id,
             target.Id,
             entries
@@ -479,6 +550,7 @@ public static class RetargetMapBuilder
                         source,
                         target))
                 .ToImmutableArray());
+        return RetargetSuggestionScorer.Score(source, target, proposal);
     }
 
     private static BoneMapEntry ApplyAutomaticBodyTransferPolicy(

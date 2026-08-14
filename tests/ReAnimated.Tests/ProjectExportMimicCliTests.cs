@@ -61,6 +61,12 @@ public sealed class ProjectExportMimicCliTests
             SourceBoneName = "head",
             TargetBoneName = "head",
             Method = BoneMappingMethod.Manual.ToString(),
+            Confidence = 0.37,
+            Evidence =
+                "ManualSelection: Explicit author mapping evidence",
+            ReviewOrigin = ProjectMappingReviewOrigin.Explicit,
+            ScorerVersion = "manual-review-v1",
+            EvidenceFingerprint = new string('a', 64),
             IsReviewed = true,
             MappingKind = RetargetMappingKind.Bone,
             TransferPolicy =
@@ -94,6 +100,22 @@ public sealed class ProjectExportMimicCliTests
             entry => Assert.Equal(
                 1,
                 entry.SourceBoneIndex));
+        BoneMapEntry bodyEntry = Assert.Single(
+            map.Entries,
+            entry => entry.TargetBoneIndex == 1);
+        Assert.Equal(0.37, bodyEntry.Confidence);
+        Assert.Equal(
+            MappingReviewOrigin.Explicit,
+            bodyEntry.ReviewOrigin);
+        Assert.Equal("manual-review-v1", bodyEntry.ScorerVersion);
+        Assert.Equal(new string('a', 64), bodyEntry.EvidenceFingerprint);
+        MappingEvidence bodyEvidence = Assert.Single(bodyEntry.Evidence);
+        Assert.Equal(
+            MappingEvidenceKind.ManualSelection,
+            bodyEvidence.Kind);
+        Assert.Equal(
+            "Explicit author mapping evidence",
+            bodyEvidence.Detail);
         BoneMapEntry helperEntry = Assert.Single(
             map.Entries,
             entry => entry.TargetBoneIndex == 2);

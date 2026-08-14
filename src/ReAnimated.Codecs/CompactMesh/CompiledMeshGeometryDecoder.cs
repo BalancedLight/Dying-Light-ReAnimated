@@ -27,8 +27,7 @@ public static class CompiledMeshGeometryDecoder
     private const int EntityLodCountOffset = 0xCA;
     private const int GeometryLodStride = 0x30;
     private const int MorphLodStride = 0x20;
-    private const int MorphDeltaElementStride = sizeof(short) * 4;
-    private const float MorphDeltaScale = 1.0f / 16_384.0f;
+    private const int MorphDeltaElementStride = sizeof(ushort) * 4;
     private const int MaterialDatabaseHeaderSize = 0x0C;
     private const int MaterialDatabaseEntryStride = 0x18;
     private const int SkinHeaderSize = 0x08;
@@ -942,26 +941,38 @@ public static class CompiledMeshGeometryDecoder
                                 targetOffset +
                                 vertexIndex *
                                 MorphDeltaElementStride);
-                            short w = ReadInt16(
+                            ushort wBits = ReadUInt16(
                                 metadata,
-                                elementOffset + sizeof(short) * 3);
-                            if (w != 0)
+                                elementOffset + sizeof(ushort) * 3);
+                            if (wBits != 0)
                             {
                                 throw new InvalidDataException(
-                                    $"Compiled mesh entity {entityIndex} LOD {lodIndex} morph target {localTargetIndex} vertex {vertexIndex} has unsupported nonzero SHORT4 W value {w}.");
+                                    $"Compiled PC mesh entity {entityIndex} LOD {lodIndex} morph target {localTargetIndex} vertex {vertexIndex} has unsupported nonzero HALF4 W bits 0x{wBits:X4}.");
                             }
 
-                            deltas[vertexIndex] = new Vector3(
-                                ReadInt16(metadata, elementOffset) *
-                                    MorphDeltaScale,
-                                ReadInt16(
+                            // The official DL1 PC compiler's morph preparation
+                            // converts each source float3 component to IEEE-754
+                            // binary16 and writes a zero W. VertexMorphing.hlsl
+                            // consumes that PC buffer as float4. The separate
+                            // X360 upload path uses signed SHORT4 * 16384 and is
+                            // intentionally not inferred for a PC resource.
+                            Vector3 delta = new(
+                                ReadHalf(metadata, elementOffset),
+                                ReadHalf(
                                     metadata,
-                                    elementOffset + sizeof(short)) *
-                                    MorphDeltaScale,
-                                ReadInt16(
+                                    elementOffset + sizeof(ushort)),
+                                ReadHalf(
                                     metadata,
-                                    elementOffset + sizeof(short) * 2) *
-                                    MorphDeltaScale);
+                                    elementOffset + sizeof(ushort) * 2));
+                            if (!float.IsFinite(delta.X) ||
+                                !float.IsFinite(delta.Y) ||
+                                !float.IsFinite(delta.Z))
+                            {
+                                throw new InvalidDataException(
+                                    $"Compiled PC mesh entity {entityIndex} LOD {lodIndex} morph target {localTargetIndex} vertex {vertexIndex} contains a non-finite HALF4 delta.");
+                            }
+
+                            deltas[vertexIndex] = delta;
                         }
 
                         targets[localTargetIndex] =
@@ -977,8 +988,7 @@ public static class CompiledMeshGeometryDecoder
                         vertexCount,
                         MorphDeltaElementStride,
                         payloadOffset,
-                        CompiledMorphDeltaFormat
-                            .SignedShort4Scale16384,
+                        CompiledMorphDeltaFormat.PcHalf4,
                         indexes,
                         targets));
                 }

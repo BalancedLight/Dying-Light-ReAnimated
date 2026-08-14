@@ -33,7 +33,8 @@ public partial class App : Application, IDisposable
         _logger = new StructuredFileLogger(paths.LogDirectory);
         MainWindowViewModel viewModel = new(
             recoveryStore,
-            _logger);
+            _logger,
+            AssistedReviewSettingsStore.CreateDefault());
         _viewModel = viewModel;
         _autosave = new WorkspaceAutosaveService(viewModel, recoveryStore);
         _crashReporter = new CrashReporter(paths.CrashDirectory);

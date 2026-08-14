@@ -1,0 +1,271 @@
+using System.Collections.Immutable;
+using ReAnimated.Core.Project;
+
+namespace ReAnimated.Tests;
+
+public sealed class ProjectModelReimportReconcilerTests
+{
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void RigChangeRetainsAuthoredRowsButInvalidatesDependentReviews()
+    {
+        Guid assetId = Guid.NewGuid();
+        Guid modelId = Guid.NewGuid();
+        ProjectBoneMapping body = ReviewedBone();
+        ProjectMorphBinding face = ReviewedMorph();
+        var model = new ProjectModelEntry
+        {
+            Id = modelId,
+            AssetId = assetId,
+            Name = "Generic target",
+            RigSignature = Sha('1'),
+            MorphSignature = Sha('2'),
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = Guid.NewGuid(),
+            Name = "Generic take",
+            TargetModelId = modelId,
+            TargetRigId = "generic-rig",
+            TargetRigSignature = Sha('1'),
+            MappingFingerprint = Sha('3'),
+            BoneMappings = [body],
+            TargetBindReviews =
+            [
+                new ProjectTargetBindReview
+                {
+                    TargetBoneIndex = 1,
+                    TargetBoneName = "child",
+                },
+            ],
+            MorphBindings = [face],
+        };
+        ProjectAnimation compatibility = Compatibility(
+            variant,
+            assetId,
+            body,
+            face);
+        var project = new DlraProject
+        {
+            Models = [model],
+            AnimationVariants = [variant],
+            Animations = [compatibility],
+        };
+        ProjectModelEntry replacement = model with
+        {
+            RigSignature = Sha('4'),
+        };
+
+        DlraProject result = ProjectModelReimportReconciler.Apply(
+            project,
+            replacement);
+
+        ProjectAnimationVariant updated = Assert.Single(
+            result.AnimationVariants);
+        Assert.Equal(Sha('4'), updated.TargetRigSignature);
+        Assert.Null(updated.MappingFingerprint);
+        Assert.Empty(updated.TargetBindReviews);
+        ProjectBoneMapping retained = Assert.Single(updated.BoneMappings);
+        Assert.Equal(body.SourceBoneName, retained.SourceBoneName);
+        Assert.Equal(body.TargetBoneName, retained.TargetBoneName);
+        Assert.Equal(body.Evidence, retained.Evidence);
+        Assert.False(retained.IsReviewed);
+        Assert.False(retained.IsLocked);
+        Assert.Equal(ProjectMappingReviewOrigin.None, retained.ReviewOrigin);
+        Assert.Equal(face, Assert.Single(updated.MorphBindings));
+
+        ProjectAnimation legacy = Assert.Single(result.Animations);
+        Assert.Null(legacy.MappingFingerprint);
+        Assert.False(Assert.Single(legacy.BoneMappings).IsReviewed);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void MorphChangeLeavesBodyReviewAndStalesOnlyFacialRows()
+    {
+        Guid assetId = Guid.NewGuid();
+        Guid modelId = Guid.NewGuid();
+        ProjectBoneMapping body = ReviewedBone();
+        ProjectMorphBinding face = ReviewedMorph();
+        var model = new ProjectModelEntry
+        {
+            Id = modelId,
+            AssetId = assetId,
+            Name = "Generic target",
+            RigSignature = Sha('1'),
+            MorphSignature = Sha('2'),
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = Guid.NewGuid(),
+            Name = "Generic take",
+            TargetModelId = modelId,
+            TargetRigId = "generic-rig",
+            TargetRigSignature = Sha('1'),
+            MappingFingerprint = Sha('3'),
+            BoneMappings = [body],
+            MorphBindings = [face],
+        };
+        var project = new DlraProject
+        {
+            Models = [model],
+            AnimationVariants = [variant],
+        };
+
+        DlraProject result = ProjectModelReimportReconciler.Apply(
+            project,
+            model with { MorphSignature = Sha('5') });
+
+        ProjectAnimationVariant updated = Assert.Single(
+            result.AnimationVariants);
+        Assert.Equal(body, Assert.Single(updated.BoneMappings));
+        Assert.Equal(Sha('3'), updated.MappingFingerprint);
+        ProjectMorphBinding retained = Assert.Single(updated.MorphBindings);
+        Assert.Equal(face.SourceChannel, retained.SourceChannel);
+        Assert.Equal(face.TargetMorph, retained.TargetMorph);
+        Assert.Equal(face.Evidence, retained.Evidence);
+        Assert.False(retained.IsReviewed);
+        Assert.False(retained.IsLocked);
+        Assert.Equal(ProjectMappingReviewOrigin.None, retained.ReviewOrigin);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void StableContractsPreserveReviewsWhileUpdatingModelMetadata()
+    {
+        var model = new ProjectModelEntry
+        {
+            Id = Guid.NewGuid(),
+            AssetId = Guid.NewGuid(),
+            Name = "Original",
+            RigSignature = Sha('1'),
+            MorphSignature = Sha('2'),
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = Guid.NewGuid(),
+            Name = "Generic take",
+            TargetModelId = model.Id,
+            TargetRigId = "generic-rig",
+            BoneMappings = [ReviewedBone()],
+            MorphBindings = [ReviewedMorph()],
+        };
+        var project = new DlraProject
+        {
+            Models = [model],
+            AnimationVariants = [variant],
+        };
+
+        DlraProject result = ProjectModelReimportReconciler.Apply(
+            project,
+            model with { Name = "Renamed" });
+
+        Assert.Equal("Renamed", Assert.Single(result.Models).Name);
+        Assert.Equal(variant, Assert.Single(result.AnimationVariants));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void ReplacementAssetRetargetsCompatibilityRowWithoutDiscardingSourceAsset()
+    {
+        Guid previousAssetId = Guid.NewGuid();
+        Guid replacementAssetId = Guid.NewGuid();
+        var model = new ProjectModelEntry
+        {
+            Id = Guid.NewGuid(),
+            AssetId = previousAssetId,
+            Name = "Generic target",
+            RigSignature = Sha('1'),
+            MorphSignature = Sha('2'),
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = Guid.NewGuid(),
+            Name = "Generic take",
+            TargetModelId = model.Id,
+            TargetRigId = "generic-rig",
+            TargetRigSignature = Sha('1'),
+            BoneMappings = [ReviewedBone()],
+        };
+        ProjectAnimation compatibility = Compatibility(
+            variant,
+            previousAssetId,
+            ReviewedBone(),
+            ReviewedMorph());
+        var project = new DlraProject
+        {
+            Models = [model],
+            AnimationVariants = [variant],
+            Animations = [compatibility],
+        };
+
+        DlraProject result = ProjectModelReimportReconciler.Apply(
+            project,
+            model with { AssetId = replacementAssetId });
+
+        Assert.Equal(
+            replacementAssetId,
+            Assert.Single(result.Animations).TargetAssetId);
+        Assert.Equal(
+            replacementAssetId,
+            Assert.Single(result.Models).AssetId);
+        Assert.Equal(variant, Assert.Single(result.AnimationVariants));
+    }
+
+    private static ProjectAnimation Compatibility(
+        ProjectAnimationVariant variant,
+        Guid targetAssetId,
+        ProjectBoneMapping body,
+        ProjectMorphBinding face) => new()
+        {
+            Id = variant.Id,
+            Name = variant.Name,
+            VariantGroupId = variant.SourceId,
+            SourceAssetId = Guid.NewGuid(),
+            TargetAssetId = targetAssetId,
+            TargetRigId = variant.TargetRigId,
+            TargetRigSignature = variant.TargetRigSignature,
+            MappingFingerprint = variant.MappingFingerprint,
+            BoneMappings = [body],
+            TargetBindReviews = variant.TargetBindReviews,
+            MorphBindings = [face],
+        };
+
+    private static ProjectBoneMapping ReviewedBone() => new()
+    {
+        SourceBoneName = "source_root",
+        TargetBoneName = "target_root",
+        Method = "manual",
+        Confidence = 1.0,
+        Evidence = "Explicit author review.",
+        ReviewOrigin = ProjectMappingReviewOrigin.Explicit,
+        ScorerVersion = "manual-v1",
+        EvidenceFingerprint = Sha('a'),
+        IsReviewed = true,
+        IsLocked = true,
+    };
+
+    private static ProjectMorphBinding ReviewedMorph() => new()
+    {
+        SourceChannel = "source_face",
+        TargetMorph = "target_face",
+        Method = "manual",
+        Confidence = 1.0,
+        Evidence = "Explicit author review.",
+        ReviewOrigin = ProjectMappingReviewOrigin.Explicit,
+        ScorerVersion = "manual-v1",
+        EvidenceFingerprint = Sha('b'),
+        IsReviewed = true,
+        IsLocked = true,
+    };
+
+    private static string Sha(char value) => new(value, 64);
+}

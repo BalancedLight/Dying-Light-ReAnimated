@@ -51,6 +51,10 @@ public static class RetargetMappingReview
 
         CompatibilityReport compatibility =
             RigCompatibilityAnalyzer.Analyze(source, target, map);
+        Dictionary<int, BoneMapEntry> currentEvidenceByTarget =
+            RetargetSuggestionScorer.Score(source, target, map)
+                .Entries
+                .ToDictionary(static entry => entry.TargetBoneIndex);
         var diagnostics =
             ImmutableArray.CreateBuilder<CompatibilityDiagnostic>();
         diagnostics.AddRange(compatibility.Diagnostics);
@@ -73,6 +77,21 @@ public static class RetargetMappingReview
             bool automaticPolicy =
                 deterministicIdentity &&
                 IsVerifiedAutomaticPolicy(target, entry);
+            bool assistedApprovalCurrent =
+                entry.ReviewOrigin != MappingReviewOrigin.Assisted ||
+                currentEvidenceByTarget.TryGetValue(
+                    entry.TargetBoneIndex,
+                    out BoneMapEntry? currentEvidence) &&
+                string.Equals(
+                    entry.ScorerVersion,
+                    RetargetSuggestionScorer.PolicyVersion,
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    entry.EvidenceFingerprint,
+                    currentEvidence.EvidenceFingerprint,
+                    StringComparison.OrdinalIgnoreCase) &&
+                RetargetSuggestionScorer.IsEligibleForAssistedReview(
+                    currentEvidence);
             if (entry.Method is
                     BoneMappingMethod.DescriptorHash or
                     BoneMappingMethod.ExactName &&
@@ -83,6 +102,18 @@ public static class RetargetMappingReview
                         "deterministic_mapping_identity_mismatch",
                         CompatibilityDiagnosticSeverity.Error,
                         $"Mapping '{sourceBone.Name}' -> '{targetBone.Name}' claims {entry.Method} but the loaded rig identities do not verify it.",
+                        sourceBone.Name,
+                        targetBone.Name));
+                continue;
+            }
+
+            if (!assistedApprovalCurrent)
+            {
+                diagnostics.Add(
+                    new CompatibilityDiagnostic(
+                        "assisted_mapping_evidence_stale",
+                        CompatibilityDiagnosticSeverity.Error,
+                        $"Assisted approval for '{sourceBone.Name}' -> '{targetBone.Name}' no longer matches policy {RetargetSuggestionScorer.PolicyVersion} or the loaded rig evidence. Regenerate suggestions or review it explicitly.",
                         sourceBone.Name,
                         targetBone.Name));
                 continue;
@@ -161,14 +192,19 @@ public static class RetargetMappingReview
         return entry.Method switch
         {
             BoneMappingMethod.DescriptorHash =>
-                sourceBone.DescriptorHash.HasValue &&
-                sourceBone.DescriptorHash ==
-                    targetBone.DescriptorHash,
+                sourceBone.DescriptorHash is { } descriptor &&
+                targetBone.DescriptorHash == descriptor &&
+                source.Bones.Count(bone =>
+                    bone.DescriptorHash == descriptor) == 1 &&
+                target.Bones.Count(bone =>
+                    bone.DescriptorHash == descriptor) == 1,
             BoneMappingMethod.ExactName =>
                 string.Equals(
                     sourceBone.Name,
                     targetBone.Name,
-                    StringComparison.OrdinalIgnoreCase),
+                    StringComparison.OrdinalIgnoreCase) &&
+                source.GetBoneIndices(sourceBone.Name).Length == 1 &&
+                target.GetBoneIndices(targetBone.Name).Length == 1,
             _ => false,
         };
     }

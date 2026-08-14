@@ -105,7 +105,7 @@ public sealed class InstalledDl1AuthoringEndToEndTests
             static binding =>
             {
                 Assert.Equal(
-                    Dl1MorphDeltaEncoding.SignedShort4Scale16384,
+                    Dl1MorphDeltaEncoding.PcHalf4,
                     binding.DeltaEncoding);
                 Assert.Equal(8, binding.DeltaByteStride);
                 Assert.True(binding.VertexCount > 0);
@@ -453,7 +453,7 @@ public sealed class InstalledDl1AuthoringEndToEndTests
             if (decodedMorph is null)
             {
                 rejected.Add(
-                    $"{name}: no fully decoded SHORT4 position-delta target");
+                    $"{name}: no fully decoded PC HALF4 position-delta target");
                 continue;
             }
 

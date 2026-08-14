@@ -147,7 +147,7 @@ public sealed class AssetCompactMeshTests
         Assert.Equal(3, binding.VertexCount);
         Assert.Equal(8, binding.DeltaByteStride);
         Assert.Equal(
-            CompiledMorphDeltaFormat.SignedShort4Scale16384,
+            CompiledMorphDeltaFormat.PcHalf4,
             binding.DeltaFormat);
         Assert.Equal((ushort)0, Assert.Single(
             binding.MorphChannelIndexes));
@@ -456,7 +456,7 @@ public sealed class AssetCompactMeshTests
     }
 
     [Fact]
-    public void MorphDeltaRejectsUnexplainedNonzeroShort4W()
+    public void MorphDeltaRejectsUnexplainedNonzeroPcHalf4W()
     {
         CompiledMeshTestFixture fixture =
             RpackTestData.BuildCompiledMeshFixture();
@@ -481,7 +481,7 @@ public sealed class AssetCompactMeshTests
             CompactMeshDiagnosticSeverity.Error,
             diagnostic.Severity);
         Assert.Contains(
-            "unsupported nonzero SHORT4 W value 1",
+            "unsupported nonzero HALF4 W bits 0x0001",
             diagnostic.Message,
             StringComparison.Ordinal);
     }

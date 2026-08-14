@@ -336,9 +336,9 @@ internal static class RpackTestData
         BinaryPrimitives.WriteUInt16LittleEndian(
             data[morphIndexes..],
             0);
-        WriteMorphDelta(data, morphPayload, 16_384, 0, 0);
-        WriteMorphDelta(data, morphPayload + 8, 0, -8_192, 4_096);
-        WriteMorphDelta(data, morphPayload + 16, 0, 0, 0);
+        WriteMorphHalfDelta(data, morphPayload, 1.0f, 0.0f, 0.0f);
+        WriteMorphHalfDelta(data, morphPayload + 8, 0.0f, -0.5f, 0.25f);
+        WriteMorphHalfDelta(data, morphPayload + 16, 0.0f, 0.0f, 0.0f);
         WritePointer(
             data,
             CompiledMeshMaterialDatabaseHolderOffset,
@@ -536,17 +536,23 @@ internal static class RpackTestData
         return output.ToArray();
     }
 
-    private static void WriteMorphDelta(
+    private static void WriteMorphHalfDelta(
         Span<byte> data,
         int offset,
-        short x,
-        short y,
-        short z)
+        float x,
+        float y,
+        float z)
     {
-        BinaryPrimitives.WriteInt16LittleEndian(data[offset..], x);
-        BinaryPrimitives.WriteInt16LittleEndian(data[(offset + 2)..], y);
-        BinaryPrimitives.WriteInt16LittleEndian(data[(offset + 4)..], z);
-        BinaryPrimitives.WriteInt16LittleEndian(data[(offset + 6)..], 0);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            data[offset..],
+            BitConverter.HalfToUInt16Bits((Half)x));
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            data[(offset + 2)..],
+            BitConverter.HalfToUInt16Bits((Half)y));
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            data[(offset + 4)..],
+            BitConverter.HalfToUInt16Bits((Half)z));
+        BinaryPrimitives.WriteUInt16LittleEndian(data[(offset + 6)..], 0);
     }
 
     private static byte[] CompressLzma(byte[] value)

@@ -48,7 +48,7 @@ public sealed class AnimationExplorerViewModelTests : IDisposable
             nameof(AssetKind.Mesh),
             viewModel.AssetBrowser.SelectedKindFilter);
         Assert.Contains(
-            "exact retail source model",
+            "exact fingerprinted source model",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
         Assert.True(
@@ -240,6 +240,35 @@ public sealed class AnimationExplorerViewModelTests : IDisposable
             target,
             target,
             new string('d', 64)));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void CustomProjectModelIdentityRequiresResourceAndFingerprint()
+    {
+        Guid assetId = Guid.NewGuid();
+        var custom = new ProjectAssetReference
+        {
+            Id = assetId,
+            Kind = ProjectAssetKind.CustomModelSource,
+            RelativePath = "assets/models/generic.dlrmodel",
+            ResourceId = $"custom-model:{Guid.NewGuid():N}",
+            ContentSha256 = new string('a', 64),
+        };
+
+        Assert.True(MainWindowViewModel.ProjectModelAssetsMatch(
+            custom,
+            custom with { Id = Guid.NewGuid() }));
+        Assert.False(MainWindowViewModel.ProjectModelAssetsMatch(
+            custom,
+            custom with { ContentSha256 = new string('b', 64) }));
+        Assert.False(MainWindowViewModel.ProjectModelAssetsMatch(
+            custom,
+            custom with
+            {
+                ResourceId = $"custom-model:{Guid.NewGuid():N}",
+            }));
     }
 
     public void Dispose()

@@ -32,31 +32,42 @@ In both rows the channel-index table begins exactly at the calculated payload
 end. Every inspected fourth component is zero. The installed `armored`
 control provides a separate 1,803-vertex, 15-channel binding.
 
-The Windows compiler selects declaration format 7 (`SHORT4`) when a morph
-component multiplied by 16384 exceeds the signed DEC4 range. Before conversion
-it multiplies each source `float3` morph delta by `16384.0`, without swapping
-or reflecting components. `SConvShortVec4` sign-extends each 16-bit component
-back to a float. Therefore the exact model-local position delta is:
+The eight-byte PC element is `HALF4`, not signed `SHORT4`. The Windows
+Developer Tools compiler's PC morph-preparation path converts each source
+`float3` component from float32 to IEEE-754 binary16 and writes an exact zero
+binary16 W. The compiled payload for the generic control therefore preserves
+the expected half bit patterns: `0.125 -> 0x3000`, `0.25 -> 0x3400`, and
+`-0.5 -> 0xB800`. The installed PC/DX11 `VertexMorphing.hlsl` consumes the
+morph buffer as `float4`, which independently agrees with that representation.
+Therefore the PC model-local position delta is:
 
 ```text
-delta = float3(short_x, short_y, short_z) / 16384
+delta = float3(half_x, half_y, half_z)
 ```
 
-The fourth signed short is padding for this `float3` path, not a normal delta.
+The fourth half is zero padding for this `float3` path, not a normal delta.
 The decoded delta is in the same model-local basis as the compact mesh
 position. The C# preview blends it before skinning. No separate normal-delta
 payload is present in this row.
 
+There is a distinct X360 compiler path. It selects `SHORT4` or `DEC4`,
+multiplies source deltas by `16384.0`, and uploads position semantic index 3.
+The X360 shader branch correspondingly divides its fetched morph vector by
+`X360_MORPH_TARGET_SCALE`. That platform-specific evidence must not be used to
+decode a PC RP6L payload.
+
 Evidence locations used for this pass:
 
-- a local Windows engine-module decompilation,
-  approximately 1523260-1523425 (`CCompactMeshEntity::Create`),
-  1548275-1548310 (SHORT4 range selection),
-  1552050-1552075 (SHORT4/DEC4 declaration selection), and
-  1552628-1552695 (target-major conversion and `* 16384.0`)
+- a local Windows engine-module decompilation, approximately
+  1523260-1523425 (`CCompactMeshEntity::Create`) and
+  1550970-1551040 (PC target-major float32-to-binary16 conversion)
+- the same Windows module, approximately 1548275-1548310,
+  1552050-1552075, and 1552628-1552695, for the separate X360
+  `SHORT4`/`DEC4` declaration and `* 16384.0` upload path
+- the installed PC/DX11 `VertexMorphing.hlsl`, whose PC branch reads
+  `Buffer<float4>` directly while the X360 branch divides by the X360 scale
 - a local named macOS engine-module decompilation, approximately
-  2917732-2917780 (`CCompactMeshEntity::Create`) and
-  2937721-2937860 (`SConvShortVec4`)
+  2917732-2917780 (`CCompactMeshEntity::Create`)
 
 ## C# implementation and fail-closed boundary
 
@@ -65,8 +76,9 @@ The codec now:
 - bounds the payload as `vertexCount * targetCount * 8` before allocation;
 - caps decoded position-delta storage at 256 MiB by default;
 - requires the morph vertex count to match the decoded entity/LOD surface;
-- rejects out-of-range channel mappings and unexplained nonzero SHORT4 `W`;
-- decodes signed XYZ at exactly `1 / 16384` in target-major order; and
+- rejects out-of-range channel mappings, non-finite halves, and unexplained
+  nonzero PC `HALF4` W bits;
+- decodes IEEE-754 binary16 XYZ in target-major order; and
 - observes cancellation between target allocations.
 
 `Dl1MorphPayloadStatus.VertexDeltasDecoded` is published only for a mapped

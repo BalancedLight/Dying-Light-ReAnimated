@@ -36,7 +36,7 @@ still require configured DL1 packs or captured Windows 1.55 evidence:
 - coverage of every base/DLC type-272 layout, rig family, LOD, material, skin
   palette, and container classification;
 - the generated fixture itself is not retail proof; separate read-only
-  `player_1_tpp` and `armored` controls cover SHORT4 position-delta
+  `player_1_tpp` and `armored` controls cover PC HALF4 position-delta
   dequantization and renderer handoff, while facial visual/game validation
   remains open;
 - retail shader, texture, helper, player FPP/TPP, and family-specific IK

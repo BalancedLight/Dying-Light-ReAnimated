@@ -73,7 +73,8 @@ public sealed class FacialFbxProjectReviewImporter :
         cancellationToken.ThrowIfCancellationRequested();
 
         Dl1MimicProfile profile =
-            Dl1MimicProfileCodec.ReadBuiltInCommon46();
+            FbxFacialProjectReviewService
+                .CreateTargetInventoryProfile(exactTargetRig);
         FbxFacialProjectReview review =
             FbxFacialProjectReviewService.Create(
                 new FbxFacialProjectReviewRequest

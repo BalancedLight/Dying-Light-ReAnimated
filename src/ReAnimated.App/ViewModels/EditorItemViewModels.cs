@@ -287,7 +287,9 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
         string? variantGroupLabel = null,
         TargetBindingStatus targetBindingStatus =
             TargetBindingStatus.Invalid,
-        bool showVariantGroupHeader = false)
+        bool showVariantGroupHeader = false,
+        bool isSourceOnly = false,
+        bool isRuntimeAvailable = true)
     {
         if (id == Guid.Empty)
         {
@@ -316,6 +318,8 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
             : variantGroupLabel.Trim();
         TargetBindingStatus = targetBindingStatus;
         ShowVariantGroupHeader = showVariantGroupHeader;
+        IsSourceOnly = isSourceOnly;
+        IsRuntimeAvailable = isRuntimeAvailable;
     }
 
     public Guid Id { get; }
@@ -357,7 +361,125 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
     public TargetBindingStatus TargetBindingStatus { get; }
 
     public bool ShowVariantGroupHeader { get; }
+
+    public bool IsSourceOnly { get; }
+
+    public bool IsRuntimeAvailable { get; }
 }
+
+public sealed class ProjectModelItemViewModel
+{
+    public ProjectModelItemViewModel(
+        Guid modelId,
+        string name,
+        string source,
+        string contract)
+    {
+        if (modelId == Guid.Empty)
+        {
+            throw new ArgumentException(
+                "Project model identifiers cannot be empty.",
+                nameof(modelId));
+        }
+
+        ModelId = modelId;
+        Name = string.IsNullOrWhiteSpace(name)
+            ? "Unnamed model"
+            : name;
+        Source = source ?? string.Empty;
+        Contract = contract ?? string.Empty;
+    }
+
+    public Guid ModelId { get; }
+
+    public string Name { get; }
+
+    public string Source { get; }
+
+    public string Contract { get; }
+}
+
+public sealed class ExportVariantSelectionViewModel : ObservableObject
+{
+    private bool _isSelected;
+
+    public ExportVariantSelectionViewModel(
+        Guid animationId,
+        string name,
+        string readiness,
+        bool isEnabled,
+        bool isSelected)
+    {
+        AnimationId = animationId;
+        Name = name ?? string.Empty;
+        Readiness = readiness ?? string.Empty;
+        IsEnabled = isEnabled;
+        _isSelected = isEnabled && isSelected;
+    }
+
+    public Guid AnimationId { get; }
+
+    public string Name { get; }
+
+    public string Readiness { get; }
+
+    public bool IsEnabled { get; }
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetProperty(ref _isSelected, IsEnabled && value);
+    }
+}
+
+public sealed class ExportModelSelectionViewModel : ObservableObject
+{
+    private bool _isSelected;
+
+    public ExportModelSelectionViewModel(
+        Guid? modelAssetId,
+        string modelName,
+        IEnumerable<ExportVariantSelectionViewModel> variants)
+    {
+        ModelAssetId = modelAssetId;
+        ModelName = string.IsNullOrWhiteSpace(modelName)
+            ? "Unbound model"
+            : modelName;
+        Variants = new ObservableCollection<ExportVariantSelectionViewModel>(
+            variants ?? throw new ArgumentNullException(nameof(variants)));
+        _isSelected = Variants.Any(static variant => variant.IsSelected);
+    }
+
+    public Guid? ModelAssetId { get; }
+
+    public string ModelName { get; }
+
+    public ObservableCollection<ExportVariantSelectionViewModel> Variants
+    { get; }
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set
+        {
+            if (!SetProperty(ref _isSelected, value))
+            {
+                return;
+            }
+
+            foreach (ExportVariantSelectionViewModel variant in Variants)
+            {
+                variant.IsSelected = value;
+            }
+        }
+    }
+}
+
+public sealed record ExportReadinessItemViewModel(
+    string Artifact,
+    string State,
+    string Detail,
+    bool IsReady);
 
 public sealed class AssetBrowserViewModel : ObservableObject
 {
@@ -1864,7 +1986,12 @@ public sealed class BoneMappingViewModel : ObservableObject
         RetargetTransferPolicy transferPolicy =
             RetargetTransferPolicy.GlobalBindBasis,
         RetargetComponentPolicy componentPolicy =
-            RetargetComponentPolicy.FullTransform)
+            RetargetComponentPolicy.FullTransform,
+        string evidence = "No mapping evidence recorded.",
+        ProjectMappingReviewOrigin reviewOrigin =
+            ProjectMappingReviewOrigin.None,
+        string scorerVersion = "unscored-v1",
+        string evidenceFingerprint = "")
     {
         SourceBone = sourceBone;
         _targetBone = targetBone;
@@ -1873,6 +2000,10 @@ public sealed class BoneMappingViewModel : ObservableObject
         MappingKind = mappingKind;
         _transferPolicy = transferPolicy;
         _componentPolicy = componentPolicy;
+        Evidence = evidence ?? string.Empty;
+        ReviewOrigin = reviewOrigin;
+        ScorerVersion = scorerVersion ?? string.Empty;
+        EvidenceFingerprint = evidenceFingerprint ?? string.Empty;
         _isLocked =
             !string.IsNullOrWhiteSpace(targetBone) &&
             isLocked;
@@ -1886,6 +2017,17 @@ public sealed class BoneMappingViewModel : ObservableObject
     public double Confidence { get; }
 
     public string Status { get; }
+
+    public string Evidence { get; }
+
+    public ProjectMappingReviewOrigin ReviewOrigin { get; }
+
+    public string ScorerVersion { get; }
+
+    public string EvidenceFingerprint { get; }
+
+    public string EvidenceSummary =>
+        $"{Confidence:P0} | {ReviewOrigin} | {ScorerVersion}\n{Evidence}";
 
     public RetargetMappingKind MappingKind { get; }
 
@@ -2082,6 +2224,7 @@ public sealed class FacialMorphBindingReviewViewModel :
     private bool _enabled;
     private bool _isReviewed;
     private bool _isLocked;
+    private bool _reviewDecisionChanged;
 
     public FacialMorphBindingReviewViewModel(
         ProjectMorphBinding binding)
@@ -2111,6 +2254,19 @@ public sealed class FacialMorphBindingReviewViewModel :
 
     public double Confidence => Binding.Confidence;
 
+    public string Evidence => Binding.Evidence;
+
+    public ProjectMappingReviewOrigin ReviewOrigin =>
+        Binding.ReviewOrigin;
+
+    public string ScorerVersion => Binding.ScorerVersion;
+
+    public string EvidenceFingerprint =>
+        Binding.EvidenceFingerprint;
+
+    public string EvidenceSummary =>
+        $"{Confidence:P0} | {ReviewOrigin} | {ScorerVersion}\n{Evidence}";
+
     public string ConfidenceLabel =>
         $"{Confidence:P0} {Method}";
 
@@ -2121,6 +2277,7 @@ public sealed class FacialMorphBindingReviewViewModel :
         {
             if (SetProperty(ref _enabled, value))
             {
+                _reviewDecisionChanged = true;
                 OnPropertyChanged(nameof(ReviewState));
             }
         }
@@ -2138,6 +2295,7 @@ public sealed class FacialMorphBindingReviewViewModel :
             }
 
             _isReviewed = value;
+            _reviewDecisionChanged = true;
             if (!value)
             {
                 _isLocked = false;
@@ -2161,6 +2319,7 @@ public sealed class FacialMorphBindingReviewViewModel :
             bool normalized = value && IsReviewed;
             if (SetProperty(ref _isLocked, normalized))
             {
+                _reviewDecisionChanged = true;
                 OnPropertyChanged(nameof(ReviewState));
             }
         }
@@ -2181,6 +2340,11 @@ public sealed class FacialMorphBindingReviewViewModel :
             Enabled = Enabled,
             IsReviewed = IsReviewed,
             IsLocked = IsLocked,
+            ReviewOrigin = !IsReviewed
+                ? ProjectMappingReviewOrigin.None
+                : _reviewDecisionChanged
+                    ? ProjectMappingReviewOrigin.Explicit
+                    : Binding.ReviewOrigin,
         };
 }
 

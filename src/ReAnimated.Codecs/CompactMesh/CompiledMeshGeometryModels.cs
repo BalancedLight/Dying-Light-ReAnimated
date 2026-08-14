@@ -134,7 +134,18 @@ public sealed record CompiledMorphChannel(
 
 public enum CompiledMorphDeltaFormat
 {
-    SignedShort4Scale16384,
+    /// <summary>
+    /// DL1 PC stores each target-major morph element as IEEE-754 binary16
+    /// XYZ plus an exact zero binary16 W component.
+    /// </summary>
+    PcHalf4,
+
+    /// <summary>
+    /// The separate X360 compiler path scales float3 deltas by 16384 and
+    /// emits signed SHORT4. This value is retained to keep that platform
+    /// contract distinct; the PC compact-mesh decoder does not emit it.
+    /// </summary>
+    X360SignedShort4Scale16384,
 }
 
 public sealed record CompiledMorphTargetDeltas(

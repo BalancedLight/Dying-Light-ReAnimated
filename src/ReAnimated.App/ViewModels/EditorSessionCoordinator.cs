@@ -7,9 +7,15 @@ public enum EditorWorkspaceMode
     Browse,
     Models,
     Animate,
+    // Playback deliberately aliases the former Animate value so recovery
+    // snapshots and existing project-session code keep their runtime
+    // semantics while the public shell uses the model-first name.
+    Playback = Animate,
     RetargetEdit,
     Face,
     Fpp,
+    Animations,
+    Export,
 }
 
 public enum PreviewLayoutMode

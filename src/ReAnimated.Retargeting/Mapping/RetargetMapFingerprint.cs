@@ -6,7 +6,7 @@ namespace ReAnimated.Retargeting.Mapping;
 
 public static class RetargetMapFingerprint
 {
-    public const string Algorithm = "dlra-retarget-mapping-v3";
+    public const string Algorithm = "dlra-retarget-mapping-v4";
 
     public static string Compute(
         string sourceRigSignature,
@@ -48,6 +48,19 @@ public static class RetargetMapFingerprint
                 AppendInt32(hash, (int)entry.MappingKind);
                 AppendInt32(hash, (int)entry.TransferPolicy);
                 AppendInt32(hash, (int)entry.ComponentPolicy);
+                AppendInt32(hash, (int)entry.ReviewOrigin);
+                AppendString(hash, entry.ScorerVersion);
+                AppendString(hash, entry.EvidenceFingerprint);
+                MappingEvidence[] evidence = entry.Evidence
+                    .OrderBy(static row => row.Kind)
+                    .ThenBy(static row => row.Detail, StringComparer.Ordinal)
+                    .ToArray();
+                AppendInt32(hash, evidence.Length);
+                foreach (MappingEvidence row in evidence)
+                {
+                    AppendInt32(hash, (int)row.Kind);
+                    AppendString(hash, row.Detail);
+                }
             }
 
             int[] targetBindReviews = mapping

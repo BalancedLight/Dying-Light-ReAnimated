@@ -411,13 +411,73 @@ $hermeticViewModelTests = @(Select-TestInputFiles (
 $hermeticRendererTests = @(Select-TestInputFiles (
     "^(Renderer(?!AuthoringStageGolden)|" +
     "LinkedTargetExternalPreview)"))
+$unifiedWorkflowTests = @(Select-TestInputFiles (
+    "^(AssistedRetargetReview|BlenderFbxHandoff|BlenderFbxStrictValidation|" +
+    "CustomModelSchema2Morph|Dl1AnimationContentContract|" +
+    "DeveloperToolsAnimationRefresh|" +
+    "Dl1DeploymentReceiptFreshness|Dl1DeveloperToolsBatchDeployment|" +
+    "Dl1DeveloperToolsDeployment|Dl1OfficialCompilerDependencySidecar|" +
+    "Dl1OfficialModelCompilerContract|" +
+    "Dl1MultiModelPortableExporter|FbxCustomModelMorphImport|" +
+    "FbxExternalAnimationImportService|FbxFacialAnimationAdapter|" +
+    "ModelsWorkspacePersistence|ProjectModelReimportReconciler|" +
+    "PendingProjectAssetStore|" +
+    "ProjectExportMimicCli|ProjectExportSchema2Cli|" +
+    "ProjectMorphSuggestionScorer|ProjectSchema2Migration|" +
+    "UnifiedWorkflowShell)Tests$"))
+$unifiedWorkflowFilter =
+    "FullyQualifiedName~AssistedRetargetReviewTests|" +
+    "FullyQualifiedName~BlenderFbxHandoffTests|" +
+    "FullyQualifiedName~BlenderFbxStrictValidationTests|" +
+    "FullyQualifiedName~CustomModelSchema2MorphTests|" +
+    "FullyQualifiedName~DeveloperToolsAnimationRefresh|" +
+    "FullyQualifiedName~Dl1AnimationContentContractTests|" +
+    "FullyQualifiedName~Dl1DeploymentReceiptFreshnessTests|" +
+    "FullyQualifiedName~Dl1DeveloperToolsBatchDeploymentTests|" +
+    "FullyQualifiedName~Dl1DeveloperToolsDeploymentTests|" +
+    "FullyQualifiedName~Dl1OfficialCompilerDependencySidecarTests|" +
+    "FullyQualifiedName~Dl1OfficialModelCompilerContractTests|" +
+    "FullyQualifiedName~Dl1MultiModelPortableExporterTests|" +
+    "FullyQualifiedName~FbxCustomModelMorphImportTests|" +
+    "FullyQualifiedName~FbxExternalAnimationImportServiceTests|" +
+    "FullyQualifiedName~FbxFacialAnimationAdapterTests|" +
+    "FullyQualifiedName~ModelsWorkspacePersistenceTests|" +
+    "FullyQualifiedName~PendingProjectAssetStoreTests|" +
+    "FullyQualifiedName~ProjectModelReimportReconcilerTests|" +
+    "FullyQualifiedName~ProjectExportMimicCliTests|" +
+    "FullyQualifiedName~ProjectExportSchema2CliTests|" +
+    "FullyQualifiedName~ProjectMorphSuggestionScorerTests|" +
+    "FullyQualifiedName~ProjectSchema2MigrationTests|" +
+    "FullyQualifiedName~UnifiedWorkflowShellTests"
+$externalControlExclusions =
+    "Gate!=ExternalFbxAnimationDomain&" +
+    "Gate!=ExternalUserRetarget&" +
+    "Gate!=CustomModelCorpus&" +
+    "Gate!=InstalledDl1ModelCompiler"
+$focusedCodecFilter =
+    "(FullyQualifiedName~AnimationPlaybackCorrectnessTests|" +
+    "FullyQualifiedName~AuthoritativeRootMotionTrailSamplerTests|" +
+    "FullyQualifiedName~MimicProjectWorkflowTests|" +
+    "FullyQualifiedName~Anm2CodecTests|" +
+    "FullyQualifiedName~EvaluationPipelineTests|" +
+    "FullyQualifiedName~CustomModelAuthoringTests)&" +
+    $externalControlExclusions
+$hermeticCodecFilter =
+    "(FullyQualifiedName~Anm2|FullyQualifiedName~AnimationScr|" +
+    "FullyQualifiedName~AnimationDocument|" +
+    "FullyQualifiedName~AuthoringPolicy|FullyQualifiedName~CoreAnimation|" +
+    "FullyQualifiedName~Evaluation|FullyQualifiedName~Retarget|" +
+    "FullyQualifiedName~RootMotion|FullyQualifiedName~Mimic|" +
+    "FullyQualifiedName~Morph|FullyQualifiedName~IkConstraint|" +
+    "FullyQualifiedName~Fbx|FullyQualifiedName~CustomModel)&" +
+    $externalControlExclusions
 
 $focusedGates = @(
     (New-Gate `
         -Name "focused-codec-evaluation" `
         -Category "codec/evaluation" `
         -Action "test" `
-        -Filter "FullyQualifiedName~AnimationPlaybackCorrectnessTests|FullyQualifiedName~AuthoritativeRootMotionTrailSamplerTests|FullyQualifiedName~MimicProjectWorkflowTests|FullyQualifiedName~Anm2CodecTests|FullyQualifiedName~EvaluationPipelineTests|FullyQualifiedName~CustomModelAuthoringTests" `
+        -Filter $focusedCodecFilter `
         -InputRoots @($codecRoots) `
         -InputFiles @($testProjectInputs + $focusedCodecTests)),
     (New-Gate `
@@ -433,7 +493,14 @@ $focusedGates = @(
         -Action "test" `
         -Filter "FullyQualifiedName~RendererSceneSourceTests|FullyQualifiedName~LinkedTargetExternalPreviewTests|FullyQualifiedName~RendererCpuReferenceTests|FullyQualifiedName~RendererGpuSkinningTests" `
         -InputRoots @($rendererRoots) `
-        -InputFiles @($testProjectInputs + $focusedRendererTests))
+        -InputFiles @($testProjectInputs + $focusedRendererTests)),
+    (New-Gate `
+        -Name "focused-unified-model-workflow" `
+        -Category "unified model workflow" `
+        -Action "test" `
+        -Filter $unifiedWorkflowFilter `
+        -InputRoots @($viewModelRoots + @("src\ReAnimated.Cli")) `
+        -InputFiles @($testProjectInputs + $unifiedWorkflowTests))
 )
 
 $hermeticGates = @(
@@ -441,7 +508,7 @@ $hermeticGates = @(
         -Name "hermetic-codec-evaluation" `
         -Category "codec/evaluation" `
         -Action "test" `
-        -Filter "FullyQualifiedName~Anm2|FullyQualifiedName~AnimationScr|FullyQualifiedName~AnimationDocument|FullyQualifiedName~AuthoringPolicy|FullyQualifiedName~CoreAnimation|FullyQualifiedName~Evaluation|FullyQualifiedName~Retarget|FullyQualifiedName~RootMotion|FullyQualifiedName~Mimic|FullyQualifiedName~Morph|FullyQualifiedName~IkConstraint|FullyQualifiedName~Fbx|FullyQualifiedName~CustomModel" `
+        -Filter $hermeticCodecFilter `
         -InputRoots @($codecRoots + @("tests\fixtures")) `
         -InputFiles @($testProjectInputs + $hermeticCodecTests)),
     (New-Gate `
@@ -457,7 +524,14 @@ $hermeticGates = @(
         -Action "test" `
         -Filter "FullyQualifiedName~Renderer&FullyQualifiedName!~RendererAuthoringStageGoldenTests|FullyQualifiedName~LinkedTargetExternalPreviewTests" `
         -InputRoots @($rendererRoots) `
-        -InputFiles @($testProjectInputs + $hermeticRendererTests))
+        -InputFiles @($testProjectInputs + $hermeticRendererTests)),
+    (New-Gate `
+        -Name "hermetic-unified-model-workflow" `
+        -Category "unified model workflow" `
+        -Action "test" `
+        -Filter $unifiedWorkflowFilter `
+        -InputRoots @($viewModelRoots + @("src\ReAnimated.Cli")) `
+        -InputFiles @($testProjectInputs + $unifiedWorkflowTests))
 )
 
 $releaseGates = @(
@@ -484,10 +558,19 @@ $releaseGates = @(
             -Script "tools\validate_dl1_blender_handoff.ps1" `
             -InputRoots @(
                 "src\ReAnimated.App\Blender",
-                "src\ReAnimated.Codecs") `
+                "src\ReAnimated.App\Infrastructure",
+                "src\ReAnimated.Codecs",
+                "src\ReAnimated.Core",
+                "src\ReAnimated.Evaluation",
+                "src\ReAnimated.Renderer.D3D11") `
             -InputFiles @(
                 $testProjectInputs +
                 @(
+                    "src\ReAnimated.App\MainWindow.xaml",
+                    "src\ReAnimated.App\ViewModels\MainWindowViewModel.cs",
+                    "src\ReAnimated.App\ViewModels\MainWindowViewModel.BlenderExport.cs",
+                    "tests\ReAnimated.Tests\BlenderFbxHandoffTests.cs",
+                    "tests\ReAnimated.Tests\BlenderFbxStrictValidationTests.cs",
                     "tests\ReAnimated.Tests\InstalledBlenderFbxAcceptanceTests.cs",
                     "tests\ReAnimated.Tests\RpackTestData.cs",
                     "tools\validate_dl1_blender_handoff.ps1")))

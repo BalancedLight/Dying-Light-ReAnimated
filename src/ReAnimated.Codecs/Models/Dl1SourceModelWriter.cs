@@ -71,6 +71,7 @@ public static class Dl1SourceModelWriter
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        ValidateMorphInventory(request.Model);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResourceName);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SurfaceName);
@@ -141,6 +142,7 @@ public static class Dl1SourceModelWriter
                         prepared.RigContract.SkeletonFingerprint,
                         prepared.RigContract.BindFingerprint,
                         prepared.RigContract.DescriptorFingerprint,
+                        prepared.RigContract.MorphFingerprint,
                     },
             },
             outputContract = new
@@ -151,6 +153,7 @@ public static class Dl1SourceModelWriter
                 boneScript = "Per-entity POS/ROT, plus root SCL",
                 animationScript = ascr is null ? "not authored" : "explicit user-supplied alias",
                 materials = "Techland DMT sources with user-owned diffuse/normal/specular DDS dependencies",
+                morphTargets = "Chrome LOD 0x0104 records with fixed UTF-8 names and one float3 position delta per expanded draw vertex",
                 unsupported = new[] { ".skn", ".msh_obj" },
             },
             counts = new
@@ -161,6 +164,9 @@ public static class Dl1SourceModelWriter
                 physicalNodes = prepared.Nodes.Length,
                 characterObjects = prepared.Nodes.Length,
                 materials = prepared.MaterialNames.Length,
+                morphChannels = request.Model.Package.Document.MorphChannels.Length,
+                morphSurfaceBindings = request.Model.Surfaces.Count(
+                    static surface => !surface.MorphTargets.IsEmpty),
                 materialSourceFiles = prepared.MaterialFiles.Count,
             },
             outputs = hashes.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
@@ -250,6 +256,44 @@ public static class Dl1SourceModelWriter
         return objects.MoveToImmutable();
     }
 
+    private static void ValidateMorphInventory(
+        FbxModelAuthoringImportResult model)
+    {
+        Dictionary<string, CustomModelMorphChannel> inventory =
+            model.Package.Document.MorphChannels.ToDictionary(
+                static channel => channel.Name,
+                StringComparer.Ordinal);
+        var emittedNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (FbxModelSurface surface in model.Surfaces)
+        {
+            var surfaceNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (FbxModelMorphTarget target in surface.MorphTargets)
+            {
+                if (!surfaceNames.Add(target.Name) ||
+                    !inventory.TryGetValue(
+                        target.Name,
+                        out CustomModelMorphChannel? channel) ||
+                    channel.DescriptorHash != target.DescriptorHash)
+                {
+                    throw new InvalidDataException(
+                        $"Surface '{surface.Id}' morph target '{target.Name}' does not match the schema-2 morph inventory.");
+                }
+
+                emittedNames.Add(target.Name);
+            }
+        }
+
+        string[] missing = inventory.Keys
+            .Where(name => !emittedNames.Contains(name))
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (missing.Length != 0)
+        {
+            throw new InvalidDataException(
+                $"Schema-2 morph channel(s) have no expanded draw-vertex payload: {string.Join(", ", missing)}.");
+        }
+    }
+
     private static PreparedSourceModel Prepare(
         FbxModelAuthoringImportResult model,
         string resourceName,
@@ -257,7 +301,7 @@ public static class Dl1SourceModelWriter
         CancellationToken cancellationToken)
     {
         CustomModelDocument document = model.Package.Document;
-        ImmutableArray<CustomModelBone> sourceBones = document.Bones;
+        ImmutableArray<CustomModelBone> sourceBones = document.CreateEffectiveBones();
         ValidateUniqueBoneNames(sourceBones);
         Dl1PreparedAuthoredRig? authoredRig = sourceBones.IsEmpty
             ? null
@@ -424,7 +468,30 @@ public static class Dl1SourceModelWriter
             surface.Indices,
             materialIndex,
             physicalPalette,
-            skin);
+            skin,
+            surface.MorphTargets.Select(target =>
+            {
+                if (target.PositionDeltas.Length != surface.Vertices.Length ||
+                    target.PositionDeltas.Any(static delta => !delta.IsFinite))
+                {
+                    throw new InvalidDataException(
+                        $"Morph target '{target.Name}' does not match surface '{surface.Id}'s expanded vertex buffer.");
+                }
+
+                for (int vertexIndex = 0;
+                     vertexIndex < target.PositionDeltas.Length;
+                     vertexIndex++)
+                {
+                    ValidateMorphHalfRange(
+                        target.PositionDeltas[vertexIndex],
+                        target.Name,
+                        vertexIndex);
+                }
+
+                return new SourceMorphTarget(
+                    target.Name,
+                    target.PositionDeltas);
+            }).ToImmutableArray());
     }
 
     private static byte[] BuildMsh(PreparedSourceModel model)
@@ -484,11 +551,18 @@ public static class Dl1SourceModelWriter
         {
             PackChunk(0x160, vertexFormat),
             PackChunk(0x101, PackVector3(lod.Positions)),
-            PackChunk(0x102, PackVector3(lod.Normals)),
-            PackChunk(0x103, PackVector3(lod.Tangents)),
-            PackChunk(0x195, PackVector3(lod.Bitangents)),
-            PackChunk(0x120, PackVector2(lod.Uvs)),
         };
+        // Preserve the source writer's observed stream order: morph deltas
+        // directly follow the base position stream.
+        if (!lod.MorphTargets.IsEmpty)
+        {
+            children.Add(BuildMorphTargetsChunk(lod));
+        }
+
+        children.Add(PackChunk(0x102, PackVector3(lod.Normals)));
+        children.Add(PackChunk(0x103, PackVector3(lod.Tangents)));
+        children.Add(PackChunk(0x195, PackVector3(lod.Bitangents)));
+        children.Add(PackChunk(0x120, PackVector2(lod.Uvs)));
         if (!lod.Skin.IsEmpty)
         {
             children.Add(BuildSkinChunk(lod.Skin));
@@ -516,8 +590,48 @@ public static class Dl1SourceModelWriter
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), checked((uint)lod.Positions.Length));
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4, 4), checked((uint)lod.Indices.Length));
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8, 4), 1);
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12, 4), 0);
+        BinaryPrimitives.WriteUInt32LittleEndian(
+            payload.AsSpan(12, 4),
+            checked((uint)lod.MorphTargets.Length));
         return PackChunk(0x100, payload, children);
+    }
+
+    private static byte[] BuildMorphTargetsChunk(SourceLod lod)
+    {
+        int targetStride = checked(64 + (lod.Positions.Length * 12));
+        byte[] payload = new byte[checked(lod.MorphTargets.Length * targetStride)];
+        int offset = 0;
+        foreach (SourceMorphTarget target in lod.MorphTargets)
+        {
+            FixedName(target.Name).CopyTo(payload.AsSpan(offset, 64));
+            offset += 64;
+            byte[] deltas = PackVector3(target.PositionDeltas);
+            deltas.CopyTo(payload, offset);
+            offset += deltas.Length;
+        }
+
+        return PackChunk(0x104, payload);
+    }
+
+    private static void ValidateMorphHalfRange(
+        Vector3D delta,
+        string targetName,
+        int vertexIndex)
+    {
+        static bool IsFiniteHalf(double value)
+        {
+            float sourceFloat = (float)value;
+            return float.IsFinite(sourceFloat) &&
+                   Half.IsFinite((Half)sourceFloat);
+        }
+
+        if (!IsFiniteHalf(delta.X) ||
+            !IsFiniteHalf(delta.Y) ||
+            !IsFiniteHalf(delta.Z))
+        {
+            throw new InvalidDataException(
+                $"Morph target '{targetName}' vertex {vertexIndex} exceeds DL1 PC's finite HALF4 morph-delta range.");
+        }
     }
 
     private static byte[] BuildSkinChunk(ImmutableArray<SkinVertex> skin)
@@ -995,6 +1109,10 @@ public static class Dl1SourceModelWriter
 
     private sealed record SkinVertex(ImmutableArray<int> BoneIndices, ImmutableArray<double> Weights);
 
+    private sealed record SourceMorphTarget(
+        string Name,
+        ImmutableArray<Vector3D> PositionDeltas);
+
     private sealed record SourceLod(
         ImmutableArray<Vector3D> Positions,
         ImmutableArray<Vector3D> Normals,
@@ -1004,7 +1122,8 @@ public static class Dl1SourceModelWriter
         ImmutableArray<uint> Indices,
         int MaterialIndex,
         ImmutableArray<int> Palette,
-        ImmutableArray<SkinVertex> Skin);
+        ImmutableArray<SkinVertex> Skin,
+        ImmutableArray<SourceMorphTarget> MorphTargets);
 
     private sealed record SourceNode(
         string Name,

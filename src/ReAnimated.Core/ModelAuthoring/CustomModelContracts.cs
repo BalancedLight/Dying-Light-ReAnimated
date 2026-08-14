@@ -55,6 +55,17 @@ public enum CustomModelNormalMapConvention
     Dl1AlphaGreen,
 }
 
+/// <summary>
+/// Identifies an editor-authored, unweighted child retained separately from
+/// the immutable hierarchy decoded from the embedded FBX snapshot.
+/// </summary>
+public enum CustomModelAuthoredHelperKind
+{
+    Helper,
+    Camera,
+    Prop,
+}
+
 public enum CustomModelImportSeverity
 {
     Information,
@@ -216,6 +227,120 @@ public sealed record CustomModelBone
         {
             throw new ArgumentException($"Bone '{Name}' has an invalid exact or preview bind transform.", parameterName);
         }
+    }
+}
+
+public sealed record CustomModelAuthoredHelper
+{
+    public Guid Id { get; init; } = Guid.NewGuid();
+
+    public string Name { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Parent row in the effective hierarchy: imported FBX bones first,
+    /// followed by earlier authored helpers in manifest order.
+    /// </summary>
+    public int ParentNodeIndex { get; init; }
+
+    public TransformTRS LocalTransform { get; init; } = TransformTRS.Identity;
+
+    public TransformMatrix ExactLocalMatrix { get; init; } = TransformMatrix.Identity;
+
+    public CustomModelAuthoredHelperKind Kind { get; init; }
+
+    internal void Validate(int effectiveIndex, string parameterName)
+    {
+        if (Id == Guid.Empty || ParentNodeIndex < 0 || ParentNodeIndex >= effectiveIndex)
+        {
+            throw new ArgumentException(
+                "Authored helpers require a non-empty identifier and an earlier parent row.",
+                parameterName);
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(Name, parameterName);
+        if (!Enum.IsDefined(Kind) ||
+            !LocalTransform.IsFinite ||
+            Math.Abs(LocalTransform.Scale.X) <= 1e-12 ||
+            Math.Abs(LocalTransform.Scale.Y) <= 1e-12 ||
+            Math.Abs(LocalTransform.Scale.Z) <= 1e-12 ||
+            !ExactLocalMatrix.IsFinite ||
+            Math.Abs(ExactLocalMatrix.M41) > 1e-9 ||
+            Math.Abs(ExactLocalMatrix.M42) > 1e-9 ||
+            Math.Abs(ExactLocalMatrix.M43) > 1e-9 ||
+            Math.Abs(ExactLocalMatrix.M44 - 1.0) > 1e-9 ||
+            Math.Abs(ExactLocalMatrix.LinearDeterminant) <= 1e-12)
+        {
+            throw new ArgumentException(
+                $"Authored helper '{Name}' has an invalid kind or local transform.",
+                parameterName);
+        }
+    }
+
+    internal BoneKind ToBoneKind() => Kind switch
+    {
+        CustomModelAuthoredHelperKind.Helper => BoneKind.Helper,
+        CustomModelAuthoredHelperKind.Camera => BoneKind.Camera,
+        CustomModelAuthoredHelperKind.Prop => BoneKind.Prop,
+        _ => throw new InvalidOperationException("The authored helper kind is unsupported."),
+    };
+}
+
+public sealed record CustomModelCameraMetadata
+{
+    /// <summary>
+    /// Stable hierarchy name used by editor camera preview. This may point to
+    /// any imported or authored node. Game-ready FPP output is a separate,
+    /// exact EyeCamera contract.
+    /// </summary>
+    public string? ActivePreviewNodeName { get; init; }
+
+    internal void Validate(
+        IReadOnlyCollection<string> effectiveNodeNames,
+        string parameterName)
+    {
+        if (ActivePreviewNodeName is null)
+        {
+            return;
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(ActivePreviewNodeName, parameterName);
+        if (!effectiveNodeNames.Contains(ActivePreviewNodeName, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                $"Preview camera node '{ActivePreviewNodeName}' is absent from the effective hierarchy.",
+                parameterName);
+        }
+    }
+}
+
+public sealed record CustomModelMorphChannel
+{
+    public int Index { get; init; }
+
+    public long BlendShapeChannelObjectId { get; init; }
+
+    public long ShapeObjectId { get; init; }
+
+    public string Name { get; init; } = string.Empty;
+
+    public uint DescriptorHash { get; init; }
+
+    public ImmutableArray<long> GeometryObjectIds { get; init; } = [];
+
+    internal void Validate(int expectedIndex, string parameterName)
+    {
+        if (Index != expectedIndex ||
+            BlendShapeChannelObjectId == 0 ||
+            ShapeObjectId == 0 ||
+            GeometryObjectIds.IsDefaultOrEmpty ||
+            GeometryObjectIds.Any(static id => id == 0))
+        {
+            throw new ArgumentException(
+                "Custom-model morph channels require contiguous indexes and concrete FBX object identities.",
+                parameterName);
+        }
+
+        ArgumentException.ThrowIfNullOrWhiteSpace(Name, parameterName);
     }
 }
 
@@ -404,6 +529,12 @@ public sealed record CustomModelAnimationClip
 
     public string SourceFingerprint { get; init; } = string.Empty;
 
+    public bool HasSkeletalTracks { get; init; }
+
+    public bool HasMorphTracks { get; init; }
+
+    public string FacialSourceValueUnit { get; init; } = "percent";
+
     internal void Validate(string parameterName)
     {
         if (Id == Guid.Empty)
@@ -419,6 +550,12 @@ public sealed record CustomModelAnimationClip
         }
 
         ProjectAssetReference.ValidateSha256(SourceFingerprint, parameterName);
+        if (FacialSourceValueUnit is not ("percent" or "normalized"))
+        {
+            throw new ArgumentException(
+                "Custom-model facial source values must declare percent or normalized units.",
+                parameterName);
+        }
         if (RootBoneName is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(RootBoneName, parameterName);
@@ -513,13 +650,16 @@ public sealed record CustomModelBuildSettings
 }
 
 /// <summary>
-/// Portable schema-1 metadata stored inside a .dlrmodel container. The package
+/// Portable schema-2 metadata stored inside a .dlrmodel container. The package
 /// embeds only user-owned source FBX and explicitly supplied texture bytes.
 /// Retail DL1 resources remain fingerprint references.
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 1;
+    public const int CurrentSchemaVersion = 2;
+
+    public const string EmptyMorphSignature =
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
 
     public const string CurrentFormat = "dl-reanimated-csharp-model";
 
@@ -539,7 +679,15 @@ public sealed record CustomModelDocument
 
     public string RigSignature { get; init; } = string.Empty;
 
+    public string MorphSignature { get; init; } = EmptyMorphSignature;
+
     public ImmutableArray<CustomModelBone> Bones { get; init; } = [];
+
+    public ImmutableArray<CustomModelAuthoredHelper> AuthoredHelpers { get; init; } = [];
+
+    public CustomModelCameraMetadata Camera { get; init; } = new();
+
+    public ImmutableArray<CustomModelMorphChannel> MorphChannels { get; init; } = [];
 
     public ImmutableArray<CustomModelMeshPart> Meshes { get; init; } = [];
 
@@ -557,7 +705,7 @@ public sealed record CustomModelDocument
     {
         if (SchemaVersion != CurrentSchemaVersion || !string.Equals(Format, CurrentFormat, StringComparison.Ordinal))
         {
-            throw new ArgumentException("Only DL ReAnimated C# custom-model schema 1 is supported.");
+            throw new ArgumentException("Only DL ReAnimated C# custom-model schema 2 is supported.");
         }
 
         if (ModelId == Guid.Empty)
@@ -569,7 +717,20 @@ public sealed record CustomModelDocument
         Source.Validate(nameof(Source));
         AxisSystem.Validate(nameof(AxisSystem));
         ProjectAssetReference.ValidateSha256(RigSignature, nameof(RigSignature));
-        if (Bones.IsDefault || Meshes.IsDefault || Materials.IsDefault || AnimationClips.IsDefault || Diagnostics.IsDefault)
+        ProjectAssetReference.ValidateSha256(MorphSignature, nameof(MorphSignature));
+        if (Camera is null)
+        {
+            throw new ArgumentException(
+                "Custom-model camera metadata must be initialized.",
+                nameof(Camera));
+        }
+        if (Bones.IsDefault ||
+            AuthoredHelpers.IsDefault ||
+            MorphChannels.IsDefault ||
+            Meshes.IsDefault ||
+            Materials.IsDefault ||
+            AnimationClips.IsDefault ||
+            Diagnostics.IsDefault)
         {
             throw new ArgumentException("Custom-model collections must be initialized.");
         }
@@ -582,6 +743,71 @@ public sealed record CustomModelDocument
         for (int index = 0; index < Bones.Length; index++)
         {
             Bones[index].Validate(index, nameof(Bones));
+        }
+
+        // FBX can legally contain case-distinct imported node names. Preserve
+        // them here so DL1-output preparation can surface its stricter
+        // normalized-name collision as a recoverable preview/build diagnostic.
+        var effectiveNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (CustomModelBone bone in Bones)
+        {
+            if (!effectiveNames.Add(bone.Name))
+            {
+                throw new ArgumentException(
+                    $"Custom-model hierarchy name '{bone.Name}' is duplicated.",
+                    nameof(Bones));
+            }
+        }
+
+        var helperIds = new HashSet<Guid>();
+        for (int helperIndex = 0; helperIndex < AuthoredHelpers.Length; helperIndex++)
+        {
+            CustomModelAuthoredHelper helper = AuthoredHelpers[helperIndex];
+            helper.Validate(Bones.Length + helperIndex, nameof(AuthoredHelpers));
+            if (!helperIds.Add(helper.Id) || effectiveNames.Any(name =>
+                    string.Equals(name, helper.Name, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new ArgumentException(
+                    $"Authored helper '{helper.Name}' has a duplicate identifier or hierarchy name.",
+                    nameof(AuthoredHelpers));
+            }
+
+            effectiveNames.Add(helper.Name);
+        }
+
+        Camera.Validate(effectiveNames, nameof(Camera));
+
+        var morphNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var morphDescriptors = new Dictionary<uint, string>();
+        for (int morphIndex = 0; morphIndex < MorphChannels.Length; morphIndex++)
+        {
+            CustomModelMorphChannel morph = MorphChannels[morphIndex];
+            morph.Validate(morphIndex, nameof(MorphChannels));
+            if (!morphNames.Add(morph.Name))
+            {
+                throw new ArgumentException(
+                    $"Custom-model morph name '{morph.Name}' is duplicated.",
+                    nameof(MorphChannels));
+            }
+
+            if (morphDescriptors.TryGetValue(morph.DescriptorHash, out string? existing))
+            {
+                throw new ArgumentException(
+                    $"Custom-model morphs '{existing}' and '{morph.Name}' collide at descriptor 0x{morph.DescriptorHash:X8}.",
+                    nameof(MorphChannels));
+            }
+
+            morphDescriptors.Add(morph.DescriptorHash, morph.Name);
+        }
+
+        if (MorphChannels.IsEmpty != string.Equals(
+                MorphSignature,
+                EmptyMorphSignature,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException(
+                "The morph signature must be empty exactly when the model has no morph inventory.",
+                nameof(MorphSignature));
         }
 
         foreach (CustomModelMeshPart mesh in Meshes)
@@ -609,7 +835,24 @@ public sealed record CustomModelDocument
         LastBuildReceipt?.Validate(nameof(LastBuildReceipt));
     }
 
-    public RigDefinition CreateRigDefinition()
+    /// <summary>
+    /// Creates the editor/runtime view of the imported hierarchy. Descriptor
+    /// hashes are retained even when the source FBX contains a collision so
+    /// Source FBX preview can remain visible and the stricter DL1 preparation
+    /// boundary can report a recoverable diagnostic.
+    /// </summary>
+    public RigDefinition CreateRigDefinition() =>
+        CreateRigDefinition(requireUniqueDl1Descriptors: false);
+
+    /// <summary>
+    /// Creates a rig admitted for descriptor-addressed DL1 animation output.
+    /// Unlike the source-preview rig, this rejects collisions across bones,
+    /// authored helpers, and morph channels before direct ANM2 evaluation.
+    /// </summary>
+    public RigDefinition CreateDl1AnimationRigDefinition() =>
+        CreateRigDefinition(requireUniqueDl1Descriptors: true);
+
+    private RigDefinition CreateRigDefinition(bool requireUniqueDl1Descriptors)
     {
         Validate();
         if (Bones.IsEmpty)
@@ -617,21 +860,107 @@ public sealed record CustomModelDocument
             throw new InvalidOperationException("A static custom model has no animation rig.");
         }
 
+        ImmutableArray<CustomModelBone> effectiveBones = CreateEffectiveBones();
+        var descriptorOwners = new Dictionary<uint, string>();
+        ImmutableArray<(CustomModelBone Bone, uint Descriptor)> descriptors =
+            effectiveBones.Select(bone =>
+            {
+                uint descriptor = ComputeDl1NameHash(bone.Name);
+                if (requireUniqueDl1Descriptors &&
+                    descriptorOwners.TryGetValue(
+                        descriptor,
+                        out string? existing))
+                {
+                    throw new InvalidDataException(
+                        $"Custom-model rig entities '{existing}' and '{bone.Name}' collide at DL1 descriptor 0x{descriptor:X8}.");
+                }
+
+                descriptorOwners.TryAdd(descriptor, bone.Name);
+                return (bone, descriptor);
+            }).ToImmutableArray();
+        if (requireUniqueDl1Descriptors)
+        {
+            foreach (CustomModelMorphChannel morph in MorphChannels)
+            {
+                if (descriptorOwners.TryGetValue(
+                        morph.DescriptorHash,
+                        out string? existing))
+                {
+                    throw new InvalidDataException(
+                        $"Custom-model rig entities '{existing}' and '{morph.Name}' collide at DL1 descriptor 0x{morph.DescriptorHash:X8}.");
+                }
+
+                descriptorOwners.Add(morph.DescriptorHash, morph.Name);
+            }
+        }
+
         return new RigDefinition(
             $"custom:{ModelId:N}",
             Name,
-            Bones.Select(static bone => new BoneDefinition(
-                bone.Index,
-                bone.Name,
-                bone.ParentIndex,
-                bone.LocalBindTransform,
-                bone.Kind,
-                requiredForExport: true)),
+            descriptors.Select(static row => new BoneDefinition(
+                row.Bone.Index,
+                row.Bone.Name,
+                row.Bone.ParentIndex,
+                row.Bone.LocalBindTransform,
+                row.Bone.Kind,
+                requiredForExport: true,
+                descriptorHash: row.Descriptor)),
+            MorphChannels.Select(static morph => new MorphChannelDefinition(
+                morph.Index,
+                morph.Name,
+                morph.DescriptorHash,
+                morph.Name)),
             sourceAssetFingerprint: new SourceAssetFingerprint(
                 Source.EmbeddedEntryPath,
                 Source.ContentSha256,
                 ModelId.ToString("N")));
     }
+
+    private static uint ComputeDl1NameHash(string name)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        uint value = 0;
+        foreach (char character in name)
+        {
+            if (character > 0x7f)
+            {
+                throw new InvalidDataException(
+                    $"Custom-model rig entity '{name}' cannot be hashed for DL1 because implicit descriptor names must contain only ASCII characters.");
+            }
+
+            char lower = char.ToLowerInvariant(character);
+            value = unchecked((uint)(byte)lower + (41u * value));
+        }
+
+        return value;
+    }
+
+    public ImmutableArray<CustomModelBone> CreateEffectiveBones()
+    {
+        var result = Bones.ToBuilder();
+        for (int helperIndex = 0; helperIndex < AuthoredHelpers.Length; helperIndex++)
+        {
+            CustomModelAuthoredHelper helper = AuthoredHelpers[helperIndex];
+            result.Add(new CustomModelBone
+            {
+                Index = Bones.Length + helperIndex,
+                FbxObjectId = 0,
+                Name = helper.Name,
+                ParentIndex = helper.ParentNodeIndex,
+                LocalBindTransform = helper.LocalTransform,
+                ExactLocalBindMatrix = helper.ExactLocalMatrix,
+                Kind = helper.ToBoneKind(),
+                IsWeighted = false,
+            });
+        }
+
+        return result.ToImmutable();
+    }
+
+    public bool HasGameReadyEyeCamera => CreateEffectiveBones().Any(static bone =>
+        bone.Kind == BoneKind.Camera &&
+        !bone.IsWeighted &&
+        string.Equals(bone.Name, "EyeCamera", StringComparison.Ordinal));
 }
 
 public sealed record CustomModelPackage(

@@ -75,6 +75,7 @@ public static class CustomModelPackageSerializer
                     throw new CustomModelFormatException("The custom-model manifest was empty.");
             }
 
+            document = MigrateToCurrent(document);
             document.Validate();
             ZipArchiveEntry sourceEntry = GetRequiredEntry(entries, document.Source.EmbeddedEntryPath);
             ImmutableArray<byte> sourceFbx = ReadBoundedEntry(sourceEntry, MaximumSourceFbxBytes);
@@ -199,6 +200,39 @@ public static class CustomModelPackageSerializer
         }
 
         return ImmutableArray.Create(stream.ToArray());
+    }
+
+    /// <summary>
+    /// Migrates package metadata in memory while leaving the embedded FBX and
+    /// texture bytes untouched. Schema 1 had no authored-helper, camera, or
+    /// morph inventory fields, so their schema-2 defaults are authoritative.
+    /// </summary>
+    public static CustomModelDocument MigrateToCurrent(CustomModelDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (!string.Equals(
+                document.Format,
+                CustomModelDocument.CurrentFormat,
+                StringComparison.Ordinal))
+        {
+            throw new CustomModelFormatException(
+                $"Unsupported custom-model format '{document.Format}'.");
+        }
+
+        return document.SchemaVersion switch
+        {
+            CustomModelDocument.CurrentSchemaVersion => document,
+            1 => document with
+            {
+                SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                AuthoredHelpers = [],
+                Camera = new CustomModelCameraMetadata(),
+                MorphChannels = [],
+                MorphSignature = CustomModelDocument.EmptyMorphSignature,
+            },
+            _ => throw new CustomModelFormatException(
+                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 or {CustomModelDocument.CurrentSchemaVersion}."),
+        };
     }
 
     private static Dictionary<string, ZipArchiveEntry> BuildEntryMap(ZipArchive archive)
@@ -334,7 +368,7 @@ public static class CustomModelPackageSerializer
         catch (CustomModelFormatException exception)
         {
             throw new CustomModelFormatException(
-                "Refusing to overwrite an existing .dlrmodel that is not a valid DL ReAnimated C# schema-1 model package.",
+                "Refusing to overwrite an existing .dlrmodel that is not a valid DL ReAnimated C# schema-1/2 model package.",
                 exception);
         }
     }

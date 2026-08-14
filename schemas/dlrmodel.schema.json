@@ -14,7 +14,11 @@
     "source",
     "axisSystem",
     "rigSignature",
+    "morphSignature",
     "bones",
+    "authoredHelpers",
+    "camera",
+    "morphChannels",
     "meshes",
     "materials",
     "animationClips",
@@ -22,7 +26,7 @@
     "buildSettings"
   ],
   "properties": {
-    "schemaVersion": { "const": 1 },
+    "schemaVersion": { "const": 2 },
     "format": { "const": "dl-reanimated-csharp-model" },
     "modelId": { "type": "string", "format": "uuid" },
     "name": { "type": "string", "minLength": 1 },
@@ -30,9 +34,19 @@
     "source": { "$ref": "#/$defs/source" },
     "axisSystem": { "$ref": "#/$defs/axisSystem" },
     "rigSignature": { "$ref": "#/$defs/sha256" },
+    "morphSignature": { "$ref": "#/$defs/sha256" },
     "bones": {
       "type": "array",
       "items": { "$ref": "#/$defs/bone" }
+    },
+    "authoredHelpers": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/authoredHelper" }
+    },
+    "camera": { "$ref": "#/$defs/camera" },
+    "morphChannels": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/morphChannel" }
     },
     "meshes": {
       "type": "array",
@@ -145,6 +159,43 @@
         "isWeighted": { "type": "boolean" }
       }
     },
+    "authoredHelper": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "parentNodeIndex", "localTransform", "exactLocalMatrix", "kind"],
+      "properties": {
+        "id": { "type": "string", "format": "uuid" },
+        "name": { "type": "string", "minLength": 1 },
+        "parentNodeIndex": { "type": "integer", "minimum": 0 },
+        "localTransform": { "$ref": "#/$defs/trs" },
+        "exactLocalMatrix": { "$ref": "#/$defs/matrix" },
+        "kind": { "enum": ["helper", "camera", "prop"] }
+      }
+    },
+    "camera": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "activePreviewNodeName": { "type": "string", "minLength": 1 }
+      }
+    },
+    "morphChannel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "blendShapeChannelObjectId", "shapeObjectId", "name", "descriptorHash", "geometryObjectIds"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "blendShapeChannelObjectId": { "type": "integer" },
+        "shapeObjectId": { "type": "integer" },
+        "name": { "type": "string", "minLength": 1 },
+        "descriptorHash": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "geometryObjectIds": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "integer" }
+        }
+      }
+    },
     "mesh": {
       "type": "object",
       "additionalProperties": false,
@@ -205,7 +256,7 @@
     "animationClip": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "fbxObjectId", "sourceName", "displayName", "included", "frameRate", "startFrame", "frameCount", "rootMotionMode", "sourceFingerprint"],
+      "required": ["id", "fbxObjectId", "sourceName", "displayName", "included", "frameRate", "startFrame", "frameCount", "rootMotionMode", "sourceFingerprint", "hasSkeletalTracks", "hasMorphTracks", "facialSourceValueUnit"],
       "properties": {
         "id": { "type": "string", "format": "uuid" },
         "fbxObjectId": { "type": "integer" },
@@ -217,7 +268,10 @@
         "frameCount": { "type": "integer", "minimum": 1 },
         "rootMotionMode": { "enum": ["recorded", "inPlace", "bip01", "motionAccumulator"] },
         "rootBoneName": { "type": "string", "minLength": 1 },
-        "sourceFingerprint": { "$ref": "#/$defs/sha256" }
+        "sourceFingerprint": { "$ref": "#/$defs/sha256" },
+        "hasSkeletalTracks": { "type": "boolean" },
+        "hasMorphTracks": { "type": "boolean" },
+        "facialSourceValueUnit": { "enum": ["percent", "normalized"] }
       }
     },
     "diagnostic": {

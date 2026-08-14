@@ -26,10 +26,20 @@ public sealed record CustomModelPreviewModeChoice(
     CustomModelPreviewMode Mode,
     string Label);
 
+internal sealed record ModelsWorkspaceEmbeddedStackPayload(
+    CustomModelAnimationClip Selection,
+    bool IsDecoded);
+
 internal sealed record ModelsWorkspacePersistencePayload(
     Guid ModelId,
     string SuggestedFileName,
     ImmutableArray<byte> PackageBytes,
+    string RigSignature,
+    string MorphSignature,
+    string? PreviewCameraNodeName,
+    int ExportableEyeCameraHelperCount,
+    string? RigId,
+    ImmutableArray<ModelsWorkspaceEmbeddedStackPayload> EmbeddedStacks,
     Guid? SelectedAnimationClipId,
     ProjectCustomModelPreviewMode PreviewMode,
     bool ShowMeshes,
@@ -75,7 +85,7 @@ internal sealed record ModelsWorkspaceSessionSnapshot(
 /// or mutates the animation project's active target, recovery snapshot, or
 /// viewport publication.
 /// </summary>
-public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
+public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 {
     private const string InvalidatedBuildReceiptDiagnosticCode =
         "model_build_receipt_invalidated";
@@ -89,6 +99,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private readonly IProjectFileDialogService _fileDialogs;
     private readonly Action<string> _setStatus;
     private readonly Func<CustomModelAnimationHandoff, Task> _openInAnimate;
+    private readonly Func<Task> _synchronizeProject;
+    private readonly Action _returnToProjectModels;
     private readonly Func<string?> _getRetailData0PakPath;
     private readonly CustomModelDeveloperToolsSettings _developerToolsSettings;
     private readonly LinkedViewportCoordinator _cameraCoordinator = new();
@@ -135,20 +147,36 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     private CustomModelAnimationClipItemViewModel? _selectedAnimation;
     private CustomModelMaterialItemViewModel? _selectedMaterial;
     private CustomModelBoneItemViewModel? _selectedBone;
+    private readonly Stack<CustomModelDocument> _helperUndo = new();
+    private CustomModelAuthoredHelperKind _selectedHelperKind =
+        CustomModelAuthoredHelperKind.Helper;
+    private string _newHelperName = string.Empty;
+    private double _helperTranslationX;
+    private double _helperTranslationY;
+    private double _helperTranslationZ;
+    private double _helperRotationX;
+    private double _helperRotationY;
+    private double _helperRotationZ;
     private bool _disposed;
 
     public ModelsWorkspaceViewModel(
         IProjectFileDialogService fileDialogs,
         Action<string> setStatus,
         Func<CustomModelAnimationHandoff, Task> openInAnimate,
-        Func<string?> getRetailData0PakPath)
+        Func<string?> getRetailData0PakPath,
+        CustomModelDeveloperToolsSettings? developerToolsSettings = null,
+        Func<Task>? synchronizeProject = null,
+        Action? returnToProjectModels = null)
     {
         _fileDialogs = fileDialogs ?? throw new ArgumentNullException(nameof(fileDialogs));
         _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
         _openInAnimate = openInAnimate ?? throw new ArgumentNullException(nameof(openInAnimate));
+        _synchronizeProject = synchronizeProject ?? (() => Task.CompletedTask);
+        _returnToProjectModels = returnToProjectModels ?? (() => { });
         _getRetailData0PakPath = getRetailData0PakPath ??
             throw new ArgumentNullException(nameof(getRetailData0PakPath));
-        _developerToolsSettings = CustomModelDeveloperToolsSettings.CreateDefault();
+        _developerToolsSettings = developerToolsSettings ??
+            CustomModelDeveloperToolsSettings.CreateDefault();
         _developerToolsProjectRoot = _developerToolsSettings.LoadProjectRoot() ?? string.Empty;
         _cameraCoordinator.IsLinked = false;
         Viewport = new ViewportPaneViewModel(
@@ -163,6 +191,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
         ImportFbxCommand = new AsyncRelayCommand(ImportFbxAsync, () => !IsBusy);
         OpenPackageCommand = new AsyncRelayCommand(OpenPackageAsync, () => !IsBusy);
+        ReturnToProjectModelsCommand = new RelayCommand(
+            _returnToProjectModels);
         SavePackageCommand = new RelayCommand(SavePackage, () => HasModel && !IsBusy);
         SelectTextureCommand = new RelayCommand(SelectTexture, () => SelectedMaterial is not null && !IsBusy);
         BuildCompletePackageCommand = new AsyncRelayCommand(
@@ -198,7 +228,20 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             () => File.Exists(_lastDeploymentManifestPath));
         FrameModelCommand = new RelayCommand(FrameModel, () => HasModel);
         ResetCameraCommand = new RelayCommand(ResetCamera);
+        DuplicateSelectedAsHelperCommand = new RelayCommand(
+            DuplicateSelectedAsHelper,
+            () => HasModel && SelectedBone is not null && !IsBusy);
+        SelectPreviewCameraCommand = new RelayCommand(
+            SelectPreviewCamera,
+            () => HasModel && SelectedBone is not null && !IsBusy);
+        ApplyHelperTransformCommand = new RelayCommand(
+            ApplySelectedHelperTransform,
+            () => HasModel && SelectedBone?.AuthoredHelperId is not null && !IsBusy);
+        UndoHelperEditCommand = new RelayCommand(
+            UndoHelperEdit,
+            () => _helperUndo.Count > 0 && !IsBusy);
         CancelCommand = new RelayCommand(Cancel, () => IsBusy);
+        InitializeAnimationRefreshCommands();
         RestoreLatestDeploymentActions();
     }
 
@@ -240,6 +283,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     public IAsyncRelayCommand OpenPackageCommand { get; }
 
+    public IRelayCommand ReturnToProjectModelsCommand { get; }
+
     public IRelayCommand SavePackageCommand { get; }
 
     public IRelayCommand SelectTextureCommand { get; }
@@ -273,6 +318,14 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     public IRelayCommand FrameModelCommand { get; }
 
     public IRelayCommand ResetCameraCommand { get; }
+
+    public IRelayCommand DuplicateSelectedAsHelperCommand { get; }
+
+    public IRelayCommand SelectPreviewCameraCommand { get; }
+
+    public IRelayCommand ApplyHelperTransformCommand { get; }
+
+    public IRelayCommand UndoHelperEditCommand { get; }
 
     public IRelayCommand CancelCommand { get; }
 
@@ -401,6 +454,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             {
                 OnPropertyChanged(nameof(DeveloperToolsProjectStatus));
                 InvalidateDeploymentPreflight();
+                ResetAnimationRefreshState(
+                    "Choose or complete a schema-2 deployment before requesting an animation refresh.");
                 OpenDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
                 NotifyCommands();
             }
@@ -457,7 +512,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
             if (ExportPortableAnimationRpack)
             {
-                lines.Add($"out/ReAnimated/{model}/{library}_pc.rpack (portable; not auto-mounted)");
+                lines.Add($"out/ReAnimated/{model}/{library}_pc.rpack (optional portable copy)");
             }
 
             return string.Join(Environment.NewLine, lines);
@@ -539,7 +594,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
     public string CompilerStatus => File.Exists(CompilerExecutablePath)
         ? $"Developer Tools compiler: {CompilerExecutablePath}"
-        : "Developer Tools compiler not selected. Loose-source export remains available; standalone animation RPacks are portable and are not automatically mounted.";
+        : "Developer Tools compiler not selected. Loose-source and portable RPack export remain available; Developer Tools deployment is unavailable.";
 
     public string Summary
     {
@@ -676,10 +731,74 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             if (SetProperty(ref _selectedBone, value))
             {
+                LoadSelectedHelperTransform();
+                OnPropertyChanged(nameof(CanEditSelectedHelper));
+                DuplicateSelectedAsHelperCommand.NotifyCanExecuteChanged();
+                SelectPreviewCameraCommand.NotifyCanExecuteChanged();
+                ApplyHelperTransformCommand.NotifyCanExecuteChanged();
                 RefreshPreview();
             }
         }
     }
+
+    public IReadOnlyList<CustomModelAuthoredHelperKind> HelperKinds { get; } =
+        Enum.GetValues<CustomModelAuthoredHelperKind>();
+
+    public CustomModelAuthoredHelperKind SelectedHelperKind
+    {
+        get => _selectedHelperKind;
+        set => SetProperty(ref _selectedHelperKind, value);
+    }
+
+    public string NewHelperName
+    {
+        get => _newHelperName;
+        set => SetProperty(ref _newHelperName, value ?? string.Empty);
+    }
+
+    public bool CanEditSelectedHelper => SelectedBone?.AuthoredHelperId is not null;
+
+    public double HelperTranslationX
+    {
+        get => _helperTranslationX;
+        set => SetProperty(ref _helperTranslationX, value);
+    }
+
+    public double HelperTranslationY
+    {
+        get => _helperTranslationY;
+        set => SetProperty(ref _helperTranslationY, value);
+    }
+
+    public double HelperTranslationZ
+    {
+        get => _helperTranslationZ;
+        set => SetProperty(ref _helperTranslationZ, value);
+    }
+
+    public double HelperRotationX
+    {
+        get => _helperRotationX;
+        set => SetProperty(ref _helperRotationX, value);
+    }
+
+    public double HelperRotationY
+    {
+        get => _helperRotationY;
+        set => SetProperty(ref _helperRotationY, value);
+    }
+
+    public double HelperRotationZ
+    {
+        get => _helperRotationZ;
+        set => SetProperty(ref _helperRotationZ, value);
+    }
+
+    public string PreviewCameraStatus => _model?.Package.Document.Camera.ActivePreviewNodeName is { } name
+        ? string.Equals(name, CustomModelHelperAuthoring.GameCameraName, StringComparison.Ordinal)
+            ? "Preview and export camera: EyeCamera"
+            : $"Editor-only preview camera: {name}"
+        : "No model-node preview camera selected";
 
     public void Tick(DateTimeOffset now) => Timeline.Tick(now);
 
@@ -689,16 +808,55 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ModelsWorkspaceSessionSnapshot previous = CaptureProjectSession();
         long generation = BeginOperation(cancellationToken, out CancellationToken token);
         try
         {
-            FbxModelAuthoringImportResult imported = await FbxModelAuthoringImporter.ImportFileAsync(
-                path,
-                new FbxModelAuthoringImportOptions { RigMode = rigMode },
-                token);
+            bool isReimport = _model is not null;
+            FbxModelAuthoringImportOptions options = new() { RigMode = rigMode };
+            FbxModelAuthoringImportResult imported;
+            if (_model is null)
+            {
+                imported = await FbxModelAuthoringImporter.ImportFileAsync(
+                    path,
+                    options,
+                    token);
+            }
+            else
+            {
+                byte[] replacementBytes = await File.ReadAllBytesAsync(path, token);
+                CustomModelReimportPreview preview = await Task.Run(
+                    () => FbxModelAuthoringImporter.PreviewReimport(
+                        _model.Package,
+                        replacementBytes,
+                        Path.GetFileName(path),
+                        options,
+                        token),
+                    token);
+                EnsureCurrent(generation, token);
+                if (!_fileDialogs.ConfirmCustomModelReimport(
+                        Path.GetFileName(path),
+                        preview.BoneAndHelperMappingsBecomeStale,
+                        preview.FacialMappingsBecomeStale))
+                {
+                    BuildStatus = "Custom-model reimport canceled after validation; current model unchanged";
+                    _setStatus(BuildStatus);
+                    return;
+                }
+
+                imported = preview.Replacement;
+            }
+
             EnsureCurrent(generation, token);
-            CommitModel(imported, path, packagePath: null);
-            _setStatus($"Imported custom model {Path.GetFileName(path)}");
+            CommitModel(
+                imported,
+                path,
+                packagePath: null,
+                markAuthoringChanged: false);
+            await SynchronizeImportedModelAsync(previous, token);
+            _setStatus(isReimport
+                ? $"Reimported custom model {Path.GetFileName(path)} after validation"
+                : $"Imported custom model {Path.GetFileName(path)}");
         }
         catch (OperationCanceledException)
         {
@@ -761,7 +919,16 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             return;
         }
 
-        long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
+        await OpenPackagePathAsync(path);
+    }
+
+    public async Task OpenPackagePathAsync(
+        string path,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ModelsWorkspaceSessionSnapshot previous = CaptureProjectSession();
+        long generation = BeginOperation(cancellationToken, out CancellationToken token);
         try
         {
             CustomModelPackage package = await Task.Run(() => CustomModelPackageSerializer.Load(path), token);
@@ -769,7 +936,12 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 () => FbxModelAuthoringImporter.ImportPackage(package, token),
                 token);
             EnsureCurrent(generation, token);
-            CommitModel(decoded, sourcePath: null, packagePath: path);
+            CommitModel(
+                decoded,
+                sourcePath: null,
+                packagePath: path,
+                markAuthoringChanged: false);
+            await SynchronizeImportedModelAsync(previous, token);
             _setStatus($"Opened custom model package {Path.GetFileName(path)}");
         }
         catch (OperationCanceledException)
@@ -787,6 +959,24 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         finally
         {
             EndOperation(generation);
+        }
+    }
+
+    private async Task SynchronizeImportedModelAsync(
+        ModelsWorkspaceSessionSnapshot previous,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _authoringRevision);
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _synchronizeProject();
+            PersistenceStateChanged?.Invoke(this, EventArgs.Empty);
+        }
+        catch
+        {
+            RestoreProjectSession(previous);
+            throw;
         }
     }
 
@@ -1239,6 +1429,9 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 DeveloperToolsProjectRoot,
                 result.Receipt.AnimationScriptRelativePath);
             _canRollbackLastDeployment = true;
+            QueueAutomaticDeveloperToolsAnimationRefresh(
+                DeveloperToolsProjectRoot,
+                result.Receipt);
             OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
             OpenDeploymentReceiptCommand.NotifyCanExecuteChanged();
             RollBackDeploymentCommand.NotifyCanExecuteChanged();
@@ -1257,9 +1450,10 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 $"{result.Receipt.AnimationLibraryName}.scr at {result.Receipt.AnimationScriptRelativePath}; " +
                 $"installed {looseAnimationCount:N0} loose and " +
                 $"{compiledAnimationCount:N0} compiled animation(s). " +
+                $"The project-owned animation runtime RPack is ready for the selected-model loader route and an Editor refresh request was queued. " +
                 (result.Plan.ExportPortableAnimationRpack
-                    ? "The animation RPack is portable-only and is not automatically mounted. "
-                    : "Portable animation RPack export was disabled. ") +
+                    ? "A separate portable export copy was also written. "
+                    : "The optional portable export copy was disabled. ") +
                 duplicateNote +
                 (result.Plan.StaleDuplicateResources.IsEmpty
                     ? string.Empty
@@ -1372,9 +1566,10 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         _lastDeploymentManifestPath = string.Empty;
         _lastDeployedAnimationScriptPath = string.Empty;
         _canRollbackLastDeployment = false;
+        Dl1DeveloperToolsDeploymentReceipt? receipt = null;
         if (Directory.Exists(DeveloperToolsProjectRoot))
         {
-            Dl1DeveloperToolsDeploymentReceipt? receipt =
+            receipt =
                 Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(DeveloperToolsProjectRoot);
             if (receipt is not null)
             {
@@ -1389,6 +1584,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
         OpenDeploymentReceiptCommand.NotifyCanExecuteChanged();
         RollBackDeploymentCommand.NotifyCanExecuteChanged();
+        RestoreLatestAnimationRefreshState(receipt);
+        NotifyAnimationRefreshCommands();
     }
 
     private void PublishDeploymentPlan(Dl1DeveloperToolsDeploymentPlan plan)
@@ -1408,9 +1605,10 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         };
         lines.AddRange(plan.Animations.Select(static animation =>
             $"  {animation.SourceName} -> {animation.Anm2FileName}; {animation.ScrSequence}"));
+        lines.Add($"Loader runtime RPack: {plan.AnimationRuntimePackRelativePath}");
         lines.Add(plan.PortableRpackRelativePath is null
-            ? "Portable animation RPack: disabled"
-            : $"Portable animation RPack: {plan.PortableRpackRelativePath} (not automatically mounted)");
+            ? "Optional portable animation RPack copy: disabled"
+            : $"Optional portable animation RPack copy: {plan.PortableRpackRelativePath}");
         _legacyOutputPaths = plan.LegacyOutputPaths;
         BackUpLegacyOutputsCommand.NotifyCanExecuteChanged();
         if (!plan.LegacyOutputWarnings.IsEmpty)
@@ -1644,6 +1842,22 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             package.Document.ModelId,
             $"{portableName}.dlrmodel",
             CustomModelPackageSerializer.Serialize(package),
+            package.Document.RigSignature,
+            package.Document.MorphSignature,
+            package.Document.Camera.ActivePreviewNodeName,
+            package.Document.CreateEffectiveBones().Count(static bone =>
+                bone.Kind == BoneKind.Camera &&
+                !bone.IsWeighted &&
+                string.Equals(
+                    bone.Name,
+                    CustomModelHelperAuthoring.GameCameraName,
+                    StringComparison.Ordinal)),
+            _model.Rig?.Id,
+            package.Document.AnimationClips
+                .Select(clip => new ModelsWorkspaceEmbeddedStackPayload(
+                    clip,
+                    _model.AnimationClips.ContainsKey(clip.Id)))
+                .ToImmutableArray(),
             SelectedAnimation?.Id,
             SelectedPreviewMode.Mode == CustomModelPreviewMode.SourceFbx
                 ? ProjectCustomModelPreviewMode.SourceFbx
@@ -1765,6 +1979,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
 
             _model = null;
             _previewSession = null;
+            _helperUndo.Clear();
             _sourcePath = null;
             _packagePath = null;
             _modelName = "No custom model loaded";
@@ -1804,6 +2019,8 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             OnPropertyChanged(nameof(SelectedAnimation));
             OnPropertyChanged(nameof(SelectedMaterial));
             OnPropertyChanged(nameof(SelectedBone));
+            OnPropertyChanged(nameof(CanEditSelectedHelper));
+            OnPropertyChanged(nameof(PreviewCameraStatus));
             OnPropertyChanged(nameof(HasModel));
             OnPropertyChanged(nameof(CanChangeRigMode));
         }
@@ -1870,6 +2087,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         try
         {
             _previewSession = null;
+            _helperUndo.Clear();
             _model = imported;
             _sourcePath = sourcePath;
             _packagePath = packagePath;
@@ -1889,14 +2107,9 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
             OnPropertyChanged(nameof(FlipTextureCoordinateV));
             BuildStatus = buildStatus;
+            OnPropertyChanged(nameof(PreviewCameraStatus));
 
-            Bones.Clear();
-            RootBoneNames.Clear();
-            foreach (CustomModelBone bone in imported.Package.Document.Bones)
-            {
-                Bones.Add(new CustomModelBoneItemViewModel(bone));
-                RootBoneNames.Add(bone.Name);
-            }
+            PopulateHierarchyRows();
 
             PopulateMaterials();
             foreach (CustomModelAnimationClipItemViewModel animation in Animations)
@@ -1919,12 +2132,12 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
                 Diagnostics.Add(new CustomModelDiagnosticItemViewModel(diagnostic));
             }
 
-            SelectedBone = Bones.FirstOrDefault();
+            SelectedBone ??= Bones.FirstOrDefault();
             SelectedMaterial = Materials.FirstOrDefault();
             SelectedAnimation = Animations.FirstOrDefault(static clip => clip.DecodedClip is not null);
             Summary =
                 $"{imported.Package.Document.Meshes.Length:N0} mesh part(s) | {imported.Surfaces.Length:N0} draw surface(s) | " +
-                $"{imported.Package.Document.Bones.Length:N0} rig node(s) | {Animations.Count:N0} animation stack(s) | " +
+                $"{imported.Package.Document.CreateEffectiveBones().Length:N0} rig/helper node(s) | {Animations.Count:N0} animation stack(s) | " +
                 $"{Materials.Count:N0} material(s)";
             OnPropertyChanged(nameof(HasModel));
             OnPropertyChanged(nameof(CanChangeRigMode));
@@ -1943,6 +2156,38 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         {
             MarkAuthoringChanged();
         }
+    }
+
+    private void PopulateHierarchyRows(string? selectedName = null)
+    {
+        if (_model is null)
+        {
+            Bones.Clear();
+            RootBoneNames.Clear();
+            SelectedBone = null;
+            return;
+        }
+
+        selectedName ??= SelectedBone?.Name;
+        CustomModelDocument document = _model.Package.Document;
+        ImmutableArray<CustomModelBone> effective = document.CreateEffectiveBones();
+        Bones.Clear();
+        RootBoneNames.Clear();
+        for (int index = 0; index < effective.Length; index++)
+        {
+            Guid? helperId = index >= document.Bones.Length
+                ? document.AuthoredHelpers[index - document.Bones.Length].Id
+                : null;
+            Bones.Add(new CustomModelBoneItemViewModel(effective[index], helperId));
+            RootBoneNames.Add(effective[index].Name);
+        }
+
+        SelectedBone = selectedName is null
+            ? Bones.FirstOrDefault()
+            : Bones.FirstOrDefault(row => string.Equals(
+                row.Name,
+                selectedName,
+                StringComparison.OrdinalIgnoreCase)) ?? Bones.FirstOrDefault();
     }
 
     private void PopulateMaterials()
@@ -2113,6 +2358,12 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
             Viewport.SceneSource.SetSkeleton(skeleton);
         }
 
+        _cameraCoordinator.SetTargetPreviewCameraOverride(
+            session.CreatePreviewCamera(
+                clip,
+                frame,
+                _model.Package.Document.Camera.ActivePreviewNodeName));
+
         Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
         ApplySkeletonVisibility();
         string previewLabel = session.IsSourceFallback
@@ -2217,6 +2468,260 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
     {
         _cameraCoordinator.UpdateCamera(ViewportSide.Target, RenderCamera.Default);
         FrameModel();
+    }
+
+    private void DuplicateSelectedAsHelper()
+    {
+        if (_model is null || SelectedBone is null)
+        {
+            return;
+        }
+
+        try
+        {
+            string? requestedName = string.IsNullOrWhiteSpace(NewHelperName)
+                ? null
+                : NewHelperName.Trim();
+            CustomModelDocument updated = CustomModelHelperAuthoring.DuplicateAsHelper(
+                _model.Package.Document,
+                SelectedBone.Index,
+                SelectedHelperKind,
+                requestedName);
+            ApplyHelperMutation(
+                updated,
+                updated.AuthoredHelpers[^1].Name,
+                $"Created {SelectedHelperKind} helper '{updated.AuthoredHelpers[^1].Name}'");
+            NewHelperName = string.Empty;
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException or
+            KeyNotFoundException)
+        {
+            BuildStatus = $"Helper creation failed: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+    }
+
+    private void SelectPreviewCamera()
+    {
+        if (_model is null || SelectedBone is null)
+        {
+            return;
+        }
+
+        try
+        {
+            CustomModelDocument current = _model.Package.Document;
+            string selectedName = SelectedBone.Name;
+            CustomModelDocument updated;
+            string selectedAfter;
+            if (string.Equals(
+                    selectedName,
+                    CustomModelHelperAuthoring.GameCameraName,
+                    StringComparison.Ordinal))
+            {
+                updated = CustomModelHelperAuthoring.SelectPreviewCamera(
+                    current,
+                    selectedName);
+                selectedAfter = selectedName;
+            }
+            else
+            {
+                bool exactExists = current.CreateEffectiveBones().Any(static bone =>
+                    string.Equals(
+                        bone.Name,
+                        CustomModelHelperAuthoring.GameCameraName,
+                        StringComparison.Ordinal));
+                CustomModelPreviewCameraDecision decision =
+                    _fileDialogs.ConfirmCustomModelPreviewCamera(
+                        selectedName,
+                        exactExists);
+                switch (decision)
+                {
+                    case CustomModelPreviewCameraDecision.CreateEyeCamera:
+                        updated = CustomModelHelperAuthoring.CreateEyeCameraHelper(
+                            current,
+                            SelectedBone.Index);
+                        selectedAfter = CustomModelHelperAuthoring.GameCameraName;
+                        break;
+                    case CustomModelPreviewCameraDecision.UseEditorOnlySelection:
+                        updated = CustomModelHelperAuthoring.SelectPreviewCamera(
+                            current,
+                            selectedName);
+                        selectedAfter = selectedName;
+                        break;
+                    case CustomModelPreviewCameraDecision.UseExistingEyeCamera:
+                        updated = CustomModelHelperAuthoring.SelectPreviewCamera(
+                            current,
+                            CustomModelHelperAuthoring.GameCameraName);
+                        selectedAfter = CustomModelHelperAuthoring.GameCameraName;
+                        break;
+                    default:
+                        return;
+                }
+            }
+
+            ApplyHelperMutation(
+                updated,
+                selectedAfter,
+                string.Equals(
+                    updated.Camera.ActivePreviewNodeName,
+                    CustomModelHelperAuthoring.GameCameraName,
+                    StringComparison.Ordinal)
+                    ? "Selected exact EyeCamera for preview and game-ready FPP export"
+                    : $"Selected '{selectedAfter}' as an editor-only preview camera");
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException or
+            KeyNotFoundException)
+        {
+            BuildStatus = $"Preview camera selection failed: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+    }
+
+    private void ApplySelectedHelperTransform()
+    {
+        if (_model is null || SelectedBone?.AuthoredHelperId is not { } helperId)
+        {
+            return;
+        }
+
+        try
+        {
+            double radians = Math.PI / 180.0;
+            System.Numerics.Quaternion rotation =
+                System.Numerics.Quaternion.CreateFromYawPitchRoll(
+                    checked((float)(HelperRotationY * radians)),
+                    checked((float)(HelperRotationX * radians)),
+                    checked((float)(HelperRotationZ * radians)));
+            var transform = new ReAnimated.Core.Mathematics.TransformTRS(
+                new ReAnimated.Core.Mathematics.Vector3D(
+                    HelperTranslationX,
+                    HelperTranslationY,
+                    HelperTranslationZ),
+                new ReAnimated.Core.Mathematics.QuaternionD(
+                    rotation.X,
+                    rotation.Y,
+                    rotation.Z,
+                    rotation.W),
+                ReAnimated.Core.Mathematics.Vector3D.One);
+            CustomModelDocument updated = CustomModelHelperAuthoring.SetLocalTransform(
+                _model.Package.Document,
+                helperId,
+                transform);
+            ApplyHelperMutation(
+                updated,
+                SelectedBone.Name,
+                $"Updated local transform for helper '{SelectedBone.Name}'");
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidOperationException or
+            KeyNotFoundException or
+            OverflowException)
+        {
+            BuildStatus = $"Helper transform failed: {exception.Message}";
+            _setStatus(BuildStatus);
+        }
+    }
+
+    private void UndoHelperEdit()
+    {
+        if (_model is null || _helperUndo.Count == 0)
+        {
+            return;
+        }
+
+        string? selectedName = SelectedBone?.Name;
+        CustomModelDocument restored = _helperUndo.Pop();
+        ReplaceAuthoredDocument(restored, selectedName);
+        BuildStatus = "Undid the last helper/camera authoring edit";
+        _setStatus(BuildStatus);
+        UndoHelperEditCommand.NotifyCanExecuteChanged();
+        MarkAuthoringChanged();
+    }
+
+    private void ApplyHelperMutation(
+        CustomModelDocument updated,
+        string? selectedName,
+        string status)
+    {
+        if (_model is null)
+        {
+            return;
+        }
+
+        _helperUndo.Push(_model.Package.Document);
+        ReplaceAuthoredDocument(updated, selectedName);
+        BuildStatus = status;
+        _setStatus(status);
+        UndoHelperEditCommand.NotifyCanExecuteChanged();
+        MarkAuthoringChanged();
+    }
+
+    private void ReplaceAuthoredDocument(
+        CustomModelDocument document,
+        string? selectedName)
+    {
+        if (_model is null)
+        {
+            return;
+        }
+
+        document.Validate();
+        _model = _model with
+        {
+            Package = new CustomModelPackage(
+                document,
+                _model.Package.SourceFbx,
+                _model.Package.TexturePayloads),
+            Rig = document.Bones.IsEmpty
+                ? null
+                : document.CreateRigDefinition(),
+        };
+        _previewSession = null;
+        PopulateHierarchyRows(selectedName);
+        OnPropertyChanged(nameof(PreviewCameraStatus));
+        NotifyCommands();
+        RefreshTimeline();
+        RefreshPreview();
+    }
+
+    private void LoadSelectedHelperTransform()
+    {
+        if (_model is null || SelectedBone?.AuthoredHelperId is not { } helperId)
+        {
+            HelperTranslationX = 0;
+            HelperTranslationY = 0;
+            HelperTranslationZ = 0;
+            HelperRotationX = 0;
+            HelperRotationY = 0;
+            HelperRotationZ = 0;
+            return;
+        }
+
+        CustomModelAuthoredHelper helper = _model.Package.Document.AuthoredHelpers
+            .Single(row => row.Id == helperId);
+        HelperTranslationX = helper.LocalTransform.Translation.X;
+        HelperTranslationY = helper.LocalTransform.Translation.Y;
+        HelperTranslationZ = helper.LocalTransform.Translation.Z;
+        ReAnimated.Core.Mathematics.QuaternionD q =
+            helper.LocalTransform.Rotation.Normalized();
+        HelperRotationX = Math.Asin(Math.Clamp(
+                2.0 * ((q.W * q.X) - (q.Y * q.Z)),
+                -1.0,
+                1.0)) * 180.0 / Math.PI;
+        HelperRotationY = Math.Atan2(
+                2.0 * ((q.W * q.Y) + (q.X * q.Z)),
+                1.0 - (2.0 * ((q.X * q.X) + (q.Y * q.Y)))) * 180.0 / Math.PI;
+        HelperRotationZ = Math.Atan2(
+                2.0 * ((q.W * q.Z) + (q.X * q.Y)),
+                1.0 - (2.0 * ((q.X * q.X) + (q.Z * q.Z)))) * 180.0 / Math.PI;
     }
 
     private void OnTimelineFrameChanged(object? sender, EventArgs args) => RefreshPreview();
@@ -2339,7 +2844,12 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         RollBackDeploymentCommand.NotifyCanExecuteChanged();
         BackUpLegacyOutputsCommand.NotifyCanExecuteChanged();
         FrameModelCommand.NotifyCanExecuteChanged();
+        DuplicateSelectedAsHelperCommand.NotifyCanExecuteChanged();
+        SelectPreviewCameraCommand.NotifyCanExecuteChanged();
+        ApplyHelperTransformCommand.NotifyCanExecuteChanged();
+        UndoHelperEditCommand.NotifyCanExecuteChanged();
         CancelCommand.NotifyCanExecuteChanged();
+        NotifyAnimationRefreshCommands();
     }
 
     private static string NormalizeTextureExtension(string path)
@@ -2413,6 +2923,7 @@ public sealed class ModelsWorkspaceViewModel : ObservableObject, IDisposable
         }
 
         _disposed = true;
+        StopAnimationRefreshMonitor();
         Timeline.CurrentFrameChanged -= OnTimelineFrameChanged;
         _operationCancellation?.Cancel();
         _operationCancellation?.Dispose();
@@ -2481,13 +2992,16 @@ public sealed class CustomModelAnimationClipItemViewModel : ObservableObject
         timeline.FramesPerSecond = new FrameRate(FrameRateNumerator, FrameRateDenominator).FramesPerSecond;
 }
 
-public sealed record CustomModelBoneItemViewModel(CustomModelBone Contract)
+public sealed record CustomModelBoneItemViewModel(
+    CustomModelBone Contract,
+    Guid? AuthoredHelperId = null)
 {
     public int Index => Contract.Index;
     public string Name => Contract.Name;
     public string Role => Contract.Kind.ToString();
     public int ParentIndex => Contract.ParentIndex;
     public bool IsWeighted => Contract.IsWeighted;
+    public bool IsAuthored => AuthoredHelperId is not null;
 }
 
 public sealed record CustomModelMaterialItemViewModel(CustomModelMaterial Contract)

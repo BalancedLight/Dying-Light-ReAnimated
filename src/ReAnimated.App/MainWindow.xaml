@@ -154,33 +154,30 @@
                         <TextBlock Margin="0,0,5,0"
                                    VerticalAlignment="Center"
                                    Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Workspace" />
-                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
-                                      CommandParameter="Browse"
-                                      Content="Browse"
-                                      IsChecked="{Binding IsBrowseWorkspace, Mode=OneWay}" />
+                                   Text="Workflow" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Models"
                                       Content="Models"
-                                      ToolTip="Import, inspect, texture, and package custom FBX models independently from animation projects."
+                                      ToolTip="Browse base-game models, preview without changing variants, and import project-owned custom FBX models."
                                       IsChecked="{Binding IsModelsWorkspace, Mode=OneWay}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
-                                      CommandParameter="Animate"
-                                      Content="Animate"
-                                      ToolTip="{Binding AnimateWorkspaceHint}"
-                                      IsChecked="{Binding IsAnimateWorkspace, Mode=OneWay}" />
+                                      CommandParameter="Animations"
+                                      Content="Animations"
+                                      ToolTip="Choose immutable sources and create model-specific target variants."
+                                      IsChecked="{Binding IsAnimationsWorkspace, Mode=OneWay}" />
+                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
+                                      CommandParameter="Playback"
+                                      Content="Playback"
+                                      ToolTip="Play the active target variant; draft mappings preview visibly but cannot export."
+                                      IsChecked="{Binding IsPlaybackWorkspace, Mode=OneWay}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Retarget/Edit"
                                       Content="Retarget / Edit"
                                       IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
-                                      CommandParameter="Face"
-                                      Content="Face"
-                                      IsChecked="{Binding IsFaceWorkspace, Mode=OneWay}" />
-                        <ToggleButton Command="{Binding SelectWorkspaceCommand}"
-                                      CommandParameter="FPP"
-                                      Content="FPP"
-                                      IsChecked="{Binding IsFppWorkspace, Mode=OneWay}" />
+                                      CommandParameter="Export"
+                                      Content="Export"
+                                      IsChecked="{Binding IsExportWorkspace, Mode=OneWay}" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,2"
@@ -272,6 +269,11 @@
                                 Content="{Binding Timeline.PlaybackLabel}"
                                 MinWidth="56" />
                         <Button Command="{Binding Timeline.StepForwardCommand}" Content="|▶" />
+                        <ToggleButton Margin="8,0,0,0"
+                                      Content="FPP camera"
+                                      IsChecked="{Binding IsFppPlaybackEnabled}"
+                                      Visibility="{Binding IsPlaybackWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                      ToolTip="Toggle the active model's selected evaluated preview camera without changing animation data." />
                     </StackPanel>
                 </WrapPanel>
             </Border>
@@ -319,6 +321,394 @@
                         </ColumnDefinition.Style>
                     </ColumnDefinition>
                 </Grid.ColumnDefinitions>
+
+                <Border x:Name="ModelsWorkflowSurface"
+                        Grid.ColumnSpan="5"
+                        Panel.ZIndex="35"
+                        Margin="0"
+                        Padding="12"
+                        Background="#F0121821"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Visibility="{Binding IsModelsWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="320" />
+                            <ColumnDefinition Width="6" />
+                            <ColumnDefinition Width="0.9*" />
+                            <ColumnDefinition Width="6" />
+                            <ColumnDefinition Width="1.1*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource PaneBorderStyle}">
+                            <Grid Margin="9">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <TextBlock FontSize="17" FontWeight="SemiBold" Text="Project models" />
+                                <TextBlock Grid.Row="1" Margin="0,3,0,7"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="Project-owned model references. Selecting a row never assigns it to an animation; targets are chosen in Animations."
+                                           TextWrapping="Wrap" />
+                                <ListBox Grid.Row="2"
+                                         ItemsSource="{Binding ProjectModelLibrary}"
+                                         SelectedItem="{Binding SelectedProjectModel}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="3,5">
+                                                <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Source}" />
+                                                <TextBlock FontSize="10" Foreground="{StaticResource AccentBrush}" Text="{Binding Contract}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <StackPanel Grid.Row="3">
+                                    <Button HorizontalAlignment="Left"
+                                            Command="{Binding UseSelectedProjectModelAsSourceCommand}"
+                                            Content="Use as ANM2 source"
+                                            ToolTip="Bind the next or pending ANM2 explicitly to this rigged project model. This never changes another variant's target." />
+                                    <WrapPanel Margin="0,5,0,0">
+                                        <Button Command="{Binding ImportCustomModelCommand}"
+                                                Content="Import FBX..."
+                                                ToolTip="Import a custom model into this project without changing the active animation target." />
+                                        <Button Command="{Binding OpenCustomModelPackageCommand}"
+                                                Content="Open .dlrmodel..."
+                                                ToolTip="Add a portable custom-model package to this project." />
+                                        <Button Command="{Binding EditSelectedProjectModelCommand}"
+                                                Content="Edit selected..."
+                                                ToolTip="Open the selected project-owned custom model for editing. Retail references remain preview-only." />
+                                    </WrapPanel>
+                                    <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="Imported custom models and checked embedded stacks enter the project immediately, including before the first Save." TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" />
+                        <Border Grid.Column="2" Style="{StaticResource PaneBorderStyle}">
+                            <Grid Margin="9">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <DockPanel>
+                                    <Button DockPanel.Dock="Right"
+                                            Command="{Binding AssetBrowser.IndexGameCommand}"
+                                            Content="{Binding AssetBrowser.CatalogActionLabel}" />
+                                    <TextBlock FontSize="17" FontWeight="SemiBold" Text="Base-game model browser" />
+                                </DockPanel>
+                                <TextBlock Grid.Row="1" Margin="0,3,0,7"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="Filter retail models, preview them in isolation, or add an exact fingerprinted reference to this project. Preview never changes the active variant target."
+                                           TextWrapping="Wrap" />
+                                <Grid Grid.Row="2" Margin="0,0,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="150" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBox Text="{Binding AssetBrowser.SearchText, UpdateSourceTrigger=PropertyChanged}" ToolTip="Filter by model name, path, provider, or profile" />
+                                    <ComboBox Grid.Column="1" Margin="6,0,0,0" ItemsSource="{Binding AssetBrowser.ProviderFilters}" SelectedItem="{Binding AssetBrowser.SelectedProviderFilter}" />
+                                </Grid>
+                                <Grid Grid.Row="3">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <ListBox ItemsSource="{Binding AssetBrowser.VisibleAssets}"
+                                             SelectedItem="{Binding AssetBrowser.SelectedAsset}"
+                                             ScrollViewer.CanContentScroll="True"
+                                             VirtualizingPanel.IsVirtualizing="True"
+                                             VirtualizingPanel.VirtualizationMode="Recycling">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="3,5">
+                                                    <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding LogicalPath}" TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock FontSize="10" Foreground="{StaticResource AccentBrush}" Text="{Binding ProfileSummary}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                    <WrapPanel Grid.Row="1" Margin="0,7,0,0">
+                                        <Button Command="{Binding PreviewSelectedAssetCommand}" Content="Preview selected" />
+                                        <Button Command="{Binding AddSelectedModelToProjectCommand}" Content="Add to project" />
+                                        <Button Command="{Binding ExportSelectedBrowserMeshToFbxCommand}" Content="Export mesh FBX..." />
+                                        <TextBlock Margin="8,5,0,0" Foreground="{StaticResource MutedTextBrush}" Text="{Binding AssetBrowser.ResultSummary}" />
+                                    </WrapPanel>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                        <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" />
+                        <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <StackPanel Margin="9,7,9,6">
+                                    <TextBlock FontSize="17" FontWeight="SemiBold" Text="Model preview" />
+                                    <TextBlock Margin="0,3,0,0"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Selection-only preview. The active animation source and every target variant remain unchanged."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <views:ViewportPane Grid.Row="1"
+                                                    DataContext="{Binding TargetViewport}" />
+                            </Grid>
+                        </Border>
+                    </Grid>
+                </Border>
+
+                <Border Grid.ColumnSpan="5"
+                        Panel.ZIndex="40"
+                        Margin="0"
+                        Padding="12"
+                        Background="#F0121821"
+                        BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
+                        Visibility="{Binding IsExportWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <TabControl>
+                        <TabItem Header="Artifacts">
+                    <Grid Margin="7">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.15*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource PaneBorderStyle}">
+                            <DockPanel Margin="10">
+                                <StackPanel DockPanel.Dock="Top">
+                                    <TextBlock FontSize="17" FontWeight="SemiBold" Text="Package models and variants" />
+                                    <TextBlock Margin="0,4,0,8"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Select models and export-ready target variants. Blocked variants remain visible and cannot be checked; nothing is silently skipped."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <StackPanel DockPanel.Dock="Bottom" Margin="0,8,0,0">
+                                    <Button HorizontalAlignment="Left"
+                                            Command="{Binding ApplyExportSelectionCommand}"
+                                            Content="Save package checklist" />
+                                    <TextBlock Margin="0,5,0,0"
+                                               Foreground="{StaticResource AccentBrush}"
+                                               Text="{Binding ExportSelectionSummary}" />
+                                </StackPanel>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl ItemsSource="{Binding ExportModelSelections}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Expander Margin="0,3"
+                                                          IsExpanded="True">
+                                                    <Expander.Header>
+                                                        <CheckBox Content="{Binding ModelName}"
+                                                                  IsChecked="{Binding IsSelected}" />
+                                                    </Expander.Header>
+                                                    <ItemsControl Margin="20,3,0,5"
+                                                                  ItemsSource="{Binding Variants}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <Grid Margin="0,3">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <CheckBox VerticalAlignment="Top"
+                                                                              IsChecked="{Binding IsSelected}"
+                                                                              IsEnabled="{Binding IsEnabled}" />
+                                                                    <StackPanel Grid.Column="1" Margin="7,0,0,0">
+                                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                                        <TextBlock FontSize="10"
+                                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                                   Text="{Binding Readiness}"
+                                                                                   TextWrapping="Wrap" />
+                                                                    </StackPanel>
+                                                                </Grid>
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </Expander>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+                        <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" />
+                        <Border Grid.Column="2" Style="{StaticResource PaneBorderStyle}">
+                            <Grid Margin="10">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <StackPanel>
+                                    <TextBlock FontSize="17" FontWeight="SemiBold" Text="Active variant readiness" />
+                                    <TextBlock Margin="0,4,0,8"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Each artifact reports its own requirements. Offline build and package checks are not live-game proof."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                                <ListBox Grid.Row="1" ItemsSource="{Binding ExportReadiness}">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Margin="2,3" Padding="8" BorderBrush="#344258" BorderThickness="1" CornerRadius="3">
+                                                <StackPanel>
+                                                    <DockPanel>
+                                                        <TextBlock DockPanel.Dock="Right" FontWeight="SemiBold" Foreground="{StaticResource AccentBrush}" Text="{Binding State}" />
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Artifact}" />
+                                                    </DockPanel>
+                                                    <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Detail}" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <WrapPanel Grid.Row="2" Margin="0,8,0,0">
+                                    <Button Command="{Binding ExportCheckedPortableCommand}" Content="Export checked portable packages..." />
+                                    <Button Command="{Binding ExportBodyCommand}" Content="Export body ANM2..." />
+                                    <Button Command="{Binding ExportMimicCommand}" Content="Export facial ANM2..." />
+                                    <Button Command="{Binding ExportBodyAndMimicCommand}" Content="Export body + facial..." />
+                                    <Button Command="{Binding ExportSelectedMeshToBlenderFbxCommand}" Content="Export self-contained FBX..." />
+                                    <Button Command="{Binding Models.BuildCompletePackageCommand}" Content="Build custom-model package..." />
+                                    <Button Command="{Binding Models.ExportAnimationRpackCommand}" Content="Export animation RPack..." />
+                                </WrapPanel>
+                            </Grid>
+                        </Border>
+                    </Grid>
+                        </TabItem>
+
+                        <TabItem Header="Developer Tools">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="1.05*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="Developer Tools deployment" />
+                                        <TextBlock Margin="0,4,0,10"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="Deploy the selected custom model or the checked project models, then request a selected-model animation refresh. The project runtime RPack is the normal route; raw loose loading is an advanced Editor-only comparison."
+                                                   TextWrapping="Wrap" />
+                                        <WrapPanel>
+                                            <Button Command="{Binding Models.SelectDeveloperToolsProjectCommand}" Content="Choose Developer Tools project..." />
+                                            <Button Command="{Binding Models.SelectModelCompilerCommand}" Content="Choose compiler..." />
+                                        </WrapPanel>
+                                        <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.DeveloperToolsProjectStatus}" TextWrapping="Wrap" />
+                                        <TextBlock Margin="0,3,0,9" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.CompilerStatus}" TextWrapping="Wrap" />
+
+                                        <TextBlock FontWeight="SemiBold" Text="Export identities" />
+                                        <Grid Margin="0,5,0,0">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="150" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <TextBlock Margin="0,6,8,0" Text="Character ID" />
+                                            <TextBox Grid.Column="1" Text="{Binding Models.CharacterId, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="1" Margin="0,6,8,0" Text="Model resource" />
+                                            <TextBox Grid.Row="1" Grid.Column="1" Text="{Binding Models.ResourceName, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="2" Margin="0,6,8,0" Text="Surface" />
+                                            <TextBox Grid.Row="2" Grid.Column="1" Text="{Binding Models.SurfaceName, UpdateSourceTrigger=PropertyChanged}" />
+                                            <TextBlock Grid.Row="3" Margin="0,6,8,0" Text="Animation library" />
+                                            <TextBox Grid.Row="3" Grid.Column="1" Text="{Binding Models.AnimationScriptAlias, UpdateSourceTrigger=PropertyChanged}" />
+                                        </Grid>
+
+                                        <Border Margin="0,10,0,0" Padding="8" Background="#111923" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold" Text="Planned destinations" />
+                                                <TextBlock Margin="0,4,0,0" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.DeploymentPathPreview}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="Deploy and refresh" />
+                                        <TextBlock Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" Text="A successful deployment writes a bounded, hash-verified Editor refresh request automatically." TextWrapping="Wrap" />
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="3*" />
+                                                <ColumnDefinition Width="2*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button Padding="10,8" FontWeight="SemiBold" Command="{Binding Models.DeployToDeveloperToolsProjectCommand}" Content="Deploy selected custom model..." />
+                                            <Button Grid.Column="1" Margin="6,0,0,0" Padding="10,8" FontWeight="SemiBold" Command="{Binding Models.RequestDeveloperToolsAnimationRefreshCommand}" Content="Refresh / retry animations" />
+                                        </Grid>
+                                        <WrapPanel Margin="0,6,0,0">
+                                            <Button Command="{Binding DeployCheckedToDeveloperToolsCommand}" Content="Deploy checked models..." />
+                                            <Button Command="{Binding Models.RollBackDeploymentCommand}" Content="Roll back selected deployment" />
+                                            <Button Command="{Binding RollBackDeveloperToolsBatchCommand}" Content="Roll back last model batch" />
+                                            <Button Command="{Binding Models.BackUpLegacyOutputsCommand}" Content="Back up legacy output" />
+                                        </WrapPanel>
+
+                                        <TextBlock Margin="0,12,0,3" Text="Target host" />
+                                        <ComboBox ItemsSource="{Binding Models.AnimationRefreshHosts}" SelectedItem="{Binding Models.SelectedAnimationRefreshHost}" DisplayMemberPath="Label" />
+                                        <TextBlock Margin="0,8,0,3" Text="Resource route" />
+                                        <ComboBox ItemsSource="{Binding Models.AnimationRefreshRoutes}" SelectedItem="{Binding Models.SelectedAnimationRefreshRoute}" DisplayMemberPath="Label" />
+                                        <TextBlock Margin="0,4,0,9" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.AnimationRefreshRouteDescription}" TextWrapping="Wrap" />
+
+                                        <Border Padding="8" Background="#13232C" BorderBrush="#2F8098" BorderThickness="1" CornerRadius="3">
+                                            <StackPanel>
+                                                <TextBlock FontWeight="SemiBold" Text="Latest deployment / refresh state" />
+                                                <TextBlock Margin="0,4,0,0" Text="{Binding Models.AnimationRefreshStatus}" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                        <TextBlock Margin="0,10,0,4" FontWeight="SemiBold" Text="Latest staged preflight" />
+                                        <TextBlock Margin="0,0,0,5" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.DeploymentPreflightSummary}" TextWrapping="Wrap" />
+                                        <DataGrid MaxHeight="210" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" IsReadOnly="True" ItemsSource="{Binding Models.DeploymentArtifacts}">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Width="80" Header="Role" Binding="{Binding Role}" />
+                                                <DataGridTextColumn Width="85" Header="Result" Binding="{Binding Disposition}" />
+                                                <DataGridTextColumn Width="*" Header="Project-relative path" Binding="{Binding RelativePath}" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </StackPanel>
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+
+                        <TabItem Header="Receipts">
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <Grid Margin="12">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="10" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel>
+                                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="Deployment and loader receipts" />
+                                        <TextBlock Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" Text="Inspect the latest project-owned receipt and selected-model refresh result. These records are offline evidence, not proof of visible playback." TextWrapping="Wrap" />
+                                        <WrapPanel>
+                                            <Button Command="{Binding Models.OpenDeveloperToolsProjectCommand}" Content="Open project folder" />
+                                            <Button Command="{Binding Models.OpenDeployedAnimationScriptCommand}" Content="Open animation script" />
+                                            <Button Command="{Binding Models.OpenDeploymentReceiptCommand}" Content="Open deployment receipt" />
+                                            <Button Command="{Binding Models.CheckDeveloperToolsAnimationRefreshResultCommand}" Content="Check loader result" />
+                                        </WrapPanel>
+                                        <TextBlock Margin="0,8,0,0" Text="{Binding Models.AnimationRefreshStatus}" TextWrapping="Wrap" />
+                                        <TextBlock Margin="0,5,0,0" FontFamily="Consolas" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.AnimationRefreshResultDetails}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock FontSize="17" FontWeight="SemiBold" Text="Diagnostic bundle" />
+                                        <TextBlock Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" Text="Collects existing receipts, refresh records, and an optional loader log. It does not inspect, launch, attach to, inject into, or control a process." TextWrapping="Wrap" />
+                                        <Button HorizontalAlignment="Left" Command="{Binding Models.SelectAnimationLoaderLogCommand}" Content="Choose existing loader log..." />
+                                        <TextBlock Margin="0,5,0,8" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Models.AnimationLoaderLogStatus}" TextWrapping="Wrap" />
+                                        <Button HorizontalAlignment="Left" Padding="10,7" Command="{Binding Models.CollectAnimationDiagnosticBundleCommand}" Content="Collect diagnostic bundle..." />
+                                        <TextBlock Margin="0,7,0,0" Text="{Binding Models.AnimationDiagnosticStatus}" TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Grid>
+                            </ScrollViewer>
+                        </TabItem>
+                    </TabControl>
+                </Border>
 
                 <Border Grid.Column="0" Style="{StaticResource PaneBorderStyle}">
                     <TabControl x:Name="ExplorerTabControl"
@@ -535,8 +925,8 @@
                                         <WrapPanel>
                                             <Button Padding="8,3"
                                                     Command="{Binding ExportSelectedMeshToBlenderFbxCommand}"
-                                                    Content="Mesh + ANM2 to FBX…"
-                                                    ToolTip="Create one armature-owned Blender Action/FBX take per selected ANM2 clip using the selected decoded retail mesh." />
+                                                    Content="Active variant to FBX…"
+                                                    ToolTip="Export the active evaluated variant with its exact target mesh, rig, helpers/camera, skinning, shape keys, materials, and embedded textures." />
                                             <Button Margin="4,0,0,0"
                                                     Padding="8,3"
                                                     Command="{Binding ConfigureBlenderCommand}"
@@ -687,6 +1077,7 @@
                                                     </Border>
                                                     <TextBox FontWeight="SemiBold"
                                                              MaxLength="128"
+                                                             IsReadOnly="{Binding IsSourceOnly}"
                                                              Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
                                                     <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Source, StringFormat=Source: {0}}" TextWrapping="Wrap" />
                                                     <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding SourceModel, StringFormat=Source model: {0}}" TextWrapping="Wrap" />
@@ -809,7 +1200,8 @@
                               HorizontalAlignment="Stretch"
                               Background="#2D3541" />
 
-                <Grid Grid.Column="2">
+                <Grid x:Name="ViewportRegionGrid"
+                      Grid.Column="2">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="*" />
                         <RowDefinition Height="5" />
@@ -871,6 +1263,25 @@
                                         </WrapPanel>
                                         <TextBlock VerticalAlignment="Center"
                                                    Foreground="#F3C978"
+                                                   Text="{Binding TargetPlaybackMessage}"
+                                                   TextWrapping="Wrap" />
+                                    </DockPanel>
+                                </Border>
+                                <Border Margin="0,5,0,0"
+                                        Padding="7,5"
+                                        Background="#25344A"
+                                        BorderBrush="{StaticResource AccentBrush}"
+                                        BorderThickness="1"
+                                        CornerRadius="3"
+                                        Visibility="{Binding IsDraftTargetPreview, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <DockPanel LastChildFill="True">
+                                        <Button DockPanel.Dock="Right"
+                                                Margin="8,0,0,0"
+                                                Command="{Binding SelectWorkspaceCommand}"
+                                                CommandParameter="Retarget/Edit"
+                                                Content="Review mapping" />
+                                        <TextBlock VerticalAlignment="Center"
+                                                   Foreground="{StaticResource AccentBrush}"
                                                    Text="{Binding TargetPlaybackMessage}"
                                                    TextWrapping="Wrap" />
                                     </DockPanel>
@@ -989,6 +1400,29 @@
                                                 Content="Accept proposal &amp; play"
                                                 ToolTip="Explicitly review every proposed row and required bind fallback, save the mapping, reset to frame zero, and start target playback." />
                                     </WrapPanel>
+                                    <Border Margin="0,6,0,0"
+                                            Padding="6"
+                                            Background="#202A39"
+                                            BorderBrush="{StaticResource BorderBrush}"
+                                            BorderThickness="1"
+                                            CornerRadius="3">
+                                        <StackPanel>
+                                            <WrapPanel>
+                                                <CheckBox Margin="2,1,8,1"
+                                                          Content="Enable assisted review"
+                                                          IsChecked="{Binding IsAssistedReviewEnabled}"
+                                                          ToolTip="Machine-local preference. Checking this never changes a project by itself." />
+                                                <Button Command="{Binding ApplyAssistedReviewCommand}"
+                                                        Content="Apply assisted review"
+                                                        ToolTip="Explicitly score the current exact rig pair and lock only eligible deterministic rows." />
+                                            </WrapPanel>
+                                            <TextBlock Margin="2,4,2,0"
+                                                       FontSize="9"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       Text="{Binding AssistedReviewPolicySummary}"
+                                                       TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
                                     <TextBlock Margin="4,7,4,3"
                                                FontSize="10"
                                                FontWeight="SemiBold"
@@ -1081,6 +1515,10 @@
                                         <DataGridTextColumn Width="92"
                                                             Binding="{Binding ReviewState}"
                                                             Header="State"
+                                                            IsReadOnly="True" />
+                                        <DataGridTextColumn Width="260"
+                                                            Binding="{Binding EvidenceSummary}"
+                                                            Header="Evidence"
                                                             IsReadOnly="True" />
                                     </DataGrid.Columns>
                                 </DataGrid>
@@ -1559,7 +1997,7 @@
                         </TabItem>
 
                         <TabItem Header="Face / FPP"
-                                 Visibility="{Binding IsFaceOrFppWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                 Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <TabControl>
                                 <TabItem Header="Facial">
                                     <Grid Margin="8">
@@ -1659,9 +2097,14 @@
                                                                                        IsChecked="{Binding IsLocked}"
                                                                                        ToolTip="A row can only be locked after it is reviewed" />
                                                                          </WrapPanel>
-                                                                         <TextBlock Margin="0,3,0,0"
-                                                                                    Foreground="{StaticResource MutedTextBrush}"
-                                                                                    Text="{Binding ReviewState}" />
+                                                                          <TextBlock Margin="0,3,0,0"
+                                                                                     Foreground="{StaticResource MutedTextBrush}"
+                                                                                     Text="{Binding ReviewState}" />
+                                                                          <TextBlock Margin="0,3,0,0"
+                                                                                     FontSize="9"
+                                                                                     Foreground="{StaticResource MutedTextBrush}"
+                                                                                     Text="{Binding EvidenceSummary}"
+                                                                                     TextWrapping="Wrap" />
                                                                      </StackPanel>
                                                                  </Border>
                                                              </DataTemplate>
@@ -1750,7 +2193,7 @@
                                     </Grid>
                                 </TabItem>
 
-                                <TabItem Header="FPP">
+                                <TabItem Header="FPP / camera">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Margin="10">
                                             <Border Margin="4"

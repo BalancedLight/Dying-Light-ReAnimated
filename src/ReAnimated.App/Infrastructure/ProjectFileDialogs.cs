@@ -1,6 +1,8 @@
+using System.Collections.Immutable;
 using System.IO;
 using System.Windows;
 using Microsoft.Win32;
+using ReAnimated.Codecs.Fbx;
 
 namespace ReAnimated.App.Infrastructure;
 
@@ -18,6 +20,14 @@ public enum DeveloperToolsDeploymentConflictDecision
     Cancel,
 }
 
+public enum CustomModelPreviewCameraDecision
+{
+    CreateEyeCamera,
+    UseEditorOnlySelection,
+    UseExistingEyeCamera,
+    Cancel,
+}
+
 public sealed record LocalAnm2ImportPreflight(
     string AnimationName,
     string SourceModelName,
@@ -32,11 +42,79 @@ public sealed record LocalAnm2ImportPreflight(
     public bool IsBlocked => AmbiguousDescriptorCount > 0;
 }
 
+public sealed record ExternalFbxAnimationStackSelection(
+    ImmutableArray<long> StackObjectIds,
+    FbxFacialSourceValueUnit FacialSourceValueUnit,
+    ImmutableArray<Guid> TargetModelIds)
+{
+    public const int MaximumSelectedStacks = 256;
+
+    public const int MaximumSelectedTargetModels = 32;
+
+    public ExternalFbxAnimationStackSelection Validate()
+    {
+        if (StackObjectIds.IsDefaultOrEmpty ||
+            StackObjectIds.Length > MaximumSelectedStacks ||
+            StackObjectIds.Any(static id => id <= 0) ||
+            StackObjectIds.Distinct().Count() !=
+                StackObjectIds.Length ||
+            TargetModelIds.IsDefaultOrEmpty ||
+            TargetModelIds.Length > MaximumSelectedTargetModels ||
+            TargetModelIds.Any(static id => id == Guid.Empty) ||
+            TargetModelIds.Distinct().Count() !=
+                TargetModelIds.Length ||
+            FacialSourceValueUnit is not (
+                FbxFacialSourceValueUnit.Normalized or
+                FbxFacialSourceValueUnit.Percent))
+        {
+            throw new ArgumentException(
+                $"An external FBX selection requires 1-{MaximumSelectedStacks} unique positive stack IDs, 1-{MaximumSelectedTargetModels} unique rigged target models, and an explicit facial source unit.");
+        }
+
+        return this;
+    }
+}
+
+public sealed record ExternalFbxTargetModelOption(
+    Guid ModelId,
+    string Name,
+    string Source,
+    string Contract,
+    bool IsStatic,
+    bool IsSelected);
+
 public interface IProjectFileDialogService
 {
     string? ShowOpenProjectDialog(string? initialPath);
 
     string? ShowOpenAnimationDialog(string? initialPath) => null;
+
+    ExternalFbxAnimationStackSelection?
+        SelectExternalFbxAnimationStacks(
+            string sourceName,
+            IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks,
+            IReadOnlyList<ExternalFbxTargetModelOption> targetModels)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+        ArgumentNullException.ThrowIfNull(stacks);
+        ArgumentNullException.ThrowIfNull(targetModels);
+        ImmutableArray<long> importable = stacks
+            .Where(static stack => stack.CanImport)
+            .Select(static stack => stack.StackObjectId)
+            .ToImmutableArray();
+        ImmutableArray<Guid> targets = targetModels
+            .Where(static model => !model.IsStatic)
+            .Take(ExternalFbxAnimationStackSelection
+                .MaximumSelectedTargetModels)
+            .Select(static model => model.ModelId)
+            .ToImmutableArray();
+        return importable.IsEmpty || targets.IsEmpty
+            ? null
+            : new ExternalFbxAnimationStackSelection(
+                importable,
+                FbxFacialSourceValueUnit.Percent,
+                targets);
+    }
 
     LocalAnm2SourceBindingDecision ConfirmLocalAnm2SourceBinding(
         LocalAnm2ImportPreflight preflight) =>
@@ -66,6 +144,12 @@ public interface IProjectFileDialogService
         string assetName,
         int clipCount) => false;
 
+    bool ConfirmActiveVariantFbxExport(
+        string modelName,
+        string animationName,
+        bool containsRetailModelBytes) =>
+        !containsRetailModelBytes;
+
     bool ConfirmRetailMeshFbxExport(string assetName) => false;
 
     string? ShowSelectExportDirectoryDialog(string? initialPath) => null;
@@ -79,6 +163,16 @@ public interface IProjectFileDialogService
     string? ShowSaveCustomModelPackageDialog(
         string suggestedName,
         string? initialPath) => null;
+
+    CustomModelPreviewCameraDecision ConfirmCustomModelPreviewCamera(
+        string selectedNodeName,
+        bool exactEyeCameraExists) =>
+        CustomModelPreviewCameraDecision.Cancel;
+
+    bool ConfirmCustomModelReimport(
+        string replacementFileName,
+        bool boneAndHelperMappingsBecomeStale,
+        bool facialMappingsBecomeStale) => false;
 
     string? ShowSelectCustomModelOutputDirectory(string? initialPath) => null;
 
@@ -111,6 +205,12 @@ public interface IProjectFileDialogService
 
     string? ShowSaveCustomModelRpackDialog(
         string suggestedName,
+        string? initialPath) => null;
+
+    string? ShowOpenDeveloperToolsAnimationLoaderLogDialog(
+        string? initialPath) => null;
+
+    string? ShowSaveDeveloperToolsAnimationDiagnosticBundleDialog(
         string? initialPath) => null;
 
     string? ShowSaveProjectDialog(
@@ -194,6 +294,30 @@ public sealed class WindowsProjectFileDialogService :
         ApplyInitialPath(dialog, initialPath);
         return dialog.ShowDialog() == true
             ? dialog.FileName
+            : null;
+    }
+
+    public ExternalFbxAnimationStackSelection?
+        SelectExternalFbxAnimationStacks(
+            string sourceName,
+            IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks,
+            IReadOnlyList<ExternalFbxTargetModelOption> targetModels)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+        ArgumentNullException.ThrowIfNull(stacks);
+        ArgumentNullException.ThrowIfNull(targetModels);
+        var dialog = new ExternalFbxStackSelectionDialog(
+            sourceName,
+            stacks,
+            targetModels);
+        Window? owner = Application.Current?.MainWindow;
+        if (owner is { IsVisible: true })
+        {
+            dialog.Owner = owner;
+        }
+
+        return dialog.ShowDialog() == true
+            ? dialog.Selection
             : null;
     }
 
@@ -332,7 +456,7 @@ public sealed class WindowsProjectFileDialogService :
             FileName = $"{MakeSafeFileName(suggestedName)}.fbx",
             Filter = FbxFilter,
             OverwritePrompt = true,
-            Title = "Export retail mesh and ANM2 Actions to Blender FBX",
+            Title = "Export active animation variant to self-contained FBX",
         };
         ApplyInitialPath(dialog, initialPath);
         return dialog.ShowDialog() == true
@@ -371,6 +495,27 @@ public sealed class WindowsProjectFileDialogService :
             System.Windows.MessageBoxImage.Warning,
             System.Windows.MessageBoxResult.No) ==
         System.Windows.MessageBoxResult.Yes;
+
+    public bool ConfirmActiveVariantFbxExport(
+        string modelName,
+        string animationName,
+        bool containsRetailModelBytes)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(animationName);
+        string ownership = containsRetailModelBytes
+            ? "This FBX contains decoded Dying Light 1 retail mesh and texture data. Keep it local and do not redistribute it."
+            : "This FBX contains the project-owned custom model, its materials/textures, and the evaluated active animation variant.";
+        return System.Windows.MessageBox.Show(
+            $"Export active variant '{animationName}' on '{modelName}' as a self-contained FBX?\n\n{ownership}\n\nOnly the decoded base-color material is reproduced; unsupported DL1 shader maps, cloth, and physics are not fabricated.",
+            "Export active variant to FBX",
+            System.Windows.MessageBoxButton.YesNo,
+            containsRetailModelBytes
+                ? System.Windows.MessageBoxImage.Warning
+                : System.Windows.MessageBoxImage.Question,
+            System.Windows.MessageBoxResult.No) ==
+            System.Windows.MessageBoxResult.Yes;
+    }
 
     public bool ConfirmRetailMeshFbxExport(string assetName) =>
         System.Windows.MessageBox.Show(
@@ -470,6 +615,79 @@ public sealed class WindowsProjectFileDialogService :
         };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public CustomModelPreviewCameraDecision ConfirmCustomModelPreviewCamera(
+        string selectedNodeName,
+        bool exactEyeCameraExists)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(selectedNodeName);
+        if (exactEyeCameraExists)
+        {
+            MessageBoxResult collision = MessageBox.Show(
+                $"The hierarchy already contains the exact exportable EyeCamera helper. " +
+                $"Use that existing helper instead of '{selectedNodeName}'?",
+                "Choose preview camera",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question,
+                MessageBoxResult.Yes);
+            return collision == MessageBoxResult.Yes
+                ? CustomModelPreviewCameraDecision.UseExistingEyeCamera
+                : CustomModelPreviewCameraDecision.Cancel;
+        }
+
+        MessageBoxResult result = MessageBox.Show(
+            $"Create an exportable child helper named exactly EyeCamera at " +
+            $"'{selectedNodeName}'?\n\nYes: create EyeCamera.\n" +
+            "No: keep this selection editor-only.\nCancel: leave the camera unchanged.",
+            "Choose preview camera",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Question,
+            MessageBoxResult.Yes);
+        return result switch
+        {
+            MessageBoxResult.Yes =>
+                CustomModelPreviewCameraDecision.CreateEyeCamera,
+            MessageBoxResult.No =>
+                CustomModelPreviewCameraDecision.UseEditorOnlySelection,
+            _ => CustomModelPreviewCameraDecision.Cancel,
+        };
+    }
+
+    public bool ConfirmCustomModelReimport(
+        string replacementFileName,
+        bool boneAndHelperMappingsBecomeStale,
+        bool facialMappingsBecomeStale)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(replacementFileName);
+        var consequences = new List<string>();
+        if (boneAndHelperMappingsBecomeStale)
+        {
+            consequences.Add("Bone/helper mappings will be marked stale for review.");
+        }
+
+        if (facialMappingsBecomeStale)
+        {
+            consequences.Add("Facial mappings will be marked stale for review.");
+        }
+
+        if (consequences.Count == 0)
+        {
+            consequences.Add(
+                "Skeleton and morph contracts are unchanged; existing mapping reviews can be preserved.");
+        }
+
+        consequences.Add(
+            "Authored helpers and preview-camera metadata remain in their separate project layer.");
+        return MessageBox.Show(
+            $"Replace the current custom-model FBX with '{replacementFileName}'?\n\n" +
+            string.Join(Environment.NewLine, consequences),
+            "Validate custom-model reimport",
+            MessageBoxButton.YesNo,
+            boneAndHelperMappingsBecomeStale || facialMappingsBecomeStale
+                ? MessageBoxImage.Warning
+                : MessageBoxImage.Question,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
     }
 
     public string? ShowSelectCustomModelOutputDirectory(string? initialPath)
@@ -602,7 +820,7 @@ public sealed class WindowsProjectFileDialogService :
             FileName = $"{MakeSafeFileName(suggestedName)}_animations.rpack",
             Filter = RpackFilter,
             OverwritePrompt = true,
-            Title = "Export portable animation RPack (not automatically mounted)",
+            Title = "Export optional portable animation RPack copy",
         };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
@@ -638,6 +856,41 @@ public sealed class WindowsProjectFileDialogService :
             Filter = RpackFilter,
             OverwritePrompt = true,
             Title = "Compile custom model to a DL1 model RPack",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenDeveloperToolsAnimationLoaderLogDialog(
+        string? initialPath)
+    {
+        OpenFileDialog dialog = new()
+        {
+            AddExtension = false,
+            CheckFileExists = true,
+            FileName = "dl_universal_loader.log",
+            Filter =
+                "Universal Loader log (dl_universal_loader.log)|dl_universal_loader.log|" +
+                "Log files (*.log)|*.log",
+            Multiselect = false,
+            Title = "Select the existing Universal Loader log",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveDeveloperToolsAnimationDiagnosticBundleDialog(
+        string? initialPath)
+    {
+        SaveFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".zip",
+            FileName = "dl-reanimated-animation-diagnostics.zip",
+            Filter = "ZIP archive (*.zip)|*.zip",
+            OverwritePrompt = true,
+            Title = "Save offline animation diagnostic bundle",
         };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;

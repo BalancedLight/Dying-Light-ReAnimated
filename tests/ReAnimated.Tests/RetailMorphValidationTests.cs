@@ -78,12 +78,12 @@ public sealed class RetailMorphValidationTests
                 binding.VertexCount == 3_068 &&
                 binding.DeltaByteStride == 8 &&
                 binding.DeltaEncoding ==
-                    Dl1MorphDeltaEncoding.SignedShort4Scale16384);
+                    Dl1MorphDeltaEncoding.PcHalf4);
             Assert.Contains(bindings, static binding =>
                 binding.VertexCount == 2_006 &&
                 binding.DeltaByteStride == 8 &&
                 binding.DeltaEncoding ==
-                    Dl1MorphDeltaEncoding.SignedShort4Scale16384);
+                    Dl1MorphDeltaEncoding.PcHalf4);
 
             Dl1MorphTarget jaw = Assert.Single(
                 mesh.MorphTargets,
@@ -104,12 +104,10 @@ public sealed class RetailMorphValidationTests
                 jawDeltas.SelectMany(static delta =>
                     new[] { delta.X, delta.Y, delta.Z }),
                 static component =>
-                    Assert.InRange(
-                        Math.Abs(
-                            component * 16_384.0f -
-                            MathF.Round(component * 16_384.0f)),
-                        0,
-                        1.0e-5f));
+                {
+                    Assert.True(float.IsFinite(component));
+                    Assert.Equal(component, (float)(Half)component);
+                });
 
             Dl1MeshPreviewPayload preview =
                 Dl1MeshPreviewAdapter.Convert(mesh);
@@ -140,6 +138,12 @@ public sealed class RetailMorphValidationTests
                 }
             }
             Assert.Contains(
+                preview.Meshes.SelectMany(static mesh => mesh.MorphTargets),
+                static target => string.Equals(
+                    target.Name,
+                    "morph_jaw_open",
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(
                 preview.Diagnostics,
                 static diagnostic =>
                     diagnostic.Contains(

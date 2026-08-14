@@ -19,8 +19,12 @@
                     <TextBlock FontSize="16" FontWeight="SemiBold" Text="Custom model" />
                     <TextBlock Margin="0,3,0,10"
                                Foreground="{StaticResource MutedTextBrush}"
-                               Text="This workspace is independent from animation projects. Importing or previewing a model here cannot replace an active animation target."
+                               Text="Custom-model authoring is part of the project model library. Importing or previewing here cannot replace an animation target; assign models to immutable sources in Animations."
                                TextWrapping="Wrap" />
+                    <Button Margin="0,0,0,8"
+                            HorizontalAlignment="Left"
+                            Command="{Binding ReturnToProjectModelsCommand}"
+                            Content="Back to project models" />
                     <WrapPanel Margin="0,0,0,8">
                         <Button x:Name="ImportFbxButton"
                                 Command="{Binding ImportFbxCommand}"
@@ -61,24 +65,6 @@
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                Text="ExactFbxRig preserves the imported hierarchy. StaticProp ignores skinning. Dl1HumanoidFit is an explicit retargeting authoring mode; it never silently renames custom bones."
-                               TextWrapping="Wrap" />
-                    <TextBlock Margin="0,3,0,2" Text="Character ID" />
-                    <TextBox Text="{Binding CharacterId, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="0,2,0,5"
-                               FontSize="10"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="One safe directory name under data/characters. It does not rename the model resource."
-                               TextWrapping="Wrap" />
-                    <TextBlock Margin="0,3,0,2" Text="Model resource name" />
-                    <TextBox Text="{Binding ResourceName, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="0,6,0,2" Text="Surface name" />
-                    <TextBox Text="{Binding SurfaceName, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="0,6,0,2" Text="Animation library / script name" />
-                    <TextBox Text="{Binding AnimationScriptAlias, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="0,2,0,2"
-                               FontSize="10"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="The model-named .ascr redirects to this .scr library."
                                TextWrapping="Wrap" />
                     <CheckBox Margin="3,9,3,0"
                               Content="Match DL1 texture origin (flip V)"
@@ -149,6 +135,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Margin="2,0,2,6"
                                    Foreground="{StaticResource MutedTextBrush}"
@@ -167,8 +154,58 @@
                                 <DataGridCheckBoxColumn Width="55"
                                                         Binding="{Binding IsWeighted, Mode=OneWay}"
                                                         Header="Skin" />
+                                <DataGridCheckBoxColumn Width="64"
+                                                        Binding="{Binding IsAuthored, Mode=OneWay}"
+                                                        Header="Authored" />
                             </DataGrid.Columns>
                         </DataGrid>
+                        <StackPanel Grid.Row="2" Margin="0,7,0,0">
+                            <TextBlock FontWeight="SemiBold" Text="Helper and camera authoring" />
+                            <TextBlock Margin="0,2,0,5"
+                                       FontSize="10"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="Duplicate keeps imported deform hierarchy immutable. The new unweighted child begins at the selected node's global bind transform."
+                                       TextWrapping="Wrap" />
+                            <WrapPanel>
+                                <ComboBox Width="92"
+                                          ItemsSource="{Binding HelperKinds}"
+                                          SelectedItem="{Binding SelectedHelperKind}" />
+                                <TextBox Width="125"
+                                         Margin="4,0"
+                                         ToolTip="Optional helper name"
+                                         Text="{Binding NewHelperName, UpdateSourceTrigger=PropertyChanged}" />
+                                <Button Command="{Binding DuplicateSelectedAsHelperCommand}"
+                                        Content="Duplicate as Helper" />
+                            </WrapPanel>
+                            <WrapPanel Margin="0,5,0,0">
+                                <Button Command="{Binding SelectPreviewCameraCommand}"
+                                        Content="Use selected as camera..." />
+                                <Button Command="{Binding UndoHelperEditCommand}"
+                                        Content="Undo helper edit" />
+                            </WrapPanel>
+                            <TextBlock Margin="0,3,0,5"
+                                       FontSize="10"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="{Binding PreviewCameraStatus}"
+                                       TextWrapping="Wrap" />
+                            <StackPanel IsEnabled="{Binding CanEditSelectedHelper}">
+                                <TextBlock FontSize="10" Text="Local translation offset (X / Y / Z)" />
+                                <UniformGrid Columns="3" Margin="0,2,0,4">
+                                    <TextBox Text="{Binding HelperTranslationX, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Margin="3,0" Text="{Binding HelperTranslationY, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Text="{Binding HelperTranslationZ, UpdateSourceTrigger=PropertyChanged}" />
+                                </UniformGrid>
+                                <TextBlock FontSize="10" Text="Local rotation offset in degrees (X / Y / Z)" />
+                                <UniformGrid Columns="3" Margin="0,2,0,4">
+                                    <TextBox Text="{Binding HelperRotationX, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Margin="3,0" Text="{Binding HelperRotationY, UpdateSourceTrigger=PropertyChanged}" />
+                                    <TextBox Text="{Binding HelperRotationZ, UpdateSourceTrigger=PropertyChanged}" />
+                                </UniformGrid>
+                                <Button HorizontalAlignment="Left"
+                                        Command="{Binding ApplyHelperTransformCommand}"
+                                        Content="Apply local offsets" />
+                            </StackPanel>
+                        </StackPanel>
                     </Grid>
                 </TabItem>
 
@@ -263,170 +300,11 @@
                             <Button Margin="0,6,0,0"
                                     HorizontalAlignment="Left"
                                     Command="{Binding OpenSelectedAnimationInAnimateCommand}"
-                                    Content="Open selected stack in Animate" />
+                                    Content="Play selected in Playback" />
                         </StackPanel>
                     </Grid>
                 </TabItem>
 
-                <TabItem Header="Build / diagnostics">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                      <StackPanel Margin="7">
-                        <TextBlock FontSize="14"
-                                   FontWeight="SemiBold"
-                                   Text="Developer Tools project deployment" />
-                        <TextBlock Margin="0,2,0,6"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Deploys sources and official compiler outputs to canonical data and assets_pc paths. The project location stays on this computer and is never embedded in the model workspace."
-                                   TextWrapping="Wrap" />
-                        <Button HorizontalAlignment="Left"
-                                Command="{Binding SelectDeveloperToolsProjectCommand}"
-                                Content="Choose Developer Tools project..." />
-                        <TextBlock Margin="0,4,0,7"
-                                   FontSize="10"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="{Binding DeveloperToolsProjectStatus}"
-                                   TextWrapping="Wrap" />
-                        <CheckBox Margin="2,1"
-                                  Content="Install loose ANM2 source files"
-                                  IsChecked="{Binding InstallLooseAnm2}" />
-                        <CheckBox Margin="2,1,2,7"
-                                  Content="Export portable animation RPack (not automatically mounted)"
-                                  IsChecked="{Binding ExportPortableAnimationRpack}" />
-                        <Border Padding="7"
-                                Background="#111923"
-                                BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="1"
-                                CornerRadius="3">
-                            <StackPanel>
-                                <TextBlock FontWeight="SemiBold" Text="Planned destinations" />
-                                <TextBlock Margin="0,4,0,0"
-                                           FontFamily="Consolas"
-                                           FontSize="10"
-                                           Foreground="{StaticResource MutedTextBrush}"
-                                           Text="{Binding DeploymentPathPreview}"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-                        </Border>
-                        <Border Margin="0,7,0,0"
-                                Padding="7"
-                                Background="#111923"
-                                BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="1"
-                                CornerRadius="3">
-                            <StackPanel>
-                                <TextBlock FontWeight="SemiBold" Text="Latest staged preflight" />
-                                <TextBlock Margin="0,4,0,5"
-                                           FontSize="10"
-                                           Foreground="{StaticResource MutedTextBrush}"
-                                           Text="{Binding DeploymentPreflightSummary}"
-                                           TextWrapping="Wrap" />
-                                <DataGrid MaxHeight="170"
-                                          AutoGenerateColumns="False"
-                                          CanUserAddRows="False"
-                                          CanUserDeleteRows="False"
-                                          IsReadOnly="True"
-                                          ItemsSource="{Binding DeploymentArtifacts}">
-                                    <DataGrid.Columns>
-                                        <DataGridTextColumn Width="82" Header="Role" Binding="{Binding Role}" />
-                                        <DataGridTextColumn Width="92" Header="Result" Binding="{Binding Disposition}" />
-                                        <DataGridTextColumn Width="72" Header="Need" Binding="{Binding Required}" />
-                                        <DataGridTextColumn Width="1.5*" Header="Project-relative path" Binding="{Binding RelativePath}" />
-                                        <DataGridTextColumn Width="*" Header="Purpose" Binding="{Binding Description}" />
-                                    </DataGrid.Columns>
-                                </DataGrid>
-                            </StackPanel>
-                        </Border>
-                        <Button Margin="0,8,0,0"
-                                HorizontalAlignment="Stretch"
-                                Padding="10,8"
-                                FontWeight="SemiBold"
-                                Command="{Binding DeployToDeveloperToolsProjectCommand}"
-                                Content="Deploy to Developer Tools project..." />
-                        <WrapPanel Margin="0,6,0,0">
-                            <Button Command="{Binding OpenDeveloperToolsProjectCommand}"
-                                    Content="Open project folder" />
-                            <Button Command="{Binding OpenDeployedAnimationScriptCommand}"
-                                    Content="Open animation script" />
-                            <Button Command="{Binding OpenDeploymentReceiptCommand}"
-                                    Content="Open deployment receipt" />
-                            <Button Command="{Binding RollBackDeploymentCommand}"
-                                    Content="Roll back deployment" />
-                            <Button Command="{Binding BackUpLegacyOutputsCommand}"
-                                    Content="Back up legacy output" />
-                        </WrapPanel>
-
-                        <Separator Margin="0,10" />
-                        <TextBlock FontSize="14" FontWeight="SemiBold" Text="Portable package" />
-                        <Button Margin="0,6,0,0"
-                                HorizontalAlignment="Stretch"
-                                Padding="8,6"
-                                FontWeight="SemiBold"
-                                Command="{Binding BuildCompletePackageCommand}"
-                                Content="Build portable DL1 model package..." />
-                        <StackPanel Margin="0,6,0,0">
-                            <Button HorizontalAlignment="Left"
-                                    Command="{Binding SelectModelCompilerCommand}"
-                                    Content="Choose Developer Tools compiler..." />
-                            <TextBlock Margin="0,4,0,0"
-                                       FontSize="10"
-                                       Foreground="{StaticResource MutedTextBrush}"
-                                       Text="{Binding CompilerStatus}"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                        <Border Margin="0,8"
-                                Padding="8"
-                                Background="#3B301D"
-                                BorderBrush="#735D2A"
-                                BorderThickness="1"
-                                CornerRadius="3">
-                            <TextBlock Foreground="#F3C978"
-                                       Text="Portable RPacks are export artifacts and are not automatically mounted by Developer Tools. Project deployment uses the canonical loose SCR plus compiled ANM2 object route and never overwrites common_anims_PC.rpack."
-                                       TextWrapping="Wrap" />
-                        </Border>
-                        <Expander
-                                  Margin="0,0,0,8"
-                                  Header="Advanced partial exports">
-                            <StackPanel Margin="0,5,0,0">
-                                <TextBlock Margin="0,0,0,5"
-                                           FontSize="10"
-                                           Foreground="{StaticResource MutedTextBrush}"
-                                           Text="These retain the legacy loose .msh/.bscr/.chr source workflow and standalone portable artifacts."
-                                           TextWrapping="Wrap" />
-                                <Button HorizontalAlignment="Stretch"
-                                        Command="{Binding BuildLooseFilesCommand}"
-                                        Content="Write loose source files only..." />
-                                <Button Margin="0,5,0,0"
-                                        HorizontalAlignment="Stretch"
-                                        Command="{Binding ExportAnimationRpackCommand}"
-                                        Content="Export animation RPack only..." />
-                                <Button Margin="0,5,0,0"
-                                        HorizontalAlignment="Stretch"
-                                        Command="{Binding BuildModelRpackCommand}"
-                                        Content="Compile model RPack only..." />
-                            </StackPanel>
-                        </Expander>
-                        <ListBox MinHeight="140" ItemsSource="{Binding Diagnostics}">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <StackPanel Margin="3,4">
-                                        <StackPanel Orientation="Horizontal">
-                                            <TextBlock FontWeight="SemiBold" Text="{Binding Severity}" />
-                                            <TextBlock Margin="6,0,0,0"
-                                                       Foreground="{StaticResource MutedTextBrush}"
-                                                       Text="{Binding Code}" />
-                                        </StackPanel>
-                                        <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
-                                        <TextBlock FontSize="10"
-                                                   Foreground="{StaticResource MutedTextBrush}"
-                                                   Text="{Binding Subject}"
-                                                   TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
-                      </StackPanel>
-                    </ScrollViewer>
-                </TabItem>
             </TabControl>
         </Border>
     </Grid>

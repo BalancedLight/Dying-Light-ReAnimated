@@ -1,4 +1,5 @@
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Mathematics;
 using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.App.Infrastructure;
@@ -22,7 +23,35 @@ public sealed record BlenderFbxExportRequest(
     /// committing loose DDS dependencies next to it.
     /// </summary>
     public bool EmbedTextures { get; init; }
+
+    /// <summary>
+    /// Authoritative editor-evaluated Actions. When populated, arbitrary ANM2
+    /// paths are rejected so the Blender handoff cannot silently export a
+    /// different source than the active project variant.
+    /// </summary>
+    public IReadOnlyList<BlenderFbxEvaluatedClip> EvaluatedClips { get; init; } =
+        Array.Empty<BlenderFbxEvaluatedClip>();
+
+    public BlenderFbxExportProvenance Provenance { get; init; } =
+        BlenderFbxExportProvenance.RetailLocal;
 }
+
+public enum BlenderFbxExportProvenance
+{
+    RetailLocal,
+    CustomUserOwned,
+}
+
+public sealed record BlenderFbxEvaluatedClip(
+    string ActionName,
+    string SourceName,
+    string SourceFingerprint,
+    FrameRate FrameRate,
+    IReadOnlyList<BlenderFbxEvaluatedFrame> Frames);
+
+public sealed record BlenderFbxEvaluatedFrame(
+    IReadOnlyList<TransformTRS> BoneLocals,
+    IReadOnlyDictionary<string, double> MorphWeights);
 
 public sealed record BlenderFbxExportProgress(
     string Stage,
@@ -137,7 +166,16 @@ public sealed record BlenderFbxJobMesh(
     int VertexStrideFloats,
     bool Skinned,
     IReadOnlyList<float> LocalToWorld,
-    string? TextureKey);
+    string? TextureKey)
+{
+    public IReadOnlyList<BlenderFbxJobMorphTarget> MorphTargets { get; init; } =
+        Array.Empty<BlenderFbxJobMorphTarget>();
+}
+
+public sealed record BlenderFbxJobMorphTarget(
+    string Name,
+    string BinaryPath,
+    int VertexCount);
 
 public sealed record BlenderFbxJobTexture(
     string Key,
@@ -161,7 +199,15 @@ public sealed record BlenderFbxJobClip(
     string BinaryPath,
     IReadOnlyList<uint> SourceDescriptors,
     IReadOnlyList<BlenderFbxJobHelperTrack> HelperTracks,
-    BlenderFbxJobMotionAccumulator MotionAccumulator);
+    BlenderFbxJobMotionAccumulator MotionAccumulator)
+{
+    public IReadOnlyList<BlenderFbxJobMorphTrack> MorphTracks { get; init; } =
+        Array.Empty<BlenderFbxJobMorphTrack>();
+}
+
+public sealed record BlenderFbxJobMorphTrack(
+    string Name,
+    IReadOnlyList<double> Values);
 
 public sealed record BlenderFbxJobHelperTrack(
     uint Descriptor,
@@ -197,6 +243,9 @@ public sealed record BlenderFbxHandoffManifest(
 
     public IReadOnlyList<string> EmbeddedTextureFiles { get; init; } =
         Array.Empty<string>();
+
+    public BlenderFbxExportProvenance Provenance { get; init; } =
+        BlenderFbxExportProvenance.RetailLocal;
 }
 
 public sealed record BlenderFbxHandoffClip(
@@ -210,4 +259,8 @@ public sealed record BlenderFbxHandoffClip(
     int FbxFrameCount,
     IReadOnlyList<uint> SourceDescriptors,
     IReadOnlyList<BlenderFbxJobHelperTrack> HelperTracks,
-    BlenderFbxJobMotionAccumulator MotionAccumulator);
+    BlenderFbxJobMotionAccumulator MotionAccumulator)
+{
+    public IReadOnlyList<string> MorphTracks { get; init; } =
+        Array.Empty<string>();
+}

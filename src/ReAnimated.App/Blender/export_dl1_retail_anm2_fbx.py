@@ -1,8 +1,8 @@
-"""Build a local DL1 retail-mesh FBX handoff inside Blender.
+"""Build a self-contained DL1 target-model FBX handoff inside Blender.
 
 This helper is embedded in DL ReAnimated's C# executable.  It consumes only
-bounded, temporary job data written by the C# export service.  Retail geometry
-and textures are intentionally emitted only beside the user-selected FBX.
+bounded, temporary job data written by the C# export service.  Retail or
+project-owned custom geometry is emitted only to the user-selected FBX.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from mathutils import Matrix, Quaternion, Vector
 JOB_FORMAT = "dl-reanimated-csharp-blender-fbx-job"
 JOB_SCHEMA = 1
 CLIP_MAGIC = b"DLRANM1\x00"
+MORPH_VERTEX_STRIDE = 3
 Y_UP_TO_BLENDER = Matrix(
     ((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1))
 )
@@ -259,6 +260,17 @@ def read_mesh(row):
                 f"{row['binary_path']}"
             )
     return vertices.reshape((vertex_count, stride)), indices
+
+
+def read_morph(path, expected_vertices):
+    with Path(path).open("rb") as stream:
+        count = int(expected_vertices) * MORPH_VERTEX_STRIDE
+        values = np.fromfile(stream, dtype="<f4", count=count)
+        if len(values) != count or stream.read(1):
+            raise ValueError(
+                f"Temporary morph payload is truncated: {path}"
+            )
+    return values.reshape((int(expected_vertices), MORPH_VERTEX_STRIDE))
 
 
 def install_armature_only_bind_pose_export():
@@ -616,6 +628,7 @@ def install_actions(
     display_rest_globals,
     display_parent_indices,
     display_basis_corrections,
+    morph_properties,
 ):
     bones = job["bones"]
     order = topological_indices(bones)
@@ -636,6 +649,8 @@ def install_actions(
     total = sum(int(row["fbx_frame_count"]) for row in job["clips"])
     completed = 0
     report("Installing actions", 0, total)
+    for property_name in morph_properties.values():
+        armature[property_name] = 0.0
     for clip in job["clips"]:
         values = read_clip(
             clip["binary_path"],
@@ -771,6 +786,31 @@ def install_actions(
                     frames,
                     sampled_scale[:, index, component],
                 )
+        morph_tracks = {
+            str(row["name"]): row["values"]
+            for row in (clip.get("morph_tracks") or [])
+        }
+        for morph_name, property_name in morph_properties.items():
+            values = np.asarray(
+                morph_tracks.get(morph_name, np.zeros(frame_count)),
+                dtype=np.float64,
+            )
+            if len(values) != frame_count or not np.isfinite(values).all():
+                raise ValueError(
+                    f"Morph track '{morph_name}' has invalid evaluated values"
+                )
+            install_bulk_curve(
+                curves,
+                f'["{property_name}"]',
+                0,
+                "DLR Morph Weights",
+                frames,
+                values,
+            )
+        action["dlr_morph_tracks"] = json.dumps(
+            sorted(morph_tracks),
+            separators=(",", ":"),
+        )
         actions.append((action, slot))
         expected_roots.append(clip_expected_roots)
         del values
@@ -783,6 +823,92 @@ def install_actions(
     if actions:
         activate_action(armature, actions[0][0], actions[0][1])
     return actions, expected_roots, root_index
+
+
+def build_morph_property_map(job):
+    names = sorted(
+        {
+            str(track["name"])
+            for clip in job.get("clips", [])
+            for track in (clip.get("morph_tracks") or [])
+        }
+    )
+    return {
+        name: f"dlr_morph_{index:04d}"
+        for index, name in enumerate(names)
+    }
+
+
+def install_shape_keys(job, mesh_objects, armature, morph_properties):
+    morph_names = set()
+    object_by_name = {obj.name: obj for obj in mesh_objects}
+    for row in job["meshes"]:
+        mesh_object = object_by_name[str(row["name"])]
+        morph_rows = row.get("morph_targets") or []
+        if not morph_rows:
+            continue
+        basis = mesh_object.shape_key_add(name="Basis", from_mix=False)
+        if len(basis.data) != int(row["vertex_count"]):
+            raise ValueError(
+                f"Shape-key basis changed vertex count for '{row['name']}'"
+            )
+        for morph in morph_rows:
+            name = str(morph["name"])
+            deltas = read_morph(
+                morph["binary_path"],
+                morph["vertex_count"],
+            )
+            if len(deltas) != len(basis.data):
+                raise ValueError(
+                    f"Morph '{name}' does not match '{row['name']}'"
+                )
+            key = mesh_object.shape_key_add(name=name, from_mix=False)
+            for index, delta in enumerate(deltas):
+                key.data[index].co = (
+                    basis.data[index].co
+                    + Y_UP_TO_BLENDER.to_3x3() @ Vector(delta)
+                )
+            key.value = 0.0
+            key.slider_min = -10.0
+            key.slider_max = 10.0
+            if armature is not None and name in morph_properties:
+                curve = key.driver_add("value")
+                driver = curve.driver
+                driver.type = "SCRIPTED"
+                variable = driver.variables.new()
+                variable.name = "weight"
+                variable.type = "SINGLE_PROP"
+                variable.targets[0].id = armature
+                variable.targets[0].data_path = (
+                    f'["{morph_properties[name]}"]'
+                )
+                driver.expression = "weight"
+            morph_names.add(name)
+            del deltas
+    return morph_names
+
+
+def create_camera_objects(job, armature):
+    cameras = []
+    if armature is None:
+        return cameras
+    for row in job["bones"]:
+        if str(row.get("semantic", "")).lower() != "camera" and not (
+            bool(row.get("helper", False))
+            and str(row["name"]) == "EyeCamera"
+        ):
+            continue
+        camera_data = bpy.data.cameras.new(str(row["name"]) + "_Camera")
+        camera_object = bpy.data.objects.new(str(row["name"]), camera_data)
+        camera_object.parent = armature
+        camera_object.parent_type = "BONE"
+        camera_object.parent_bone = str(row["name"])
+        camera_object.matrix_parent_inverse = Matrix.Identity(4)
+        camera_object.rotation_euler[0] = math.radians(90.0)
+        camera_object["dlr_exportable_camera_helper"] = True
+        bpy.context.collection.objects.link(camera_object)
+        cameras.append(camera_object)
+    return cameras
 
 
 def create_material(texture, image_by_key):
@@ -1084,6 +1210,8 @@ def main(argv=None):
     armature = None
     guard = None
     actions = []
+    camera_objects = []
+    morph_properties = build_morph_property_map(job)
     if job.get("bones"):
         (
             armature,
@@ -1102,6 +1230,7 @@ def main(argv=None):
                 display_rest_globals,
                 display_parent_indices,
                 display_basis_corrections,
+                morph_properties,
             )
             audit_root_parity(
                 scene,
@@ -1112,9 +1241,22 @@ def main(argv=None):
                 job["bones"],
             )
         mesh_objects = build_meshes(job, armature)
+        install_shape_keys(
+            job,
+            mesh_objects,
+            armature,
+            morph_properties,
+        )
+        camera_objects = create_camera_objects(job, armature)
         guard = create_roundtrip_guard(job, armature, bind_heads)
     else:
         mesh_objects = build_meshes(job, None)
+        install_shape_keys(
+            job,
+            mesh_objects,
+            None,
+            morph_properties,
+        )
 
     if not actions:
         print(
@@ -1134,6 +1276,8 @@ def main(argv=None):
         armature.select_set(True)
     for mesh_object in mesh_objects:
         mesh_object.select_set(True)
+    for camera_object in camera_objects:
+        camera_object.select_set(True)
     if guard is not None:
         guard.select_set(True)
     bpy.context.view_layer.objects.active = (
@@ -1150,7 +1294,7 @@ def main(argv=None):
         filepath=str(output),
         use_selection=True,
         object_types=(
-            {"ARMATURE", "MESH"}
+            {"ARMATURE", "MESH", "CAMERA"}
             if armature is not None
             else {"MESH"}
         ),

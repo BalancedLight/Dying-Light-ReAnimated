@@ -212,6 +212,58 @@ public sealed class Dl1AnimationExporterTests
         }
     }
 
+    [Fact]
+    public void RefusesBoneMorphDescriptorCollisionBeforeDirectAnm2Output()
+    {
+        var collidingRig = new RigDefinition(
+            "collision-test",
+            "Generic collision test",
+            [
+                new BoneDefinition(
+                    0,
+                    "Root",
+                    -1,
+                    TransformTRS.Identity,
+                    descriptorHash: 0x12345678),
+            ],
+            [
+                new MorphChannelDefinition(
+                    0,
+                    "GenericMorph",
+                    0x12345678),
+            ]);
+        var clip = new AnimationClip(
+            "direct",
+            new FrameRate(30, 1),
+            1,
+            [
+                new TransformTrack(
+                    0,
+                    [new TransformKeyframe(0, TransformTRS.Identity)]),
+            ]);
+        var exporter = new Dl1AnimationExporter(
+            new Anm2EvaluationAdapter(new AnimationEvaluator()));
+
+        InvalidOperationException exception =
+            Assert.Throws<InvalidOperationException>(() =>
+                exporter.Export(
+                    new Dl1AnimationExportRequest
+                    {
+                        Evaluation = new EvaluationRequest(
+                            collidingRig,
+                            collidingRig,
+                            clip,
+                            0,
+                            PreviewProfile.RawAuthoring),
+                        Parts = Dl1AnimationExportParts.Body,
+                    }));
+
+        Assert.Contains(
+            "collide at DL1 descriptor 0x12345678",
+            exception.Message,
+            StringComparison.Ordinal);
+    }
+
     private static RigDefinition CreateRig() =>
         new(
             "test",

@@ -123,6 +123,78 @@ public static class FbxFacialProjectReviewService
     public const string FingerprintAlgorithm =
         "dlra-fbx-facial-project-review-v1";
 
+    public const string TargetInventoryProfilePrefix =
+        "generated:target-morph-inventory-v1:";
+
+    /// <summary>
+    /// Builds a deterministic review profile from the exact target rig rather
+    /// than assuming that every project model exposes the retail common-46
+    /// inventory. Known retail metadata is retained when descriptors match;
+    /// custom FBX morphs remain addressable by their own names and semantics.
+    /// </summary>
+    public static Dl1MimicProfile CreateTargetInventoryProfile(
+        RigDefinition exactTargetRig)
+    {
+        ArgumentNullException.ThrowIfNull(exactTargetRig);
+        MorphChannelDefinition[] morphs = exactTargetRig.MorphChannels
+            .Where(static morph => morph.DescriptorHash.HasValue)
+            .ToArray();
+        if (morphs.Length == 0)
+        {
+            throw new InvalidDataException(
+                $"Target rig '{exactTargetRig.Id}' has no descriptor-backed morph inventory for facial mapping.");
+        }
+
+        IGrouping<uint, MorphChannelDefinition>? collision = morphs
+            .GroupBy(static morph => morph.DescriptorHash!.Value)
+            .FirstOrDefault(static group => group.Count() != 1);
+        if (collision is not null)
+        {
+            throw new InvalidDataException(
+                $"Target rig '{exactTargetRig.Id}' has a facial descriptor collision at 0x{collision.Key:X8}; mapping suggestions require one exact target per descriptor.");
+        }
+
+        Dl1MimicProfile retail =
+            Dl1MimicProfileCodec.ReadBuiltInCommon46();
+        var targets = ImmutableArray.CreateBuilder<Dl1MimicTarget>(
+            morphs.Length);
+        for (var index = 0; index < morphs.Length; index++)
+        {
+            MorphChannelDefinition morph = morphs[index];
+            uint descriptor = morph.DescriptorHash!.Value;
+            Dl1MimicTarget? known = retail.FindTarget(descriptor);
+            IEnumerable<string> aliases = (known?.Aliases ?? [])
+                .Append(morph.SemanticRole)
+                .Where(static value => !string.IsNullOrWhiteSpace(value))
+                .Select(static value => value!)
+                .Append(morph.Name)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
+            targets.Add(new Dl1MimicTarget(
+                index,
+                descriptor,
+                morph.Name,
+                known?.Label ?? morph.SemanticRole ?? morph.Name,
+                aliases: aliases,
+                recommendedMinimum: morph.MinimumValue,
+                recommendedMaximum: morph.MaximumValue,
+                nameStatus: known?.NameStatus ?? "target-rig",
+                confidence: known?.Confidence ?? 1.0,
+                tags: known?.Tags ?? []));
+        }
+
+        string rigSignature = RigSignature.Compute(exactTargetRig);
+        return new Dl1MimicProfile(
+            TargetInventoryProfilePrefix + rigSignature,
+            $"{exactTargetRig.DisplayName} morph inventory",
+            targets.MoveToImmutable(),
+            "Generated deterministically from the exact project target rig for editable facial retarget review.");
+    }
+
+    public static bool IsTargetInventoryProfileId(string? profileId) =>
+        profileId?.StartsWith(
+            TargetInventoryProfilePrefix,
+            StringComparison.Ordinal) == true;
+
     public static FbxFacialProjectReview Create(
         FbxFacialProjectReviewRequest request,
         CancellationToken cancellationToken = default)
@@ -276,7 +348,9 @@ public static class FbxFacialProjectReviewService
         }
 
         ImmutableArray<ProjectMorphBinding> bindingArray =
-            suggestions.MoveToImmutable();
+            ProjectMorphSuggestionScorer.Score(
+                suggestions.MoveToImmutable(),
+                request.ExactTargetRig);
         HashSet<string> mappedChannels = bindingArray
             .Select(static binding => binding.SourceChannel)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);

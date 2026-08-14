@@ -293,7 +293,7 @@ public sealed class Dl1OfficialModelCompilerContractTests
             ModelResourceName = "GenericModel",
             SurfaceName = "default",
             AnimationLibraryName = "GenericLibrary",
-            InstallLooseAnm2 = false,
+            InstallLooseAnm2 = true,
             ExportPortableAnimationRpack = false,
             SourceWriterOverride = (request, cancellationToken) =>
                 WriteSyntheticSourceAsync(request, stagedAscr, cancellationToken),
@@ -451,6 +451,12 @@ public sealed class Dl1OfficialModelCompilerContractTests
         await WriteTextAsync(meshObject, "synthetic mesh object", cancellationToken);
         await WriteTextAsync(receipt, "{}", cancellationToken);
         string fingerprint = new('a', 64);
+        string toolFingerprint =
+            Dl1OfficialModelCompiler.CurrentToolFingerprint;
+        string outputRpackSha256 = Convert.ToHexStringLower(
+            SHA256.HashData(await File.ReadAllBytesAsync(
+                request.OutputRpackPath,
+                cancellationToken)));
         return new Dl1OfficialModelCompilerResult(
             request.ResourceName,
             request.OutputRpackPath,
@@ -462,13 +468,27 @@ public sealed class Dl1OfficialModelCompilerContractTests
             new CustomModelBuildReceipt
             {
                 InputFingerprint = fingerprint,
-                ToolFingerprint = fingerprint,
+                ToolFingerprint = toolFingerprint,
                 CompilerFingerprint = fingerprint,
                 OutputManifestFingerprint = fingerprint,
                 State = CustomModelBuildState.CompilerValidated,
                 CompletedUtc = DateTimeOffset.UnixEpoch,
             },
-            "Synthetic compiler completed.");
+            "Synthetic compiler completed.")
+        {
+            CompilerEvidence = new Dl1OfficialModelCompilerEvidence
+            {
+                OutputRpackSha256 = outputRpackSha256,
+                CompilerFingerprint = fingerprint,
+                ToolFingerprint = toolFingerprint,
+                BuildReceiptInputFingerprint = fingerprint,
+                BuildReceiptOutputManifestFingerprint = fingerprint,
+                BuildState = CustomModelBuildState.CompilerValidated,
+                VerifiedMorphChannelCount = 0,
+                VerifiedMorphBindingCount = 0,
+                MorphDeltaFormat = null,
+            },
+        };
     }
 
     private static async Task<Dl1OfficialAnimationCompilerResult> WriteSyntheticAnimationsAsync(

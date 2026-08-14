@@ -409,7 +409,7 @@ public sealed class TransactionalPlaybackTests : IDisposable
 
         viewModel.SelectWorkspaceCommand.Execute("Animate");
 
-        Assert.Equal("Animate", viewModel.ActiveWorkspaceMode);
+        Assert.Equal("Playback", viewModel.ActiveWorkspaceMode);
         Assert.True(viewModel.TargetViewport.SceneSource
             .HasExternalPreviewScene);
         RenderFrameSnapshot setup = viewModel.TargetViewport.SceneSource

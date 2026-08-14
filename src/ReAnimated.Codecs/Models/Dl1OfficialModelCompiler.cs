@@ -5,10 +5,12 @@ using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Numerics;
 using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.ModelAuthoring;
+using CoreVector3 = ReAnimated.Core.Mathematics.Vector3D;
 
 namespace ReAnimated.Codecs.Models;
 
@@ -40,6 +42,14 @@ public sealed record Dl1OfficialModelCompilerRequest
     public string? AnimationScriptAlias { get; init; }
 
     /// <summary>
+    /// Validated loose animation source graph staged into the isolated model
+    /// compiler project before the mesh is compiled. This allows genuine
+    /// compiler dependency sidecars to observe the same alias target and ANM2
+    /// files that the deployment transaction will publish.
+    /// </summary>
+    public PreparedCustomModelAnimationLibrary? AnimationLibrary { get; init; }
+
+    /// <summary>
     /// Optional existing Developer Tools material database. When supplied it
     /// is staged into the isolated compiler project and updated in place by
     /// Techland's material compiler; every pre-existing material record must
@@ -62,6 +72,37 @@ public sealed record Dl1OfficialModelCompilerResult(
     string CompilerLog)
 {
     public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
+
+    public ImmutableArray<Dl1OfficialCompilerDependencySidecar> DependencySidecars { get; init; } = [];
+
+    /// <summary>
+    /// Typed evidence produced only after the official compiler RPack has
+    /// completed its bounded compact-mesh round trip. Portable packaging uses
+    /// this instead of guessing at opaque mesh bytes.
+    /// </summary>
+    public required Dl1OfficialModelCompilerEvidence CompilerEvidence
+    { get; init; }
+}
+
+public sealed record Dl1OfficialModelCompilerEvidence
+{
+    public required string OutputRpackSha256 { get; init; }
+
+    public required string CompilerFingerprint { get; init; }
+
+    public required string ToolFingerprint { get; init; }
+
+    public required string BuildReceiptInputFingerprint { get; init; }
+
+    public required string BuildReceiptOutputManifestFingerprint { get; init; }
+
+    public required CustomModelBuildState BuildState { get; init; }
+
+    public required int VerifiedMorphChannelCount { get; init; }
+
+    public required int VerifiedMorphBindingCount { get; init; }
+
+    public required CompiledMorphDeltaFormat? MorphDeltaFormat { get; init; }
 }
 
 public sealed record Dl1OfficialAnimationCompilerRequest
@@ -80,7 +121,10 @@ public sealed record Dl1OfficialAnimationCompilerRequest
 public sealed record Dl1OfficialAnimationCompilerResult(
     ImmutableDictionary<string, string> CompiledObjectPaths,
     string CompilerFingerprint,
-    string CompilerLog);
+    string CompilerLog)
+{
+    public ImmutableArray<Dl1OfficialCompilerDependencySidecar> DependencySidecars { get; init; } = [];
+}
 
 /// <summary>
 /// Isolated bridge to Techland's installed Dying Light Developer Tools mesh
@@ -94,7 +138,7 @@ public sealed record Dl1OfficialAnimationCompilerResult(
 public static class Dl1OfficialModelCompiler
 {
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-character-dir-material-preserve-animation-v11";
+        "dl-reanimated-csharp-model-compiler-character-dir-material-preserve-animation-source-morph-v12";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -258,6 +302,14 @@ public static class Dl1OfficialModelCompiler
                     AnimationScriptAlias = request.AnimationScriptAlias,
                 },
                 cancellationToken).ConfigureAwait(false);
+
+            if (request.AnimationLibrary is not null)
+            {
+                await StageModelAnimationSourcesAsync(
+                    request,
+                    projectDirectory,
+                    cancellationToken).ConfigureAwait(false);
+            }
 
             string devToolsData = ResolveDeveloperToolsDataDirectory(compilerPath);
             CopyCompilerBootstrap(devToolsData, projectDirectory);
@@ -463,6 +515,8 @@ public static class Dl1OfficialModelCompiler
             int verifiedSurfaceCount;
             int verifiedVertexCount;
             int verifiedIndexCount;
+            int verifiedMorphChannelCount;
+            int verifiedMorphBindingCount;
             await using (var verificationCache = new Rp6lChunkCache(
                              new Rp6lChunkCacheOptions
                              {
@@ -532,10 +586,14 @@ public static class Dl1OfficialModelCompiler
                         "No model RPack was published.");
                 }
 
+                ValidateCompiledMorphOutput(request.Model, geometry);
+
                 verifiedEntityCount = hierarchy.Entities.Count;
                 verifiedSurfaceCount = geometry.Surfaces.Count;
                 verifiedVertexCount = geometry.VertexCount;
                 verifiedIndexCount = geometry.IndexCount;
+                verifiedMorphChannelCount = geometry.MorphChannels.Count;
+                verifiedMorphBindingCount = geometry.MorphBindings.Count;
             }
 
             string outputDirectory = Path.GetDirectoryName(outputRpackPath)
@@ -567,6 +625,11 @@ public static class Dl1OfficialModelCompiler
                     cancellationToken).ConfigureAwait(false);
             }
 
+            ImmutableArray<Dl1OfficialCompilerDependencySidecar> dependencySidecars =
+                await Dl1OfficialCompilerDependencySidecarCodec.PublishEmittedAsync(
+                    compiledObjects,
+                    outputDirectory,
+                    cancellationToken).ConfigureAwait(false);
             string outputRpackSha256 = await Sha256FileAsync(outputRpackPath, cancellationToken).ConfigureAwait(false);
             string outputObjectSha256 = await Sha256FileAsync(outputObjectPath, cancellationToken).ConfigureAwait(false);
             string? outputMaterialDatabaseSha256 = outputMaterialDatabasePath is null
@@ -644,6 +707,11 @@ public static class Dl1OfficialModelCompiler
                         surfaces = verifiedSurfaceCount,
                         vertices = verifiedVertexCount,
                         indices = verifiedIndexCount,
+                        morphChannels = verifiedMorphChannelCount,
+                        morphBindings = verifiedMorphBindingCount,
+                        morphEncoding = verifiedMorphBindingCount == 0
+                            ? null
+                            : CompiledMorphDeltaFormat.PcHalf4.ToString(),
                         customMaterials = sourceBuild.CustomMaterialReferences.Length,
                         textures = sourceBuild.TextureSourceFiles.Length,
                     },
@@ -666,6 +734,25 @@ public static class Dl1OfficialModelCompiler
                 compilerLog.ToString())
             {
                 CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
+                DependencySidecars = dependencySidecars,
+                CompilerEvidence = new Dl1OfficialModelCompilerEvidence
+                {
+                    OutputRpackSha256 = outputRpackSha256,
+                    CompilerFingerprint = compilerFingerprint,
+                    ToolFingerprint = buildReceipt.ToolFingerprint,
+                    BuildReceiptInputFingerprint =
+                        buildReceipt.InputFingerprint,
+                    BuildReceiptOutputManifestFingerprint =
+                        buildReceipt.OutputManifestFingerprint,
+                    BuildState = buildReceipt.State,
+                    VerifiedMorphChannelCount =
+                        verifiedMorphChannelCount,
+                    VerifiedMorphBindingCount =
+                        verifiedMorphBindingCount,
+                    MorphDeltaFormat = verifiedMorphBindingCount == 0
+                        ? null
+                        : CompiledMorphDeltaFormat.PcHalf4,
+                },
             };
         }
         catch (Exception exception)
@@ -881,11 +968,20 @@ public static class Dl1OfficialModelCompiler
                 published.Add(animation.Name, destination);
             }
 
+            ImmutableArray<Dl1OfficialCompilerDependencySidecar> dependencySidecars =
+                await Dl1OfficialCompilerDependencySidecarCodec.PublishEmittedAsync(
+                    validatedObjects.Values,
+                    outputDirectory,
+                    cancellationToken).ConfigureAwait(false);
+
             completedSuccessfully = true;
             return new Dl1OfficialAnimationCompilerResult(
                 published.ToImmutable(),
                 compilerFingerprint,
-                compilerLog.ToString());
+                compilerLog.ToString())
+            {
+                DependencySidecars = dependencySidecars,
+            };
         }
         finally
         {
@@ -1765,6 +1861,11 @@ public static class Dl1OfficialModelCompiler
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        if (!request.Model.Package.Document.Bones.IsEmpty)
+        {
+            _ = request.Model.Package.Document
+                .CreateDl1AnimationRigDefinition();
+        }
         ArgumentException.ThrowIfNullOrWhiteSpace(request.CompilerExecutablePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputRpackPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResourceName);
@@ -1806,6 +1907,178 @@ public static class Dl1OfficialModelCompiler
         }
     }
 
+    internal static void ValidateCompiledMorphOutput(
+        FbxModelAuthoringImportResult source,
+        CompiledMeshGeometryDocument compiled)
+    {
+        string[] expectedChannelNames = source.Package.Document.MorphChannels
+            .Select(static channel => channel.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        string[] actualChannelNames = compiled.MorphChannels
+            .Select(static channel => channel.Name)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        if (!expectedChannelNames.SequenceEqual(
+                actualChannelNames,
+                StringComparer.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The official compiler output did not preserve the exact custom-model morph channel names. " +
+                $"Expected [{string.Join(", ", expectedChannelNames)}], got " +
+                $"[{string.Join(", ", actualChannelNames)}]. No model RPack was published.");
+        }
+
+        for (int surfaceIndex = 0; surfaceIndex < source.Surfaces.Length; surfaceIndex++)
+        {
+            FbxModelSurface expectedSurface = source.Surfaces[surfaceIndex];
+            if (expectedSurface.MorphTargets.IsEmpty)
+            {
+                continue;
+            }
+
+            if (surfaceIndex >= compiled.Surfaces.Count)
+            {
+                throw new InvalidDataException(
+                    $"The official compiler omitted morph-bearing draw surface {surfaceIndex}. " +
+                    "No model RPack was published.");
+            }
+
+            CompiledMeshSurface compiledSurface = compiled.Surfaces[surfaceIndex];
+            CompiledNodeMorphBinding[] bindings = compiled.MorphBindings
+                .Where(binding =>
+                    binding.EntityIndex == compiledSurface.EntityIndex &&
+                    binding.LodIndex == compiledSurface.LodIndex)
+                .ToArray();
+            if (bindings.Length != 1)
+            {
+                throw new InvalidDataException(
+                    $"The official compiler emitted {bindings.Length} morph bindings for " +
+                    $"surface '{compiledSurface.Name}'; exactly one is required. " +
+                    "No model RPack was published.");
+            }
+
+            CompiledNodeMorphBinding binding = bindings[0];
+            if (binding.VertexCount != expectedSurface.Vertices.Length ||
+                binding.TargetDeltas.Count != expectedSurface.MorphTargets.Length)
+            {
+                throw new InvalidDataException(
+                    $"The official compiler changed morph dimensions for surface " +
+                    $"'{compiledSurface.Name}'. No model RPack was published.");
+            }
+
+            if (binding.DeltaFormat != CompiledMorphDeltaFormat.PcHalf4)
+            {
+                throw new InvalidDataException(
+                    $"The official PC compiler emitted unsupported morph encoding " +
+                    $"'{binding.DeltaFormat}' for surface '{compiledSurface.Name}'; " +
+                    "PC output must use HALF4. No model RPack was published.");
+            }
+
+            foreach (CompiledMorphTargetDeltas actualTarget in binding.TargetDeltas)
+            {
+                if (actualTarget.MorphChannelIndex >= compiled.MorphChannels.Count)
+                {
+                    throw new InvalidDataException(
+                        "The official compiler emitted an out-of-range morph channel index.");
+                }
+
+                string targetName = compiled.MorphChannels[
+                    actualTarget.MorphChannelIndex].Name;
+                FbxModelMorphTarget expectedTarget = expectedSurface.MorphTargets
+                    .SingleOrDefault(target => string.Equals(
+                        target.Name,
+                        targetName,
+                        StringComparison.Ordinal)) ??
+                    throw new InvalidDataException(
+                        $"The official compiler emitted unexpected morph target '{targetName}' " +
+                        $"for surface '{compiledSurface.Name}'.");
+                if (actualTarget.PositionDeltas.Count !=
+                    expectedTarget.PositionDeltas.Length)
+                {
+                    throw new InvalidDataException(
+                        $"The official compiler changed morph target '{targetName}'s vertex count.");
+                }
+
+                for (int vertexIndex = 0;
+                     vertexIndex < actualTarget.PositionDeltas.Count;
+                     vertexIndex++)
+                {
+                    Vector3 actual = actualTarget.PositionDeltas[vertexIndex];
+                    CoreVector3 expected = expectedTarget.PositionDeltas[vertexIndex];
+                    try
+                    {
+                        ValidateHalfMorphComponent(
+                            actual.X,
+                            expected.X,
+                            targetName,
+                            vertexIndex,
+                            "X");
+                        ValidateHalfMorphComponent(
+                            actual.Y,
+                            expected.Y,
+                            targetName,
+                            vertexIndex,
+                            "Y");
+                        ValidateHalfMorphComponent(
+                            actual.Z,
+                            expected.Z,
+                            targetName,
+                            vertexIndex,
+                            "Z");
+                    }
+                    catch (InvalidDataException exception)
+                    {
+                        string compiledPreview = string.Join(
+                            "; ",
+                            actualTarget.PositionDeltas.Take(8)
+                                .Select((delta, index) =>
+                                    $"{index}:({delta.X:R},{delta.Y:R},{delta.Z:R})"));
+                        string compiledPositions = string.Join(
+                            "; ",
+                            compiledSurface.Vertices.Take(8)
+                                .Select((vertex, index) =>
+                                    $"{index}:({vertex.Position.X:R},{vertex.Position.Y:R},{vertex.Position.Z:R})"));
+                        string compiledLayout = compiledSurface.VertexLayout is null
+                            ? "unavailable"
+                            : string.Join(
+                                "; ",
+                                compiledSurface.VertexLayout.Elements.Select(element =>
+                                    $"format={element.RawFormat},semantic={element.RawSemantic},channel={element.Channel},offset={element.ByteOffset},size={element.ByteSize}"));
+                        throw new InvalidDataException(
+                            $"{exception.Message} Compiled delta preview [{compiledPreview}]. " +
+                            $"Compiled position preview [{compiledPositions}]. " +
+                            $"Compiled declaration [{compiledLayout}].",
+                            exception);
+                    }
+                }
+            }
+        }
+    }
+
+    private static void ValidateHalfMorphComponent(
+        float actual,
+        double expected,
+        string targetName,
+        int vertexIndex,
+        string component)
+    {
+        float sourceFloat = (float)expected;
+        Half expectedHalf = (Half)sourceFloat;
+        float expectedQuantized = (float)expectedHalf;
+        if (!float.IsFinite(sourceFloat) ||
+            !Half.IsFinite(expectedHalf) ||
+            !float.IsFinite(actual) ||
+            actual != expectedQuantized)
+        {
+            throw new InvalidDataException(
+                $"The official compiler did not preserve morph '{targetName}' vertex " +
+                $"{vertexIndex} {component} through the PC HALF4 conversion " +
+                $"(source {expected:R}, expected half {expectedQuantized:R}, compiled {actual:R}). " +
+                "No model RPack was published.");
+        }
+    }
+
     private static string ResolveDeveloperToolsDataDirectory(string compilerPath)
     {
         string compilerDirectory = Path.GetDirectoryName(compilerPath)
@@ -1834,6 +2107,64 @@ public static class Dl1OfficialModelCompiler
         }
 
         return materialCompilerPath;
+    }
+
+    private static async Task StageModelAnimationSourcesAsync(
+        Dl1OfficialModelCompilerRequest request,
+        string projectDirectory,
+        CancellationToken cancellationToken)
+    {
+        PreparedCustomModelAnimationLibrary library = request.AnimationLibrary
+            ?? throw new InvalidOperationException("Animation library was not supplied.");
+        if (string.IsNullOrWhiteSpace(request.AnimationScriptAlias) ||
+            !string.Equals(
+                library.AnimationScriptName,
+                request.AnimationScriptAlias,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The model compiler animation library must exactly match its ASCR alias identity.");
+        }
+
+        string expectedScript = CustomModelAnimationLibraryExporter.BuildLooseAnimationScript(
+            library.Sequences);
+        if (!string.Equals(library.LooseScriptText, expectedScript, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "The model compiler animation SCR differs from its prepared sequence inventory.");
+        }
+
+        string animationDirectory = Path.Combine(
+            projectDirectory,
+            "data",
+            "characters",
+            "animations");
+        string scriptDirectory = Path.Combine(animationDirectory, "animscripts");
+        Directory.CreateDirectory(scriptDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(scriptDirectory, $"{library.AnimationScriptName}.scr"),
+            library.LooseScriptText,
+            new UTF8Encoding(false),
+            cancellationToken).ConfigureAwait(false);
+        foreach (PreparedCustomModelAnimation animation in library.Animations)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string expectedFileName = Dl1SourceModelWriter.RequireExactResourceName(
+                animation.Name,
+                63,
+                "animation resource name") + ".anm2";
+            if (!string.Equals(animation.Anm2FileName, expectedFileName, StringComparison.Ordinal) ||
+                animation.Payload is not { Length: > 0 })
+            {
+                throw new InvalidDataException(
+                    $"Prepared animation '{animation.Name}' has an invalid loose source contract.");
+            }
+
+            await File.WriteAllBytesAsync(
+                Path.Combine(animationDirectory, animation.Anm2FileName),
+                animation.Payload,
+                cancellationToken).ConfigureAwait(false);
+        }
     }
 
     private static void CopyCompilerBootstrap(string sourceRoot, string projectDirectory)

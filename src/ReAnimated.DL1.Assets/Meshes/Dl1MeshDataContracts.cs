@@ -75,7 +75,8 @@ public enum Dl1MorphPayloadStatus
 
 public enum Dl1MorphDeltaEncoding
 {
-    SignedShort4Scale16384,
+    PcHalf4,
+    X360SignedShort4Scale16384,
 }
 
 public sealed record Dl1MeshDiagnostic(

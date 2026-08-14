@@ -83,6 +83,13 @@ public sealed class CustomModelPreviewSessionTests
         FbxModelAuthoringImportResult model = CreateModel(
             flipTextureCoordinateV: true,
             duplicateNormalizedBoneName: true);
+        RigDefinition sourcePreviewRig = Assert.IsType<RigDefinition>(model.Rig);
+        Assert.NotNull(sourcePreviewRig.Bones[0].DescriptorHash);
+        Assert.Equal(
+            sourcePreviewRig.Bones[0].DescriptorHash,
+            sourcePreviewRig.Bones[1].DescriptorHash);
+        Assert.Throws<InvalidDataException>(
+            model.Package.Document.CreateDl1AnimationRigDefinition);
 
         CustomModelPreviewSession session = CustomModelPreviewAdapter.CreateSession(
             model,

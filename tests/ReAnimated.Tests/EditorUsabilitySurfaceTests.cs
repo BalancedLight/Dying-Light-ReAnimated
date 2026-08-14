@@ -193,17 +193,28 @@ public sealed class EditorUsabilitySurfaceTests
                     (string?)element.Attribute("IsChecked"),
                     "{Binding IsRetargetWorkspace, Mode=OneWay}",
                     StringComparison.Ordinal));
-        Assert.Contains(
-            document.Descendants(Presentation + "ToggleButton"),
-            static element => string.Equals(
-                    (string?)element.Attribute("Content"),
-                    "Animate",
-                    StringComparison.Ordinal) &&
-                element.Attribute("IsEnabled") is null &&
-                string.Equals(
-                    (string?)element.Attribute("ToolTip"),
-                    "{Binding AnimateWorkspaceHint}",
-                    StringComparison.Ordinal));
+        XElement[] workflowTabs = document
+            .Descendants(Presentation + "ToggleButton")
+            .Where(static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding SelectWorkspaceCommand}",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(
+            ["Models", "Animations", "Playback", "Retarget / Edit", "Export"],
+            workflowTabs
+                .Select(static element =>
+                    (string?)element.Attribute("Content") ?? string.Empty)
+                .ToArray());
+        Assert.Equal(
+            ["Models", "Animations", "Playback", "Retarget/Edit", "Export"],
+            workflowTabs
+                .Select(static element =>
+                    (string?)element.Attribute("CommandParameter") ?? string.Empty)
+                .ToArray());
+        Assert.All(
+            workflowTabs,
+            static element => Assert.Null(element.Attribute("IsEnabled")));
 
         string[] visibleRigControls =
         [
@@ -384,13 +395,13 @@ public sealed class EditorUsabilitySurfaceTests
     [Trait("Gate", "ViewModelWpf")]
     public void ModelsWorkspaceExposesIndependentCompleteAuthoringFlow()
     {
-        XDocument shell = XDocument.Load(
+        XDocument shellDocument = XDocument.Load(
             FindRepositoryFile(
                 "src",
                 "ReAnimated.App",
                 "MainWindow.xaml"));
         Assert.Contains(
-            shell.Descendants(Presentation + "ToggleButton"),
+            shellDocument.Descendants(Presentation + "ToggleButton"),
             static element =>
                 string.Equals(
                     (string?)element.Attribute("Content"),
@@ -408,7 +419,7 @@ public sealed class EditorUsabilitySurfaceTests
                 "Views",
                 "ModelsWorkspaceView.xaml"));
         XElement modelsSurface = Assert.Single(
-            shell.Descendants(),
+            shellDocument.Descendants(),
             static element => string.Equals(
                 element.Name.LocalName,
                 "ModelsWorkspaceView",
@@ -431,12 +442,8 @@ public sealed class EditorUsabilitySurfaceTests
             "{Binding OpenPackageCommand}",
             "{Binding SavePackageCommand}",
             "{Binding SelectTextureCommand}",
-            "{Binding BuildCompletePackageCommand}",
-            "{Binding BuildLooseFilesCommand}",
-            "{Binding ExportAnimationRpackCommand}",
-            "{Binding BuildModelRpackCommand}",
-            "{Binding SelectModelCompilerCommand}",
             "{Binding OpenSelectedAnimationInAnimateCommand}",
+            "{Binding ReturnToProjectModelsCommand}",
         ];
         foreach (string command in requiredCommands)
         {
@@ -480,13 +487,45 @@ public sealed class EditorUsabilitySurfaceTests
         Assert.Contains(
             workspace.Descendants(Presentation + "TextBlock"),
             static element => ((string?)element.Attribute("Text"))?.Contains(
-                "independent from animation projects",
+                "part of the project model library",
                 StringComparison.OrdinalIgnoreCase) == true);
         Assert.Contains(
             workspace.Descendants(Presentation + "TextBlock"),
             static element => ((string?)element.Attribute("Text"))?.Contains(
-                "loose .msh/.bscr/.chr",
+                "cannot replace an animation target",
                 StringComparison.OrdinalIgnoreCase) == true);
+        Assert.Contains(
+            workspace.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                    (string?)element.Attribute("Command"),
+                    "{Binding OpenSelectedAnimationInAnimateCommand}",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("Content"),
+                    "Play selected in Playback",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            workspace.Descendants(Presentation + "TabItem"),
+            static element => string.Equals(
+                (string?)element.Attribute("Header"),
+                "Build / diagnostics",
+                StringComparison.Ordinal));
+
+        foreach (string header in new[] { "Artifacts", "Developer Tools", "Receipts" })
+        {
+            Assert.Contains(
+                shellDocument.Descendants(Presentation + "TabItem"),
+                element => string.Equals(
+                    (string?)element.Attribute("Header"),
+                    header,
+                    StringComparison.Ordinal));
+        }
+        Assert.Contains(
+            shellDocument.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding Models.BuildCompletePackageCommand}",
+                StringComparison.Ordinal));
 
         string dialogCode = File.ReadAllText(
             FindRepositoryFile(
@@ -610,19 +649,53 @@ public sealed class EditorUsabilitySurfaceTests
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
+            "nameof(MainWindowViewModel.IsExportWorkspace)",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ViewportRegionGrid.Children.Remove(ViewportGrid);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "ViewportRegionGrid.Children.Add(ViewportGrid);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AnimationWorkspaceSurface.Children.Remove(\n" +
+            "                ModelsWorkflowSurface);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AnimationWorkspaceSurface.Children.Add(\n" +
+            "                    ModelsWorkflowSurface);",
+            windowCode,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "_viewModel.PropertyChanged -= OnViewModelPropertyChanged;",
             windowCode,
             StringComparison.Ordinal);
 
-        XElement catalogButton = Assert.Single(
-            document.Descendants(Presentation + "Button"),
-            static element => string.Equals(
+        XElement[] catalogButtons = document
+            .Descendants(Presentation + "Button")
+            .Where(static element => string.Equals(
                 (string?)element.Attribute("Command"),
                 "{Binding AssetBrowser.IndexGameCommand}",
-                StringComparison.Ordinal));
-        Assert.Equal(
-            "{Binding AssetBrowser.CatalogActionLabel}",
-            (string?)catalogButton.Attribute("Content"));
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.NotEmpty(catalogButtons);
+        Assert.All(
+            catalogButtons,
+            static catalogButton => Assert.Equal(
+                "{Binding AssetBrowser.CatalogActionLabel}",
+                (string?)catalogButton.Attribute("Content")));
+        Assert.Single(
+            catalogButtons,
+            static catalogButton => catalogButton
+                .Ancestors(Presentation + "Border")
+                .Any(static border => string.Equals(
+                    (string?)border.Attribute("Visibility"),
+                    "{Binding IsModelsWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}",
+                    StringComparison.Ordinal)));
         Assert.DoesNotContain(
             document.Root!.DescendantsAndSelf()
                 .Attributes()

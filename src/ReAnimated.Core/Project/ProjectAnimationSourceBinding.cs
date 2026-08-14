@@ -17,9 +17,11 @@ public sealed record ProjectAnimationSourceBinding
     public string SourceRigSignature { get; init; } = string.Empty;
 
     /// <summary>
-    /// Exact retail mesh identity used to partition an ANM2. Required for new
-    /// local and retail ANM2 bindings; absent legacy bindings remain loadable
-    /// but fail closed until Rebind Source creates a new document.
+    /// Exact model-asset identity used to partition an ANM2. The historical
+    /// JSON property name is retained for schema compatibility, but schema 2
+    /// accepts either a fingerprinted retail reference or a project-owned
+    /// custom-model package. Absent legacy bindings remain loadable but fail
+    /// closed until Rebind Source creates a new document.
     /// </summary>
     public Guid? RetailSourceModelAssetId { get; init; }
 
@@ -103,10 +105,12 @@ public sealed record ProjectAnimationSourceBinding
         {
             if (RetailSourceModelAssetId is not { } sourceModelId ||
                 !assetKinds.TryGetValue(sourceModelId, out ProjectAssetKind modelKind) ||
-                modelKind != ProjectAssetKind.RetailGameResource)
+                modelKind is not (
+                    ProjectAssetKind.RetailGameResource or
+                    ProjectAssetKind.CustomModelSource))
             {
                 throw new ArgumentException(
-                    "A new ANM2 source binding requires its exact retail source-model identity.",
+                    "A new ANM2 source binding requires its exact retail or project-model source identity.",
                     parameterName);
             }
 
