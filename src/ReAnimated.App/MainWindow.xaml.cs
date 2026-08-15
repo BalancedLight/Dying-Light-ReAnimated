@@ -98,6 +98,18 @@ public partial class MainWindow : Window
             string.Equals(
                 args.PropertyName,
                 nameof(MainWindowViewModel.IsExportWorkspace),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsAnimationsWorkspace),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsPlaybackWorkspace),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsRetargetWorkspace),
                 StringComparison.Ordinal);
         bool viewportLayoutChanged = string.Equals(
             args.PropertyName,
@@ -132,7 +144,7 @@ public partial class MainWindow : Window
             ApplyWorkflowAirspaceLayout();
         }
 
-        if (viewportLayoutChanged)
+        if (workspaceSurfaceChanged || viewportLayoutChanged)
         {
             ApplyViewportColumnLayout();
         }
@@ -176,16 +188,21 @@ public partial class MainWindow : Window
             EditorRootGrid.Children.Contains(AnimationWorkspaceSurface);
         bool modelsOwnViewport =
             animationSurfaceIsAttached && _viewModel.IsModelsWorkspace;
-        bool authoringOwnsViewport =
+        bool retargetOwnsViewport =
             animationSurfaceIsAttached &&
-            !_viewModel.IsModelsWorkspace &&
-            !_viewModel.IsExportWorkspace;
+            _viewModel.IsRetargetWorkspace;
+        bool animationsOwnViewport =
+            animationSurfaceIsAttached &&
+            _viewModel.IsAnimationsWorkspace;
+        bool playbackOwnsViewport =
+            animationSurfaceIsAttached &&
+            _viewModel.IsPlaybackWorkspace;
 
-        // HwndHost always wins over WPF z-order. The Models and Export tabs are
-        // workflow surfaces, not translucent covers for the authoring view, so
-        // the authoring viewport must leave the visual tree while either tab is
-        // active. Otherwise its native target window punches through the tab.
-        if (authoringOwnsViewport)
+        // HwndHost always wins over WPF z-order. Each workflow owns a distinct
+        // viewport arrangement, so the Retarget/Edit comparison leaves the
+        // visual tree whenever another workflow becomes active. Otherwise its
+        // native target window punches through the active workspace.
+        if (retargetOwnsViewport)
         {
             if (!ViewportRegionGrid.Children.Contains(ViewportGrid))
             {
@@ -217,15 +234,48 @@ public partial class MainWindow : Window
                 ModelsWorkflowSurface);
         }
 
+        SetWorkflowSurfaceAttached(
+            AnimationsWorkflowSurface,
+            animationsOwnViewport);
+        SetWorkflowSurfaceAttached(
+            PlaybackWorkflowSurface,
+            playbackOwnsViewport);
+
         ViewportRegionGrid.InvalidateMeasure();
         ViewportRegionGrid.InvalidateArrange();
         AnimationWorkspaceSurface.InvalidateMeasure();
         AnimationWorkspaceSurface.InvalidateArrange();
     }
 
+    private void SetWorkflowSurfaceAttached(
+        FrameworkElement surface,
+        bool shouldAttach)
+    {
+        if (shouldAttach)
+        {
+            if (!AnimationWorkspaceSurface.Children.Contains(surface))
+            {
+                Grid.SetColumnSpan(surface, 5);
+                AnimationWorkspaceSurface.Children.Add(surface);
+            }
+
+            return;
+        }
+
+        // ViewportPane contains HwndHost. Removing an inactive workspace from
+        // the visual tree is required; Collapsed alone can leave the native
+        // child above the next workspace and retain the previous pane size.
+        AnimationWorkspaceSurface.Children.Remove(surface);
+    }
+
     private void ApplyViewportColumnLayout()
     {
-        if (_viewModel.IsSourceViewportVisible)
+        // Retarget/Edit always compares the original source hierarchy with the
+        // target. A meshless FBX still owns a skeleton-only presentation, so
+        // direct variants must not collapse the source pane just because no
+        // mapping proposal is required.
+        if (_viewModel.IsRetargetWorkspace ||
+            _viewModel.IsSourceViewportVisible)
         {
             SourceViewportColumn.MinWidth = 0.0;
             SourceViewportColumn.MaxWidth = double.PositiveInfinity;
@@ -333,14 +383,41 @@ public partial class MainWindow : Window
         object sender,
         MouseButtonEventArgs args)
     {
-        if (!_viewModel.ActivateSelectedAnimationCommand.CanExecute(
+        if (!_viewModel.OpenSelectedAnimationCommand.CanExecute(
                 null))
         {
             return;
         }
 
         args.Handled = true;
-        await _viewModel.ActivateSelectedAnimationCommand
+        await _viewModel.OpenSelectedAnimationCommand
             .ExecuteAsync(null);
+    }
+
+    private void OnResetRetargetLayoutClick(
+        object sender,
+        RoutedEventArgs args)
+    {
+        // The pre-workspace shell persisted a horizontal explorer/editor
+        // split. Retarget/Edit is vertical now, so reset that legacy width
+        // state to one full-width content column before restoring its own
+        // bounded rows.
+        RetargetViewportColumn.Width =
+            new GridLength(1.0, GridUnitType.Star);
+        RetargetEditorSplitterColumn.Width = new GridLength(0.0);
+        RetargetEditorColumn.Width = new GridLength(0.0);
+        RetargetViewportRow.Height =
+            new GridLength(3.0, GridUnitType.Star);
+        RetargetEditorRow.Height =
+            new GridLength(2.3, GridUnitType.Star);
+        RetargetBottomDockRow.Height =
+            new GridLength(220.0);
+        SourceViewportColumn.Width =
+            new GridLength(1.0, GridUnitType.Star);
+        ViewportGrid.ColumnDefinitions[2].Width =
+            new GridLength(1.0, GridUnitType.Star);
+
+        AnimationWorkspaceSurface.InvalidateMeasure();
+        AnimationWorkspaceSurface.InvalidateArrange();
     }
 }

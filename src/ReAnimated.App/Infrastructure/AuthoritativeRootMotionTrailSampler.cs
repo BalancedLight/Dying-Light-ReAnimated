@@ -20,7 +20,8 @@ internal sealed record AuthoritativeRootMotionTrailRequest(
     IReadOnlyList<MorphEditLayer> MorphEditLayers,
     IReadOnlyList<IkConstraintLayer> IkLayers,
     int SampleCount,
-    bool PreviewMotionAccumulationEnabled = false);
+    bool PreviewMotionAccumulationEnabled = false,
+    DirectRigBinding? DirectBinding = null);
 
 /// <summary>
 /// Samples root positions from the same authored/export evaluation path used
@@ -86,7 +87,8 @@ internal static class AuthoritativeRootMotionTrailSampler
             morphBindings: request.MorphBindings,
             morphEditLayers: request.MorphEditLayers,
             ikLayers: request.IkLayers,
-            dl1PreviewInputs: Dl1PreviewInputs.Empty);
+            dl1PreviewInputs: Dl1PreviewInputs.Empty,
+            directRigBinding: request.DirectBinding);
         Dl1RootMotionPolicy rootMotion =
             request.AuthoringPolicy.RootMotion;
         AuxiliaryTransformTrack? auxiliaryMotionTrack =

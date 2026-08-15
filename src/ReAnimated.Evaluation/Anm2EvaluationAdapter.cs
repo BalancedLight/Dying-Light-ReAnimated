@@ -86,7 +86,8 @@ public sealed class Anm2EvaluationAdapter : IAnm2EvaluationAdapter
                 requestTemplate.Dl1AuthoringPolicy,
                 requestTemplate.MorphBindings,
                 requestTemplate.MorphEditLayers,
-                requestTemplate.IkLayers);
+                requestTemplate.IkLayers,
+                directRigBinding: requestTemplate.DirectRigBinding);
             EvaluationFrame evaluated = _evaluator.Evaluate(exportRequest);
 
             var tracks = ImmutableArray.CreateBuilder<Dl1Anm2TrackSample>();

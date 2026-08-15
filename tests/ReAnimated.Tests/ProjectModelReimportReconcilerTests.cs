@@ -167,7 +167,12 @@ public sealed class ProjectModelReimportReconcilerTests
             model with { Name = "Renamed" });
 
         Assert.Equal("Renamed", Assert.Single(result.Models).Name);
-        Assert.Equal(variant, Assert.Single(result.AnimationVariants));
+        ProjectAnimationVariant retained = Assert.Single(
+            result.AnimationVariants);
+        Assert.Equal(variant.Id, retained.Id);
+        Assert.Equal(model.RigSignature, retained.TargetRigSignature);
+        Assert.Equal(variant.BoneMappings, retained.BoneMappings);
+        Assert.Equal(variant.MorphBindings, retained.MorphBindings);
     }
 
     [Fact]
@@ -218,6 +223,89 @@ public sealed class ProjectModelReimportReconcilerTests
             replacementAssetId,
             Assert.Single(result.Models).AssetId);
         Assert.Equal(variant, Assert.Single(result.AnimationVariants));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void StableAuthoringContractDoesNotLeaveOldEmbeddedSourceFalselyExact()
+    {
+        Guid modelId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        string authoring = Sha('9');
+        string skeleton = Sha('a');
+        var model = new ProjectModelEntry
+        {
+            Id = modelId,
+            AssetId = Guid.NewGuid(),
+            Name = "Generic target",
+            RigSignature = Sha('1'),
+            AuthoringRigContractSignature = authoring,
+            AnimationSkeletonSignature = skeleton,
+        };
+        var source = new ProjectAnimationSource
+        {
+            Id = sourceId,
+            Name = "Immutable take",
+            SourceAssetId = Guid.NewGuid(),
+            EmbeddedCustomModelStack =
+                new ProjectEmbeddedAnimationStackIdentity
+                {
+                    ClipId = Guid.NewGuid(),
+                    FbxObjectId = 42,
+                    StackFingerprint = Sha('2'),
+                    SourceRigSignature = Sha('1'),
+                    SourceAnimationSkeletonSignature = skeleton,
+                },
+            SourceAnimationSkeletonSignature = skeleton,
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = sourceId,
+            Name = "Immutable take",
+            TargetModelId = modelId,
+            TargetRigId = "generic-rig",
+            TargetRigSignature = Sha('1'),
+            TargetAnimationSkeletonSignature = skeleton,
+            BindingMode = ProjectAnimationBindingMode.ExactDirect,
+            BoneMappings = [ReviewedBone()],
+        };
+        var project = new DlraProject
+        {
+            Models = [model],
+            AnimationSources = [source],
+            AnimationVariants = [variant],
+        };
+        ProjectModelEntry replacement = model with
+        {
+            AssetId = Guid.NewGuid(),
+            RigSignature = Sha('4'),
+        };
+
+        DlraProject result = ProjectModelReimportReconciler.Apply(
+            project,
+            replacement);
+
+        ProjectAnimationVariant updated = Assert.Single(
+            result.AnimationVariants);
+        Assert.Equal(variant.Id, updated.Id);
+        Assert.Equal(Sha('4'), updated.TargetRigSignature);
+        Assert.Equal(
+            ProjectAnimationBindingMode.Retarget,
+            updated.BindingMode);
+        Assert.Null(updated.DirectBinding);
+        Assert.Equal(
+            variant.BoneMappings,
+            updated.BoneMappings);
+        Assert.Equal(
+            authoring,
+            Assert.Single(result.Models)
+                .AuthoringRigContractSignature);
+        Assert.Equal(
+            Sha('1'),
+            Assert.Single(result.AnimationSources)
+                .SourceRigSignature);
     }
 
     private static ProjectAnimation Compatibility(

@@ -88,13 +88,12 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)element.Attribute("Width"),
                 "560",
                 StringComparison.Ordinal));
-        XElement inspector = Assert.Single(
+        Assert.DoesNotContain(
             document.Descendants(Presentation + "Border"),
             static element => string.Equals(
                 (string?)element.Attribute("Visibility"),
                 "{Binding IsInspectorPanelVisible, Converter={StaticResource BooleanToVisibilityConverter}}",
                 StringComparison.Ordinal));
-        Assert.Equal("4", (string?)inspector.Attribute("Grid.Column"));
 
         XElement frameAttachment = Assert.Single(
             document.Descendants(
@@ -350,8 +349,8 @@ public sealed class EditorUsabilitySurfaceTests
         XElement animationTab = Assert.Single(
             document.Descendants(Presentation + "TabItem"),
             static element => string.Equals(
-                (string?)element.Attribute("Header"),
-                "Animations",
+                (string?)element.Attribute(Xaml + "Name"),
+                "AnimationLibraryTab",
                 StringComparison.Ordinal));
         XElement library = Assert.Single(
             animationTab.Descendants(Presentation + "ListBox"),
@@ -511,7 +510,7 @@ public sealed class EditorUsabilitySurfaceTests
                 "Build / diagnostics",
                 StringComparison.Ordinal));
 
-        foreach (string header in new[] { "Artifacts", "Developer Tools", "Receipts" })
+        foreach (string header in new[] { "Files", "Developer Tools" })
         {
             Assert.Contains(
                 shellDocument.Descendants(Presentation + "TabItem"),
@@ -520,11 +519,17 @@ public sealed class EditorUsabilitySurfaceTests
                     header,
                     StringComparison.Ordinal));
         }
+        Assert.DoesNotContain(
+            shellDocument.Descendants(Presentation + "TabItem"),
+            static element => string.Equals(
+                (string?)element.Attribute("Header"),
+                "Receipts",
+                StringComparison.Ordinal));
         Assert.Contains(
             shellDocument.Descendants(Presentation + "Button"),
             static element => string.Equals(
                 (string?)element.Attribute("Command"),
-                "{Binding Models.BuildCompletePackageCommand}",
+                "{Binding ExportCharacterFilesCommand}",
                 StringComparison.Ordinal));
 
         string dialogCode = File.ReadAllText(
@@ -831,6 +836,233 @@ public sealed class EditorUsabilitySurfaceTests
             row.Arrange(new Rect(0, 0, 640, 480));
             row.UpdateLayout();
         });
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void WorkflowSurfacesHaveIndependentPurposeBuiltLayouts()
+    {
+        XDocument document = XDocument.Load(FindRepositoryFile(
+            "src",
+            "ReAnimated.App",
+            "MainWindow.xaml"));
+
+        XElement animations = Assert.Single(
+            document.Descendants(Presentation + "Border"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "AnimationsWorkflowSurface",
+                StringComparison.Ordinal));
+        XElement animationTable = Assert.Single(
+            animations.Descendants(Presentation + "DataGrid"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "AnimationLibraryTable",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "{Binding AnimationLibrary}",
+            (string?)animationTable.Attribute("ItemsSource"));
+        Assert.Contains(
+            animationTable.Descendants(Presentation + "TextBlock"),
+            static text => string.Equals(
+                (string?)text.Attribute("Text"),
+                "Immutable source",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            animationTable.Descendants(Presentation + "DataTrigger"),
+            static trigger =>
+                string.Equals(
+                    (string?)trigger.Attribute("Binding"),
+                    "{Binding ShowVariantGroupHeader}",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)trigger.Attribute("Value"),
+                    "True",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            animationTable.Descendants().Where(static element =>
+                element.Name.LocalName.EndsWith(
+                    "Column",
+                    StringComparison.Ordinal)),
+            static column => string.Equals(
+                (string?)column.Attribute("Header"),
+                "Origin model / rig",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            animationTable.Descendants().Where(static element =>
+                element.Name.LocalName.EndsWith(
+                    "Column",
+                    StringComparison.Ordinal)),
+            static column => string.Equals(
+                (string?)column.Attribute("Header"),
+                "Primary SCR",
+                StringComparison.Ordinal));
+
+        XElement playback = Assert.Single(
+            document.Descendants(Presentation + "Border"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "PlaybackWorkflowSurface",
+                StringComparison.Ordinal));
+        Assert.Single(
+            playback.Descendants(),
+            static element =>
+                element.Name.LocalName == "ViewportPane");
+        Assert.DoesNotContain(
+            playback.Descendants(Presentation + "ListBox"),
+            static _ => true);
+        Assert.Contains(
+            playback.Descendants(Presentation + "ToggleButton"),
+            static toggle => string.Equals(
+                (string?)toggle.Attribute("Content"),
+                "FPP camera",
+                StringComparison.Ordinal));
+
+        XElement retargetExplorerColumn = Assert.Single(
+            document.Descendants(Presentation + "ColumnDefinition"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "RetargetExplorerColumn",
+                StringComparison.Ordinal));
+        Assert.Equal("0", (string?)retargetExplorerColumn.Attribute("Width"));
+        XElement retargetViewport = Assert.Single(
+            document.Descendants(Presentation + "Grid"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "ViewportRegionGrid",
+                StringComparison.Ordinal));
+        Assert.Equal("0", (string?)retargetViewport.Attribute("Grid.Row"));
+        Assert.Equal("5", (string?)retargetViewport.Attribute("Grid.ColumnSpan"));
+        XElement retargetSourcePane = Assert.Single(
+            retargetViewport.Descendants(),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "SourceViewportPane",
+                StringComparison.Ordinal));
+        Assert.Null(retargetSourcePane.Attribute("Visibility"));
+        XElement retargetEditor = Assert.Single(
+            document.Descendants(Presentation + "Border"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "RetargetEditorSurface",
+                StringComparison.Ordinal));
+        Assert.Equal("2", (string?)retargetEditor.Attribute("Grid.Row"));
+        Assert.Equal("5", (string?)retargetEditor.Attribute("Grid.ColumnSpan"));
+        XElement retargetDock = Assert.Single(
+            document.Descendants(Presentation + "TabControl"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "RetargetBottomDock",
+                StringComparison.Ordinal));
+        Assert.Equal("4", (string?)retargetDock.Attribute("Grid.Row"));
+        Assert.Equal("5", (string?)retargetDock.Attribute("Grid.ColumnSpan"));
+        Assert.Contains(
+            document.Descendants(Presentation + "Button"),
+            static button => string.Equals(
+                (string?)button.Attribute("Content"),
+                "Reset layout",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            document.Descendants(Presentation + "TabItem"),
+            static tab => string.Equals(
+                (string?)tab.Attribute("Header"),
+                "Timeline / curves",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            document.Descendants(Presentation + "TextBlock"),
+            static text => string.Equals(
+                (string?)text.Attribute("Text"),
+                "Mapping evidence",
+                StringComparison.Ordinal));
+        string[] componentToggles = document
+            .Descendants(Presentation + "CheckBox")
+            .Where(static checkBox =>
+                ((string?)checkBox.Attribute("IsChecked"))?.Contains(
+                    "Enabled",
+                    StringComparison.Ordinal) == true)
+            .Select(static checkBox =>
+                (string?)checkBox.Attribute("Content") ?? string.Empty)
+            .Where(static content => content is "T" or "R" or "S")
+            .ToArray();
+        Assert.Equal(["T", "R", "S"], componentToggles);
+        XElement transferPicker = Assert.Single(
+            document.Descendants(Presentation + "ComboBox"),
+            static item => string.Equals(
+                (string?)item.Attribute("ItemsSource"),
+                "{Binding TransferPolicyOptions}",
+                StringComparison.Ordinal));
+        Assert.Equal("Label", (string?)transferPicker.Attribute("DisplayMemberPath"));
+        Assert.Equal(
+            "{Binding SelectedTransferPolicyOption, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}",
+            (string?)transferPicker.Attribute("SelectedItem"));
+
+        string[] exportTabs = document
+            .Descendants(Presentation + "TabItem")
+            .Select(static item =>
+                (string?)item.Attribute("Header"))
+            .Where(static header => header is "Files" or "Developer Tools")
+            .Cast<string>()
+            .ToArray();
+        Assert.Equal(["Files", "Developer Tools"], exportTabs);
+        Assert.DoesNotContain(
+            document.Descendants(Presentation + "TabItem"),
+            static item => string.Equals(
+                (string?)item.Attribute("Header"),
+                "Receipts",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            document.Descendants(Presentation + "TextBlock"),
+            static item => string.Equals(
+                (string?)item.Attribute("Text"),
+                "Active variant readiness",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            document.Descendants(Presentation + "Button"),
+            static item => string.Equals(
+                (string?)item.Attribute("Content"),
+                "Use as ANM2 source",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            document.Descendants(Presentation + "Expander"),
+            static item => string.Equals(
+                (string?)item.Attribute("Header"),
+                "Base-game model browser",
+                StringComparison.Ordinal));
+
+        XDocument application = XDocument.Load(FindRepositoryFile(
+            "src",
+            "ReAnimated.App",
+            "App.xaml"));
+        Assert.Contains(
+            application.Descendants(Presentation + "Style"),
+            static style => string.Equals(
+                (string?)style.Attribute("TargetType"),
+                "{x:Type ListBoxItem}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            application.Descendants(Presentation + "Style"),
+            static style => string.Equals(
+                (string?)style.Attribute("TargetType"),
+                "{x:Type DataGridRow}",
+                StringComparison.Ordinal));
+
+        string codeBehind = File.ReadAllText(FindRepositoryFile(
+            "src",
+            "ReAnimated.App",
+            "MainWindow.xaml.cs"));
+        Assert.Contains(
+            "SetWorkflowSurfaceAttached(\n            AnimationsWorkflowSurface",
+            codeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OnResetRetargetLayoutClick",
+            codeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "_viewModel.IsRetargetWorkspace ||",
+            codeBehind,
+            StringComparison.Ordinal);
     }
 
     private static void RunOnStaThread(Action action)

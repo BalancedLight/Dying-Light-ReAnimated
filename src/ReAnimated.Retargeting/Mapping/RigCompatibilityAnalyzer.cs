@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Project;
 
 namespace ReAnimated.Retargeting.Mapping;
 
@@ -139,8 +140,8 @@ public static class RigCompatibilityAnalyzer
             }
 
             if (entry.MappingKind == RetargetMappingKind.HelperOverride &&
-                entry.ComponentPolicy ==
-                    RetargetComponentPolicy.FullTransform)
+                entry.TransformComponents ==
+                    RetargetTransformComponents.All)
             {
                 diagnostics.Add(
                     new(

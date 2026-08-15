@@ -412,23 +412,29 @@ $hermeticRendererTests = @(Select-TestInputFiles (
     "^(Renderer(?!AuthoringStageGolden)|" +
     "LinkedTargetExternalPreview)"))
 $unifiedWorkflowTests = @(Select-TestInputFiles (
-    "^(AssistedRetargetReview|BlenderFbxHandoff|BlenderFbxStrictValidation|" +
+    "^(AnimationLibraryEditor|AssistedRetargetReview|BlenderFbxHandoff|BlenderFbxStrictValidation|" +
+    "CustomModelPreviewSession|CustomModelProjectIdentityRepair|DirectRigBinding|" +
     "CustomModelSchema2Morph|Dl1AnimationContentContract|" +
     "DeveloperToolsAnimationRefresh|" +
     "Dl1DeploymentReceiptFreshness|Dl1DeveloperToolsBatchDeployment|" +
     "Dl1DeveloperToolsDeployment|Dl1OfficialCompilerDependencySidecar|" +
     "Dl1OfficialModelCompilerContract|" +
-    "Dl1MultiModelPortableExporter|FbxCustomModelMorphImport|" +
+    "Dl1MultiModelPortableExporter|ExternalFbxStackSelection|FbxCustomModelMorphImport|" +
     "FbxExternalAnimationImportService|FbxFacialAnimationAdapter|" +
-    "ModelsWorkspacePersistence|ProjectModelReimportReconciler|" +
+    "ModelsWorkspacePersistence|ModelsWorkspacePreviewVisibility|ProjectAnimationPackBuilder|ProjectArtifactTransactionService|" +
+    "ProjectJsonSchema|ProjectModelReimportReconciler|" +
     "PendingProjectAssetStore|" +
     "ProjectExportMimicCli|ProjectExportSchema2Cli|" +
-    "ProjectMorphSuggestionScorer|ProjectSchema2Migration|" +
+    "ProjectMorphSuggestionScorer|ProjectSchema2Migration|ProjectSchema3Migration|" +
     "UnifiedWorkflowShell)Tests$"))
 $unifiedWorkflowFilter =
+    "FullyQualifiedName~AnimationLibraryEditorTests|" +
     "FullyQualifiedName~AssistedRetargetReviewTests|" +
     "FullyQualifiedName~BlenderFbxHandoffTests|" +
     "FullyQualifiedName~BlenderFbxStrictValidationTests|" +
+    "FullyQualifiedName~CustomModelPreviewSessionTests|" +
+    "FullyQualifiedName~CustomModelProjectIdentityRepairTests|" +
+    "FullyQualifiedName~DirectRigBindingTests|" +
     "FullyQualifiedName~CustomModelSchema2MorphTests|" +
     "FullyQualifiedName~DeveloperToolsAnimationRefresh|" +
     "FullyQualifiedName~Dl1AnimationContentContractTests|" +
@@ -438,16 +444,22 @@ $unifiedWorkflowFilter =
     "FullyQualifiedName~Dl1OfficialCompilerDependencySidecarTests|" +
     "FullyQualifiedName~Dl1OfficialModelCompilerContractTests|" +
     "FullyQualifiedName~Dl1MultiModelPortableExporterTests|" +
+    "FullyQualifiedName~ExternalFbxStackSelectionTests|" +
     "FullyQualifiedName~FbxCustomModelMorphImportTests|" +
     "FullyQualifiedName~FbxExternalAnimationImportServiceTests|" +
     "FullyQualifiedName~FbxFacialAnimationAdapterTests|" +
     "FullyQualifiedName~ModelsWorkspacePersistenceTests|" +
+    "FullyQualifiedName~ModelsWorkspacePreviewVisibilityTests|" +
     "FullyQualifiedName~PendingProjectAssetStoreTests|" +
+    "FullyQualifiedName~ProjectAnimationPackBuilderTests|" +
+    "FullyQualifiedName~ProjectArtifactTransactionServiceTests|" +
+    "FullyQualifiedName~ProjectJsonSchemaTests|" +
     "FullyQualifiedName~ProjectModelReimportReconcilerTests|" +
     "FullyQualifiedName~ProjectExportMimicCliTests|" +
     "FullyQualifiedName~ProjectExportSchema2CliTests|" +
     "FullyQualifiedName~ProjectMorphSuggestionScorerTests|" +
     "FullyQualifiedName~ProjectSchema2MigrationTests|" +
+    "FullyQualifiedName~ProjectSchema3MigrationTests|" +
     "FullyQualifiedName~UnifiedWorkflowShellTests"
 $externalControlExclusions =
     "Gate!=ExternalFbxAnimationDomain&" +

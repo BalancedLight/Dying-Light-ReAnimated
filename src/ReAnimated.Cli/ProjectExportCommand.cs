@@ -424,54 +424,88 @@ internal static class ProjectExportCommand
         }
 
         RetargetMap? mapping = null;
+        DirectRigBinding? directBinding = null;
         string? mappingFingerprint = null;
-        bool directSameRig = string.Equals(
+        bool exactSameRig = string.Equals(
             sourceSignature,
             targetSignature,
             StringComparison.OrdinalIgnoreCase);
-        if (!directSameRig)
+        switch (animation.BindingMode)
         {
-            mapping = BuildMap(
-                sourceRig,
-                targetRig,
-                animation.BoneMappings,
-                animation.TargetBindReviews);
-            mappingFingerprint =
-                RetargetMapFingerprint.Compute(
-                    sourceSignature,
-                    targetSignature,
-                    targetAsset.ContentSha256 ??
-                        throw new InvalidDataException(
-                            "The target-model asset has no content fingerprint."),
-                    mapping);
-            if (!string.Equals(
-                    mappingFingerprint,
-                    animation.MappingFingerprint,
-                    StringComparison.Ordinal))
-            {
-                throw new InvalidDataException(
-                    "The saved mapping fingerprint does not match its rigs, target asset, and mapping rows.");
-            }
+            case ProjectAnimationBindingMode.ExactDirect:
+                if (!exactSameRig || animation.DirectBinding is not null)
+                {
+                    throw new InvalidDataException(
+                        "The exact-direct variant no longer uses one runtime rig identity.");
+                }
 
-            RetargetMappingReviewReport mappingReview =
-                RetargetMappingReview.Analyze(
+                break;
+            case ProjectAnimationBindingMode.CompatibleDirect:
+                directBinding = animation.DirectBinding ??
+                    throw new InvalidDataException(
+                        "The compatible-direct variant has no persisted direct binding.");
+                directBinding.ValidateFor(sourceRig, targetRig);
+                if (!string.Equals(
+                        directBinding.EvidenceFingerprint,
+                        animation.BindingEvidenceFingerprint,
+                        StringComparison.OrdinalIgnoreCase) ||
+                    !string.Equals(
+                        directBinding.Policy,
+                        animation.BindingPolicyVersion,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "The compatible-direct binding evidence is stale.");
+                }
+
+                break;
+            case ProjectAnimationBindingMode.Retarget:
+                mapping = BuildMap(
                     sourceRig,
                     targetRig,
-                    mapping);
-            if (!mappingReview.IsReady)
-            {
-                string reasons = string.Join(
-                    "; ",
-                    mappingReview.Diagnostics
-                        .Where(static diagnostic =>
-                            diagnostic.Severity ==
-                            CompatibilityDiagnosticSeverity.Error)
-                        .Select(static diagnostic =>
-                            diagnostic.Message));
+                    animation.BoneMappings,
+                    animation.TargetBindReviews);
+                mappingFingerprint =
+                    RetargetMapFingerprint.Compute(
+                        sourceSignature,
+                        targetSignature,
+                        targetAsset.ContentSha256 ??
+                            throw new InvalidDataException(
+                                "The target-model asset has no content fingerprint."),
+                        mapping);
+                if (!string.Equals(
+                        mappingFingerprint,
+                        animation.MappingFingerprint,
+                        StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException(
+                        "The saved mapping fingerprint does not match its rigs, target asset, and mapping rows.");
+                }
+
+                RetargetMappingReviewReport mappingReview =
+                    RetargetMappingReview.Analyze(
+                        sourceRig,
+                        targetRig,
+                        mapping);
+                if (!mappingReview.IsReady)
+                {
+                    string reasons = string.Join(
+                        "; ",
+                        mappingReview.Diagnostics
+                            .Where(static diagnostic =>
+                                diagnostic.Severity ==
+                                CompatibilityDiagnosticSeverity.Error)
+                            .Select(static diagnostic =>
+                                diagnostic.Message));
+                    throw new InvalidDataException(
+                        "The saved retarget mapping has not passed explicit review: " +
+                        reasons);
+                }
+
+                break;
+            default:
                 throw new InvalidDataException(
-                    "The saved retarget mapping has not passed explicit review: " +
-                    reasons);
-            }
+                    "The project contains an unsupported animation-binding mode.");
         }
 
         AnimationRootMode rootMode =
@@ -493,7 +527,8 @@ internal static class ProjectExportCommand
             targetRig,
             mapping,
             rootMode,
-            animation.RootBoneName);
+            animation.RootBoneName,
+            directRigBinding: directBinding);
         var evaluation = new EvaluationRequest(
             sourceRig,
             targetRig,
@@ -512,7 +547,8 @@ internal static class ProjectExportCommand
             morphEditLayers: animation.MorphEditLayers,
             ikLayers: BuildIkLayers(
                 animation,
-                targetRig));
+                targetRig),
+            directRigBinding: directBinding);
         var exporter = new Dl1AnimationExporter(
             new Anm2EvaluationAdapter(
                 new AnimationEvaluator()));
@@ -1373,7 +1409,8 @@ internal static class ProjectExportCommand
                     ParsePersistedEvidence(row.Evidence),
                     ToRuntimeReviewOrigin(row.ReviewOrigin),
                     row.ScorerVersion,
-                    row.EvidenceFingerprint);
+                    row.EvidenceFingerprint,
+                    row.EffectiveTransformComponents);
             }),
             targetBindReviews.Select(review =>
             {

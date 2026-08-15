@@ -9,6 +9,75 @@ namespace ReAnimated.Tests;
 
 public sealed class RetargetCompatibilityTests
 {
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "EditorUsability")]
+    public void MappingViewModelEditsEveryComponentCombinationWithoutAllowingEmpty()
+    {
+        BoneMappingViewModel row = new(
+            "source",
+            "target",
+            0.95,
+            BoneMappingMethod.ExactName.ToString(),
+            componentPolicy: RetargetComponentPolicy.FullTransform,
+            evidence: "Unique normalized identity.",
+            transformComponents:
+                RetargetTransformComponents.Rotation |
+                RetargetTransformComponents.Scale);
+        List<string?> changed = [];
+        row.PropertyChanged += (_, args) =>
+            changed.Add(args.PropertyName);
+
+        Assert.False(row.IsTranslationEnabled);
+        Assert.True(row.IsRotationEnabled);
+        Assert.True(row.IsScaleEnabled);
+        Assert.Equal(
+            RetargetTransformComponents.Rotation |
+                RetargetTransformComponents.Scale,
+            row.TransformComponents);
+        Assert.Equal("Exact · 95%", row.EvidenceMethod);
+
+        row.IsTranslationEnabled = true;
+        Assert.Equal(
+            RetargetTransformComponents.All,
+            row.TransformComponents);
+        Assert.Equal(
+            RetargetComponentPolicy.FullTransform,
+            row.ComponentPolicy);
+        Assert.Contains(
+            nameof(BoneMappingViewModel.TransformComponents),
+            changed);
+
+        row.IsRotationEnabled = false;
+        Assert.Equal(
+            RetargetTransformComponents.Translation |
+                RetargetTransformComponents.Scale,
+            row.TransformComponents);
+        row.IsTranslationEnabled = false;
+        Assert.Equal(
+            RetargetTransformComponents.Scale,
+            row.TransformComponents);
+        Assert.Equal(
+            RetargetComponentPolicy.Scale,
+            row.ComponentPolicy);
+
+        row.IsScaleEnabled = false;
+        Assert.Equal(
+            RetargetTransformComponents.Scale,
+            row.TransformComponents);
+        Assert.True(row.IsScaleEnabled);
+
+        RetargetTransferPolicyOption restRelative = Assert.Single(
+            row.TransferPolicyOptions,
+            option => option.Value ==
+                RetargetTransferPolicy.RestRelative);
+        row.SelectedTransferPolicyOption = restRelative;
+        Assert.Equal(
+            RetargetTransferPolicy.RestRelative,
+            row.TransferPolicy);
+        Assert.False(string.IsNullOrWhiteSpace(restRelative.Description));
+    }
+
     [Theory]
     [InlineData(
         "RefCamera",

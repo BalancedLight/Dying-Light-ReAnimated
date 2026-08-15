@@ -87,7 +87,8 @@ internal static class BlenderFbxActiveVariantEvaluator
                 template.MorphEditLayers,
                 template.IkLayers,
                 template.Dl1PreviewInputs,
-                template.PreviewMotionAccumulationEnabled);
+                template.PreviewMotionAccumulationEnabled,
+                template.DirectRigBinding);
             EvaluationFrame evaluated = evaluator.Evaluate(request);
             if (evaluated.Diagnostics.Any(static diagnostic =>
                     diagnostic.Severity ==

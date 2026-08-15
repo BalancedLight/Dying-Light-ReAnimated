@@ -127,6 +127,74 @@ public sealed class FbxExternalAnimationImportServiceTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void ExternalWorkflowProjectsAffineRigTransformsAndReportsWarning()
+    {
+        FbxBinaryDocument document = CreateAffineDocument(
+            singularBind: false);
+        FbxExternalAnimationImportOptions strict = Options() with
+        {
+            ProjectAffineShearToTrs = false,
+        };
+
+        FbxExternalAnimationStackDescriptor rejected = Assert.Single(
+            FbxExternalAnimationImportService.Scan(
+                document,
+                strict).Stacks);
+        Assert.False(rejected.CanImport);
+        Assert.Contains(
+            rejected.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == "body_import_failed" &&
+                diagnostic.Severity ==
+                    FbxExternalAnimationDiagnosticSeverity.Error);
+
+        FbxExternalAnimationStackDescriptor projected = Assert.Single(
+            FbxExternalAnimationImportService.Scan(
+                document,
+                Options()).Stacks);
+        Assert.True(projected.CanImport);
+        Assert.Equal(AnimationSourceRoles.Body, projected.Roles);
+        Assert.Contains(
+            projected.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == "body_affine_trs_projection" &&
+                diagnostic.Severity ==
+                    FbxExternalAnimationDiagnosticSeverity.Warning);
+
+        FbxExternalAnimationImportResult imported = Assert.Single(
+            FbxExternalAnimationImportService.ImportSelected(
+                document,
+                [projected.StackObjectId],
+                Options()));
+        Assert.NotNull(imported.SourceRig);
+        Assert.Single(imported.Clip.TransformTracks);
+    }
+
+    [Fact]
+    public void ExternalWorkflowStillRejectsSingularBindTransforms()
+    {
+        FbxExternalAnimationStackDescriptor row = Assert.Single(
+            FbxExternalAnimationImportService.Scan(
+                CreateAffineDocument(singularBind: true),
+                Options()).Stacks);
+
+        Assert.False(row.CanImport);
+        Assert.Contains(
+            row.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == "body_import_failed" &&
+                diagnostic.Severity ==
+                    FbxExternalAnimationDiagnosticSeverity.Error &&
+                diagnostic.Message.Contains(
+                    "non-singular",
+                    StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(
+            row.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code == "body_affine_trs_projection");
+    }
+
     private static FbxExternalAnimationImportOptions Options() =>
         new()
         {
@@ -173,6 +241,38 @@ public sealed class FbxExternalAnimationImportServiceTests
                 Connection("OP", 32, 22, "d|DeformPercent"),
             ],
             GlobalSettings(Property70("TimeMode", 6)));
+
+    private static FbxBinaryDocument CreateAffineDocument(
+        bool singularBind)
+    {
+        ImmutableArray<double> bind = singularBind
+            ? ImmutableArray.Create(
+                0.0, 0.0, 0.0, 0.0,
+                0.0, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0)
+            : ImmutableArray.Create(
+                1.0, 0.0, 0.0, 0.0,
+                0.25, 1.0, 0.0, 0.0,
+                0.0, 0.0, 1.0, 0.0,
+                0.0, 0.0, 0.0, 1.0);
+        return Document(
+            [
+                Model(1, "root", "LimbNode"),
+                BindPose(50, (1, bind)),
+                Stack(40, "Affine", 0, FrameTick),
+                Layer(100, "Base"),
+                CurveNode(20, "body"),
+                Curve(30, [0, FrameTick], [0.0, 1.0]),
+            ],
+            [
+                Connection("OO", 100, 40),
+                Connection("OO", 20, 100),
+                Connection("OP", 20, 1, "Lcl Translation"),
+                Connection("OP", 30, 20, "d|X"),
+            ],
+            GlobalSettings(Property70("TimeMode", 6)));
+    }
 
     private static FbxNode Model(
         long objectId,
@@ -239,6 +339,26 @@ public sealed class FbxExternalAnimationImportServiceTests
             Node(
                 "KeyAttrRefCount",
                 [ImmutableArray.Create(keyTimes.Length)]));
+
+    private static FbxNode BindPose(
+        long objectId,
+        params (long ObjectId, ImmutableArray<double> Matrix)[] rows)
+    {
+        FbxNode[] children =
+        [
+            Node("Type", ["BindPose"]),
+            .. rows.Select(static row =>
+                Node(
+                    "PoseNode",
+                    [],
+                    Node("Node", [row.ObjectId]),
+                    Node("Matrix", [row.Matrix]))),
+        ];
+        return Node(
+            "Pose",
+            [objectId, "Pose::BindPose", "BindPose"],
+            children);
+    }
 
     private static FbxNode GlobalSettings(params FbxNode[] properties) =>
         Node(

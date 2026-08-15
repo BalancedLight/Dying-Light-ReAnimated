@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Select FBX animation stacks"
         Width="1060"
-        Height="760"
+        Height="620"
         MinWidth="820"
         MinHeight="440"
         WindowStartupLocation="CenterOwner"
@@ -14,7 +14,6 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <StackPanel>
@@ -23,7 +22,7 @@
                        Text="{Binding TitleText}" />
             <TextBlock Margin="0,4,0,10"
                        Foreground="#666666"
-                       Text="Check every immutable take to add. Layered takes remain visible but must be baked to one layer before import."
+                       Text="Check every immutable take to add. Assign project-model targets later from Animations. Layered takes remain visible but must be baked to one layer before import."
                        TextWrapping="Wrap" />
         </StackPanel>
 
@@ -70,37 +69,7 @@
             </DataGrid.Columns>
         </DataGrid>
 
-        <StackPanel Grid.Row="3" Margin="0,12,0,0">
-            <TextBlock FontWeight="SemiBold"
-                       Text="Target project models" />
-            <TextBlock Margin="0,2,0,5"
-                       Foreground="#666666"
-                       Text="One independent variant is created per checked model. Static models remain visible but cannot be animation targets."
-                       TextWrapping="Wrap" />
-            <DataGrid MaxHeight="170"
-                      AutoGenerateColumns="False"
-                      CanUserAddRows="False"
-                      CanUserDeleteRows="False"
-                      HeadersVisibility="Column"
-                      ItemsSource="{Binding TargetRows}">
-                <DataGrid.Columns>
-                    <DataGridTemplateColumn Header="Target" Width="58">
-                        <DataGridTemplateColumn.CellTemplate>
-                            <DataTemplate>
-                                <CheckBox HorizontalAlignment="Center"
-                                          IsChecked="{Binding IsSelected, UpdateSourceTrigger=PropertyChanged}"
-                                          IsEnabled="{Binding CanTarget}" />
-                            </DataTemplate>
-                        </DataGridTemplateColumn.CellTemplate>
-                    </DataGridTemplateColumn>
-                    <DataGridTextColumn Header="Model" Binding="{Binding Name}" Width="190" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Source" Binding="{Binding Source}" Width="160" IsReadOnly="True" />
-                    <DataGridTextColumn Header="Rig contract" Binding="{Binding Contract}" Width="*" IsReadOnly="True" />
-                </DataGrid.Columns>
-            </DataGrid>
-        </StackPanel>
-
-        <Grid Grid.Row="4" Margin="0,12,0,0">
+        <Grid Grid.Row="3" Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />

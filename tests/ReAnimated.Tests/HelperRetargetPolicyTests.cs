@@ -1,5 +1,6 @@
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.Project;
 using ReAnimated.Retargeting;
 using ReAnimated.Retargeting.Mapping;
 
@@ -75,6 +76,131 @@ public sealed class HelperRetargetPolicyTests
         };
 
         AssertTransformNear(expected, actual);
+    }
+
+    [Theory]
+    [InlineData((int)RetargetTransformComponents.Translation)]
+    [InlineData((int)RetargetTransformComponents.Rotation)]
+    [InlineData((int)RetargetTransformComponents.Scale)]
+    [InlineData((int)(RetargetTransformComponents.Translation |
+                      RetargetTransformComponents.Rotation))]
+    [InlineData((int)(RetargetTransformComponents.Translation |
+                      RetargetTransformComponents.Scale))]
+    [InlineData((int)(RetargetTransformComponents.Rotation |
+                      RetargetTransformComponents.Scale))]
+    [InlineData((int)RetargetTransformComponents.All)]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ComponentFlagsSupportEveryNonEmptyTrsCombination(
+        int componentValue)
+    {
+        RetargetTransformComponents components =
+            (RetargetTransformComponents)componentValue;
+        TransformTRS sourceAnimated = new(
+            new Vector3D(4.0, -2.0, 7.0),
+            Rotation(Vector3D.UnitZ, 42.0),
+            new Vector3D(1.4, 0.8, 1.2));
+        RigDefinition source = Rig(
+            "flags-source",
+            new BoneDefinition(
+                0,
+                "Driver",
+                -1,
+                TransformTRS.Identity,
+                BoneKind.Root));
+        SkeletonPose sourcePose = new(source, [sourceAnimated]);
+
+        TransformTRS targetBind = new(
+            new Vector3D(-3.0, 5.0, 2.0),
+            Rotation(Vector3D.UnitX, -17.0),
+            new Vector3D(0.7, 1.1, 1.3));
+        RigDefinition target = Rig(
+            "flags-target",
+            new BoneDefinition(
+                0,
+                "Target",
+                -1,
+                targetBind,
+                BoneKind.Helper,
+                requiredForExport: false));
+        BoneMapEntry entry = new(
+            0,
+            0,
+            BoneMappingMethod.Manual,
+            1.0,
+            mappingKind: RetargetMappingKind.HelperOverride,
+            transferPolicy: RetargetTransferPolicy.CopyLocal,
+            componentPolicy: RetargetComponentPolicy.FullTransform,
+            transformComponents: components);
+
+        TransformTRS actual = PoseRetargeter.Retarget(
+                sourcePose,
+                target,
+                Map(source, target, entry))
+            .LocalTransforms[0];
+        TransformTRS expected = targetBind with
+        {
+            Translation = components.HasFlag(
+                RetargetTransformComponents.Translation)
+                    ? sourceAnimated.Translation
+                    : targetBind.Translation,
+            Rotation = components.HasFlag(
+                RetargetTransformComponents.Rotation)
+                    ? sourceAnimated.Rotation
+                    : targetBind.Rotation,
+            Scale = components.HasFlag(
+                RetargetTransformComponents.Scale)
+                    ? sourceAnimated.Scale
+                    : targetBind.Scale,
+        };
+
+        Assert.Equal(components, entry.TransformComponents);
+        AssertTransformNear(expected, actual);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ComponentFlagsRejectAnEmptySelection()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new BoneMapEntry(
+                0,
+                0,
+                BoneMappingMethod.Manual,
+                1.0,
+                transformComponents:
+                    RetargetTransformComponents.None));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void MappingFingerprintDistinguishesNonLegacyComponentCombinations()
+    {
+        BoneMapEntry rotationScale = new(
+            0,
+            0,
+            BoneMappingMethod.Manual,
+            1.0,
+            transformComponents:
+                RetargetTransformComponents.Rotation |
+                RetargetTransformComponents.Scale);
+        BoneMapEntry translationScale = new(
+            0,
+            0,
+            BoneMappingMethod.Manual,
+            1.0,
+            transformComponents:
+                RetargetTransformComponents.Translation |
+                RetargetTransformComponents.Scale);
+
+        string first = Fingerprint(
+            new RetargetMap("source", "target", [rotationScale]));
+        string second = Fingerprint(
+            new RetargetMap("source", "target", [translationScale]));
+
+        Assert.NotEqual(first, second);
     }
 
     [Theory]
@@ -1227,6 +1353,10 @@ public sealed class HelperRetargetPolicyTests
             RetargetTransferPolicy.RestRelative,
             entry.TransferPolicy);
         Assert.Equal(expectedComponents, entry.ComponentPolicy);
+        Assert.Equal(
+            RetargetTransformComponentsCompatibility.FromLegacy(
+                expectedComponents),
+            entry.TransformComponents);
     }
 
     private static RigDefinition Rig(

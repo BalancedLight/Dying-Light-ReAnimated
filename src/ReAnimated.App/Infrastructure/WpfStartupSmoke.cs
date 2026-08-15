@@ -161,13 +161,6 @@ internal sealed class WpfStartupSmoke
             ValidateModelsWorkspaceCommands(window, viewModel);
 
             SeedAnimationLibrary(viewModel);
-            // Normal empty workspaces physically detach the hidden source
-            // HwndHost to guarantee true single-pane airspace. The
-            // package-only smoke explicitly materializes a synthetic dual
-            // layout so it can still exercise both native hosts without
-            // weakening the user-facing rule.
-            viewModel.ActiveWorkspaceMode = "FPP";
-            viewModel.ConfigureStartupSmokeDualViewport();
             await RunAsync(
                 application,
                 window);
@@ -257,6 +250,25 @@ internal sealed class WpfStartupSmoke
                 await MaterializeAnimationLibraryRowAsync(
                     window);
 
+            // The current Retarget/Edit workspace is the only dedicated
+            // two-viewport authoring surface. Materialize it after the
+            // animation-table check so resize evidence covers the same
+            // source/target layout users now interact with.
+            if (window.DataContext is not MainWindowViewModel viewModel)
+            {
+                throw new InvalidDataException(
+                    "The startup-smoke window lost its main ViewModel.");
+            }
+
+            await window.Dispatcher.InvokeAsync(
+                () =>
+                {
+                    viewModel.ActiveWorkspaceMode = "Retarget/Edit";
+                    viewModel.ConfigureStartupSmokeDualViewport();
+                    window.UpdateLayout();
+                },
+                DispatcherPriority.Loaded);
+
             stage = "WPF viewport startup";
             await window.Dispatcher.InvokeAsync(
                 () => { },
@@ -264,6 +276,7 @@ internal sealed class WpfStartupSmoke
                     .ApplicationIdle);
             hosts = FindVisualChildren<D3D11RenderHost>(
                     window)
+                .Where(static host => host.IsVisible)
                 .ToArray();
             if (hosts.Length != RequiredViewportCount)
             {
@@ -376,15 +389,12 @@ internal sealed class WpfStartupSmoke
         await window.Dispatcher.InvokeAsync(
             () =>
             {
-                var tabControl = window.FindName(
-                    "ExplorerTabControl") as TabControl
+                var viewModel = window.DataContext as
+                    MainWindowViewModel
                     ?? throw new InvalidDataException(
-                        "The explorer tab control was not found in the real WPF window.");
-                var animationsTab = window.FindName(
-                    "AnimationLibraryTab") as TabItem
-                    ?? throw new InvalidDataException(
-                        "The Animations tab was not found in the real WPF window.");
-                tabControl.SelectedItem = animationsTab;
+                        "The startup-smoke window has no main ViewModel.");
+                viewModel.ActiveWorkspaceMode = "Animations";
+                window.UpdateLayout();
             },
             DispatcherPriority.Loaded);
         await window.Dispatcher.InvokeAsync(
@@ -395,9 +405,9 @@ internal sealed class WpfStartupSmoke
             () =>
             {
                 var library = window.FindName(
-                    "AnimationLibraryList") as ListBox
+                    "AnimationLibraryTable") as DataGrid
                     ?? throw new InvalidDataException(
-                        "The animation library was not found in the real WPF window.");
+                        "The dedicated animation-library table was not found in the real WPF window.");
                 if (library.Items.Count != 1)
                 {
                     throw new InvalidDataException(
@@ -407,7 +417,7 @@ internal sealed class WpfStartupSmoke
                 library.ScrollIntoView(library.Items[0]);
                 library.UpdateLayout();
                 if (library.ItemContainerGenerator
-                        .ContainerFromIndex(0) is not ListBoxItem row ||
+                        .ContainerFromIndex(0) is not DataGridRow row ||
                     row.ActualWidth <= 0 ||
                     row.ActualHeight <= 0)
                 {

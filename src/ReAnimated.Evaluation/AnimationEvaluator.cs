@@ -121,7 +121,9 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
             request.PreviewProfile,
             request.Purpose,
             request.MorphBindings,
-            request.MorphEditLayers);
+            request.MorphEditLayers,
+            allowImplicitIdentity:
+                request.DirectRigBinding is null);
         diagnostics.AddRange(evaluatedMorphs.Diagnostics);
 
         SkeletonPose displayPose = authoredPose;
@@ -323,6 +325,15 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 request.TargetRig,
                 request.RetargetMap,
                 request.Dl1AuthoringPolicy?.TargetBindBoneIndices);
+        }
+        else if (request.DirectRigBinding is not null)
+        {
+            compatibility = null;
+            basePose = DirectRigPoseBinder.Apply(
+                sourcePose,
+                request.TargetRig,
+                request.Clip,
+                request.DirectRigBinding);
         }
         else
         {

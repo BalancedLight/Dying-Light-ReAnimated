@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Project;
 
 namespace ReAnimated.Retargeting.Mapping;
 
@@ -60,7 +61,8 @@ public sealed record BoneMapEntry
         IEnumerable<MappingEvidence>? evidence = null,
         MappingReviewOrigin reviewOrigin = MappingReviewOrigin.None,
         string scorerVersion = "",
-        string evidenceFingerprint = "")
+        string evidenceFingerprint = "",
+        RetargetTransformComponents? transformComponents = null)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(sourceBoneIndex);
         ArgumentOutOfRangeException.ThrowIfNegative(targetBoneIndex);
@@ -80,6 +82,19 @@ public sealed record BoneMapEntry
                 "The mapping kind, transfer policy, and component policy must be supported values.");
         }
 
+        RetargetTransformComponents effectiveComponents =
+            transformComponents ??
+            RetargetTransformComponentsCompatibility.FromLegacy(
+                componentPolicy);
+        if (effectiveComponents == RetargetTransformComponents.None ||
+            (effectiveComponents & ~RetargetTransformComponents.All) !=
+                RetargetTransformComponents.None)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(transformComponents),
+                "A retarget row must transfer at least one supported transform component.");
+        }
+
         SourceBoneIndex = sourceBoneIndex;
         TargetBoneIndex = targetBoneIndex;
         Method = method;
@@ -88,7 +103,12 @@ public sealed record BoneMapEntry
         IsReviewed = isReviewed;
         MappingKind = mappingKind;
         TransferPolicy = transferPolicy;
-        ComponentPolicy = componentPolicy;
+        TransformComponents = effectiveComponents;
+        ComponentPolicy = RetargetTransformComponentsCompatibility.TryToLegacy(
+            effectiveComponents,
+            out RetargetComponentPolicy compatiblePolicy)
+                ? compatiblePolicy
+                : componentPolicy;
         Evidence = evidence?.ToImmutableArray() ?? [];
         if (Evidence.Any(static row =>
                 !Enum.IsDefined(row.Kind) ||
@@ -138,6 +158,13 @@ public sealed record BoneMapEntry
     public RetargetTransferPolicy TransferPolicy { get; }
 
     public RetargetComponentPolicy ComponentPolicy { get; }
+
+    /// <summary>
+    /// Components owned by this mapping row. Unlike the legacy component
+    /// policy, flags represent every non-empty Translation/Rotation/Scale
+    /// combination.
+    /// </summary>
+    public RetargetTransformComponents TransformComponents { get; }
 
     public ImmutableArray<MappingEvidence> Evidence { get; }
 

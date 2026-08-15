@@ -65,6 +65,31 @@ public sealed class CustomModelPreviewSession
 
     public ImmutableArray<string> Diagnostics { get; }
 
+    /// <summary>
+    /// Converts an evaluated runtime-rig pose into the exact hierarchy and
+    /// bind bases used by the prepared DL1-output meshes. Source FBX mode and
+    /// an explicitly diagnosed DL1-output fallback keep the runtime pose
+    /// unchanged.
+    /// </summary>
+    public SkeletonPose CreatePresentationPose(SkeletonPose runtimePose)
+    {
+        ArgumentNullException.ThrowIfNull(runtimePose);
+        return _authoredRig?.RebasePose(runtimePose) ?? runtimePose;
+    }
+
+    public SkeletonRenderData CreateSkeleton(
+        SkeletonPose runtimePose,
+        int? selectedBoneIndex = null,
+        TransformMatrix? actorWorldTransform = null)
+    {
+        SkeletonPose previewPose = CreatePresentationPose(runtimePose);
+        int? previewSelectedBone = MapSourceBoneIndex(selectedBoneIndex);
+        return CorePreviewAdapter.ToRenderSkeleton(
+            previewPose,
+            previewSelectedBone,
+            actorWorldTransform);
+    }
+
     internal bool Matches(
         FbxModelAuthoringImportResult model,
         CustomModelPreviewMode mode)
@@ -96,13 +121,7 @@ public sealed class CustomModelPreviewSession
                         0,
                         checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))),
                 PlaybackMode.Clamp);
-        SkeletonPose previewPose = _authoredRig?.RebasePose(sourcePose) ?? sourcePose;
-        int? previewSelectedBone = _authoredRig is null || selectedBoneIndex is not { } sourceIndex
-            ? selectedBoneIndex
-            : (uint)sourceIndex < (uint)_authoredRig.Contract.SourceToPhysicalIndices.Length
-                ? _authoredRig.Contract.SourceToPhysicalIndices[sourceIndex]
-                : null;
-        return CorePreviewAdapter.ToRenderSkeleton(previewPose, previewSelectedBone);
+        return CreateSkeleton(sourcePose, selectedBoneIndex);
     }
 
     public RenderCamera? CreatePreviewCamera(
@@ -158,6 +177,14 @@ public sealed class CustomModelPreviewSession
             Meshes,
             CreateSkeleton(clip, frame, selectedBoneIndex),
             Diagnostics);
+
+    private int? MapSourceBoneIndex(int? selectedBoneIndex) =>
+        _authoredRig is null || selectedBoneIndex is not { } sourceIndex
+            ? selectedBoneIndex
+            : (uint)sourceIndex <
+                (uint)_authoredRig.Contract.SourceToPhysicalIndices.Length
+                ? _authoredRig.Contract.SourceToPhysicalIndices[sourceIndex]
+                : null;
 
     private static Vector3 ToVector3(Vector3D value) => new(
         checked((float)value.X),

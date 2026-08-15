@@ -177,7 +177,10 @@ public sealed class ProjectSchema2MigrationTests : IDisposable
         string json = File.ReadAllText(path);
         DlraProject reopened = ProjectSerializer.Load(path);
 
-        Assert.Contains("\"schemaVersion\": 2", json, StringComparison.Ordinal);
+        Assert.Contains(
+            $"\"schemaVersion\": {DlraProject.CurrentSchemaVersion}",
+            json,
+            StringComparison.Ordinal);
         Assert.Single(reopened.Assets);
         Assert.DoesNotContain(
             reopened.Assets,
@@ -192,6 +195,134 @@ public sealed class ProjectSchema2MigrationTests : IDisposable
         Assert.Empty(reopened.Animations);
         Assert.Equal(ProjectWorkflowTab.Playback, reopened.Workflow.ActiveTab);
         Assert.Equal(variantId, reopened.Workflow.SelectedAnimationVariantId);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void Schema2RoundTripKeepsCompatibleDirectBindingEvidence()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string path = Path.Combine(
+            _temporaryDirectory,
+            "compatible-direct.dlraproj");
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid targetAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid modelId = Guid.NewGuid();
+        string sourceSkeleton = Sha('d');
+        string targetSkeleton = Sha('e');
+        DirectBoneBinding[] rows =
+        [
+            new DirectBoneBinding
+            {
+                SourceBoneIndex = 0,
+                TargetBoneIndex = 1,
+                SourceBoneName = "root",
+                TargetBoneName = "root",
+                IdentityEvidence =
+                    DirectBoneIdentityEvidence.UniqueDescriptor,
+                ParentTopologyMatches = true,
+                LocalBindMatches = true,
+                GlobalBindMatches = true,
+            },
+        ];
+        string evidence = DirectRigBindingFingerprint.Compute(
+            sourceSkeleton,
+            targetSkeleton,
+            DirectRigBinding.PolicyVersion,
+            rows);
+        var direct = new DirectRigBinding(
+            sourceSkeleton,
+            targetSkeleton,
+            evidence,
+            DirectRigBinding.PolicyVersion,
+            rows);
+        DlraProject project = DlraProject.Create("Compatible direct") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = sourceAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "Sources/generic-motion.fbx",
+                    ContentSha256 = Sha('a'),
+                },
+                new ProjectAssetReference
+                {
+                    Id = targetAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "Models/generic-target.dlrmodel",
+                    ContentSha256 = Sha('b'),
+                },
+            ],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = modelId,
+                    AssetId = targetAssetId,
+                    Name = "Generic target",
+                    RigSignature = Sha('c'),
+                    AnimationSkeletonSignature = targetSkeleton,
+                },
+            ],
+            AnimationSources =
+            [
+                new ProjectAnimationSource
+                {
+                    Id = sourceId,
+                    Name = "Generic motion",
+                    SourceAssetId = sourceAssetId,
+                    SourceBinding = new ProjectAnimationSourceBinding
+                    {
+                        Kind = AnimationSourceKind.LocalFbx,
+                        AssetId = sourceAssetId,
+                        SourceRigSignature = Sha('f'),
+                        Roles = AnimationSourceRoles.Body,
+                        TimingProvenance =
+                            AnimationTimingProvenance.EmbeddedFbx,
+                    },
+                    SourceAnimationSkeletonSignature = sourceSkeleton,
+                    FrameRate = new FrameRate(30, 1),
+                    FrameCount = 2,
+                },
+            ],
+            AnimationVariants =
+            [
+                new ProjectAnimationVariant
+                {
+                    SourceId = sourceId,
+                    Name = "Generic target variant",
+                    TargetModelId = modelId,
+                    TargetRigId = "generic-target",
+                    TargetRigSignature = Sha('c'),
+                    TargetAnimationSkeletonSignature = targetSkeleton,
+                    BindingMode =
+                        ProjectAnimationBindingMode.CompatibleDirect,
+                    DirectBinding = direct,
+                    BindingEvidenceFingerprint = evidence,
+                    BindingPolicyVersion = direct.Policy,
+                },
+            ],
+        };
+
+        ProjectSerializer.SaveAtomic(project, path);
+        DlraProject reopened = ProjectSerializer.Load(path);
+
+        ProjectAnimationVariant variant = Assert.Single(
+            reopened.AnimationVariants);
+        Assert.Equal(
+            ProjectAnimationBindingMode.CompatibleDirect,
+            variant.BindingMode);
+        DirectRigBinding loaded = Assert.IsType<DirectRigBinding>(
+            variant.DirectBinding);
+        Assert.Equal(evidence, loaded.EvidenceFingerprint);
+        Assert.Equal(0, Assert.Single(loaded.Rows).SourceBoneIndex);
+        Assert.Equal(1, loaded.Rows[0].TargetBoneIndex);
+        Assert.Null(variant.MappingFingerprint);
+        reopened.Validate();
     }
 
     [Fact]
@@ -224,7 +355,7 @@ public sealed class ProjectSchema2MigrationTests : IDisposable
 
         DlraProject migrated = ProjectSerializer.Load(path);
 
-        Assert.Equal(2, migrated.SchemaVersion);
+        Assert.Equal(DlraProject.CurrentSchemaVersion, migrated.SchemaVersion);
         Assert.Single(migrated.Models);
         ProjectAnimationSource source = Assert.Single(
             migrated.AnimationSources);

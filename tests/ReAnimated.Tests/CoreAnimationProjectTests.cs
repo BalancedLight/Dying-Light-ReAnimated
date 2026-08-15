@@ -234,7 +234,10 @@ public sealed class CoreAnimationProjectTests : IDisposable
         DlraProject loaded = ProjectSerializer.Load(savedPath);
 
         Assert.Contains("\"format\": \"dl-reanimated-csharp-project\"", json, StringComparison.Ordinal);
-        Assert.Contains("\"schemaVersion\": 2", json, StringComparison.Ordinal);
+        Assert.Contains(
+            $"\"schemaVersion\": {DlraProject.CurrentSchemaVersion}",
+            json,
+            StringComparison.Ordinal);
         Assert.Contains("\"game\": \"dying-light-1\"", json, StringComparison.Ordinal);
         Assert.Contains("\"previewMode\": \"raw\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("schema_version", json, StringComparison.Ordinal);

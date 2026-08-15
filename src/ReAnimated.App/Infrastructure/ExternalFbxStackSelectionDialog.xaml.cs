@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Core.Domain;
 
 namespace ReAnimated.App.Infrastructure;
 
@@ -15,12 +16,10 @@ public partial class ExternalFbxStackSelectionDialog : Window,
 
     public ExternalFbxStackSelectionDialog(
         string sourceName,
-        IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks,
-        IReadOnlyList<ExternalFbxTargetModelOption> targetModels)
+        IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
         ArgumentNullException.ThrowIfNull(stacks);
-        ArgumentNullException.ThrowIfNull(targetModels);
         InitializeComponent();
         TitleText = $"Animation stacks in {sourceName}";
         int importableCount = stacks.Count(static candidate =>
@@ -36,15 +35,6 @@ public partial class ExternalFbxStackSelectionDialog : Window,
             row.PropertyChanged += OnRowPropertyChanged;
         }
 
-        TargetRows = new ObservableCollection<
-            ExternalFbxTargetSelectionRow>(
-                targetModels.Select(model =>
-                    new ExternalFbxTargetSelectionRow(model)));
-        foreach (ExternalFbxTargetSelectionRow row in TargetRows)
-        {
-            row.PropertyChanged += OnTargetRowPropertyChanged;
-        }
-
         DataContext = this;
     }
 
@@ -53,9 +43,6 @@ public partial class ExternalFbxStackSelectionDialog : Window,
     public string TitleText { get; }
 
     public ObservableCollection<ExternalFbxStackSelectionRow> Rows { get; }
-
-    public ObservableCollection<ExternalFbxTargetSelectionRow>
-        TargetRows { get; }
 
     public IReadOnlyList<FbxFacialSourceValueUnit>
         FacialSourceValueUnits { get; } =
@@ -81,9 +68,7 @@ public partial class ExternalFbxStackSelectionDialog : Window,
 
     public string SelectionSummary =>
         $"{Rows.Count(static row => row.IsSelected):N0} of " +
-        $"{Rows.Count(static row => row.CanImport):N0} importable stack(s); " +
-        $"{TargetRows.Count(static row => row.IsSelected):N0} of " +
-        $"{TargetRows.Count(static row => row.CanTarget):N0} rigged target(s) checked";
+        $"{Rows.Count(static row => row.CanImport):N0} importable stack(s) checked";
 
     public ExternalFbxAnimationStackSelection? Selection { get; private set; }
 
@@ -93,15 +78,11 @@ public partial class ExternalFbxStackSelectionDialog : Window,
             .Where(static row => row.IsSelected && row.CanImport)
             .Select(static row => row.StackObjectId)
             .ToImmutableArray();
-        ImmutableArray<Guid> targetModelIds = TargetRows
-            .Where(static row => row.IsSelected && row.CanTarget)
-            .Select(static row => row.ModelId)
-            .ToImmutableArray();
-        if (selected.IsEmpty || targetModelIds.IsEmpty)
+        if (selected.IsEmpty)
         {
             MessageBox.Show(
                 this,
-                "Check at least one importable animation stack and one rigged project model.",
+                "Check at least one importable animation stack.",
                 "Select FBX animation stacks",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -109,14 +90,11 @@ public partial class ExternalFbxStackSelectionDialog : Window,
         }
 
         if (selected.Length >
-                ExternalFbxAnimationStackSelection.MaximumSelectedStacks ||
-            targetModelIds.Length >
-                ExternalFbxAnimationStackSelection
-                    .MaximumSelectedTargetModels)
+                ExternalFbxAnimationStackSelection.MaximumSelectedStacks)
         {
             MessageBox.Show(
                 this,
-                $"Select at most {ExternalFbxAnimationStackSelection.MaximumSelectedStacks:N0} stacks and {ExternalFbxAnimationStackSelection.MaximumSelectedTargetModels:N0} target models per import.",
+                $"Select at most {ExternalFbxAnimationStackSelection.MaximumSelectedStacks:N0} stacks per import.",
                 "Select FBX animation stacks",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -125,21 +103,9 @@ public partial class ExternalFbxStackSelectionDialog : Window,
 
         Selection = new ExternalFbxAnimationStackSelection(
                 selected,
-                FacialSourceValueUnit,
-                targetModelIds)
+                FacialSourceValueUnit)
             .Validate();
         DialogResult = true;
-    }
-
-    private void OnTargetRowPropertyChanged(
-        object? sender,
-        PropertyChangedEventArgs args)
-    {
-        if (args.PropertyName ==
-            nameof(ExternalFbxTargetSelectionRow.IsSelected))
-        {
-            OnPropertyChanged(nameof(SelectionSummary));
-        }
     }
 
     private void OnRowPropertyChanged(
@@ -160,61 +126,6 @@ public partial class ExternalFbxStackSelectionDialog : Window,
             new PropertyChangedEventArgs(propertyName));
 }
 
-public sealed class ExternalFbxTargetSelectionRow :
-    INotifyPropertyChanged
-{
-    private bool _isSelected;
-
-    public ExternalFbxTargetSelectionRow(
-        ExternalFbxTargetModelOption model)
-    {
-        ArgumentNullException.ThrowIfNull(model);
-        if (model.ModelId == Guid.Empty)
-        {
-            throw new ArgumentException(
-                "A target-model checklist row requires a stable project model ID.",
-                nameof(model));
-        }
-
-        ModelId = model.ModelId;
-        Name = model.Name;
-        Source = model.Source;
-        Contract = model.Contract;
-        CanTarget = !model.IsStatic;
-        _isSelected = model.IsSelected && CanTarget;
-    }
-
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    public Guid ModelId { get; }
-
-    public string Name { get; }
-
-    public string Source { get; }
-
-    public string Contract { get; }
-
-    public bool CanTarget { get; }
-
-    public bool IsSelected
-    {
-        get => _isSelected;
-        set
-        {
-            bool normalized = value && CanTarget;
-            if (_isSelected == normalized)
-            {
-                return;
-            }
-
-            _isSelected = normalized;
-            PropertyChanged?.Invoke(
-                this,
-                new PropertyChangedEventArgs(nameof(IsSelected)));
-        }
-    }
-}
-
 public sealed class ExternalFbxStackSelectionRow :
     INotifyPropertyChanged
 {
@@ -232,9 +143,7 @@ public sealed class ExternalFbxStackSelectionRow :
         Timing =
             $"{stack.FrameRate.Numerator}/{stack.FrameRate.Denominator} fps | {stack.FrameCount:N0} frames";
         Roles = stack.Roles.ToString();
-        SourceRig = string.IsNullOrWhiteSpace(stack.SourceRigId)
-            ? "No skeletal rig"
-            : stack.SourceRigId;
+        SourceRig = DescribeSourceRig(stack);
         Layers = stack.LayerNames.IsEmpty
             ? "None"
             : string.Join(", ", stack.LayerNames);
@@ -280,5 +189,25 @@ public sealed class ExternalFbxStackSelectionRow :
                 this,
                 new PropertyChangedEventArgs(nameof(IsSelected)));
         }
+    }
+
+    private static string DescribeSourceRig(
+        FbxExternalAnimationStackDescriptor stack)
+    {
+        if (!string.IsNullOrWhiteSpace(stack.SourceRigId))
+        {
+            return stack.SourceRigId;
+        }
+
+        if (stack.Diagnostics.Any(static diagnostic =>
+                diagnostic.Code is "body_import_failed" or
+                    "invalid_skeletal_stack"))
+        {
+            return "Rig preparation failed";
+        }
+
+        return (stack.Roles & AnimationSourceRoles.Facial) != 0
+            ? "Facial-only (no skeletal rig)"
+            : "No skeletal animation";
     }
 }

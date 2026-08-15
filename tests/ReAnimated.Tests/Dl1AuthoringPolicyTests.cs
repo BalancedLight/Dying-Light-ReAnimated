@@ -1,5 +1,6 @@
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.Project;
 using ReAnimated.Evaluation;
 using ReAnimated.Retargeting.Ik;
 using ReAnimated.Retargeting.Mapping;
@@ -301,6 +302,96 @@ public sealed class Dl1AuthoringPolicyTests
         AssertVectorNear(
             new Vector3D(3.0, 1.0, 2.0),
             frame.AuthoredPose.GlobalMatrices[1].Translation);
+    }
+
+    [Theory]
+    [InlineData(
+        (int)(RetargetTransformComponents.Translation |
+              RetargetTransformComponents.Scale),
+        true,
+        false)]
+    [InlineData(
+        (int)(RetargetTransformComponents.Rotation |
+              RetargetTransformComponents.Scale),
+        false,
+        true)]
+    [InlineData(
+        (int)RetargetTransformComponents.Scale,
+        false,
+        false)]
+    [InlineData(
+        (int)RetargetTransformComponents.All,
+        true,
+        true)]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void RootMotionOwnershipUsesSchema3ComponentFlags(
+        int componentValue,
+        bool expectedTranslation,
+        bool expectedRotation)
+    {
+        var source = new RigDefinition(
+            "ownership-source",
+            "Ownership source",
+            [
+                new BoneDefinition(
+                    0,
+                    "source_pelvis",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    semanticRole: "body.pelvis"),
+            ]);
+        var target = new RigDefinition(
+            "ownership-target",
+            "Ownership target",
+            [
+                new BoneDefinition(
+                    0,
+                    "target_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    semanticRole: "root.skeletal"),
+                new BoneDefinition(
+                    1,
+                    "target_pelvis",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    semanticRole: "body.pelvis"),
+            ]);
+        var mapping = new RetargetMap(
+            source.Id,
+            target.Id,
+            [
+                new BoneMapEntry(
+                    0,
+                    1,
+                    BoneMappingMethod.Manual,
+                    1.0,
+                    isReviewed: true,
+                    transferPolicy: RetargetTransferPolicy.CopyLocal,
+                    componentPolicy:
+                        RetargetComponentPolicy.FullTransform,
+                    transformComponents:
+                        (RetargetTransformComponents)componentValue),
+            ],
+            reviewedTargetBindBoneIndices: [0]);
+
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source,
+            target,
+            mapping,
+            AnimationRootMode.Bip01,
+            targetRootBoneName: "target_root");
+
+        Assert.Equal(
+            expectedTranslation,
+            policy.RootMotion.TargetPoseOwnsTranslation);
+        Assert.Equal(
+            expectedRotation,
+            policy.RootMotion.TargetPoseOwnsRotation);
     }
 
     [Fact]

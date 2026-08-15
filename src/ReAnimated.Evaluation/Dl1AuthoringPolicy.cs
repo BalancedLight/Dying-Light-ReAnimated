@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.Project;
 using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.Evaluation;
@@ -202,10 +203,17 @@ public sealed class Dl1AuthoringPolicy
         RetargetMap? retargetMap,
         AnimationRootMode rootMode,
         string? targetRootBoneName = null,
-        Vector3D? worldUpAxis = null)
+        Vector3D? worldUpAxis = null,
+        DirectRigBinding? directRigBinding = null)
     {
         ArgumentNullException.ThrowIfNull(sourceRig);
         ArgumentNullException.ThrowIfNull(targetRig);
+        if (retargetMap is not null && directRigBinding is not null)
+        {
+            throw new ArgumentException(
+                "A DL1 authoring policy cannot use a retarget map and compatible direct binding together.");
+        }
+
         if (retargetMap is not null &&
             (!string.Equals(
                  retargetMap.SourceRigId,
@@ -220,6 +228,7 @@ public sealed class Dl1AuthoringPolicy
                 "The DL1 policy retarget map is not bound to the selected rigs.",
                 nameof(retargetMap));
         }
+        directRigBinding?.ValidateFor(sourceRig, targetRig);
 
         int targetRootBoneIndex = ResolveTargetRoot(
             targetRig,
@@ -235,6 +244,12 @@ public sealed class Dl1AuthoringPolicy
             retargetMap?.Entries.ToImmutableDictionary(
                 static entry => entry.TargetBoneIndex) ??
             ImmutableDictionary<int, BoneMapEntry>.Empty;
+        ImmutableDictionary<int, DirectBoneBinding> directEntriesByTarget =
+            directRigBinding?.Rows.ToImmutableDictionary(
+                static entry => entry.TargetBoneIndex) ??
+            ImmutableDictionary<int, DirectBoneBinding>.Empty;
+        bool exactDirectRigEvaluation =
+            retargetMap is null && directRigBinding is null;
         bool directRigEvaluation = retargetMap is null;
         (int sourceMotionBoneIndex,
          int targetPoseMotionBoneIndex,
@@ -243,6 +258,7 @@ public sealed class Dl1AuthoringPolicy
             sourceRig,
             targetRig,
             retargetMap,
+            directRigBinding,
             targetRootBoneIndex);
         var tracks = ImmutableArray.CreateBuilder<Dl1TargetTrackPolicy>(
             targetRig.BoneCount);
@@ -258,7 +274,7 @@ public sealed class Dl1AuthoringPolicy
                     $"Required DL1 helper '{targetBone.Name}' has no authoritative descriptor.");
             }
 
-            if (directRigEvaluation)
+            if (exactDirectRigEvaluation)
             {
                 if (targetBone.Index >= sourceRig.BoneCount)
                 {
@@ -270,6 +286,18 @@ public sealed class Dl1AuthoringPolicy
                     new(
                         targetBone.Index,
                         targetBone.Index,
+                        Dl1TargetTrackSource.Evaluated,
+                        targetBone.RequiredForExport,
+                        isHelper));
+            }
+            else if (directEntriesByTarget.TryGetValue(
+                         targetBone.Index,
+                         out DirectBoneBinding? directEntry))
+            {
+                tracks.Add(
+                    new(
+                        targetBone.Index,
+                        directEntry.SourceBoneIndex,
                         Dl1TargetTrackSource.Evaluated,
                         targetBone.RequiredForExport,
                         isHelper));
@@ -455,11 +483,24 @@ public sealed class Dl1AuthoringPolicy
         int TargetPoseMotionBoneIndex,
         bool TargetPoseOwnsTranslation,
         bool TargetPoseOwnsRotation) ResolveMotionOwnership(
-            RigDefinition sourceRig,
-            RigDefinition targetRig,
-            RetargetMap? retargetMap,
-            int targetRootBoneIndex)
+        RigDefinition sourceRig,
+        RigDefinition targetRig,
+        RetargetMap? retargetMap,
+        DirectRigBinding? directRigBinding,
+        int targetRootBoneIndex)
     {
+        if (directRigBinding is not null)
+        {
+            DirectBoneBinding? root = directRigBinding.Rows
+                .FirstOrDefault(row =>
+                    row.TargetBoneIndex == targetRootBoneIndex);
+            return (
+                root?.SourceBoneIndex ?? ResolveSourceRoot(sourceRig),
+                targetRootBoneIndex,
+                true,
+                true);
+        }
+
         if (retargetMap is null)
         {
             return (
@@ -505,14 +546,10 @@ public sealed class Dl1AuthoringPolicy
                 false);
         }
 
-        bool ownsTranslation = pelvis.ComponentPolicy is
-            RetargetComponentPolicy.FullTransform or
-            RetargetComponentPolicy.Translation or
-            RetargetComponentPolicy.RotationTranslation;
-        bool ownsRotation = pelvis.ComponentPolicy is
-            RetargetComponentPolicy.FullTransform or
-            RetargetComponentPolicy.Rotation or
-            RetargetComponentPolicy.RotationTranslation;
+        bool ownsTranslation = pelvis.TransformComponents.HasFlag(
+            RetargetTransformComponents.Translation);
+        bool ownsRotation = pelvis.TransformComponents.HasFlag(
+            RetargetTransformComponents.Rotation);
         return (
             pelvis.SourceBoneIndex,
             pelvis.TargetBoneIndex,

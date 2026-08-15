@@ -88,12 +88,18 @@ public sealed class EvaluationRequest
         IEnumerable<MorphEditLayer>? morphEditLayers = null,
         IEnumerable<IkConstraintLayer>? ikLayers = null,
         Dl1PreviewInputs? dl1PreviewInputs = null,
-        bool previewMotionAccumulationEnabled = false)
+        bool previewMotionAccumulationEnabled = false,
+        DirectRigBinding? directRigBinding = null)
     {
         ArgumentNullException.ThrowIfNull(sourceRig);
         ArgumentNullException.ThrowIfNull(targetRig);
         ArgumentNullException.ThrowIfNull(clip);
         ArgumentNullException.ThrowIfNull(previewProfile);
+        if (retargetMap is not null && directRigBinding is not null)
+        {
+            throw new ArgumentException(
+                "A retarget map and compatible direct binding are mutually exclusive.");
+        }
         if (!double.IsFinite(timeSeconds))
         {
             throw new ArgumentOutOfRangeException(nameof(timeSeconds));
@@ -116,6 +122,7 @@ public sealed class EvaluationRequest
         IkLayers = ikLayers?.ToImmutableArray() ?? [];
         Dl1PreviewInputs = dl1PreviewInputs ?? Dl1PreviewInputs.Empty;
         PreviewMotionAccumulationEnabled = previewMotionAccumulationEnabled;
+        DirectRigBinding = directRigBinding;
     }
 
     public RigDefinition SourceRig { get; }
@@ -129,6 +136,8 @@ public sealed class EvaluationRequest
     public PreviewProfile PreviewProfile { get; }
 
     public RetargetMap? RetargetMap { get; }
+
+    public DirectRigBinding? DirectRigBinding { get; }
 
     public ImmutableArray<BoneEditLayer> EditLayers { get; }
 

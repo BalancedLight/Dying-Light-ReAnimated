@@ -13,6 +13,8 @@
     "models",
     "animationSources",
     "animationVariants",
+    "animationLibraries",
+    "exportSelection",
     "animations",
     "workflow",
     "dl1Settings",
@@ -21,7 +23,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": 2
+      "const": 3
     },
     "format": {
       "const": "dl-reanimated-csharp-project"
@@ -60,6 +62,15 @@
       "items": {
         "$ref": "#/$defs/animationVariant"
       }
+    },
+    "animationLibraries": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/animationLibrary"
+      }
+    },
+    "exportSelection": {
+      "$ref": "#/$defs/exportSelection"
     },
     "animations": {
       "type": "array",
@@ -127,6 +138,308 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "animationLibraryImport": {
+      "type": "object",
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "projectLibrary",
+            "retailScript"
+          ]
+        },
+        "projectLibraryId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "retailScriptIdentity": {
+          "$ref": "#/$defs/retailIdentity"
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "projectLibrary"
+            }
+          },
+          "required": [
+            "projectLibraryId"
+          ],
+          "not": {
+            "required": [
+              "retailScriptIdentity"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "retailScript"
+            }
+          },
+          "required": [
+            "retailScriptIdentity"
+          ],
+          "not": {
+            "required": [
+              "projectLibraryId"
+            ]
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "animationLibrary": {
+      "type": "object",
+      "required": [
+        "id",
+        "resourceName",
+        "displayName",
+        "mode",
+        "imports",
+        "collisionPolicy"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "resourceName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^(?!\\.{1,2}$)(?!.*[\\\\/:])(?!.*\\.[^.]+$).+$",
+          "description": "Extensionless single-component type-322 resource identity."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "mode": {
+          "enum": [
+            "customAdditive",
+            "existingScriptExtension"
+          ]
+        },
+        "existingScriptIdentity": {
+          "$ref": "#/$defs/retailIdentity"
+        },
+        "imports": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/animationLibraryImport"
+          }
+        },
+        "collisionPolicy": {
+          "enum": [
+            "reject",
+            "replaceExisting"
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "mode": {
+                "const": "existingScriptExtension"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "then": {
+            "required": [
+              "existingScriptIdentity"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "existingScriptIdentity"
+              ]
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "animationSourcePresentation": {
+      "type": "object",
+      "required": [
+        "originKind",
+        "originName",
+        "projectAssetId"
+      ],
+      "properties": {
+        "originKind": {
+          "enum": [
+            "importedFbxRig",
+            "owningCustomModel",
+            "boundRetailModel",
+            "boundProjectModel",
+            "unresolvedLegacy"
+          ]
+        },
+        "originName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "owningModelId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "projectAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "sourceRigIdentity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "originKind": {
+                "const": "owningCustomModel"
+              }
+            },
+            "required": [
+              "originKind"
+            ]
+          },
+          "then": {
+            "required": [
+              "owningModelId"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "owningModelId"
+              ]
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    },
+    "exportSelection": {
+      "type": "object",
+      "required": [
+        "modelIds",
+        "animationVariantIds"
+      ],
+      "properties": {
+        "modelIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "animationVariantIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "directBoneBinding": {
+      "type": "object",
+      "required": [
+        "sourceBoneIndex",
+        "targetBoneIndex",
+        "sourceBoneName",
+        "targetBoneName",
+        "identityEvidence",
+        "parentTopologyMatches",
+        "localBindMatches",
+        "globalBindMatches"
+      ],
+      "properties": {
+        "sourceBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "targetBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sourceBoneName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "targetBoneName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityEvidence": {
+          "enum": [
+            "uniqueDescriptor",
+            "exactNormalizedName"
+          ]
+        },
+        "parentTopologyMatches": {
+          "const": true
+        },
+        "localBindMatches": {
+          "const": true
+        },
+        "globalBindMatches": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "directRigBinding": {
+      "type": "object",
+      "required": [
+        "sourceSkeletonSignature",
+        "targetSkeletonSignature",
+        "evidenceFingerprint",
+        "policy",
+        "rows"
+      ],
+      "properties": {
+        "sourceSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "targetSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "evidenceFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "policy": {
+          "const": "dlra-direct-rig-binding-v1"
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/directBoneBinding"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "workflow": {
       "type": "object",
       "required": [
@@ -181,6 +494,26 @@
         "rigSignature": {
           "type": "string",
           "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "authoringRigContractSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "animationSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "dl1OutputRigSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "dl1DescriptorInventoryFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "rootAnimationLibraryId": {
+          "type": "string",
+          "format": "uuid"
         },
         "morphSignature": {
           "type": "string",
@@ -245,6 +578,10 @@
           "type": "string",
           "pattern": "^[0-9A-Fa-f]{64}$"
         },
+        "sourceAnimationSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
         "roles": {
           "enum": [
             "body",
@@ -272,6 +609,7 @@
         "name",
         "sourceAssetId",
         "requiresSourceRebind",
+        "presentation",
         "frameRate",
         "frameCount",
         "sourceRigSignature"
@@ -301,6 +639,13 @@
         "legacySourceRigSignature": {
           "type": "string",
           "maxLength": 512
+        },
+        "sourceAnimationSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "presentation": {
+          "$ref": "#/$defs/animationSourcePresentation"
         },
         "mimicAssetId": {
           "type": "string",
@@ -339,6 +684,7 @@
         },
         "sourceRigSignature": {
           "type": "string",
+          "pattern": "^(?:|[0-9A-Fa-f]{64})$",
           "readOnly": true
         }
       },
@@ -374,6 +720,9 @@
         "name",
         "targetModelId",
         "targetRigId",
+        "bindingMode",
+        "owningAnimationLibraryId",
+        "outputAnm2Name",
         "rootMotionMode",
         "previewMotionAccumulationEnabled",
         "boneMappings",
@@ -408,6 +757,39 @@
         },
         "targetRigSignature": {
           "type": "string"
+        },
+        "targetAnimationSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "bindingMode": {
+          "enum": [
+            "exactDirect",
+            "compatibleDirect",
+            "retarget"
+          ]
+        },
+        "directBinding": {
+          "$ref": "#/$defs/directRigBinding"
+        },
+        "bindingEvidenceFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "bindingPolicyVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "owningAnimationLibraryId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "outputAnm2Name": {
+          "type": "string",
+          "minLength": 6,
+          "maxLength": 132,
+          "pattern": "^(?!\\.anm2$)[^\\\\/:]+\\.[aA][nN][mM]2$"
         },
         "mappingFingerprint": {
           "type": "string"
@@ -476,6 +858,35 @@
           "type": "boolean"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "bindingMode": {
+                "const": "compatibleDirect"
+              }
+            },
+            "required": [
+              "bindingMode"
+            ]
+          },
+          "then": {
+            "required": [
+              "targetAnimationSkeletonSignature",
+              "directBinding",
+              "bindingEvidenceFingerprint",
+              "bindingPolicyVersion"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "directBinding"
+              ]
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "modelsWorkspace": {
@@ -670,6 +1081,7 @@
         "targetRigId",
         "frameRate",
         "frameCount",
+        "bindingMode",
         "rootMotionMode",
         "boneMappings",
         "targetBindReviews",
@@ -732,6 +1144,33 @@
         },
         "targetRigSignature": {
           "type": "string"
+        },
+        "sourceAnimationSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "targetAnimationSkeletonSignature": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "bindingMode": {
+          "enum": [
+            "exactDirect",
+            "compatibleDirect",
+            "retarget"
+          ]
+        },
+        "directBinding": {
+          "$ref": "#/$defs/directRigBinding"
+        },
+        "bindingEvidenceFingerprint": {
+          "type": "string",
+          "pattern": "^[0-9A-Fa-f]{64}$"
+        },
+        "bindingPolicyVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
         },
         "mappingFingerprint": {
           "type": "string"
@@ -959,6 +1398,36 @@
           }
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "bindingMode": {
+                "const": "compatibleDirect"
+              }
+            },
+            "required": [
+              "bindingMode"
+            ]
+          },
+          "then": {
+            "required": [
+              "sourceAnimationSkeletonSignature",
+              "targetAnimationSkeletonSignature",
+              "directBinding",
+              "bindingEvidenceFingerprint",
+              "bindingPolicyVersion"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "directBinding"
+              ]
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "animationSourceBinding": {
@@ -995,12 +1464,12 @@
         },
         "sourceRigSignature": {
           "type": "string",
-          "pattern": "^[0-9A-Fa-f]{64}$"
+          "pattern": "^(?:|[0-9A-Fa-f]{64})$"
         },
         "retailSourceModelAssetId": {
           "type": "string",
           "format": "uuid",
-          "description": "Historical property name for the exact model asset used to partition ANM2. Schema 2 permits a fingerprinted retail model or project-owned custom-model asset."
+          "description": "Historical property name for the exact model asset used to partition ANM2. Schema 3 permits a fingerprinted retail model or project-owned custom-model asset."
         },
         "timingProvenance": {
           "enum": [
@@ -1026,6 +1495,32 @@
           "$ref": "#/$defs/anm2TrackPartition"
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "roles": {
+                "enum": [
+                  "body",
+                  "body, facial",
+                  "body, auxiliary",
+                  "body, facial, auxiliary"
+                ]
+              }
+            },
+            "required": [
+              "roles"
+            ]
+          },
+          "then": {
+            "properties": {
+              "sourceRigSignature": {
+                "pattern": "^[0-9A-Fa-f]{64}$"
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     },
     "anm2TrackPartition": {
@@ -1278,7 +1773,8 @@
         "scorerVersion",
         "evidenceFingerprint",
         "isLocked",
-        "isReviewed"
+        "isReviewed",
+        "transformComponents"
       ],
       "properties": {
         "sourceBoneName": {
@@ -1349,6 +1845,17 @@
             "translation",
             "rotationTranslation",
             "scale"
+          ]
+        },
+        "transformComponents": {
+          "enum": [
+            "translation",
+            "rotation",
+            "scale",
+            "translation, rotation",
+            "translation, scale",
+            "rotation, scale",
+            "all"
           ]
         }
       },

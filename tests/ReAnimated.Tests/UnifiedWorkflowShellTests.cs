@@ -425,23 +425,7 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
             Assert.IsType<ExternalFbxAnimationStackSelection>(
                 dialogs.SelectExternalFbxAnimationStacks(
                     "generic.fbx",
-                    rows,
-                    [
-                        new ExternalFbxTargetModelOption(
-                            Guid.NewGuid(),
-                            "Rigged",
-                            "Project custom model",
-                            "Rig ready",
-                            IsStatic: false,
-                            IsSelected: true),
-                        new ExternalFbxTargetModelOption(
-                            Guid.NewGuid(),
-                            "Static",
-                            "Base game reference",
-                            "Static model",
-                            IsStatic: true,
-                            IsSelected: true),
-                    ]));
+                    rows));
 
         Assert.Equal(
             new long[] { 1 },
@@ -449,29 +433,6 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         Assert.Equal(
             FbxFacialSourceValueUnit.Percent,
             selection.FacialSourceValueUnit);
-        Assert.Single(selection.TargetModelIds);
-    }
-
-    [Fact]
-    public void ExternalFbxTargetChecklistKeepsStaticModelsVisibleButDisabled()
-    {
-        Guid modelId = Guid.NewGuid();
-        var row = new ExternalFbxTargetSelectionRow(
-            new ExternalFbxTargetModelOption(
-                modelId,
-                "Static prop",
-                "Base game reference",
-                "Static model - preview/export only",
-                IsStatic: true,
-                IsSelected: true));
-
-        Assert.Equal(modelId, row.ModelId);
-        Assert.False(row.CanTarget);
-        Assert.False(row.IsSelected);
-
-        row.IsSelected = true;
-
-        Assert.False(row.IsSelected);
     }
 
     [Fact]
@@ -541,7 +502,7 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
 
         Assert.Equal(2, batch.Animations.Length);
         Assert.Null(batch.Mappings[0]);
-        Assert.NotNull(batch.Mappings[1]);
+        Assert.Null(batch.Mappings[1]);
         Assert.All(batch.Animations, animation =>
         {
             Assert.Equal(sourceAsset.Id, animation.SourceAssetId);
@@ -551,8 +512,12 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         });
         Assert.Empty(batch.Animations[0].BoneMappings);
         Assert.Null(batch.Animations[0].MappingFingerprint);
-        Assert.NotEmpty(batch.Animations[1].BoneMappings);
-        Assert.NotNull(batch.Animations[1].MappingFingerprint);
+        Assert.Empty(batch.Animations[1].BoneMappings);
+        Assert.Null(batch.Animations[1].MappingFingerprint);
+        Assert.Equal(
+            ProjectAnimationBindingMode.CompatibleDirect,
+            batch.Animations[1].BindingMode);
+        Assert.NotNull(batch.Animations[1].DirectBinding);
 
         var directModel = new ProjectModelEntry
         {
@@ -593,7 +558,7 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
     }
 
     [Fact]
-    public void MainWindowExposesModelFirstStagesAndArtifactReadiness()
+    public void MainWindowExposesDedicatedModelFirstWorkflowSurfaces()
     {
         string repository = LocateRepositoryRoot();
         string xaml = File.ReadAllText(Path.Combine(
@@ -604,20 +569,51 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
 
         Assert.Contains("CommandParameter=\"Models\"", xaml, StringComparison.Ordinal);
         Assert.Contains("CommandParameter=\"Animations\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding AddAnimationTargetsCommand}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("CommandParameter=\"Playback\"", xaml, StringComparison.Ordinal);
         Assert.Contains("CommandParameter=\"Retarget/Edit\"", xaml, StringComparison.Ordinal);
         Assert.Contains("CommandParameter=\"Export\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Content=\"FPP camera\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding ExportReadiness}\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("ItemsSource=\"{Binding ExportModelSelections}\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("Command=\"{Binding ExportCheckedPortableCommand}\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("Command=\"{Binding DeployCheckedToDeveloperToolsCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("ItemsSource=\"{Binding ExportReadiness}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("ItemsSource=\"{Binding ExportVariants}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding ExportFullProjectCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding DeployCurrentSelectionCommand}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding RollBackDeveloperToolsBatchCommand}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("SelectedItem=\"{Binding SelectedProjectModel}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("DataContext=\"{Binding TargetViewport}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("active animation source and every target variant remain unchanged", xaml, StringComparison.Ordinal);
-        Assert.Contains("Header=\"Face / FPP\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Header=\"Facial / FPP\"", xaml, StringComparison.Ordinal);
+        Assert.DoesNotContain("Header=\"Receipts\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("CommandParameter=\"Face\"", xaml, StringComparison.Ordinal);
+
+        string targetDialog = File.ReadAllText(Path.Combine(
+            repository,
+            "src",
+            "ReAnimated.App",
+            "Infrastructure",
+            "AnimationTargetSelectionDialog.xaml"));
+        Assert.Contains(
+            "Existing variants stay assigned",
+            targetDialog,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "IsEnabled=\"{Binding CanSelect}\"",
+            targetDialog,
+            StringComparison.Ordinal);
+        string mainViewModel = File.ReadAllText(Path.Combine(
+            repository,
+            "src",
+            "ReAnimated.App",
+            "ViewModels",
+            "MainWindowViewModel.cs"));
+        Assert.Contains(
+            "Target / Source FBX fallback",
+            mainViewModel,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Custom-model DL1-output UVs",
+            mainViewModel,
+            StringComparison.Ordinal);
 
         string stackDialog = File.ReadAllText(Path.Combine(
             repository,
@@ -699,7 +695,7 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         var ready = new ExportVariantSelectionViewModel(
             Guid.Parse("90000000-0000-0000-0000-000000000009"),
             "Ready",
-            "Ready - direct same-rig",
+            "Ready \u2014 direct owning model",
             isEnabled: true,
             isSelected: false);
         var model = new ExportModelSelectionViewModel(

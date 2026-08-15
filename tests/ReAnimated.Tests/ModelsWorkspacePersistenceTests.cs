@@ -100,8 +100,25 @@ public sealed class ModelsWorkspacePersistenceTests
         Assert.Contains(
             roundTripped.Assets,
             asset => asset == firstPackage);
-        Assert.Contains(source, roundTripped.AnimationSources);
-        Assert.Contains(variant, roundTripped.AnimationVariants);
+        ProjectAnimationSource preservedSource = Assert.Single(
+            roundTripped.AnimationSources,
+            animationSource => animationSource.Id == source.Id);
+        Assert.Equal(source.Name, preservedSource.Name);
+        Assert.Equal(source.SourceAssetId, preservedSource.SourceAssetId);
+        Assert.Equal(source.SourceBinding, preservedSource.SourceBinding);
+        Assert.NotNull(preservedSource.Presentation);
+        ProjectAnimationVariant preservedVariant = Assert.Single(
+            roundTripped.AnimationVariants,
+            animationVariant => animationVariant.Id == variant.Id);
+        Assert.Equal(variant.SourceId, preservedVariant.SourceId);
+        Assert.Equal(variant.Name, preservedVariant.Name);
+        Assert.Equal(variant.TargetModelId, preservedVariant.TargetModelId);
+        Assert.Equal(
+            variant.TargetRigSignature,
+            preservedVariant.TargetRigSignature);
+        Assert.NotNull(preservedVariant.OwningAnimationLibraryId);
+        Assert.False(string.IsNullOrWhiteSpace(
+            preservedVariant.OutputAnm2Name));
         ProjectAnimationSource secondEmbeddedSource = Assert.Single(
             roundTripped.AnimationSources,
             static animationSource =>
@@ -259,7 +276,15 @@ public sealed class ModelsWorkspacePersistenceTests
         ProjectModelEntry updatedModel = Assert.Single(roundTripped.Models);
         Assert.Equal(originalEntry.Id, updatedModel.Id);
         Assert.NotEqual(originalAssetId, updatedModel.AssetId);
-        Assert.Equal(replacementDocument.RigSignature, updatedModel.RigSignature);
+        string replacementRuntimeSignature = RigSignature.Compute(
+            replacement.Rig!);
+        Assert.Equal(replacementRuntimeSignature, updatedModel.RigSignature);
+        Assert.Equal(
+            replacementDocument.RigSignature,
+            updatedModel.AuthoringRigContractSignature);
+        Assert.Equal(
+            AnimationSkeletonSignature.Compute(replacement.Rig!),
+            updatedModel.AnimationSkeletonSignature);
         Assert.Null(updatedModel.PreviewCameraNodeName);
         Assert.Equal(1, updatedModel.ExportableEyeCameraHelperCount);
         Assert.Contains(roundTripped.Assets, asset => asset.Id == originalAssetId);
@@ -273,7 +298,9 @@ public sealed class ModelsWorkspacePersistenceTests
             roundTripped.AnimationVariants.Single(
                 animationVariant => animationVariant.Id == variantId);
         Assert.Equal(originalEntry.Id, updatedVariant.TargetModelId);
-        Assert.Equal(replacementDocument.RigSignature, updatedVariant.TargetRigSignature);
+        Assert.Equal(
+            replacementRuntimeSignature,
+            updatedVariant.TargetRigSignature);
         Assert.Null(updatedVariant.MappingFingerprint);
         ProjectBoneMapping staleBone = Assert.Single(updatedVariant.BoneMappings);
         Assert.False(staleBone.IsReviewed);

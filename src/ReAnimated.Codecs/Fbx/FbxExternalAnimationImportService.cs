@@ -68,6 +68,14 @@ public sealed record FbxExternalAnimationImportOptions
     public FbxCoreAnimationImportOptions Body { get; init; } = new();
 
     /// <summary>
+    /// External animation sources use the same bounded affine-to-TRS
+    /// projection as custom-model embedded stacks. The lower-level core
+    /// adapter remains strict by default; this workflow retries only a
+    /// diagnosed TRS-representation failure and reports the projection.
+    /// </summary>
+    public bool ProjectAffineShearToTrs { get; init; } = true;
+
+    /// <summary>
     /// Explicit DeformPercent interpretation. Percent is deliberately the UI
     /// workflow default; values are never inferred from their numeric range.
     /// </summary>
@@ -101,6 +109,10 @@ public sealed record FbxExternalAnimationImportResult(
 /// </summary>
 public static class FbxExternalAnimationImportService
 {
+    private sealed record BodyImportOutcome(
+        FbxCoreAnimationImportResult Result,
+        bool UsedAffineProjection);
+
     public static FbxExternalAnimationScanResult Scan(
         FbxBinaryDocument document,
         FbxExternalAnimationImportOptions? options = null,
@@ -293,11 +305,20 @@ public static class FbxExternalAnimationImportService
         {
             try
             {
-                body = FbxCoreAnimationAdapter.Import(
+                BodyImportOutcome importedBody = ImportBody(
                     document,
-                    BodyOptions(options, stack.Name),
+                    options,
+                    stack.Name,
                     cancellationToken);
+                body = importedBody.Result;
                 roles |= AnimationSourceRoles.Body;
+                if (importedBody.UsedAffineProjection)
+                {
+                    diagnostics.Add(new FbxExternalAnimationDiagnostic(
+                        "body_affine_trs_projection",
+                        FbxExternalAnimationDiagnosticSeverity.Warning,
+                        "The source rig contains authored affine shear. Its skeleton and animation samples use the deterministic orthonormal TRS projection used by custom-model animation stacks."));
+                }
             }
             catch (InvalidDataException exception)
             {
@@ -379,10 +400,11 @@ public static class FbxExternalAnimationImportService
         FbxFacialAnimationImportResult? facial = null;
         if ((row.Roles & AnimationSourceRoles.Body) != 0)
         {
-            body = FbxCoreAnimationAdapter.Import(
+            body = ImportBody(
                 document,
-                BodyOptions(options, row.Name),
-                cancellationToken);
+                options,
+                row.Name,
+                cancellationToken).Result;
         }
 
         if ((row.Roles & AnimationSourceRoles.Facial) != 0)
@@ -442,7 +464,54 @@ public static class FbxExternalAnimationImportService
     private static FbxCoreAnimationImportOptions BodyOptions(
         FbxExternalAnimationImportOptions options,
         string stackName) =>
-        options.Body with { AnimationStackName = stackName };
+        options.Body with
+        {
+            AnimationStackName = stackName,
+            // Projection is owned by this workflow so strict and projected
+            // outcomes remain distinguishable in its diagnostics.
+            ProjectAffineShearToTrs = false,
+        };
+
+    private static BodyImportOutcome ImportBody(
+        FbxBinaryDocument document,
+        FbxExternalAnimationImportOptions options,
+        string stackName,
+        CancellationToken cancellationToken)
+    {
+        FbxCoreAnimationImportOptions strictOptions =
+            BodyOptions(options, stackName);
+        try
+        {
+            return new BodyImportOutcome(
+                FbxCoreAnimationAdapter.Import(
+                    document,
+                    strictOptions,
+                    cancellationToken),
+                UsedAffineProjection: false);
+        }
+        catch (InvalidDataException exception) when (
+            options.ProjectAffineShearToTrs &&
+            IsTrsProjectionCandidate(exception))
+        {
+            FbxCoreAnimationImportResult projected =
+                FbxCoreAnimationAdapter.Import(
+                    document,
+                    strictOptions with
+                    {
+                        ProjectAffineShearToTrs = true,
+                    },
+                    cancellationToken);
+            return new BodyImportOutcome(
+                projected,
+                UsedAffineProjection: true);
+        }
+    }
+
+    private static bool IsTrsProjectionCandidate(
+        InvalidDataException exception) =>
+        exception.Message.Contains(
+            "cannot be represented as Core TRS",
+            StringComparison.Ordinal);
 
     private static FbxFacialAnimationImportOptions FacialOptions(
         FbxExternalAnimationImportOptions options,

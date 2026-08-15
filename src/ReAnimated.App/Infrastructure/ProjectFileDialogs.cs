@@ -28,6 +28,13 @@ public enum CustomModelPreviewCameraDecision
     Cancel,
 }
 
+public enum OwningAnimationOpenDecision
+{
+    PlayOnExistingModel,
+    AddAnotherTarget,
+    Cancel,
+}
+
 public sealed record LocalAnm2ImportPreflight(
     string AnimationName,
     string SourceModelName,
@@ -44,12 +51,9 @@ public sealed record LocalAnm2ImportPreflight(
 
 public sealed record ExternalFbxAnimationStackSelection(
     ImmutableArray<long> StackObjectIds,
-    FbxFacialSourceValueUnit FacialSourceValueUnit,
-    ImmutableArray<Guid> TargetModelIds)
+    FbxFacialSourceValueUnit FacialSourceValueUnit)
 {
     public const int MaximumSelectedStacks = 256;
-
-    public const int MaximumSelectedTargetModels = 32;
 
     public ExternalFbxAnimationStackSelection Validate()
     {
@@ -58,17 +62,12 @@ public sealed record ExternalFbxAnimationStackSelection(
             StackObjectIds.Any(static id => id <= 0) ||
             StackObjectIds.Distinct().Count() !=
                 StackObjectIds.Length ||
-            TargetModelIds.IsDefaultOrEmpty ||
-            TargetModelIds.Length > MaximumSelectedTargetModels ||
-            TargetModelIds.Any(static id => id == Guid.Empty) ||
-            TargetModelIds.Distinct().Count() !=
-                TargetModelIds.Length ||
             FacialSourceValueUnit is not (
                 FbxFacialSourceValueUnit.Normalized or
                 FbxFacialSourceValueUnit.Percent))
         {
             throw new ArgumentException(
-                $"An external FBX selection requires 1-{MaximumSelectedStacks} unique positive stack IDs, 1-{MaximumSelectedTargetModels} unique rigged target models, and an explicit facial source unit.");
+                $"An external FBX selection requires 1-{MaximumSelectedStacks} unique positive stack IDs and an explicit facial source unit.");
         }
 
         return this;
@@ -83,6 +82,34 @@ public sealed record ExternalFbxTargetModelOption(
     bool IsStatic,
     bool IsSelected);
 
+public sealed record AnimationTargetModelOption(
+    Guid ModelId,
+    string Name,
+    string Source,
+    string Contract,
+    string? UnavailableReason,
+    bool IsAlreadyAssigned);
+
+public sealed record AnimationTargetSelection(
+    ImmutableArray<Guid> TargetModelIds)
+{
+    public const int MaximumSelectedTargetModels = 32;
+
+    public AnimationTargetSelection Validate()
+    {
+        if (TargetModelIds.IsDefaultOrEmpty ||
+            TargetModelIds.Length > MaximumSelectedTargetModels ||
+            TargetModelIds.Any(static id => id == Guid.Empty) ||
+            TargetModelIds.Distinct().Count() != TargetModelIds.Length)
+        {
+            throw new ArgumentException(
+                $"An animation target selection requires 1-{MaximumSelectedTargetModels} unique project-model IDs.");
+        }
+
+        return this;
+    }
+}
+
 public interface IProjectFileDialogService
 {
     string? ShowOpenProjectDialog(string? initialPath);
@@ -92,29 +119,33 @@ public interface IProjectFileDialogService
     ExternalFbxAnimationStackSelection?
         SelectExternalFbxAnimationStacks(
             string sourceName,
-            IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks,
-            IReadOnlyList<ExternalFbxTargetModelOption> targetModels)
+            IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
         ArgumentNullException.ThrowIfNull(stacks);
-        ArgumentNullException.ThrowIfNull(targetModels);
         ImmutableArray<long> importable = stacks
             .Where(static stack => stack.CanImport)
+            .Take(ExternalFbxAnimationStackSelection.MaximumSelectedStacks)
             .Select(static stack => stack.StackObjectId)
             .ToImmutableArray();
-        ImmutableArray<Guid> targets = targetModels
-            .Where(static model => !model.IsStatic)
-            .Take(ExternalFbxAnimationStackSelection
-                .MaximumSelectedTargetModels)
-            .Select(static model => model.ModelId)
-            .ToImmutableArray();
-        return importable.IsEmpty || targets.IsEmpty
+        return importable.IsEmpty
             ? null
             : new ExternalFbxAnimationStackSelection(
                 importable,
-                FbxFacialSourceValueUnit.Percent,
-                targets);
+                FbxFacialSourceValueUnit.Percent).Validate();
     }
+
+    AnimationTargetSelection? SelectAnimationTargets(
+        string sourceName,
+        IReadOnlyList<AnimationTargetModelOption> targetModels) => null;
+
+    AnimationLibraryAssignmentResult? EditAnimationLibraryAssignment(
+        AnimationLibraryEditorRequest request) => null;
+
+    OwningAnimationOpenDecision ConfirmOwningAnimationOpen(
+        string animationName,
+        string modelName) =>
+        OwningAnimationOpenDecision.PlayOnExistingModel;
 
     LocalAnm2SourceBindingDecision ConfirmLocalAnm2SourceBinding(
         LocalAnm2ImportPreflight preflight) =>
@@ -300,15 +331,32 @@ public sealed class WindowsProjectFileDialogService :
     public ExternalFbxAnimationStackSelection?
         SelectExternalFbxAnimationStacks(
             string sourceName,
-            IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks,
-            IReadOnlyList<ExternalFbxTargetModelOption> targetModels)
+            IReadOnlyList<FbxExternalAnimationStackDescriptor> stacks)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
         ArgumentNullException.ThrowIfNull(stacks);
-        ArgumentNullException.ThrowIfNull(targetModels);
         var dialog = new ExternalFbxStackSelectionDialog(
             sourceName,
-            stacks,
+            stacks);
+        Window? owner = Application.Current?.MainWindow;
+        if (owner is { IsVisible: true })
+        {
+            dialog.Owner = owner;
+        }
+
+        return dialog.ShowDialog() == true
+            ? dialog.Selection
+            : null;
+    }
+
+    public AnimationTargetSelection? SelectAnimationTargets(
+        string sourceName,
+        IReadOnlyList<AnimationTargetModelOption> targetModels)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceName);
+        ArgumentNullException.ThrowIfNull(targetModels);
+        var dialog = new AnimationTargetSelectionDialog(
+            sourceName,
             targetModels);
         Window? owner = Application.Current?.MainWindow;
         if (owner is { IsVisible: true })
@@ -319,6 +367,47 @@ public sealed class WindowsProjectFileDialogService :
         return dialog.ShowDialog() == true
             ? dialog.Selection
             : null;
+    }
+
+    public AnimationLibraryAssignmentResult? EditAnimationLibraryAssignment(
+        AnimationLibraryEditorRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var dialog = new AnimationLibraryEditorDialog(request);
+        Window? owner = Application.Current?.MainWindow;
+        if (owner is { IsVisible: true })
+        {
+            dialog.Owner = owner;
+        }
+
+        return dialog.ShowDialog() == true
+            ? dialog.Result
+            : null;
+    }
+
+    public OwningAnimationOpenDecision ConfirmOwningAnimationOpen(
+        string animationName,
+        string modelName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(animationName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
+        MessageBoxResult result = MessageBox.Show(
+            $"'{animationName}' already plays directly on its owning model '{modelName}' and does not need retargeting.\n\n" +
+            "Yes: play on the existing model.\n" +
+            "No: assign this source to another project model.\n" +
+            "Cancel: remain in Animations.",
+            "Open animation",
+            MessageBoxButton.YesNoCancel,
+            MessageBoxImage.Question,
+            MessageBoxResult.Yes);
+        return result switch
+        {
+            MessageBoxResult.Yes =>
+                OwningAnimationOpenDecision.PlayOnExistingModel,
+            MessageBoxResult.No =>
+                OwningAnimationOpenDecision.AddAnotherTarget,
+            _ => OwningAnimationOpenDecision.Cancel,
+        };
     }
 
     public LocalAnm2SourceBindingDecision ConfirmLocalAnm2SourceBinding(
@@ -775,7 +864,7 @@ public sealed class WindowsProjectFileDialogService :
         return MessageBox.Show(
             $"The preflight passed for {artifactCount:N0} artifact(s) and {animationCount:N0} animation(s).\n\n" +
             $"Project: {projectRoot}\n\n" +
-            "Every destination is listed in the Build / diagnostics panel. Continue with the transactional deployment?",
+            "Every destination is listed in the Developer Tools export details. Continue with the transactional deployment?",
             "Deploy to Dying Light Developer Tools project",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question,

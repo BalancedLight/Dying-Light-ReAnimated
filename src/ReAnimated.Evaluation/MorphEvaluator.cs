@@ -17,7 +17,8 @@ public static class MorphEvaluator
         PreviewProfile previewProfile,
         EvaluationPurpose purpose,
         IEnumerable<MorphChannelBinding>? bindings = null,
-        IEnumerable<MorphEditLayer>? layers = null)
+        IEnumerable<MorphEditLayer>? layers = null,
+        bool allowImplicitIdentity = true)
     {
         ArgumentNullException.ThrowIfNull(sampledWeights);
         ArgumentNullException.ThrowIfNull(targetRig);
@@ -36,6 +37,7 @@ public static class MorphEvaluator
             sampledWeights,
             targetRig,
             bindingArray,
+            allowImplicitIdentity,
             diagnostics);
         ApplyLayers(
             authored,
@@ -74,6 +76,7 @@ public static class MorphEvaluator
         IReadOnlyDictionary<string, double> sampled,
         RigDefinition rig,
         ImmutableArray<MorphChannelBinding> bindings,
+        bool allowImplicitIdentity,
         ImmutableArray<EvaluationDiagnostic>.Builder diagnostics)
     {
         HashSet<string> inventory = rig.MorphChannels
@@ -83,6 +86,20 @@ public static class MorphEvaluator
             StringComparer.OrdinalIgnoreCase);
         if (bindings.IsEmpty)
         {
+            if (!allowImplicitIdentity)
+            {
+                foreach (string channel in sampled.Keys)
+                {
+                    diagnostics.Add(
+                        new(
+                            "morph_binding_required",
+                            EvaluationDiagnosticSeverity.Warning,
+                            $"Morph channel '{channel}' is unavailable on this target until an exact or reviewed facial binding is stored."));
+                }
+
+                return result;
+            }
+
             foreach ((string channel, double value) in sampled)
             {
                 if (!double.IsFinite(value))

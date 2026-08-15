@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Project;
 
 namespace ReAnimated.Retargeting.Mapping;
 
@@ -319,7 +320,7 @@ public static class RetargetSuggestionScorer
         {
             evidence.Add(new(
                 MappingEvidenceKind.TransferPolicyAgreement,
-                $"{entry.TransferPolicy}/{entry.ComponentPolicy} is a supported automatic policy for this row."));
+                $"{entry.TransferPolicy}/{entry.TransformComponents} is a supported automatic policy for this row."));
         }
 
         ImmutableArray<MappingEvidence> rows = evidence
@@ -356,7 +357,8 @@ public static class RetargetSuggestionScorer
             rows,
             origin,
             PolicyVersion,
-            fingerprint);
+            fingerprint,
+            entry.TransformComponents);
     }
 
     private static bool HasMappedParentAgreement(
@@ -496,11 +498,11 @@ public static class RetargetSuggestionScorer
     private static bool IsSupportedAutomaticPolicy(BoneMapEntry entry) =>
         entry.MappingKind == RetargetMappingKind.Bone &&
         ((entry.TransferPolicy == RetargetTransferPolicy.GlobalBindBasis &&
-          entry.ComponentPolicy == RetargetComponentPolicy.FullTransform) ||
+          entry.TransformComponents == RetargetTransformComponents.All) ||
          (entry.TransferPolicy is
               RetargetTransferPolicy.AnatomicalDirection or
               RetargetTransferPolicy.RotationDelta &&
-          entry.ComponentPolicy == RetargetComponentPolicy.Rotation));
+          entry.TransformComponents == RetargetTransformComponents.Rotation));
 
     private static BoneMapEntry Copy(
         BoneMapEntry entry,
@@ -520,7 +522,8 @@ public static class RetargetSuggestionScorer
             entry.Evidence,
             reviewOrigin,
             entry.ScorerVersion,
-            entry.EvidenceFingerprint);
+            entry.EvidenceFingerprint,
+            entry.TransformComponents);
 
     private static string ComputeEvidenceFingerprint(
         RigDefinition source,
@@ -539,7 +542,7 @@ public static class RetargetSuggestionScorer
         Append(hash, (int)entry.Method);
         Append(hash, (int)entry.MappingKind);
         Append(hash, (int)entry.TransferPolicy);
-        Append(hash, (int)entry.ComponentPolicy);
+        Append(hash, (int)entry.TransformComponents);
         Append(hash, BitConverter.DoubleToInt64Bits(confidence));
         foreach (MappingEvidence row in evidence
                      .OrderBy(static row => row.Kind)

@@ -421,7 +421,7 @@ public sealed class DeveloperToolsAnimationRefreshTests
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
-    public void ExportWorkspaceOwnsProminentRefreshRoutesAndPassiveReceipts()
+    public void ExportWorkspaceKeepsDeploymentSimpleAndDiagnosticsSecondary()
     {
         XDocument document = XDocument.Load(FindRepositoryFile(
             "src",
@@ -430,46 +430,68 @@ public sealed class DeveloperToolsAnimationRefreshTests
         XNamespace presentation =
             "http://schemas.microsoft.com/winfx/2006/xaml/presentation";
 
-        XElement refresh = Assert.Single(
-            document.Descendants(presentation + "Button"),
-            static element => string.Equals(
-                (string?)element.Attribute("Content"),
-                "Refresh / retry animations",
-                StringComparison.Ordinal));
-        Assert.Equal(
-            "{Binding Models.RequestDeveloperToolsAnimationRefreshCommand}",
-            (string?)refresh.Attribute("Command"));
-        XElement actionGrid = Assert.IsType<XElement>(refresh.Parent);
-        Assert.Contains(
-            actionGrid.Elements(presentation + "Button"),
-            static element => string.Equals(
-                (string?)element.Attribute("Command"),
-                "{Binding Models.DeployToDeveloperToolsProjectCommand}",
-                StringComparison.Ordinal));
-        Assert.Contains(
-            document.Descendants(presentation + "ComboBox"),
-            static element => string.Equals(
-                (string?)element.Attribute("ItemsSource"),
-                "{Binding Models.AnimationRefreshRoutes}",
-                StringComparison.Ordinal));
         Assert.DoesNotContain(
             document.Descendants().Attributes(),
             static attribute => attribute.Value.Contains(
                 "HostsClosedForDiagnostics",
                 StringComparison.Ordinal));
         Assert.Equal(
-            ["Artifacts", "Developer Tools", "Receipts"],
+            ["Files", "Developer Tools"],
             document.Descendants(presentation + "TabItem")
                 .Select(static element => (string?)element.Attribute("Header"))
                 .Where(static header => header is
-                    "Artifacts" or "Developer Tools" or "Receipts")
+                    "Files" or "Developer Tools")
                 .Cast<string>()
                 .ToArray());
+        Assert.DoesNotContain(
+            document.Descendants(presentation + "TabItem"),
+            static element => string.Equals(
+                (string?)element.Attribute("Header"),
+                "Receipts",
+                StringComparison.Ordinal));
         Assert.Contains(
-            document.Descendants(presentation + "TextBlock"),
-            static element => ((string?)element.Attribute("Text"))?.Contains(
-                "does not inspect, launch, attach",
-                StringComparison.OrdinalIgnoreCase) == true);
+            document.Descendants(presentation + "Expander"),
+            static element => string.Equals(
+                (string?)element.Attribute("Header"),
+                "Failure details and diagnostics",
+                StringComparison.Ordinal));
+        foreach (string mode in new[]
+                 {
+                     "Animations only",
+                     "Characters only",
+                     "ANM2 only",
+                     "Initial / full export",
+                 })
+        {
+            Assert.Contains(
+                document.Descendants().Where(static element =>
+                    element.Name.LocalName is "Button" or "ToggleButton"),
+                element => string.Equals(
+                    (string?)element.Attribute("Content"),
+                    mode,
+                    StringComparison.Ordinal));
+        }
+        XElement[] modeToggles = document
+            .Descendants(presentation + "ToggleButton")
+            .Where(static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding SelectDeveloperToolsExportModeCommand}",
+                StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(4, modeToggles.Length);
+        Assert.Equal(
+            ["AnimationsOnly", "CharactersOnly", "Anm2Only", "Full"],
+            modeToggles.Select(static element =>
+                (string?)element.Attribute("CommandParameter") ?? string.Empty));
+        XElement compiler = Assert.Single(
+            document.Descendants(presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding Models.SelectModelCompilerCommand}",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "{Binding IsCharacterCompilerRequired, Converter={StaticResource BooleanToVisibilityConverter}}",
+            (string?)compiler.Attribute("Visibility"));
     }
 
     private static string WriteManifest(string projectRoot, int schemaVersion = 2)

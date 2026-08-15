@@ -44,7 +44,8 @@ public sealed class AnimationDocument
         IEnumerable<IkConstraintLayer>? ikLayers = null,
         Dl1AuthoringPolicy? dl1AuthoringPolicy = null,
         FacialClipTiming? facialTiming = null,
-        bool previewMotionAccumulationEnabled = false)
+        bool previewMotionAccumulationEnabled = false,
+        DirectRigBinding? directRigBinding = null)
     {
         if (id == Guid.Empty)
         {
@@ -58,14 +59,21 @@ public sealed class AnimationDocument
         ArgumentNullException.ThrowIfNull(targetRig);
         ArgumentNullException.ThrowIfNull(bodyAnimation);
         ArgumentNullException.ThrowIfNull(previewProfile);
+        if (mapping is not null && directRigBinding is not null)
+        {
+            throw new ArgumentException(
+                "An animation document cannot use retarget and compatible-direct bindings together.");
+        }
         ValidateMapping(sourceRig, targetRig, mapping);
+        directRigBinding?.ValidateFor(sourceRig, targetRig);
         Dl1AuthoringPolicy resolvedDl1Policy =
             dl1AuthoringPolicy ??
             Dl1AuthoringPolicy.Create(
                 sourceRig,
                 targetRig,
                 mapping,
-                rootMode);
+                rootMode,
+                directRigBinding: directRigBinding);
         resolvedDl1Policy.ValidateFor(sourceRig, targetRig);
         if (resolvedDl1Policy.RootMotion.Mode != rootMode)
         {
@@ -129,6 +137,7 @@ public sealed class AnimationDocument
         BodyAnimation = bodyAnimation;
         MimicAnimation = mimicAnimation;
         Mapping = mapping;
+        DirectRigBinding = directRigBinding;
         RootMode = rootMode;
         PreviewProfile = previewProfile;
         EditLayers = edits;
@@ -156,6 +165,7 @@ public sealed class AnimationDocument
             sourceSignature,
             targetSignature,
             targetRig.SourceAssetFingerprint?.ContentSha256,
+            directRigBinding?.EvidenceFingerprint ??
             RetargetMapFingerprint.Compute(
                 sourceSignature,
                 targetSignature,
@@ -178,6 +188,8 @@ public sealed class AnimationDocument
     public AnimationClip SynchronizedAnimation { get; }
 
     public RetargetMap? Mapping { get; }
+
+    public DirectRigBinding? DirectRigBinding { get; }
 
     public RetargetMappingBinding MappingBinding { get; }
 
@@ -226,7 +238,8 @@ public sealed class AnimationDocument
             ikLayers: IkLayers,
             dl1PreviewInputs: dl1PreviewInputs,
             previewMotionAccumulationEnabled:
-                PreviewMotionAccumulationEnabled);
+                PreviewMotionAccumulationEnabled,
+            directRigBinding: DirectRigBinding);
 
     private static void ValidateMapping(
         RigDefinition source,

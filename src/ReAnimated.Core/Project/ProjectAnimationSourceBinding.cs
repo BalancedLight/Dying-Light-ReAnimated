@@ -90,11 +90,20 @@ public sealed record ProjectAnimationSourceBinding
                 parameterName);
         }
 
-        if (SourceRigSignature.Length != 64 ||
-            SourceRigSignature.Any(static character => !Uri.IsHexDigit(character)))
+        bool requiresSkeletalRig = (Roles & AnimationSourceRoles.Body) != 0;
+        bool hasRigSignature = !string.IsNullOrWhiteSpace(
+            SourceRigSignature);
+        bool mayOmitRigSignature =
+            Kind == AnimationSourceKind.LocalFbx &&
+            !requiresSkeletalRig;
+        if ((!hasRigSignature && !mayOmitRigSignature) ||
+            (hasRigSignature &&
+             (SourceRigSignature.Length != 64 ||
+              SourceRigSignature.Any(static character =>
+                  !Uri.IsHexDigit(character)))))
         {
             throw new ArgumentException(
-                "An animation source binding requires an exact source-rig SHA-256 signature.",
+                "A body animation source requires an exact source-rig SHA-256 signature; skeleton-free sources may omit it only when they have no body role.",
                 parameterName);
         }
 

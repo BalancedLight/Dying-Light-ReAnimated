@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using ReAnimated.Core.Domain;
 
 namespace ReAnimated.Core.Project;
 
@@ -18,6 +19,12 @@ public static class ProjectModelReimportReconciler
         ArgumentNullException.ThrowIfNull(replacementModel);
         ValidateOptionalSha256(
             replacementModel.RigSignature,
+            nameof(replacementModel));
+        ValidateOptionalSha256(
+            replacementModel.AuthoringRigContractSignature,
+            nameof(replacementModel));
+        ValidateOptionalSha256(
+            replacementModel.AnimationSkeletonSignature,
             nameof(replacementModel));
         ValidateOptionalSha256(
             replacementModel.MorphSignature,
@@ -41,40 +48,41 @@ public static class ProjectModelReimportReconciler
         }
 
         ProjectModelEntry previousModel = project.Models[modelIndex];
+        string? previousAuthoringContract =
+            previousModel.AuthoringRigContractSignature ??
+            previousModel.RigSignature;
+        string? replacementAuthoringContract =
+            replacementModel.AuthoringRigContractSignature ??
+            replacementModel.RigSignature;
         bool rigChanged = !string.Equals(
-            previousModel.RigSignature,
-            replacementModel.RigSignature,
+            previousAuthoringContract,
+            replacementAuthoringContract,
             StringComparison.OrdinalIgnoreCase);
         bool morphChanged = !string.Equals(
             previousModel.MorphSignature,
             replacementModel.MorphSignature,
             StringComparison.OrdinalIgnoreCase);
-        bool assetChanged =
-            previousModel.AssetId != replacementModel.AssetId;
-
         ImmutableArray<ProjectModelEntry> models = project.Models.SetItem(
             modelIndex,
             replacementModel);
-        if (!rigChanged && !morphChanged)
-        {
-            return project with
-            {
-                Models = models,
-                Animations = assetChanged
-                    ? RetargetCompatibilityAssets(
-                        project.Animations,
-                        previousModel.AssetId,
-                        replacementModel.AssetId)
-                    : project.Animations,
-            };
-        }
+        // Reimport replaces a model target. Existing animation sources remain
+        // immutable and continue to point at the exact package bytes from
+        // which they were sampled. ReconcileEmbeddedCustomModelStacks adds
+        // source records for checked stacks in the replacement package after
+        // this target-only reconciliation step.
+        ImmutableArray<ProjectAnimationSource> sources =
+            project.AnimationSources;
+        Dictionary<Guid, ProjectAnimationSource> sourceById = sources
+            .ToDictionary(static source => source.Id);
 
         ImmutableArray<ProjectAnimationVariant> variants = project
             .AnimationVariants
             .Select(variant => variant.TargetModelId == previousModel.Id
                 ? InvalidateVariant(
                     variant,
+                    sourceById.GetValueOrDefault(variant.SourceId),
                     replacementModel.RigSignature,
+                    replacementModel.AnimationSkeletonSignature,
                     rigChanged,
                     morphChanged)
                 : variant)
@@ -89,6 +97,7 @@ public static class ProjectModelReimportReconciler
                         animation,
                         replacementModel.AssetId,
                         replacementModel.RigSignature,
+                        replacementModel.AnimationSkeletonSignature,
                         rigChanged,
                         morphChanged)
                     : animation)
@@ -97,6 +106,7 @@ public static class ProjectModelReimportReconciler
         return project with
         {
             Models = models,
+            AnimationSources = sources,
             AnimationVariants = variants,
             Animations = compatibilityAnimations,
         };
@@ -104,15 +114,54 @@ public static class ProjectModelReimportReconciler
 
     private static ProjectAnimationVariant InvalidateVariant(
         ProjectAnimationVariant variant,
+        ProjectAnimationSource? source,
         string? replacementRigSignature,
+        string? replacementSkeletonSignature,
         bool rigChanged,
-        bool morphChanged) =>
-        variant with
+        bool morphChanged)
+    {
+        bool sourceKnown = source is not null;
+        bool exactSource = sourceKnown &&
+            string.Equals(
+                source!.SourceRigSignature,
+                replacementRigSignature,
+                StringComparison.OrdinalIgnoreCase);
+        bool compatibleEvidence = !rigChanged &&
+            HasCurrentCompatibleEvidence(
+                variant.BindingMode,
+                variant.DirectBinding,
+                source?.SourceAnimationSkeletonSignature,
+                replacementSkeletonSignature,
+                variant.BindingEvidenceFingerprint,
+                variant.BindingPolicyVersion);
+        bool preserveUnresolvedLegacy = !sourceKnown && !rigChanged;
+        bool staleDirect = sourceKnown && !exactSource &&
+            !compatibleEvidence &&
+            variant.BindingMode != ProjectAnimationBindingMode.Retarget;
+        return variant with
         {
-            TargetRigSignature = rigChanged
-                ? replacementRigSignature
-                : variant.TargetRigSignature,
-            MappingFingerprint = rigChanged
+            TargetRigSignature = replacementRigSignature,
+            TargetAnimationSkeletonSignature =
+                replacementSkeletonSignature,
+            BindingMode = exactSource
+                ? ProjectAnimationBindingMode.ExactDirect
+                : compatibleEvidence
+                    ? ProjectAnimationBindingMode.CompatibleDirect
+                    : preserveUnresolvedLegacy
+                        ? variant.BindingMode
+                        : ProjectAnimationBindingMode.Retarget,
+            DirectBinding = compatibleEvidence || preserveUnresolvedLegacy
+                ? variant.DirectBinding
+                : null,
+            BindingEvidenceFingerprint = compatibleEvidence ||
+                preserveUnresolvedLegacy
+                ? variant.BindingEvidenceFingerprint
+                : null,
+            BindingPolicyVersion = compatibleEvidence ||
+                preserveUnresolvedLegacy
+                ? variant.BindingPolicyVersion
+                : null,
+            MappingFingerprint = exactSource || rigChanged || staleDirect
                 ? null
                 : variant.MappingFingerprint,
             BoneMappings = rigChanged
@@ -125,20 +174,59 @@ public static class ProjectModelReimportReconciler
                 ? InvalidateMorphReviews(variant.MorphBindings)
                 : variant.MorphBindings,
         };
+    }
 
     private static ProjectAnimation InvalidateCompatibilityAnimation(
         ProjectAnimation animation,
         Guid replacementAssetId,
         string? replacementRigSignature,
+        string? replacementSkeletonSignature,
         bool rigChanged,
-        bool morphChanged) =>
-        animation with
+        bool morphChanged)
+    {
+        bool sourceKnown = !string.IsNullOrWhiteSpace(
+            animation.SourceRigSignature);
+        bool exactSource = sourceKnown && string.Equals(
+            animation.SourceRigSignature,
+            replacementRigSignature,
+            StringComparison.OrdinalIgnoreCase);
+        bool compatibleEvidence = !rigChanged &&
+            HasCurrentCompatibleEvidence(
+                animation.BindingMode,
+                animation.DirectBinding,
+                animation.SourceAnimationSkeletonSignature,
+                replacementSkeletonSignature,
+                animation.BindingEvidenceFingerprint,
+                animation.BindingPolicyVersion);
+        bool preserveUnresolvedLegacy = !sourceKnown && !rigChanged;
+        bool staleDirect = sourceKnown && !exactSource &&
+            !compatibleEvidence &&
+            animation.BindingMode != ProjectAnimationBindingMode.Retarget;
+        return animation with
         {
             TargetAssetId = replacementAssetId,
-            TargetRigSignature = rigChanged
-                ? replacementRigSignature
-                : animation.TargetRigSignature,
-            MappingFingerprint = rigChanged
+            TargetRigSignature = replacementRigSignature,
+            TargetAnimationSkeletonSignature =
+                replacementSkeletonSignature,
+            BindingMode = exactSource
+                ? ProjectAnimationBindingMode.ExactDirect
+                : compatibleEvidence
+                    ? ProjectAnimationBindingMode.CompatibleDirect
+                    : preserveUnresolvedLegacy
+                        ? animation.BindingMode
+                        : ProjectAnimationBindingMode.Retarget,
+            DirectBinding = compatibleEvidence || preserveUnresolvedLegacy
+                ? animation.DirectBinding
+                : null,
+            BindingEvidenceFingerprint = compatibleEvidence ||
+                preserveUnresolvedLegacy
+                ? animation.BindingEvidenceFingerprint
+                : null,
+            BindingPolicyVersion = compatibleEvidence ||
+                preserveUnresolvedLegacy
+                ? animation.BindingPolicyVersion
+                : null,
+            MappingFingerprint = exactSource || rigChanged || staleDirect
                 ? null
                 : animation.MappingFingerprint,
             BoneMappings = rigChanged
@@ -151,21 +239,33 @@ public static class ProjectModelReimportReconciler
                 ? InvalidateMorphReviews(animation.MorphBindings)
                 : animation.MorphBindings,
         };
+    }
 
-    private static ImmutableArray<ProjectAnimation>
-        RetargetCompatibilityAssets(
-            ImmutableArray<ProjectAnimation> animations,
-            Guid previousAssetId,
-            Guid replacementAssetId) =>
-        animations
-            .Select(animation =>
-                animation.TargetAssetId == previousAssetId
-                    ? animation with
-                    {
-                        TargetAssetId = replacementAssetId,
-                    }
-                    : animation)
-            .ToImmutableArray();
+    private static bool HasCurrentCompatibleEvidence(
+        ProjectAnimationBindingMode bindingMode,
+        DirectRigBinding? directBinding,
+        string? sourceSkeletonSignature,
+        string? targetSkeletonSignature,
+        string? evidenceFingerprint,
+        string? policyVersion) =>
+        bindingMode == ProjectAnimationBindingMode.CompatibleDirect &&
+        directBinding is not null &&
+        string.Equals(
+            sourceSkeletonSignature,
+            directBinding.SourceSkeletonSignature,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            targetSkeletonSignature,
+            directBinding.TargetSkeletonSignature,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            evidenceFingerprint,
+            directBinding.EvidenceFingerprint,
+            StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(
+            policyVersion,
+            directBinding.Policy,
+            StringComparison.Ordinal);
 
     private static void ValidateOptionalSha256(
         string? value,

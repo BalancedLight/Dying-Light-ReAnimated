@@ -270,6 +270,7 @@ public sealed class AssetItemViewModel : ObservableObject
 public sealed class AnimationLibraryItemViewModel : ObservableObject
 {
     private string _name;
+    private bool _includeInPackage;
 
     public AnimationLibraryItemViewModel(
         Guid id,
@@ -289,7 +290,11 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
             TargetBindingStatus.Invalid,
         bool showVariantGroupHeader = false,
         bool isSourceOnly = false,
-        bool isRuntimeAvailable = true)
+        bool isRuntimeAvailable = true,
+        string? primaryScript = null,
+        string? effectiveScripts = null,
+        string? outputName = null,
+        bool includeInExport = true)
     {
         if (id == Guid.Empty)
         {
@@ -320,6 +325,12 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
         ShowVariantGroupHeader = showVariantGroupHeader;
         IsSourceOnly = isSourceOnly;
         IsRuntimeAvailable = isRuntimeAvailable;
+        PrimaryScript = primaryScript ?? string.Empty;
+        EffectiveScripts = effectiveScripts ?? string.Empty;
+        OutputName = string.IsNullOrWhiteSpace(outputName)
+            ? _name
+            : outputName.Trim();
+        _includeInPackage = includeInExport;
     }
 
     public Guid Id { get; }
@@ -338,6 +349,13 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
 
     public string SourceModel { get; }
 
+    /// <summary>
+    /// User-facing origin identity.  The historical SourceModel property is
+    /// retained for bindings and serialized UI snapshots created before the
+    /// animation-centric table was introduced.
+    /// </summary>
+    public string OriginModel => SourceModel;
+
     public string TargetModel { get; }
 
     public string Roles { get; }
@@ -347,6 +365,8 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
     public string Duration { get; }
 
     public string MappingState { get; }
+
+    public string BindingState => MappingState;
 
     public string Diagnostics { get; }
 
@@ -365,6 +385,26 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
     public bool IsSourceOnly { get; }
 
     public bool IsRuntimeAvailable { get; }
+
+    public string PrimaryScript { get; }
+
+    public string EffectiveScripts { get; }
+
+    public string OutputName { get; }
+
+    public bool IncludeInPackage
+    {
+        get => _includeInPackage;
+        set
+        {
+            if (SetProperty(ref _includeInPackage, value))
+            {
+                OnPropertyChanged(nameof(IncludeInExport));
+            }
+        }
+    }
+
+    public bool IncludeInExport => IncludeInPackage;
 }
 
 public sealed class ProjectModelItemViewModel
@@ -408,13 +448,27 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
         string name,
         string readiness,
         bool isEnabled,
-        bool isSelected)
+        bool isSelected,
+        string? originModel = null,
+        string? targetModel = null,
+        string? primaryScript = null,
+        string? effectiveScripts = null,
+        string? outputName = null,
+        string? bindingState = null)
     {
         AnimationId = animationId;
         Name = name ?? string.Empty;
         Readiness = readiness ?? string.Empty;
         IsEnabled = isEnabled;
         _isSelected = isEnabled && isSelected;
+        OriginModel = originModel ?? string.Empty;
+        TargetModel = targetModel ?? string.Empty;
+        PrimaryScript = primaryScript ?? string.Empty;
+        EffectiveScripts = effectiveScripts ?? string.Empty;
+        OutputName = string.IsNullOrWhiteSpace(outputName)
+            ? Name
+            : outputName.Trim();
+        BindingState = bindingState ?? string.Empty;
     }
 
     public Guid AnimationId { get; }
@@ -422,6 +476,18 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
     public string Name { get; }
 
     public string Readiness { get; }
+
+    public string OriginModel { get; }
+
+    public string TargetModel { get; }
+
+    public string PrimaryScript { get; }
+
+    public string EffectiveScripts { get; }
+
+    public string OutputName { get; }
+
+    public string BindingState { get; }
 
     public bool IsEnabled { get; }
 
@@ -1966,13 +2032,52 @@ public sealed class IkConstraintEditorViewModel : ObservableObject
     }
 }
 
+public sealed record RetargetTransferPolicyOption(
+    RetargetTransferPolicy Value,
+    string Label,
+    string Description);
+
 public sealed class BoneMappingViewModel : ObservableObject
 {
+    private static readonly IReadOnlyList<RetargetTransferPolicyOption>
+        TransferPolicyOptionValues =
+        [
+            new(
+                RetargetTransferPolicy.GlobalBindBasis,
+                "Global bind basis",
+                "Transfers the source bind-relative transform in model space."),
+            new(
+                RetargetTransferPolicy.RestRelative,
+                "Rest-relative",
+                "Applies the source local rest-pose delta to the target bind transform."),
+            new(
+                RetargetTransferPolicy.RotationDelta,
+                "Local rotation delta",
+                "Transfers only the source local bind-relative rotation basis."),
+            new(
+                RetargetTransferPolicy.CopyLocal,
+                "Copy source local",
+                "Copies the source local transform before component filtering."),
+            new(
+                RetargetTransferPolicy.Bind,
+                "Keep target bind",
+                "Keeps the target bind transform for the selected components."),
+            new(
+                RetargetTransferPolicy.GlobalRotationDelta,
+                "Model-space rotation delta",
+                "Transfers bind-relative rotation in model space through the target parent."),
+            new(
+                RetargetTransferPolicy.AnatomicalDirection,
+                "Anatomical direction",
+                "Solves supported humanoid orientation from animated joint directions."),
+        ];
+
     private string? _targetBone;
     private bool _isLocked;
     private bool _isReviewed;
     private RetargetTransferPolicy _transferPolicy;
     private RetargetComponentPolicy _componentPolicy;
+    private RetargetTransformComponents _transformComponents;
 
     public BoneMappingViewModel(
         string sourceBone,
@@ -1991,7 +2096,8 @@ public sealed class BoneMappingViewModel : ObservableObject
         ProjectMappingReviewOrigin reviewOrigin =
             ProjectMappingReviewOrigin.None,
         string scorerVersion = "unscored-v1",
-        string evidenceFingerprint = "")
+        string evidenceFingerprint = "",
+        RetargetTransformComponents? transformComponents = null)
     {
         SourceBone = sourceBone;
         _targetBone = targetBone;
@@ -1999,7 +2105,24 @@ public sealed class BoneMappingViewModel : ObservableObject
         Status = status;
         MappingKind = mappingKind;
         _transferPolicy = transferPolicy;
-        _componentPolicy = componentPolicy;
+        _transformComponents = transformComponents ??
+            RetargetTransformComponentsCompatibility.FromLegacy(
+                componentPolicy);
+        if (_transformComponents == RetargetTransformComponents.None ||
+            (_transformComponents & ~RetargetTransformComponents.All) !=
+                RetargetTransformComponents.None)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(transformComponents),
+                "A mapping row must transfer at least one supported transform component.");
+        }
+
+        _componentPolicy =
+            RetargetTransformComponentsCompatibility.TryToLegacy(
+                _transformComponents,
+                out RetargetComponentPolicy compatiblePolicy)
+                ? compatiblePolicy
+                : componentPolicy;
         Evidence = evidence ?? string.Empty;
         ReviewOrigin = reviewOrigin;
         ScorerVersion = scorerVersion ?? string.Empty;
@@ -2029,6 +2152,22 @@ public sealed class BoneMappingViewModel : ObservableObject
     public string EvidenceSummary =>
         $"{Confidence:P0} | {ReviewOrigin} | {ScorerVersion}\n{Evidence}";
 
+    public string EvidenceMethod =>
+        $"{CompactMethodLabel} · {Confidence:P0}";
+
+    private string CompactMethodLabel => Status switch
+    {
+        nameof(BoneMappingMethod.DescriptorHash) => "Descriptor",
+        nameof(BoneMappingMethod.ExactName) => "Exact",
+        nameof(BoneMappingMethod.NormalizedName) => "Normalized",
+        nameof(BoneMappingMethod.Semantic) => "Semantic",
+        nameof(BoneMappingMethod.Structural) => "Structural",
+        nameof(BoneMappingMethod.Manual) => "Manual",
+        nameof(BoneMappingMethod.Composed) => "Composed",
+        nameof(BoneMappingMethod.Distributed) => "Distributed",
+        _ => Status,
+    };
+
     public RetargetMappingKind MappingKind { get; }
 
     public string MappingKindLabel =>
@@ -2043,6 +2182,22 @@ public sealed class BoneMappingViewModel : ObservableObject
         TransferPolicies
     { get; } =
             Enum.GetValues<RetargetTransferPolicy>();
+
+    public IReadOnlyList<RetargetTransferPolicyOption>
+        TransferPolicyOptions { get; } = TransferPolicyOptionValues;
+
+    public RetargetTransferPolicyOption SelectedTransferPolicyOption
+    {
+        get => TransferPolicyOptionValues.First(option =>
+            option.Value == TransferPolicy);
+        set
+        {
+            if (value is not null)
+            {
+                TransferPolicy = value.Value;
+            }
+        }
+    }
 
     public IReadOnlyList<RetargetComponentPolicy>
         ComponentPolicies
@@ -2066,6 +2221,7 @@ public sealed class BoneMappingViewModel : ObservableObject
             if (SetProperty(ref _targetBone, value))
             {
                 OnPropertyChanged(nameof(HasTarget));
+                OnPropertyChanged(nameof(RequiresExplicitReview));
                 OnPropertyChanged(nameof(ReviewState));
             }
         }
@@ -2076,13 +2232,67 @@ public sealed class BoneMappingViewModel : ObservableObject
     public RetargetTransferPolicy TransferPolicy
     {
         get => _transferPolicy;
-        set => SetProperty(ref _transferPolicy, value);
+        set
+        {
+            if (SetProperty(ref _transferPolicy, value))
+            {
+                OnPropertyChanged(nameof(SelectedTransferPolicyOption));
+                OnPropertyChanged(nameof(RequiresExplicitReview));
+                OnPropertyChanged(nameof(ReviewState));
+            }
+        }
     }
 
     public RetargetComponentPolicy ComponentPolicy
     {
         get => _componentPolicy;
-        set => SetProperty(ref _componentPolicy, value);
+        set
+        {
+            if (!Enum.IsDefined(value))
+            {
+                return;
+            }
+
+            TransformComponents =
+                RetargetTransformComponentsCompatibility.FromLegacy(
+                    value);
+        }
+    }
+
+    public RetargetTransformComponents TransformComponents
+    {
+        get => _transformComponents;
+        set => SetTransformComponents(value);
+    }
+
+    public bool IsTranslationEnabled
+    {
+        get => TransformComponents.HasFlag(
+            RetargetTransformComponents.Translation);
+        set => SetTransformComponent(
+            RetargetTransformComponents.Translation,
+            value,
+            nameof(IsTranslationEnabled));
+    }
+
+    public bool IsRotationEnabled
+    {
+        get => TransformComponents.HasFlag(
+            RetargetTransformComponents.Rotation);
+        set => SetTransformComponent(
+            RetargetTransformComponents.Rotation,
+            value,
+            nameof(IsRotationEnabled));
+    }
+
+    public bool IsScaleEnabled
+    {
+        get => TransformComponents.HasFlag(
+            RetargetTransformComponents.Scale);
+        set => SetTransformComponent(
+            RetargetTransformComponents.Scale,
+            value,
+            nameof(IsScaleEnabled));
     }
 
     public bool RequiresExplicitReview =>
@@ -2102,17 +2312,64 @@ public sealed class BoneMappingViewModel : ObservableObject
             RetargetMappingKind.Bone =>
                 TransferPolicy ==
                     RetargetTransferPolicy.GlobalBindBasis &&
-                ComponentPolicy ==
-                    RetargetComponentPolicy.FullTransform,
+                TransformComponents ==
+                    RetargetTransformComponents.All,
             RetargetMappingKind.HelperOverride =>
                 TransferPolicy ==
                     RetargetTransferPolicy.RestRelative &&
-                ComponentPolicy ==
-                    RetargetMapBuilder
-                        .GetDefaultHelperComponentPolicy(
-                            TargetBone ?? SourceBone),
+                TransformComponents ==
+                    RetargetTransformComponentsCompatibility.FromLegacy(
+                        RetargetMapBuilder
+                            .GetDefaultHelperComponentPolicy(
+                                TargetBone ?? SourceBone)),
             _ => false,
         };
+
+    private void SetTransformComponent(
+        RetargetTransformComponents component,
+        bool enabled,
+        string propertyName)
+    {
+        RetargetTransformComponents next = enabled
+            ? _transformComponents | component
+            : _transformComponents & ~component;
+        if (next == RetargetTransformComponents.None)
+        {
+            // Every mapping row must own at least one component. Tell the
+            // binding to restore the checked state after rejecting the edit.
+            OnPropertyChanged(propertyName);
+            return;
+        }
+
+        SetTransformComponents(next);
+    }
+
+    private void SetTransformComponents(
+        RetargetTransformComponents value)
+    {
+        if (value == RetargetTransformComponents.None ||
+            (value & ~RetargetTransformComponents.All) !=
+                RetargetTransformComponents.None ||
+            _transformComponents == value)
+        {
+            return;
+        }
+
+        _transformComponents = value;
+        _componentPolicy =
+            RetargetTransformComponentsCompatibility.TryToLegacy(
+                value,
+                out RetargetComponentPolicy compatiblePolicy)
+                ? compatiblePolicy
+                : RetargetComponentPolicy.FullTransform;
+        OnPropertyChanged(nameof(TransformComponents));
+        OnPropertyChanged(nameof(ComponentPolicy));
+        OnPropertyChanged(nameof(IsTranslationEnabled));
+        OnPropertyChanged(nameof(IsRotationEnabled));
+        OnPropertyChanged(nameof(IsScaleEnabled));
+        OnPropertyChanged(nameof(RequiresExplicitReview));
+        OnPropertyChanged(nameof(ReviewState));
+    }
 
     public string ReviewState =>
         !HasTarget

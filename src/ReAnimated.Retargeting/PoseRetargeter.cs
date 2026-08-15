@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.Project;
 using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.Retargeting;
@@ -377,34 +378,28 @@ public static class PoseRetargeter
         };
 
         TransformTRS basis = targetBind.LocalTransforms[targetIndex];
-        TransformTRS merged = entry.ComponentPolicy switch
+        RetargetTransformComponents components =
+            entry.TransformComponents;
+        TransformTRS merged = basis with
         {
-            RetargetComponentPolicy.FullTransform => candidate,
-            RetargetComponentPolicy.Rotation => basis with
-            {
-                Rotation = candidate.Rotation,
-            },
-            RetargetComponentPolicy.Translation => basis with
-            {
-                Translation = candidate.Translation,
-            },
-            RetargetComponentPolicy.RotationTranslation => basis with
-            {
-                Translation = candidate.Translation,
-                Rotation = candidate.Rotation,
-            },
-            RetargetComponentPolicy.Scale => basis with
-            {
-                Scale = candidate.Scale,
-            },
-            _ => throw new InvalidOperationException(
-                $"Unsupported retarget component policy '{entry.ComponentPolicy}'."),
+            Translation = components.HasFlag(
+                RetargetTransformComponents.Translation)
+                    ? candidate.Translation
+                    : basis.Translation,
+            Rotation = components.HasFlag(
+                RetargetTransformComponents.Rotation)
+                    ? candidate.Rotation
+                    : basis.Rotation,
+            Scale = components.HasFlag(
+                RetargetTransformComponents.Scale)
+                    ? candidate.Scale
+                    : basis.Scale,
         };
         return RequireValidLocal(
             merged,
             targetIndex,
             entry.TransferPolicy,
-            entry.ComponentPolicy);
+            components);
     }
 
     private static TransformTRS EvaluateGlobalBindBasis(
@@ -632,7 +627,7 @@ public static class PoseRetargeter
                 matrix.Decompose(),
                 targetIndex,
                 transferPolicy,
-                RetargetComponentPolicy.FullTransform);
+                RetargetTransformComponents.All);
         }
         catch (InvalidOperationException exception)
         {
@@ -653,7 +648,7 @@ public static class PoseRetargeter
         TransformTRS transform,
         int targetIndex,
         RetargetTransferPolicy transferPolicy,
-        RetargetComponentPolicy componentPolicy)
+        RetargetTransformComponents transformComponents)
     {
         if (!transform.IsFinite ||
             Math.Abs(transform.Scale.X) <= 1e-12 ||
@@ -661,7 +656,7 @@ public static class PoseRetargeter
             Math.Abs(transform.Scale.Z) <= 1e-12)
         {
             throw new InvalidOperationException(
-                $"Retarget policies '{transferPolicy}'/'{componentPolicy}' produced a non-finite or singular local transform for target bone {targetIndex}.");
+                $"Retarget policies '{transferPolicy}'/'{transformComponents}' produced a non-finite or singular local transform for target bone {targetIndex}.");
         }
 
         return transform.Normalized();

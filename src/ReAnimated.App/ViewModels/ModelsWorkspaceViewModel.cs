@@ -34,8 +34,13 @@ internal sealed record ModelsWorkspacePersistencePayload(
     Guid ModelId,
     string SuggestedFileName,
     ImmutableArray<byte> PackageBytes,
-    string RigSignature,
+    string? RuntimeRigSignature,
+    string AuthoringRigContractSignature,
+    string? AnimationSkeletonSignature,
+    string? Dl1OutputRigSignature,
+    string? Dl1DescriptorInventoryFingerprint,
     string MorphSignature,
+    string? AnimationScriptAlias,
     string? PreviewCameraNodeName,
     int ExportableEyeCameraHelperCount,
     string? RigId,
@@ -637,7 +642,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     MarkAuthoringChanged();
                 }
 
-                RefreshPreview();
+                // A skinned mesh still needs its evaluated skeleton palette
+                // when the hierarchy overlay is hidden.  ShowBones is a
+                // presentation toggle only; rebuilding the preview without a
+                // skeleton makes every skinned draw lose its deformation
+                // source and disappear.
+                ApplySkeletonVisibility();
             }
         }
     }
@@ -1833,6 +1843,23 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
         SyncDocument();
         CustomModelPackage package = _model.Package;
+        Dl1PreparedAuthoredRig? dl1Output = null;
+        if (_model.Rig is not null)
+        {
+            try
+            {
+                dl1Output = Dl1CustomModelRigPreparer.Prepare(_model);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or
+                InvalidDataException or
+                InvalidOperationException or
+                OverflowException)
+            {
+                BuildStatus =
+                    $"DL1 output is not ready: {exception.Message}";
+            }
+        }
         string portableName = Dl1SourceModelWriter.SanitizeName(
             string.IsNullOrWhiteSpace(ResourceName)
                 ? package.Document.Name
@@ -1842,8 +1869,19 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             package.Document.ModelId,
             $"{portableName}.dlrmodel",
             CustomModelPackageSerializer.Serialize(package),
+            _model.Rig is null
+                ? null
+                : RigSignature.Compute(_model.Rig),
             package.Document.RigSignature,
+            _model.Rig is null
+                ? null
+                : AnimationSkeletonSignature.Compute(_model.Rig),
+            dl1Output is null
+                ? null
+                : RigSignature.Compute(dl1Output.PreviewRig),
+            dl1Output?.Contract.DescriptorFingerprint,
             package.Document.MorphSignature,
+            package.Document.BuildSettings.AnimationScriptAlias,
             package.Document.Camera.ActivePreviewNodeName,
             package.Document.CreateEffectiveBones().Count(static bone =>
                 bone.Kind == BoneKind.Camera &&
@@ -2342,9 +2380,11 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             replacePreparedScene = false;
         }
 
-        SkeletonRenderData? skeleton = ShowBones
-            ? session.CreateSkeleton(clip, frame, SelectedBone?.Index)
-            : null;
+        // Always retain the evaluated skeleton for skinning. Overlay
+        // visibility is carried separately by SkeletonRenderData's role
+        // flags and applied below.
+        SkeletonRenderData? skeleton =
+            session.CreateSkeleton(clip, frame, SelectedBone?.Index);
         if (replacePreparedScene)
         {
             Viewport.SceneSource.SetScene(

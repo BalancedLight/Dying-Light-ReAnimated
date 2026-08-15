@@ -1,10 +1,14 @@
+using System.Buffers.Binary;
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using ReAnimated.App.Infrastructure;
+using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
+using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.Tests;
 
@@ -30,6 +34,60 @@ public sealed class CustomModelPreviewSessionTests
         Assert.Equal(CustomModelPreviewMode.Dl1Output, dl1.EffectiveMode);
         Assert.True(dl1.AppliesTextureCoordinateVFlip);
         Assert.Equal(0.75f, dl1.Meshes[0].Vertices.Span[0].TextureCoordinate.Y, precision: 6);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void AnimationTargetUsesIndependentDl1OutputPresentation()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(
+            flipTextureCoordinateV: true);
+        byte[] sourceFbxBefore = model.Package.SourceFbx.ToArray();
+        CustomModelPreviewSession source =
+            CustomModelPreviewAdapter.CreateSession(
+                model,
+                CustomModelPreviewMode.SourceFbx);
+        CustomModelPreviewSession authoring =
+            CustomModelPreviewAdapter.CreateSession(
+                model,
+                CustomModelPreviewMode.Dl1Output);
+        CustomModelPreviewSession target =
+            MainWindowViewModel.CreateCustomModelAnimationTargetPreview(
+                model);
+
+        Assert.Equal(CustomModelPreviewMode.SourceFbx, source.EffectiveMode);
+        Assert.Equal(CustomModelPreviewMode.Dl1Output, target.RequestedMode);
+        Assert.Equal(CustomModelPreviewMode.Dl1Output, target.EffectiveMode);
+        Assert.NotSame(source.Meshes[0], target.Meshes[0]);
+        Assert.Equal(
+            0.25f,
+            source.Meshes[0].Vertices.Span[0].TextureCoordinate.Y,
+            precision: 6);
+        Assert.Equal(
+            0.75f,
+            target.Meshes[0].Vertices.Span[0].TextureCoordinate.Y,
+            precision: 6);
+        Assert.Equal(authoring.Meshes[0].Tint, target.Meshes[0].Tint);
+        TextureRenderData authoringTexture = Assert.IsType<TextureRenderData>(
+            authoring.Meshes[0].BaseColorTexture);
+        TextureRenderData targetTexture = Assert.IsType<TextureRenderData>(
+            target.Meshes[0].BaseColorTexture);
+        Assert.NotSame(
+            source.Meshes[0].BaseColorTexture,
+            targetTexture);
+        Assert.Equal(
+            authoringTexture.Width,
+            targetTexture.Width);
+        Assert.Equal(
+            authoringTexture.Format,
+            targetTexture.Format);
+        Assert.True(
+            authoringTexture.BaseMipBytes.Span
+                .SequenceEqual(
+                    targetTexture.BaseMipBytes.Span));
+        Assert.True(target.AppliesTextureCoordinateVFlip);
+        Assert.True(model.Package.SourceFbx.SequenceEqual(sourceFbxBefore));
     }
 
     [Fact]
@@ -78,6 +136,48 @@ public sealed class CustomModelPreviewSessionTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelPreview")]
+    public void EvaluatedRuntimePoseIsRebasedIntoDl1OutputPresentationRig()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(
+            flipTextureCoordinateV: true);
+        RigDefinition runtimeRig = Assert.IsType<RigDefinition>(model.Rig);
+        CustomModelPreviewSession session =
+            CustomModelPreviewAdapter.CreateSession(
+                model,
+                CustomModelPreviewMode.Dl1Output);
+        var runtimePose = new SkeletonPose(
+            runtimeRig,
+            runtimeRig.Bones.Select((bone, index) =>
+                index == 1
+                    ? bone.LocalBindPose with
+                    {
+                        Translation =
+                            bone.LocalBindPose.Translation +
+                            new Vector3D(0, 0.25, 0),
+                    }
+                    : bone.LocalBindPose));
+
+        SkeletonPose presentation = session.CreatePresentationPose(
+            runtimePose);
+        SkeletonRenderData rendered = session.CreateSkeleton(runtimePose);
+
+        Assert.NotSame(runtimeRig, presentation.Rig);
+        Assert.Equal(runtimeRig.BoneCount, presentation.Rig.BoneCount);
+        Assert.Equal(
+            presentation.GlobalMatrices[1].Translation,
+            new Vector3D(
+                rendered.Bones[1].WorldTransform.M41,
+                rendered.Bones[1].WorldTransform.M42,
+                rendered.Bones[1].WorldTransform.M43));
+        Assert.Equal(
+            session.CreatePayload(clip: null, frame: 0)
+                .Skeleton!.Bones.Count,
+            rendered.Bones.Count);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
     public void Dl1PreparationFailureFallsBackToVisibleSourcePreviewWithoutWeakeningPreparation()
     {
         FbxModelAuthoringImportResult model = CreateModel(
@@ -120,6 +220,11 @@ public sealed class CustomModelPreviewSessionTests
         const string fingerprint =
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
         Guid materialId = new("5348d012-9a03-574d-8300-b07080a1900b");
+        const string texturePath = "textures/base-color.dds";
+        ImmutableArray<byte> texturePayload = CreateDxt1Texture();
+        string textureFingerprint = Convert.ToHexString(
+                SHA256.HashData(texturePayload.AsSpan()))
+            .ToLowerInvariant();
         ImmutableArray<CustomModelBone> bones =
         [
             new CustomModelBone
@@ -183,6 +288,19 @@ public sealed class CustomModelPreviewSessionTests
                 {
                     Id = materialId,
                     Name = "surface",
+                    Textures =
+                    [
+                        new CustomModelTextureBinding
+                        {
+                            Semantic = CustomModelTextureSemantic.BaseColor,
+                            SourceKind = CustomModelTextureSourceKind.EmbeddedFbx,
+                            ColorSpace = CustomModelTextureColorSpace.Srgb,
+                            DisplayName = "Generic base color",
+                            PackageEntryPath = texturePath,
+                            ContentSha256 = textureFingerprint,
+                            MediaType = "image/vnd-ms.dds",
+                        },
+                    ],
                 },
             ],
             BuildSettings = new CustomModelBuildSettings
@@ -213,7 +331,9 @@ public sealed class CustomModelPreviewSessionTests
         var package = new CustomModelPackage(
             document,
             [0x46, 0x42, 0x58],
-            ImmutableDictionary<string, ImmutableArray<byte>>.Empty);
+            ImmutableDictionary<string, ImmutableArray<byte>>.Empty.Add(
+                texturePath,
+                texturePayload));
         return new FbxModelAuthoringImportResult(
             package,
             rig,
@@ -233,6 +353,19 @@ public sealed class CustomModelPreviewSessionTests
             v,
             [0],
             [1.0]);
+
+    private static ImmutableArray<byte> CreateDxt1Texture()
+    {
+        byte[] payload = new byte[136];
+        "DDS "u8.CopyTo(payload);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4), 124);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(12), 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(16), 4);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(76), 32);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(84), 0x3154_5844);
+        payload.AsSpan(128).Fill(0x5a);
+        return payload.ToImmutableArray();
+    }
 
     private static FbxModelAuthoringImportResult WithFlip(
         FbxModelAuthoringImportResult model,

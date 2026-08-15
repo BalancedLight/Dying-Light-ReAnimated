@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Project;
 
 namespace ReAnimated.Retargeting.Mapping;
 
@@ -125,7 +126,7 @@ public static class RetargetMappingReview
                     new CompatibilityDiagnostic(
                         "mapping_row_requires_review",
                         CompatibilityDiagnosticSeverity.Error,
-                        $"Mapping '{sourceBone.Name}' -> '{targetBone.Name}' was proposed by {entry.Method} with {entry.TransferPolicy}/{entry.ComponentPolicy} policy and requires explicit review before export.",
+                        $"Mapping '{sourceBone.Name}' -> '{targetBone.Name}' was proposed by {entry.Method} with {entry.TransferPolicy}/{entry.TransformComponents} policy and requires explicit review before export.",
                         sourceBone.Name,
                         targetBone.Name));
             }
@@ -224,15 +225,16 @@ public static class RetargetMappingReview
                 target.Bones[entry.TargetBoneIndex];
             return entry.TransferPolicy ==
                     RetargetTransferPolicy.RestRelative &&
-                entry.ComponentPolicy ==
-                    RetargetMapBuilder.GetDefaultHelperComponentPolicy(
-                        targetBone.Name);
+                entry.TransformComponents ==
+                    RetargetTransformComponentsCompatibility.FromLegacy(
+                        RetargetMapBuilder.GetDefaultHelperComponentPolicy(
+                            targetBone.Name));
         }
 
         return entry.TransferPolicy ==
                 RetargetTransferPolicy.GlobalBindBasis &&
-            entry.ComponentPolicy ==
-                RetargetComponentPolicy.FullTransform;
+            entry.TransformComponents ==
+                RetargetTransformComponents.All;
     }
 
 }

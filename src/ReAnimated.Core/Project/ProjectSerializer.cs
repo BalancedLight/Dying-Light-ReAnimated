@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -44,7 +45,7 @@ public sealed class LegacyProjectFormatException : ProjectFormatException
         : base(
             $"Project schema {detectedSchemaVersion} belongs to the legacy Python application. " +
             "This C# first pass neither imports, modifies, nor overwrites legacy projects; " +
-            "create a fresh C# schema-2 project instead.")
+            "create a fresh C# schema-3 project instead.")
     {
         DetectedSchemaVersion = detectedSchemaVersion;
     }
@@ -53,8 +54,8 @@ public sealed class LegacyProjectFormatException : ProjectFormatException
 }
 
 /// <summary>
-/// Reads schema-1 C# projects, migrates them in memory, and atomically writes
-/// the DL1-only schema-2 project format.
+/// Reads schema-1/2 C# projects, migrates them in memory, and atomically writes
+/// the DL1-only schema-3 project format.
 /// </summary>
 public static class ProjectSerializer
 {
@@ -87,6 +88,13 @@ public static class ProjectSerializer
         "animationSources",
         "animationVariants",
         "workflow",
+    ];
+
+    private static readonly string[] RequiredSchema3RootProperties =
+    [
+        .. RequiredSchema2RootProperties,
+        "animationLibraries",
+        "exportSelection",
     ];
 
     private static readonly JsonSerializerOptions SerializerOptions = CreateOptions();
@@ -133,7 +141,7 @@ public static class ProjectSerializer
                 throw new ProjectFormatException("The project does not declare an integer schemaVersion.");
             }
 
-            if (schemaVersion is not (1 or DlraProject.CurrentSchemaVersion))
+            if (schemaVersion is not (1 or 2 or DlraProject.CurrentSchemaVersion))
             {
                 throw new ProjectFormatException(
                     $"Project schema {schemaVersion} is not supported by this application.");
@@ -145,9 +153,13 @@ public static class ProjectSerializer
                 stream,
                 SerializerOptions) ??
                 throw new ProjectFormatException("The project document was empty.");
-            project = schemaVersion == 1
-                ? MigrateSchema1(project)
-                : NormalizeSchema2(project);
+            project = schemaVersion switch
+            {
+                1 => MigrateSchema1(project),
+                2 => MigrateSchema2(project),
+                DlraProject.CurrentSchemaVersion => NormalizeSchema3(project),
+                _ => throw new UnreachableException(),
+            };
             project.Validate();
             return project;
         }
@@ -176,7 +188,8 @@ public static class ProjectSerializer
         DlraProject normalized = project.SchemaVersion switch
         {
             1 => MigrateSchema1(project),
-            DlraProject.CurrentSchemaVersion => NormalizeSchema2(project),
+            2 => MigrateSchema2(project),
+            DlraProject.CurrentSchemaVersion => NormalizeSchema3(project),
             _ => throw new ProjectFormatException(
                 $"Project schema {project.SchemaVersion} is not supported by this application."),
         };
@@ -244,7 +257,7 @@ public static class ProjectSerializer
         {
             throw new ProjectFormatException(
                 "Refusing to overwrite an existing .dlraproj that is not a valid " +
-                "DL ReAnimated C# schema-1 or schema-2 project.",
+                "DL ReAnimated C# schema-1, schema-2, or schema-3 project.",
                 exception);
         }
     }
@@ -375,12 +388,14 @@ public static class ProjectSerializer
             ? workspaceModel.Id
             : selectedVariant?.TargetModelId;
 
-        return project with
+        DlraProject schema2 = project with
         {
-            SchemaVersion = DlraProject.CurrentSchemaVersion,
+            SchemaVersion = 2,
             Models = models,
             AnimationSources = sources.ToImmutableArray(),
             AnimationVariants = variants.ToImmutableArray(),
+            AnimationLibraries = [],
+            ExportSelection = new ProjectExportSelection(),
             Animations = animations
                 .Where(animation =>
                     preserveSourceOnlyCompatibilityRows &&
@@ -396,21 +411,89 @@ public static class ProjectSerializer
                 SelectedAnimationVariantId = selectedVariant?.Id,
             },
         };
+
+        return NormalizeSchema3Core(
+            schema2,
+            seedLegacyExportSelection: true,
+            allowLegacyProjectionFallback: false);
     }
 
-    internal static DlraProject NormalizeSchema2(DlraProject project)
+    internal static DlraProject MigrateSchema2(DlraProject project)
     {
         ArgumentNullException.ThrowIfNull(project);
+        // These references did not exist in schema 2. A hand-edited or
+        // down-versioned document can still carry serializer-readable schema
+        // 3 values whose referenced arrays are absent; never let those stale
+        // IDs suppress deterministic schema-3 library allocation.
+        DlraProject schema2 = project with
+        {
+            Models = project.Models
+                .Select(static model => model with
+                {
+                    RootAnimationLibraryId = null,
+                })
+                .ToImmutableArray(),
+            AnimationVariants = project.AnimationVariants
+                .Select(static variant => variant with
+                {
+                    OwningAnimationLibraryId = null,
+                    OutputAnm2Name = null,
+                })
+                .ToImmutableArray(),
+            AnimationLibraries = [],
+            ExportSelection = new ProjectExportSelection(),
+        };
+        return NormalizeSchema3Core(
+            schema2,
+            seedLegacyExportSelection: true,
+            allowLegacyProjectionFallback: true);
+    }
+
+    internal static DlraProject NormalizeSchema3(DlraProject project) =>
+        NormalizeSchema3Core(
+            project,
+            seedLegacyExportSelection: false,
+            allowLegacyProjectionFallback: true);
+
+    private static DlraProject NormalizeSchema3Core(
+        DlraProject project,
+        bool seedLegacyExportSelection,
+        bool allowLegacyProjectionFallback)
+    {
+        ArgumentNullException.ThrowIfNull(project);
+        Dictionary<Guid, ProjectAssetReference> assets = project.Assets
+            .ToDictionary(static asset => asset.Id);
+        Dictionary<Guid, ProjectModelEntry> models = project.Models
+            .ToDictionary(static model => model.Id);
         ImmutableArray<ProjectAnimationSource> sources =
-            project.AnimationSources;
+            project.AnimationSources
+                .Select(source => NormalizeSourcePresentation(
+                    source.SourceAnimationSkeletonSignature is null &&
+                    source.EmbeddedCustomModelStack is
+                    {
+                        SourceAnimationSkeletonSignature: { } signature,
+                    }
+                        ? source with
+                        {
+                            SourceAnimationSkeletonSignature = signature,
+                        }
+                        : source,
+                    assets,
+                    models))
+                .ToImmutableArray();
+        Dictionary<Guid, ProjectAnimationSource> sourceById = sources
+            .ToDictionary(static source => source.Id);
         ImmutableArray<ProjectAnimationVariant> variants =
             project.AnimationVariants
-                .Select(NormalizeVariantProvenance)
+                .Select(variant => NormalizeVariantBinding(
+                    NormalizeVariantProvenance(variant),
+                    sourceById.GetValueOrDefault(variant.SourceId)))
                 .ToImmutableArray();
 
         // App integration remains source compatible: projects constructed by
         // the schema-1 WPF surface are promoted before validation/save.
-        if (sources.IsEmpty &&
+        if (allowLegacyProjectionFallback &&
+            sources.IsEmpty &&
             variants.IsEmpty &&
             (!project.Animations.IsEmpty ||
              project.ModelsWorkspace is not null))
@@ -420,19 +503,135 @@ public static class ProjectSerializer
                 preserveSourceOnlyCompatibilityRows: true);
         }
 
+        project = ProjectAnimationOutputNormalizer.Normalize(project with
+        {
+            AnimationSources = sources,
+            AnimationVariants = variants,
+        });
+        variants = project.AnimationVariants;
         ValidateSchema2References(project, sources, variants);
 
+        ProjectExportSelection exportSelection =
+            seedLegacyExportSelection
+                ? CreateLegacyExportSelection(variants)
+                : project.ExportSelection;
         return project with
         {
             SchemaVersion = DlraProject.CurrentSchemaVersion,
+            AnimationSources = sources,
             AnimationVariants = variants,
             Animations = SynchronizeCompatibilityAnimations(
                 project,
                 sources,
                 variants),
+            ExportSelection = exportSelection,
+            // A model-first import creates owning direct variants immediately,
+            // but it must not silently turn one of them into the active
+            // animation target.  Only an explicit activation (or an existing
+            // persisted workflow selection) restores an active variant.
             ActiveAnimationId = project.ActiveAnimationId ??
-                project.Workflow.SelectedAnimationVariantId ??
-                variants.FirstOrDefault()?.Id,
+                project.Workflow.SelectedAnimationVariantId,
+        };
+    }
+
+    private static ProjectAnimationSource NormalizeSourcePresentation(
+        ProjectAnimationSource source,
+        Dictionary<Guid, ProjectAssetReference> assets,
+        Dictionary<Guid, ProjectModelEntry> models)
+    {
+        if (source.Presentation is not null)
+        {
+            return source;
+        }
+
+        assets.TryGetValue(
+            source.SourceAssetId,
+            out ProjectAssetReference? sourceAsset);
+        ProjectModelEntry? owningModel = source.EmbeddedCustomModelStack is null
+            ? null
+            : models.Values.FirstOrDefault(model =>
+                model.AssetId == source.SourceAssetId);
+        ProjectAssetReference? boundModelAsset =
+            source.SourceBinding?.RetailSourceModelAssetId is { } modelAssetId
+                ? assets.GetValueOrDefault(modelAssetId)
+                : null;
+
+        ProjectAnimationSourceOriginKind originKind;
+        string originName;
+        Guid? owningModelId = null;
+        if (owningModel is not null)
+        {
+            originKind = ProjectAnimationSourceOriginKind.OwningCustomModel;
+            originName = owningModel.Name;
+            owningModelId = owningModel.Id;
+        }
+        else if (boundModelAsset is not null ||
+                 source.SourceBinding?.Kind == AnimationSourceKind.RetailAnm2)
+        {
+            originKind = boundModelAsset?.Kind ==
+                    ProjectAssetKind.CustomModelSource
+                ? ProjectAnimationSourceOriginKind.BoundProjectModel
+                : ProjectAnimationSourceOriginKind.BoundRetailModel;
+            originName = boundModelAsset?.RetailIdentity?.ResourceName ??
+                (boundModelAsset is null
+                    ? null
+                    : Path.GetFileNameWithoutExtension(
+                        boundModelAsset.RelativePath)) ??
+                sourceAsset?.RetailIdentity?.ResourceName ??
+                source.Name;
+        }
+        else if (source.SourceBinding?.Kind == AnimationSourceKind.LocalFbx ||
+                 source.EmbeddedCustomModelStack is not null)
+        {
+            originKind = ProjectAnimationSourceOriginKind.ImportedFbxRig;
+            originName = sourceAsset is null
+                ? source.Name
+                : Path.GetFileNameWithoutExtension(sourceAsset.RelativePath);
+        }
+        else
+        {
+            originKind = ProjectAnimationSourceOriginKind.UnresolvedLegacy;
+            originName = source.Name;
+        }
+
+        if (string.IsNullOrWhiteSpace(originName))
+        {
+            originName = source.Name;
+        }
+
+        return source with
+        {
+            Presentation = new ProjectAnimationSourcePresentation
+            {
+                OriginKind = originKind,
+                OriginName = originName,
+                OwningModelId = owningModelId,
+                ProjectAssetId = source.SourceAssetId,
+                SourceRigIdentity = string.IsNullOrWhiteSpace(
+                    source.SourceRigSignature)
+                    ? null
+                    : source.SourceRigSignature,
+            },
+        };
+    }
+
+    private static ProjectExportSelection CreateLegacyExportSelection(
+        ImmutableArray<ProjectAnimationVariant> variants)
+    {
+        ProjectAnimationVariant[] included = variants
+            .Where(static variant => variant.IncludeInPackage)
+            .OrderBy(static variant => variant.Id)
+            .ToArray();
+        return new ProjectExportSelection
+        {
+            ModelIds = included
+                .Select(static variant => variant.TargetModelId)
+                .Distinct()
+                .Order()
+                .ToImmutableArray(),
+            AnimationVariantIds = included
+                .Select(static variant => variant.Id)
+                .ToImmutableArray(),
         };
     }
 
@@ -499,6 +698,15 @@ public static class ProjectSerializer
                 TargetRigId = variant.TargetRigId,
                 SourceRigSignature = source.SourceRigSignature,
                 TargetRigSignature = variant.TargetRigSignature,
+                SourceAnimationSkeletonSignature =
+                    source.SourceAnimationSkeletonSignature,
+                TargetAnimationSkeletonSignature =
+                    variant.TargetAnimationSkeletonSignature,
+                BindingMode = variant.BindingMode,
+                DirectBinding = variant.DirectBinding,
+                BindingEvidenceFingerprint =
+                    variant.BindingEvidenceFingerprint,
+                BindingPolicyVersion = variant.BindingPolicyVersion,
                 MappingFingerprint = variant.MappingFingerprint,
                 MimicProfileId = variant.MimicProfileId,
                 MimicMappingFingerprint = variant.MimicMappingFingerprint,
@@ -637,6 +845,8 @@ public static class ProjectSerializer
             FacialSourceAssetId = animation.FacialSourceAssetId,
             FacialSourceValueUnit = animation.FacialSourceValueUnit,
             FacialTiming = animation.FacialTiming,
+            SourceAnimationSkeletonSignature =
+                animation.SourceAnimationSkeletonSignature,
             FrameRate = animation.FrameRate,
             FrameCount = animation.FrameCount,
             LegacyVariantGroupId = legacyGroupId,
@@ -667,6 +877,20 @@ public static class ProjectSerializer
             TargetModelId = targetModel.Id,
             TargetRigId = animation.TargetRigId,
             TargetRigSignature = animation.TargetRigSignature,
+            TargetAnimationSkeletonSignature =
+                animation.TargetAnimationSkeletonSignature,
+            BindingMode = animation.DirectBinding is not null
+                ? ProjectAnimationBindingMode.CompatibleDirect
+                : !string.Equals(
+                    animation.SourceRigSignature,
+                    animation.TargetRigSignature,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? ProjectAnimationBindingMode.Retarget
+                    : ProjectAnimationBindingMode.ExactDirect,
+            DirectBinding = animation.DirectBinding,
+            BindingEvidenceFingerprint =
+                animation.BindingEvidenceFingerprint,
+            BindingPolicyVersion = animation.BindingPolicyVersion,
             MappingFingerprint = animation.MappingFingerprint,
             MimicProfileId = animation.MimicProfileId,
             MimicMappingFingerprint = animation.MimicMappingFingerprint,
@@ -696,6 +920,50 @@ public static class ProjectSerializer
                 .ToImmutableArray(),
         };
 
+    private static ProjectAnimationVariant NormalizeVariantBinding(
+        ProjectAnimationVariant variant,
+        ProjectAnimationSource? source)
+    {
+        if (variant.DirectBinding is { } direct)
+        {
+            return variant with
+            {
+                BindingMode = ProjectAnimationBindingMode.CompatibleDirect,
+                TargetAnimationSkeletonSignature =
+                    variant.TargetAnimationSkeletonSignature ??
+                    direct.TargetSkeletonSignature,
+                BindingEvidenceFingerprint = direct.EvidenceFingerprint,
+                BindingPolicyVersion = direct.Policy,
+            };
+        }
+
+        bool runtimeRigDiffers = source is not null &&
+            !string.IsNullOrWhiteSpace(source.SourceRigSignature) &&
+            !string.IsNullOrWhiteSpace(variant.TargetRigSignature) &&
+            !string.Equals(
+                source.SourceRigSignature,
+                variant.TargetRigSignature,
+                StringComparison.OrdinalIgnoreCase);
+        bool retargetEvidence =
+            // A different runtime rig is direct only when a persisted,
+            // validated DirectRigBinding proves the compatible correspondence.
+            // Matching skeleton fingerprints alone cannot provide the row-level
+            // identity and topology evidence required by the direct evaluator.
+            runtimeRigDiffers ||
+            !variant.BoneMappings.IsEmpty ||
+            !variant.TargetBindReviews.IsEmpty ||
+            variant.MappingFingerprint is not null;
+        return variant with
+        {
+            BindingMode = retargetEvidence
+                ? ProjectAnimationBindingMode.Retarget
+                : ProjectAnimationBindingMode.ExactDirect,
+            DirectBinding = null,
+            BindingEvidenceFingerprint = null,
+            BindingPolicyVersion = null,
+        };
+    }
+
     private static ProjectAnimation NormalizeLegacyAnimationProvenance(
         ProjectAnimation animation) =>
         animation with
@@ -711,6 +979,14 @@ public static class ProjectSerializer
     private static ProjectBoneMapping NormalizeBoneMappingProvenance(
         ProjectBoneMapping mapping)
     {
+        mapping = mapping.TransformComponents is null
+            ? mapping with
+            {
+                TransformComponents =
+                    RetargetTransformComponentsCompatibility.FromLegacy(
+                        mapping.ComponentPolicy),
+            }
+            : mapping;
         if (mapping.Evidence is null ||
             mapping.ScorerVersion is null ||
             mapping.EvidenceFingerprint is null)
@@ -943,7 +1219,7 @@ public static class ProjectSerializer
             project.Animations.IsDefault)
         {
             throw new ProjectFormatException(
-                "Schema-2 project collections must be initialized before normalization.");
+                "Schema-2/3 project collections must be initialized before normalization.");
         }
 
         Dictionary<Guid, ProjectAssetReference> assets;
@@ -1154,9 +1430,15 @@ public static class ProjectSerializer
         JsonElement root,
         int schemaVersion)
     {
-        string[] required = schemaVersion == 1
-            ? RequiredSchema1RootProperties
-            : RequiredSchema2RootProperties;
+        string[] required = schemaVersion switch
+        {
+            1 => RequiredSchema1RootProperties,
+            2 => RequiredSchema2RootProperties,
+            DlraProject.CurrentSchemaVersion =>
+                RequiredSchema3RootProperties,
+            _ => throw new ProjectFormatException(
+                $"Project schema {schemaVersion} is not supported by this application."),
+        };
         foreach (string propertyName in required)
         {
             if (!root.TryGetProperty(propertyName, out _))

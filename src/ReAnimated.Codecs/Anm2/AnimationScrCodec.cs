@@ -246,7 +246,7 @@ public static class AnimationScrCodec
         if (parsed.NameTableOffset != recordsEnd)
         {
             throw new NotSupportedException(
-                "AnimationScr resources with auxiliary/event data between records and names cannot be appended.");
+                "AnimationScr resources with auxiliary/event data between records and names cannot be appended losslessly; preserve the full base resource or choose a different library identity.");
         }
 
         HashSet<string> existing = parsed.Sequences
