@@ -153,7 +153,10 @@ public sealed class ViewModelTimelineTests
                 Assert.True(double.IsFinite(point.PixelX));
                 Assert.InRange(point.PixelY, 32.0, 166.0);
             });
-        Assert.Equal(120.0, timeline.CurvePoints[2].PixelX);
+        Assert.Equal(
+            20.0 * timeline.PixelsPerFrame,
+            timeline.CurvePoints[2].PixelX,
+            precision: 6);
         Assert.True(
             timeline.CurvePoints[0].PixelY >
             timeline.CurvePoints[2].PixelY);
@@ -198,6 +201,39 @@ public sealed class ViewModelTimelineTests
 
         Assert.True(timeline.CanvasWidth > 1_120.0);
         Assert.True(timeline.FrameMarkers.Count < 40);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void FitTracksTheLiveViewportAndManualZoomCannotRevealDeadSpace()
+    {
+        TimelineViewModel timeline = new(
+            startFrame: 0,
+            endFrame: 15);
+
+        timeline.SetViewportSize(1_500.0, 420.0);
+
+        Assert.True(timeline.IsFitToViewport);
+        Assert.Equal(1_500.0, timeline.CanvasWidth, precision: 6);
+        Assert.Equal(420.0, timeline.DopeSheetCanvasHeight, precision: 6);
+        Assert.Equal(420.0, timeline.CurveCanvasHeight, precision: 6);
+        Assert.Equal(396.0, timeline.CurveGridHeight, precision: 6);
+
+        timeline.ZoomInCommand.Execute(null);
+
+        Assert.False(timeline.IsFitToViewport);
+        Assert.True(timeline.CanvasWidth > 1_500.0);
+
+        timeline.ZoomOutCommand.Execute(null);
+
+        Assert.True(timeline.IsFitToViewport);
+        Assert.Equal(1_500.0, timeline.CanvasWidth, precision: 6);
+
+        timeline.SetViewportSize(1_820.0, 360.0);
+
+        Assert.Equal(1_820.0, timeline.CanvasWidth, precision: 6);
+        Assert.Equal(360.0, timeline.CurveCanvasHeight, precision: 6);
     }
 
     [Fact]

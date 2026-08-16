@@ -407,11 +407,11 @@ public partial class MainWindow : Window
         RetargetEditorSplitterColumn.Width = new GridLength(0.0);
         RetargetEditorColumn.Width = new GridLength(0.0);
         RetargetViewportRow.Height =
-            new GridLength(3.0, GridUnitType.Star);
+            new GridLength(2.0, GridUnitType.Star);
         RetargetEditorRow.Height =
-            new GridLength(2.3, GridUnitType.Star);
+            new GridLength(3.0, GridUnitType.Star);
         RetargetBottomDockRow.Height =
-            new GridLength(220.0);
+            new GridLength(1.35, GridUnitType.Star);
         SourceViewportColumn.Width =
             new GridLength(1.0, GridUnitType.Star);
         ViewportGrid.ColumnDefinitions[2].Width =

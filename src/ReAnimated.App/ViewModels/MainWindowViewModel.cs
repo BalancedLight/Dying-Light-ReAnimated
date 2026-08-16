@@ -7575,6 +7575,14 @@ public sealed partial class MainWindowViewModel :
                 return;
             }
 
+            if (await TryPublishSelectedCustomAnimationPreviewAsync(
+                    session,
+                    selectedRowId,
+                    generation))
+            {
+                return;
+            }
+
             SkeletonPose pose = session.Clip.SamplePose(
                 session.Rig,
                 timeSeconds: 0,
@@ -7605,6 +7613,75 @@ public sealed partial class MainWindowViewModel :
                 "Source preview unavailable",
                 exception.Message);
         }
+    }
+
+    private async Task<bool> TryPublishSelectedCustomAnimationPreviewAsync(
+        ImportedAnimationSession session,
+        Guid selectedRowId,
+        long generation)
+    {
+        ProjectAnimationVariant? variant = _project.AnimationVariants
+            .FirstOrDefault(candidate => candidate.Id == selectedRowId);
+        if (variant is null ||
+            variant.BindingMode != ProjectAnimationBindingMode.ExactDirect)
+        {
+            return false;
+        }
+
+        ProjectModelEntry? targetModel = _project.Models.FirstOrDefault(
+            candidate => candidate.Id == variant.TargetModelId);
+        ProjectAssetReference? targetAsset = targetModel is null
+            ? null
+            : FindProjectAsset(targetModel.AssetId);
+        if (targetAsset?.Kind != ProjectAssetKind.CustomModelSource)
+        {
+            return false;
+        }
+
+        PreparedCustomTarget target = await DecodeCustomModelTargetAsync(
+            targetAsset,
+            CancellationToken.None);
+        if (!IsCurrentAnimationSourcePreview(
+                selectedRowId,
+                generation))
+        {
+            return true;
+        }
+
+        if (!string.Equals(
+                RigSignature.Compute(session.Rig),
+                RigSignature.Compute(target.Rig),
+                StringComparison.Ordinal))
+        {
+            // A stale ExactDirect declaration is repaired by the normal
+            // activation path. Do not force source-local matrices onto an
+            // unrelated target merely to populate this compact browser.
+            return false;
+        }
+
+        CustomModelPreviewPayload payload = target.PreviewSession
+            .CreatePayload(
+                session.Clip,
+                frame: 0,
+                SelectedBone?.Index);
+        SourceViewport.SceneSource.SetExternalPreviewScene(null);
+        SetSourcePreviewScene(
+            payload.Meshes,
+            payload.Skeleton);
+        if (target.UsesSourceFallback)
+        {
+            SourceViewport.SetPresentation(
+                "Animation preview / Source FBX fallback",
+                target.PreviewDiagnostics.IsDefaultOrEmpty
+                    ? "DL1-output preparation failed; the source presentation is shown explicitly."
+                    : string.Join("; ", target.PreviewDiagnostics));
+            return true;
+        }
+
+        SourceViewport.SetPresentation(
+            "Animation preview / DL1 output",
+            $"{targetModel!.Name} | target UVs, materials, embedded textures, and authored hierarchy");
+        return true;
     }
 
     private bool IsCurrentAnimationSourcePreview(

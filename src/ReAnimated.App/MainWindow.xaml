@@ -309,11 +309,11 @@
                     <ColumnDefinition x:Name="RetargetEditorColumn" Width="0" MinWidth="0" MaxWidth="0" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition x:Name="RetargetViewportRow" Height="3*" MinHeight="180" />
+                    <RowDefinition x:Name="RetargetViewportRow" Height="2*" MinHeight="140" />
                     <RowDefinition Height="6" />
-                    <RowDefinition x:Name="RetargetEditorRow" Height="2.3*" MinHeight="200" />
+                    <RowDefinition x:Name="RetargetEditorRow" Height="3*" MinHeight="220" />
                     <RowDefinition Height="6" />
-                    <RowDefinition x:Name="RetargetBottomDockRow" Height="220" MinHeight="120" MaxHeight="420" />
+                    <RowDefinition x:Name="RetargetBottomDockRow" Height="1.35*" MinHeight="90" />
                 </Grid.RowDefinitions>
 
                 <Border x:Name="ModelsWorkflowSurface"
@@ -479,7 +479,10 @@
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
-                            <RowDefinition Height="250" MinHeight="190" MaxHeight="390" />
+                            <RowDefinition x:Name="AnimationsPreviewRow"
+                                           Height="210"
+                                           MinHeight="120"
+                                           MaxHeight="520" />
                             <RowDefinition Height="6" />
                             <RowDefinition Height="*" MinHeight="230" />
                         </Grid.RowDefinitions>
@@ -525,7 +528,13 @@
                             <GridSplitter Grid.Column="1"
                                           Width="6"
                                           HorizontalAlignment="Stretch"
-                                          Background="#2D3541" />
+                                          Panel.ZIndex="100"
+                                          Background="#516173"
+                                          Cursor="SizeWE"
+                                          ResizeBehavior="PreviousAndNext"
+                                          ResizeDirection="Columns"
+                                          ShowsPreview="False"
+                                          ToolTip="Drag to resize the animation preview and details." />
                             <Border Grid.Column="2"
                                     Padding="12"
                                     Style="{StaticResource PaneBorderStyle}">
@@ -573,7 +582,13 @@
                         <GridSplitter Grid.Row="2"
                                       Height="6"
                                       HorizontalAlignment="Stretch"
-                                      Background="#2D3541" />
+                                      Panel.ZIndex="100"
+                                      Background="#516173"
+                                      Cursor="SizeNS"
+                                      ResizeBehavior="PreviousAndNext"
+                                      ResizeDirection="Rows"
+                                      ShowsPreview="False"
+                                      ToolTip="Drag to resize the preview and animation library." />
 
                         <Border Grid.Row="3" Style="{StaticResource PaneBorderStyle}">
                             <DataGrid x:Name="AnimationLibraryTable"
@@ -713,7 +728,13 @@
                         <GridSplitter Grid.Row="2"
                                       Height="6"
                                       HorizontalAlignment="Stretch"
-                                      Background="#2D3541" />
+                                      Panel.ZIndex="100"
+                                      Background="#516173"
+                                      Cursor="SizeNS"
+                                      ResizeBehavior="PreviousAndNext"
+                                      ResizeDirection="Rows"
+                                      ShowsPreview="False"
+                                      ToolTip="Drag to resize the playback viewport and timeline." />
                         <views:TimelinePanel Grid.Row="3"
                                              DataContext="{Binding Timeline}" />
                     </Grid>
@@ -1488,7 +1509,13 @@
                         <GridSplitter Grid.Row="1"
                                       Grid.Column="1"
                                       HorizontalAlignment="Stretch"
-                                      Background="#2D3541" />
+                                      Panel.ZIndex="100"
+                                      Background="#516173"
+                                      Cursor="SizeWE"
+                                      ResizeBehavior="PreviousAndNext"
+                                      ResizeDirection="Columns"
+                                      ShowsPreview="False"
+                                      ToolTip="Drag to resize the source and target viewports." />
                         <views:ViewportPane Grid.Row="1"
                                             Grid.Column="2"
                                             DataContext="{Binding TargetViewport}" />
@@ -1524,7 +1551,13 @@
                               Grid.ColumnSpan="5"
                               Height="6"
                               VerticalAlignment="Stretch"
-                              Background="#2D3541"
+                              Panel.ZIndex="100"
+                              Background="#516173"
+                              Cursor="SizeNS"
+                              ResizeBehavior="PreviousAndNext"
+                              ResizeDirection="Rows"
+                              ShowsPreview="False"
+                              ToolTip="Drag to resize the viewports and retarget editor."
                               Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
                 <Border x:Name="RetargetEditorSurface"
@@ -1592,67 +1625,73 @@
                                                 Content="Accept proposal &amp; play"
                                                 ToolTip="Explicitly review every proposed row and required bind fallback, save the mapping, reset to frame zero, and start target playback." />
                                     </WrapPanel>
-                                    <Border Margin="0,6,0,0"
-                                            Padding="6"
-                                            Background="#202A39"
-                                            BorderBrush="{StaticResource BorderBrush}"
-                                            BorderThickness="1"
-                                            CornerRadius="3">
+                                    <Expander Margin="0,6,0,0"
+                                              Header="Assisted review and helper overrides"
+                                              IsExpanded="False"
+                                              ToolTip="Expand deterministic assisted-review controls and helper/camera fan-out authoring.">
                                         <StackPanel>
-                                            <WrapPanel>
-                                                <CheckBox Margin="2,1,8,1"
-                                                          Content="Enable assisted review"
-                                                          IsChecked="{Binding IsAssistedReviewEnabled}"
-                                                          ToolTip="Machine-local preference. Checking this never changes a project by itself." />
-                                                <Button Command="{Binding ApplyAssistedReviewCommand}"
-                                                        Content="Apply assisted review"
-                                                        ToolTip="Explicitly score the current exact rig pair and lock only eligible deterministic rows." />
-                                            </WrapPanel>
-                                            <TextBlock Margin="2,4,2,0"
-                                                       FontSize="9"
-                                                       Foreground="{StaticResource MutedTextBrush}"
-                                                       Text="{Binding AssistedReviewPolicySummary}"
-                                                       TextWrapping="Wrap" />
+                                            <Border Padding="6"
+                                                    Background="#202A39"
+                                                    BorderBrush="{StaticResource BorderBrush}"
+                                                    BorderThickness="1"
+                                                    CornerRadius="3">
+                                                <StackPanel>
+                                                    <WrapPanel>
+                                                        <CheckBox Margin="2,1,8,1"
+                                                                  Content="Enable assisted review"
+                                                                  IsChecked="{Binding IsAssistedReviewEnabled}"
+                                                                  ToolTip="Machine-local preference. Checking this never changes a project by itself." />
+                                                        <Button Command="{Binding ApplyAssistedReviewCommand}"
+                                                                Content="Apply assisted review"
+                                                                ToolTip="Explicitly score the current exact rig pair and lock only eligible deterministic rows." />
+                                                    </WrapPanel>
+                                                    <TextBlock Margin="2,4,2,0"
+                                                               FontSize="9"
+                                                               Foreground="{StaticResource MutedTextBrush}"
+                                                               Text="{Binding AssistedReviewPolicySummary}"
+                                                               TextWrapping="Wrap" />
+                                                </StackPanel>
+                                            </Border>
+                                            <TextBlock Margin="4,7,4,3"
+                                                       FontSize="10"
+                                                       FontWeight="SemiBold"
+                                                       Text="Helper / camera fan-out" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <ComboBox Margin="0,0,3,0"
+                                                          IsTextSearchEnabled="True"
+                                                          ItemsSource="{Binding MappingSourceBoneOptions}"
+                                                          SelectedItem="{Binding SelectedHelperOverrideSourceBone}"
+                                                          ToolTip="One source may keep its ordinary body row and also drive multiple distinct helper targets." />
+                                                <TextBlock Grid.Column="1"
+                                                           Margin="3,0"
+                                                           VerticalAlignment="Center"
+                                                           Text="-&gt;" />
+                                                <ComboBox Grid.Column="2"
+                                                          Margin="3,0"
+                                                          IsTextSearchEnabled="True"
+                                                          ItemsSource="{Binding MappingHelperTargetOptions}"
+                                                          SelectedItem="{Binding SelectedHelperOverrideTargetBone}"
+                                                          ToolTip="Validated target helper, camera, or prop node. A target may appear in only one mapping row." />
+                                                <Button Grid.Column="3"
+                                                        Margin="3,0"
+                                                        Command="{Binding AddHelperOverrideCommand}"
+                                                        Content="Add helper override"
+                                                        ToolTip="Add a rest-relative helper fan-out row without replacing the source's ordinary body mapping." />
+                                                <Button Grid.Column="4"
+                                                        Margin="3,0,0,0"
+                                                        Command="{Binding RemoveHelperOverrideCommand}"
+                                                        Content="Remove"
+                                                        ToolTip="Remove the selected helper override. Ordinary body rows cannot be removed with this action." />
+                                            </Grid>
                                         </StackPanel>
-                                    </Border>
-                                    <TextBlock Margin="4,7,4,3"
-                                               FontSize="10"
-                                               FontWeight="SemiBold"
-                                               Text="Helper / camera fan-out" />
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="*" />
-                                            <ColumnDefinition Width="Auto" />
-                                            <ColumnDefinition Width="Auto" />
-                                        </Grid.ColumnDefinitions>
-                                        <ComboBox Margin="0,0,3,0"
-                                                  IsTextSearchEnabled="True"
-                                                  ItemsSource="{Binding MappingSourceBoneOptions}"
-                                                  SelectedItem="{Binding SelectedHelperOverrideSourceBone}"
-                                                  ToolTip="One source may keep its ordinary body row and also drive multiple distinct helper targets." />
-                                        <TextBlock Grid.Column="1"
-                                                   Margin="3,0"
-                                                   VerticalAlignment="Center"
-                                                   Text="-&gt;" />
-                                        <ComboBox Grid.Column="2"
-                                                  Margin="3,0"
-                                                  IsTextSearchEnabled="True"
-                                                  ItemsSource="{Binding MappingHelperTargetOptions}"
-                                                  SelectedItem="{Binding SelectedHelperOverrideTargetBone}"
-                                                  ToolTip="Validated target helper, camera, or prop node. A target may appear in only one mapping row." />
-                                        <Button Grid.Column="3"
-                                                Margin="3,0"
-                                                Command="{Binding AddHelperOverrideCommand}"
-                                                Content="Add helper override"
-                                                ToolTip="Add a rest-relative helper fan-out row without replacing the source's ordinary body mapping." />
-                                        <Button Grid.Column="4"
-                                                Margin="3,0,0,0"
-                                                Command="{Binding RemoveHelperOverrideCommand}"
-                                                Content="Remove"
-                                                ToolTip="Remove the selected helper override. Ordinary body rows cannot be removed with this action." />
-                                    </Grid>
+                                    </Expander>
                                 </StackPanel>
                                 <DataGrid Grid.Row="1"
                                           Margin="0,5"
@@ -1755,12 +1794,11 @@
                                         </ScrollViewer>
                                     </Grid>
                                 </Border>
-                                <StackPanel Grid.Row="3"
-                                            Margin="0,2,0,5">
-                                    <TextBlock Margin="4,2,4,0"
-                                               FontSize="10"
-                                               FontWeight="SemiBold"
-                                               Text="Required target-bind fallbacks" />
+                                <Expander Grid.Row="3"
+                                          Margin="0,2,0,5"
+                                          Header="Required target-bind fallbacks"
+                                          IsExpanded="False">
+                                    <StackPanel>
                                     <TextBlock Margin="4,1,4,3"
                                                FontSize="9"
                                                Foreground="{StaticResource MutedTextBrush}"
@@ -1789,7 +1827,8 @@
                                                                 IsReadOnly="True" />
                                         </DataGrid.Columns>
                                     </DataGrid>
-                                </StackPanel>
+                                    </StackPanel>
+                                </Expander>
                                 <Border Grid.Row="4"
                                         Padding="8"
                                         Background="#3B301D"
@@ -2696,7 +2735,13 @@
                               Grid.ColumnSpan="5"
                               Height="6"
                               VerticalAlignment="Stretch"
-                              Background="#2D3541"
+                              Panel.ZIndex="100"
+                              Background="#516173"
+                              Cursor="SizeNS"
+                              ResizeBehavior="PreviousAndNext"
+                              ResizeDirection="Rows"
+                              ShowsPreview="False"
+                              ToolTip="Drag to resize the retarget editor and bottom dock."
                               Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
                 <TabControl x:Name="RetargetBottomDock"

@@ -9,17 +9,22 @@ public sealed class TimelineViewModel : ObservableObject
 {
     private const double DefaultPixelsPerFrame = 6.0;
     private const double MinimumPixelsPerFrame = 0.05;
-    private const double MaximumPixelsPerFrame = 24.0;
-    private const double FitCanvasWidth = 1080.0;
+    private const double DefaultViewportWidth = 1080.0;
+    private const double DefaultViewportHeight = 180.0;
+    private const double MinimumCanvasHeight = 160.0;
+    private const double MaximumCanvasWidth = 250_000.0;
+    private const double TimelineRightPadding = 18.0;
     private const double TrackHeaderHeight = 24.0;
     private const double TrackRowHeight = 28.0;
     private const double CurveTop = 32.0;
-    private const double CurveBottom = 166.0;
     private readonly int _startFrame;
     private readonly List<TimelineCurveTrackViewModel> _allCurves = [];
     private int _currentFrame;
     private int _endFrame;
     private double _pixelsPerFrame = DefaultPixelsPerFrame;
+    private double _viewportWidth = DefaultViewportWidth;
+    private double _viewportHeight = DefaultViewportHeight;
+    private bool _isFitToViewport = true;
     private double _framesPerSecond = 30.0;
     private double _playbackFrameRemainder;
     private bool _isPlaying;
@@ -47,9 +52,9 @@ public sealed class TimelineViewModel : ObservableObject
         AddKeyframeCommand = new RelayCommand(AddKeyframe);
         FitTimelineCommand = new RelayCommand(FitTimeline);
         ZoomInCommand = new RelayCommand(
-            () => SetPixelsPerFrame(PixelsPerFrame * 1.5));
+            () => ZoomTimeline(1.5));
         ZoomOutCommand = new RelayCommand(
-            () => SetPixelsPerFrame(PixelsPerFrame / 1.5));
+            () => ZoomTimeline(1.0 / 1.5));
         FitTimeline();
     }
 
@@ -297,19 +302,72 @@ public sealed class TimelineViewModel : ObservableObject
 
     public string ZoomLabel => $"{PixelsPerFrame:0.##} px/frame";
 
+    public bool IsFitToViewport => _isFitToViewport;
+
     public double CanvasWidth => Math.Max(
-        720.0,
-        ((EndFrame - StartFrame) * PixelsPerFrame) + 40.0);
+        _viewportWidth,
+        ((EndFrame - StartFrame) * PixelsPerFrame) +
+        TimelineRightPadding);
 
     public double CurrentFramePixelX => ToPixel(CurrentFrame);
 
     public double DopeSheetCanvasHeight => Math.Max(
-        160.0,
+        CurveCanvasHeight,
         TrackHeaderHeight + (VisibleTracks.Count * TrackRowHeight));
 
     public double TimelineGridHeight => Math.Max(
         136.0,
         DopeSheetCanvasHeight - TrackHeaderHeight);
+
+    public double CurveCanvasHeight => Math.Max(
+        MinimumCanvasHeight,
+        _viewportHeight);
+
+    public double CurveGridHeight => Math.Max(
+        1.0,
+        CurveCanvasHeight - TrackHeaderHeight);
+
+    /// <summary>
+    /// Supplies the actual scrollable viewport owned by the current timeline
+    /// panel. Fit is a live layout mode: resizing the dock keeps the complete
+    /// clip edge-to-edge. Manual zoom may grow the canvas, but never shrink it
+    /// below the width that displays the whole clip without dead space.
+    /// </summary>
+    public void SetViewportSize(double width, double height)
+    {
+        if (!double.IsFinite(width) ||
+            !double.IsFinite(height) ||
+            width <= 0.0 ||
+            height <= 0.0)
+        {
+            return;
+        }
+
+        double normalizedWidth = Math.Max(1.0, width);
+        double normalizedHeight = Math.Max(1.0, height);
+        bool widthChanged =
+            Math.Abs(normalizedWidth - _viewportWidth) >= 0.5;
+        bool heightChanged =
+            Math.Abs(normalizedHeight - _viewportHeight) >= 0.5;
+        if (!widthChanged && !heightChanged)
+        {
+            return;
+        }
+
+        _viewportWidth = normalizedWidth;
+        _viewportHeight = normalizedHeight;
+        double fit = CalculateFitPixelsPerFrame(
+            _viewportWidth,
+            StartFrame,
+            EndFrame);
+        if (_isFitToViewport || PixelsPerFrame < fit)
+        {
+            SetPixelsPerFrame(fit, fitToViewport: true);
+            return;
+        }
+
+        RebuildPresentationGeometry();
+    }
 
     public void Tick(DateTimeOffset now)
     {
@@ -492,20 +550,52 @@ public sealed class TimelineViewModel : ObservableObject
 
     private void FitTimeline()
     {
-        double span = Math.Max(1.0, EndFrame - StartFrame);
-        SetPixelsPerFrame(Math.Min(
-            DefaultPixelsPerFrame,
-            FitCanvasWidth / span));
+        SetPixelsPerFrame(
+            CalculateFitPixelsPerFrame(
+                _viewportWidth,
+                StartFrame,
+                EndFrame),
+            fitToViewport: true);
     }
 
-    private void SetPixelsPerFrame(double value)
+    private void ZoomTimeline(double factor)
     {
+        if (!double.IsFinite(factor) || factor <= 0.0)
+        {
+            return;
+        }
+
+        SetPixelsPerFrame(
+            PixelsPerFrame * factor,
+            fitToViewport: false);
+    }
+
+    private void SetPixelsPerFrame(
+        double value,
+        bool fitToViewport)
+    {
+        double span = Math.Max(1.0, EndFrame - StartFrame);
+        double fit = CalculateFitPixelsPerFrame(
+            _viewportWidth,
+            StartFrame,
+            EndFrame);
+        double maximum = Math.Max(
+            fit,
+            MaximumCanvasWidth / span);
         double normalized = Math.Clamp(
             value,
-            MinimumPixelsPerFrame,
-            MaximumPixelsPerFrame);
+            Math.Max(MinimumPixelsPerFrame, fit),
+            maximum);
+        bool nextFitState =
+            fitToViewport || Math.Abs(normalized - fit) < 1.0e-9;
+        bool fitStateChanged = _isFitToViewport != nextFitState;
+        _isFitToViewport = nextFitState;
         if (Math.Abs(normalized - _pixelsPerFrame) < 1.0e-9)
         {
+            if (fitStateChanged)
+            {
+                OnPropertyChanged(nameof(IsFitToViewport));
+            }
             RebuildPresentationGeometry();
             return;
         }
@@ -513,13 +603,35 @@ public sealed class TimelineViewModel : ObservableObject
         _pixelsPerFrame = normalized;
         OnPropertyChanged(nameof(PixelsPerFrame));
         OnPropertyChanged(nameof(ZoomLabel));
+        OnPropertyChanged(nameof(IsFitToViewport));
         RebuildPresentationGeometry();
+    }
+
+    internal static double CalculateFitPixelsPerFrame(
+        double viewportWidth,
+        int startFrame,
+        int endFrame)
+    {
+        if (!double.IsFinite(viewportWidth) || viewportWidth <= 0.0)
+        {
+            viewportWidth = DefaultViewportWidth;
+        }
+
+        double span = Math.Max(1.0, (double)endFrame - startFrame);
+        return Math.Max(
+            MinimumPixelsPerFrame,
+            Math.Max(1.0, viewportWidth - TimelineRightPadding) /
+            span);
     }
 
     private void RebuildPresentationGeometry()
     {
         OnPropertyChanged(nameof(CanvasWidth));
         OnPropertyChanged(nameof(CurrentFramePixelX));
+        OnPropertyChanged(nameof(DopeSheetCanvasHeight));
+        OnPropertyChanged(nameof(TimelineGridHeight));
+        OnPropertyChanged(nameof(CurveCanvasHeight));
+        OnPropertyChanged(nameof(CurveGridHeight));
         RebuildFrameMarkers();
         RebuildVisibleKeyframes();
         RebuildCurveGeometry();
@@ -737,6 +849,9 @@ public sealed class TimelineViewModel : ObservableObject
 
         foreach (TimelineCurveTrackViewModel curve in Curves)
         {
+            double curveBottom = Math.Max(
+                CurveTop + 1.0,
+                CurveCanvasHeight - 14.0);
             TimelineCurvePointViewModel[] points = curve.Keys
                 .Select(key => new TimelineCurvePointViewModel(
                     curve.Name,
@@ -744,10 +859,10 @@ public sealed class TimelineViewModel : ObservableObject
                     key.Frame,
                     key.Value,
                     ToPixel(key.Frame),
-                    CurveBottom -
+                    curveBottom -
                     ((key.Value - minimum) /
                      (maximum - minimum) *
-                     (CurveBottom - CurveTop))))
+                     (curveBottom - CurveTop))))
                 .ToArray();
             foreach (TimelineCurvePointViewModel point in points)
             {

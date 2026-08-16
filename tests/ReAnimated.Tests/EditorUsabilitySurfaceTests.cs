@@ -286,6 +286,23 @@ public sealed class EditorUsabilitySurfaceTests
                     command,
                     StringComparison.Ordinal));
         }
+
+        XElement root = document.Root!;
+        Assert.Equal(
+            "TimelinePanel_OnSizeChanged",
+            (string?)root.Attribute("SizeChanged"));
+        Assert.Equal(
+            "TimelinePanel_OnPreviewMouseWheel",
+            (string?)root.Attribute("PreviewMouseWheel"));
+        XElement curveCanvas = Assert.Single(
+            document.Descendants(Presentation + "Canvas"),
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "CurveCanvas",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "{Binding CurveCanvasHeight}",
+            (string?)curveCanvas.Attribute("Height"));
     }
 
     [Fact]
@@ -963,6 +980,26 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)button.Attribute("Content"),
                 "Reset layout",
                 StringComparison.Ordinal));
+        XElement[] interactiveSplitters = document
+            .Descendants(Presentation + "GridSplitter")
+            .Where(static splitter =>
+                string.Equals(
+                    (string?)splitter.Attribute("ResizeBehavior"),
+                    "PreviousAndNext",
+                    StringComparison.Ordinal))
+            .ToArray();
+        Assert.True(interactiveSplitters.Length >= 5);
+        Assert.All(
+            interactiveSplitters,
+            static splitter =>
+            {
+                Assert.Equal(
+                    "False",
+                    (string?)splitter.Attribute("ShowsPreview"));
+                Assert.True(
+                    (string?)splitter.Attribute("ResizeDirection") is
+                        "Rows" or "Columns");
+            });
         Assert.Contains(
             document.Descendants(Presentation + "TabItem"),
             static tab => string.Equals(

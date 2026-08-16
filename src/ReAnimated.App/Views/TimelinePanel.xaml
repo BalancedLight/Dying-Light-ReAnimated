@@ -1,6 +1,9 @@
 <UserControl x:Class="ReAnimated.App.Views.TimelinePanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Loaded="TimelinePanel_OnLoaded"
+             PreviewMouseWheel="TimelinePanel_OnPreviewMouseWheel"
+             SizeChanged="TimelinePanel_OnSizeChanged">
     <Border Style="{StaticResource PaneBorderStyle}">
         <Grid>
             <Grid.RowDefinitions>
@@ -105,7 +108,9 @@
                 </StackPanel>
             </Grid>
 
-            <TabControl Grid.Row="2">
+            <TabControl x:Name="TimelineTabs"
+                        Grid.Row="2"
+                        SelectionChanged="TimelineTabs_OnSelectionChanged">
                 <TabItem Header="Dope sheet">
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -320,19 +325,21 @@
                             </DockPanel>
                         </Border>
 
-                        <ScrollViewer Grid.Column="1"
+                        <ScrollViewer x:Name="CurveScroll"
+                                      Grid.Column="1"
                                       HorizontalScrollBarVisibility="Auto"
-                                      VerticalScrollBarVisibility="Disabled">
+                                      VerticalScrollBarVisibility="Disabled"
+                                      ScrollChanged="CurveScroll_OnScrollChanged">
                             <Canvas x:Name="CurveCanvas"
                                     Width="{Binding CanvasWidth}"
-                                    Height="180"
+                                    Height="{Binding CurveCanvasHeight}"
                                     Background="#11161E"
                                     Cursor="SizeWE"
                                     MouseLeftButtonDown="TimelineCanvas_OnMouseLeftButtonDown"
                                     MouseLeftButtonUp="TimelineCanvas_OnMouseLeftButtonUp"
                                     MouseMove="TimelineCanvas_OnMouseMove">
                                 <ItemsControl Width="{Binding CanvasWidth}"
-                                              Height="180"
+                                              Height="{Binding CurveCanvasHeight}"
                                               ItemsSource="{Binding FrameMarkers}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
@@ -349,14 +356,16 @@
                                                            FontSize="9"
                                                            Foreground="{StaticResource MutedTextBrush}"
                                                            Text="{Binding Frame}" />
-                                                <Border Width="1" Height="156" Background="#27313D" />
+                                                <Border Width="1"
+                                                        Height="{Binding DataContext.CurveGridHeight, RelativeSource={RelativeSource AncestorType=UserControl}}"
+                                                        Background="#27313D" />
                                             </StackPanel>
                                         </DataTemplate>
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
                                 <ItemsControl Width="{Binding CanvasWidth}"
-                                              Height="180"
+                                              Height="{Binding CurveCanvasHeight}"
                                               ItemsSource="{Binding CurveSegments}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
@@ -375,7 +384,7 @@
                                 </ItemsControl>
 
                                 <ItemsControl Width="{Binding CanvasWidth}"
-                                              Height="180"
+                                              Height="{Binding CurveCanvasHeight}"
                                               ItemsSource="{Binding CurvePoints}">
                                     <ItemsControl.ItemsPanel>
                                         <ItemsPanelTemplate><Canvas /></ItemsPanelTemplate>
@@ -406,7 +415,7 @@
 
                                 <Border Canvas.Left="{Binding CurrentFramePixelX}"
                                         Width="2"
-                                        Height="180"
+                                        Height="{Binding CurveCanvasHeight}"
                                         Background="{StaticResource ErrorBrush}" />
                             </Canvas>
                         </ScrollViewer>
