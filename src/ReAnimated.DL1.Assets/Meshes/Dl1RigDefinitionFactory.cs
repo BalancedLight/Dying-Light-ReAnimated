@@ -11,6 +11,10 @@ namespace ReAnimated.DL1.Assets.Meshes;
 /// </summary>
 public static class Dl1RigDefinitionFactory
 {
+    // These role strings are hashed into RigSignature, so renaming one
+    // invalidates every persisted rig signature and retail source binding.
+    // Consumers that disagree with a role here must accept both spellings
+    // instead - see Dl1PreviewContract.ReferenceCameraHelperSemanticRole.
     private static readonly Dictionary<string, string> SemanticRoles =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {

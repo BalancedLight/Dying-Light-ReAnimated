@@ -489,6 +489,9 @@
 
                         <DockPanel Margin="0,0,0,7">
                             <WrapPanel DockPanel.Dock="Right">
+                                <ToggleButton Content="Base-game animations"
+                                              IsChecked="{Binding IsRetailAnimationBrowserVisible}"
+                                              ToolTip="Search the indexed retail type-320 catalog and add a base-game clip to this project." />
                                 <Button Command="{Binding ImportAnimationCommand}"
                                         Content="Import animation..." />
                                 <Button Command="{Binding AddAnimationTargetsCommand}"
@@ -590,7 +593,167 @@
                                       ShowsPreview="False"
                                       ToolTip="Drag to resize the preview and animation library." />
 
-                        <Border Grid.Row="3" Style="{StaticResource PaneBorderStyle}">
+                        <Grid Grid.Row="3">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" MinWidth="320" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="RetailAnimationBrowserPane"
+                                    Width="340"
+                                    Margin="0,0,0,0"
+                                    Padding="10"
+                                    Style="{StaticResource PaneBorderStyle}"
+                                    Visibility="{Binding IsRetailAnimationBrowserVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+                                    <DockPanel>
+                                        <Button DockPanel.Dock="Right"
+                                                Command="{Binding AssetBrowser.IndexGameCommand}"
+                                                Content="{Binding AnimationBrowser.CatalogActionLabel}" />
+                                        <TextBlock FontSize="15"
+                                                   FontWeight="SemiBold"
+                                                   Text="Base-game animation browser" />
+                                    </DockPanel>
+                                    <TextBlock Grid.Row="1"
+                                               Margin="0,3,0,7"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Retail type-320 clips. Adding one records an exact fingerprinted reference and never modifies the retail asset."
+                                               TextWrapping="Wrap" />
+                                    <Grid Grid.Row="2" Margin="0,0,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="130" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBox Text="{Binding AnimationBrowser.SearchText, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Filter by animation name, path, or provider" />
+                                        <ComboBox Grid.Column="1"
+                                                  Margin="6,0,0,0"
+                                                  ItemsSource="{Binding AnimationBrowser.ProviderFilters}"
+                                                  SelectedItem="{Binding AnimationBrowser.SelectedProviderFilter}" />
+                                    </Grid>
+
+                                    <!-- Both prompts are hosted here so the add
+                                         flow can finish on the surface that
+                                         started it. Without them an ambiguous
+                                         source model or a conflicting SCR
+                                         timing is a dead end. -->
+                                    <StackPanel Grid.Row="3">
+                                        <Border Margin="0,0,0,5"
+                                                Padding="6"
+                                                Background="#25344A"
+                                                BorderBrush="{StaticResource AccentBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="3"
+                                                Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                            <StackPanel>
+                                                <TextBlock Foreground="{StaticResource TextBrush}"
+                                                           Text="{Binding ExplorerSourceModelPickerPrompt}"
+                                                           TextWrapping="Wrap" />
+                                                <ComboBox Margin="0,5,0,4"
+                                                          DisplayMemberPath="Name"
+                                                          ItemsSource="{Binding ProjectModelLibrary}"
+                                                          SelectedItem="{Binding SelectedProjectModel}"
+                                                          ToolTip="Bind the clip to a rigged model already in this project." />
+                                                <WrapPanel>
+                                                    <Button Command="{Binding UseSelectedProjectModelAsSourceCommand}"
+                                                            Content="Use project model as source" />
+                                                    <Button Command="{Binding SelectWorkspaceCommand}"
+                                                            CommandParameter="Models"
+                                                            Content="Find base-game model..." />
+                                                    <Button Command="{Binding CancelExplorerSourceModelPickerCommand}"
+                                                            Content="Cancel" />
+                                                </WrapPanel>
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Margin="0,0,0,5"
+                                                Padding="6"
+                                                Background="#3A2D18"
+                                                BorderBrush="{StaticResource WarningBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="3"
+                                                Visibility="{Binding IsExplorerAnimationTimingPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                            <StackPanel>
+                                                <TextBlock Foreground="{StaticResource TextBrush}"
+                                                           Text="{Binding ExplorerAnimationTimingPrompt}"
+                                                           TextWrapping="Wrap" />
+                                                <ComboBox Margin="0,5,0,4"
+                                                          DisplayMemberPath="SelectionLabel"
+                                                          ItemsSource="{Binding ExplorerAnimationTimingChoices}"
+                                                          SelectedItem="{Binding SelectedExplorerAnimationTiming}" />
+                                                <WrapPanel>
+                                                    <Button Command="{Binding ConfirmExplorerAnimationTimingCommand}"
+                                                            Content="Use timing and play" />
+                                                    <Button Command="{Binding CancelExplorerAnimationTimingCommand}"
+                                                            Content="Cancel" />
+                                                </WrapPanel>
+                                            </StackPanel>
+                                        </Border>
+                                    </StackPanel>
+                                    <Grid Grid.Row="4">
+                                        <ListBox ItemsSource="{Binding AnimationBrowser.VisibleAssets}"
+                                                 SelectedItem="{Binding AnimationBrowser.SelectedAsset}"
+                                                 ScrollViewer.CanContentScroll="True"
+                                                 VirtualizingPanel.IsVirtualizing="True"
+                                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                                            <ListBox.ItemTemplate>
+                                                <DataTemplate>
+                                                    <StackPanel Margin="3,5">
+                                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
+                                                        <TextBlock FontSize="10"
+                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                   Text="{Binding LogicalPath}"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                </DataTemplate>
+                                            </ListBox.ItemTemplate>
+                                        </ListBox>
+                                        <TextBlock Margin="8"
+                                                   VerticalAlignment="Top"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding AnimationBrowser.EmptyResultMessage}"
+                                                   TextWrapping="Wrap">
+                                            <TextBlock.Style>
+                                                <Style TargetType="{x:Type TextBlock}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding AnimationBrowser.HasFilteredAssets}" Value="False">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Grid>
+                                    <WrapPanel Grid.Row="5" Margin="0,7,0,0">
+                                        <Button Command="{Binding AddSelectedRetailAnimationCommand}"
+                                                Content="Add to project &amp; play"
+                                                ToolTip="Decode this clip against the current source model, add it to the project once, and start playback." />
+                                        <TextBlock Margin="8,5,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding AnimationBrowser.ResultSummary}" />
+                                    </WrapPanel>
+                                </Grid>
+                            </Border>
+                            <GridSplitter Grid.Column="1"
+                                          Width="6"
+                                          HorizontalAlignment="Stretch"
+                                          Panel.ZIndex="100"
+                                          Background="#516173"
+                                          Cursor="SizeWE"
+                                          ResizeBehavior="PreviousAndNext"
+                                          ResizeDirection="Columns"
+                                          ShowsPreview="False"
+                                          ToolTip="Drag to resize the base-game animation browser."
+                                          Visibility="{Binding IsRetailAnimationBrowserVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <Border Grid.Column="2" Style="{StaticResource PaneBorderStyle}">
                             <DataGrid x:Name="AnimationLibraryTable"
                                       AlternationCount="2"
                                       AutoGenerateColumns="False"
@@ -668,6 +831,7 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </Border>
+                        </Grid>
                     </Grid>
                 </Border>
 
@@ -701,6 +865,15 @@
                                 <WrapPanel DockPanel.Dock="Right">
                                     <ToggleButton Content="FPP camera"
                                                   IsChecked="{Binding IsFppPlaybackEnabled}" />
+                                    <TextBlock Margin="8,5,4,0"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Camera bone"
+                                               Visibility="{Binding IsFppPlaybackEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                                    <ComboBox Width="160"
+                                              ItemsSource="{Binding TargetPreviewCameraBoneOptions}"
+                                              SelectedItem="{Binding SelectedTargetPreviewCameraBone}"
+                                              ToolTip="Choose which target rig bone anchors the FPP preview. Auto-detect prefers EyeCamera, then the camera.eye role, then the head or neck."
+                                              Visibility="{Binding IsFppPlaybackEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                     <Button Command="{Binding SelectWorkspaceCommand}"
                                             CommandParameter="Animations"
                                             Content="Choose animation" />
@@ -720,11 +893,39 @@
                                         <Run Text="  ->  Target: " />
                                         <Run Text="{Binding ActiveTargetModelLabel, Mode=OneWay}" />
                                     </TextBlock>
+                                    <TextBlock Margin="0,3,0,0"
+                                               FontSize="10"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="{Binding FppPlaybackCameraStatus, Mode=OneWay}"
+                                               TextWrapping="Wrap"
+                                               Visibility="{Binding IsFppPlaybackEnabled, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                 </StackPanel>
                             </DockPanel>
                         </Border>
-                        <views:ViewportPane Grid.Row="1"
-                                            DataContext="{Binding TargetViewport}" />
+                        <Grid x:Name="PlaybackViewportGrid" Grid.Row="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition x:Name="PlaybackFppCameraColumn" Width="0" MinWidth="0" MaxWidth="0" />
+                                <ColumnDefinition x:Name="PlaybackFppSplitterColumn" Width="0" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <!-- DataContext is assigned in code-behind: this
+                                 pane is detached on every FPP toggle and an
+                                 inherited binding returns null after that. -->
+                            <views:ViewportPane x:Name="PlaybackFppViewportPane"
+                                                Grid.Column="0" />
+                            <GridSplitter Grid.Column="1"
+                                          Width="6"
+                                          HorizontalAlignment="Stretch"
+                                          Panel.ZIndex="100"
+                                          Background="#516173"
+                                          Cursor="SizeWE"
+                                          ResizeBehavior="PreviousAndNext"
+                                          ResizeDirection="Columns"
+                                          ShowsPreview="False"
+                                          ToolTip="Drag to resize the FPP camera and external orbit panes." />
+                            <views:ViewportPane Grid.Column="2"
+                                                DataContext="{Binding TargetViewport}" />
+                        </Grid>
                         <GridSplitter Grid.Row="2"
                                       Height="6"
                                       HorizontalAlignment="Stretch"

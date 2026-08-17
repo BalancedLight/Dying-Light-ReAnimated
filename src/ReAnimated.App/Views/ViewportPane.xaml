@@ -103,7 +103,7 @@
                     <TextBlock Foreground="{StaticResource AccentBrush}"
                                FontSize="10"
                                FontWeight="SemiBold"
-                               Text="EYE CAMERA" />
+                               Text="{Binding CameraViewBadge}" />
                 </Border>
                 <Grid Width="26" Height="26"
                       HorizontalAlignment="Center"

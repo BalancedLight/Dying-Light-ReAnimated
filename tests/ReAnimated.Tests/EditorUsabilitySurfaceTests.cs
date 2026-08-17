@@ -705,11 +705,17 @@ public sealed class EditorUsabilitySurfaceTests
                 StringComparison.Ordinal))
             .ToArray();
         Assert.NotEmpty(catalogButtons);
+
+        // One catalog load feeds every browser, so each button may label
+        // itself from whichever browser it sits next to, but it must still
+        // report a catalog action rather than static text.
         Assert.All(
             catalogButtons,
-            static catalogButton => Assert.Equal(
-                "{Binding AssetBrowser.CatalogActionLabel}",
-                (string?)catalogButton.Attribute("Content")));
+            static catalogButton => Assert.True(
+                (string?)catalogButton.Attribute("Content") is
+                    "{Binding AssetBrowser.CatalogActionLabel}" or
+                    "{Binding AnimationBrowser.CatalogActionLabel}",
+                "Every catalog button must report a live catalog action label."));
         Assert.Single(
             catalogButtons,
             static catalogButton => catalogButton
@@ -922,13 +928,67 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)element.Attribute(Xaml + "Name"),
                 "PlaybackWorkflowSurface",
                 StringComparison.Ordinal));
-        Assert.Single(
+        // Playback is single-pane until the FPP camera is enabled, at which
+        // point the evaluated-camera pane joins the free external orbit.
+        Assert.Equal(
+            2,
+            playback.Descendants().Count(static element =>
+                element.Name.LocalName == "ViewportPane"));
+        XElement playbackFppPane = Assert.Single(
             playback.Descendants(),
-            static element =>
-                element.Name.LocalName == "ViewportPane");
+            static element => string.Equals(
+                (string?)element.Attribute(Xaml + "Name"),
+                "PlaybackFppViewportPane",
+                StringComparison.Ordinal));
+
+        // The pane is detached on every FPP toggle, so an inherited binding
+        // comes back null and the viewport renders black. Its source must be
+        // assigned directly in code-behind instead.
+        Assert.Null(playbackFppPane.Attribute("DataContext"));
+        Assert.Contains(
+            "PlaybackFppViewportPane.DataContext = _viewModel.SourceViewport;",
+            File.ReadAllText(
+                FindRepositoryFile(
+                    "src",
+                    "ReAnimated.App",
+                    "MainWindow.xaml.cs")),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            playback.Descendants(Presentation + "ColumnDefinition"),
+            static column => string.Equals(
+                (string?)column.Attribute(Xaml + "Name"),
+                "PlaybackFppCameraColumn",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            playback.Descendants(Presentation + "ColumnDefinition"),
+            static column => string.Equals(
+                (string?)column.Attribute(Xaml + "Name"),
+                "PlaybackFppSplitterColumn",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            playback.Descendants(Presentation + "GridSplitter"),
+            static splitter => string.Equals(
+                (string?)splitter.Attribute("ResizeDirection"),
+                "Columns",
+                StringComparison.Ordinal));
+
+        // The camera-bone picker must stay a ComboBox: a ListBox here would
+        // compete with the timeline for the surface's vertical space.
         Assert.DoesNotContain(
             playback.Descendants(Presentation + "ListBox"),
             static _ => true);
+        Assert.Contains(
+            playback.Descendants(Presentation + "ComboBox"),
+            static picker => string.Equals(
+                (string?)picker.Attribute("ItemsSource"),
+                "{Binding TargetPreviewCameraBoneOptions}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            playback.Descendants(Presentation + "TextBlock"),
+            static text => string.Equals(
+                (string?)text.Attribute("Text"),
+                "{Binding FppPlaybackCameraStatus, Mode=OneWay}",
+                StringComparison.Ordinal));
         Assert.Contains(
             playback.Descendants(Presentation + "ToggleButton"),
             static toggle => string.Equals(

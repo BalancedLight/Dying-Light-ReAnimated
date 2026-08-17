@@ -547,6 +547,250 @@ public sealed record ExportReadinessItemViewModel(
     string Detail,
     bool IsReady);
 
+/// <summary>
+/// Retail catalog browser scoped to base-game animation resources.
+/// </summary>
+/// <remarks>
+/// This deliberately does not reuse the shared <see cref="AssetBrowserViewModel"/>.
+/// Several animation flows steer that browser as a side effect - the source
+/// model picker clears its search and forces the mesh kind filter, for example
+/// - which would wipe the animation the operator just selected at the exact
+/// moment they act on it. Keeping a separate list also stops an animation
+/// selection from changing what the Models tab buttons operate on. The rows
+/// themselves are shared instances, so only the filtered projection is
+/// duplicated.
+/// </remarks>
+public sealed class RetailAnimationBrowserViewModel : ObservableObject
+{
+    public const string AllProviders = AssetBrowserViewModel.AllProviders;
+    public const int MaximumVisibleAssets =
+        AssetBrowserViewModel.MaximumVisibleAssets;
+
+    private readonly List<AssetItemViewModel> _allAssets = [];
+    private string _searchText = string.Empty;
+    private string _selectedProviderFilter = AllProviders;
+    private AssetItemViewModel? _selectedAsset;
+    private bool _isCatalogLoading;
+    private int _filteredAssetCount;
+
+    public RetailAnimationBrowserViewModel()
+    {
+        ClearSearchCommand = new RelayCommand(
+            () => SearchText = string.Empty,
+            () => SearchText.Length > 0);
+    }
+
+    public event EventHandler<AssetItemViewModel?>? SelectedAssetChanged;
+
+    public ObservableCollection<AssetItemViewModel> VisibleAssets { get; } = [];
+
+    public ObservableCollection<string> ProviderFilters { get; } =
+        [AllProviders];
+
+    public IRelayCommand ClearSearchCommand { get; }
+
+    public bool IsCatalogLoading => _isCatalogLoading;
+
+    public string CatalogActionLabel => IsCatalogLoading
+        ? "Loading..."
+        : HasIndexedAssets
+            ? "Refresh catalog"
+            : "Load catalog";
+
+    public string SearchText
+    {
+        get => _searchText;
+        set
+        {
+            if (SetProperty(ref _searchText, value ?? string.Empty))
+            {
+                ClearSearchCommand.NotifyCanExecuteChanged();
+                RebuildVisibleAssets();
+            }
+        }
+    }
+
+    public string SelectedProviderFilter
+    {
+        get => _selectedProviderFilter;
+        set
+        {
+            string requested = string.IsNullOrWhiteSpace(value)
+                ? AllProviders
+                : value;
+            if (SetProperty(ref _selectedProviderFilter, requested))
+            {
+                RebuildVisibleAssets();
+            }
+        }
+    }
+
+    public AssetItemViewModel? SelectedAsset
+    {
+        get => _selectedAsset;
+        set
+        {
+            if (SetProperty(ref _selectedAsset, value))
+            {
+                SelectedAssetChanged?.Invoke(this, value);
+            }
+        }
+    }
+
+    public int IndexedAssetCount => _allAssets.Count;
+
+    public bool HasIndexedAssets => IndexedAssetCount > 0;
+
+    public int FilteredAssetCount => _filteredAssetCount;
+
+    public bool HasFilteredAssets => FilteredAssetCount > 0;
+
+    public bool IsResultTruncated =>
+        FilteredAssetCount > VisibleAssets.Count;
+
+    public string EmptyResultMessage => IsCatalogLoading
+        ? "Loading the saved Dying Light 1 asset catalog..."
+        : HasIndexedAssets
+            ? "No base-game animations match the current filters."
+            : "No saved asset catalog is available. Load the Dying Light 1 assets once; later launches reuse the validated local cache.";
+
+    public string ResultSummary => IsCatalogLoading
+        ? "Loading saved catalog"
+        : IsResultTruncated
+            ? $"Showing {VisibleAssets.Count:N0} of {FilteredAssetCount:N0} animations"
+            : $"{FilteredAssetCount:N0} matching animations";
+
+    /// <summary>
+    /// Keeps only fingerprinted retail animation resources. Every other
+    /// catalog row is irrelevant here and would only make the list unusable.
+    /// </summary>
+    public void ReplaceAssets(IEnumerable<AssetItemViewModel> assets)
+    {
+        ArgumentNullException.ThrowIfNull(assets);
+        string? selectedId = SelectedAsset?.Id;
+        _allAssets.Clear();
+        _allAssets.AddRange(
+            assets.Where(static asset =>
+                asset.Kind == AssetKind.Animation &&
+                asset.RetailAsset is not null));
+
+        string previousProvider = SelectedProviderFilter;
+        ProviderFilters.Clear();
+        ProviderFilters.Add(AllProviders);
+        foreach (string provider in _allAssets
+                     .Select(static asset => asset.Provider)
+                     .Where(static provider =>
+                         !string.IsNullOrWhiteSpace(provider))
+                     .Distinct(StringComparer.OrdinalIgnoreCase)
+                     .OrderBy(
+                         static provider => provider,
+                         StringComparer.OrdinalIgnoreCase))
+        {
+            ProviderFilters.Add(provider);
+        }
+
+        SelectedProviderFilter = ProviderFilters.Contains(
+            previousProvider,
+            StringComparer.OrdinalIgnoreCase)
+                ? previousProvider
+                : AllProviders;
+        SelectedAsset = selectedId is null
+            ? null
+            : _allAssets.FirstOrDefault(item =>
+                string.Equals(
+                    item.Id,
+                    selectedId,
+                    StringComparison.Ordinal));
+        OnPropertyChanged(nameof(IndexedAssetCount));
+        OnPropertyChanged(nameof(HasIndexedAssets));
+        OnPropertyChanged(nameof(EmptyResultMessage));
+        OnPropertyChanged(nameof(CatalogActionLabel));
+        RebuildVisibleAssets();
+    }
+
+    public void SetCatalogLoading(bool isLoading)
+    {
+        if (!SetProperty(
+                ref _isCatalogLoading,
+                isLoading,
+                nameof(IsCatalogLoading)))
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(CatalogActionLabel));
+        OnPropertyChanged(nameof(EmptyResultMessage));
+        OnPropertyChanged(nameof(ResultSummary));
+    }
+
+    private void RebuildVisibleAssets()
+    {
+        string filter = SearchText.Trim();
+        IEnumerable<AssetItemViewModel> matches = _allAssets;
+        if (!string.Equals(
+                SelectedProviderFilter,
+                AllProviders,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            matches = matches.Where(item => string.Equals(
+                item.Provider,
+                SelectedProviderFilter,
+                StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (filter.Length > 0)
+        {
+            matches = matches.Where(item =>
+                item.Name.Contains(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase) ||
+                item.LogicalPath.Contains(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase) ||
+                item.Provider.Contains(
+                    filter,
+                    StringComparison.OrdinalIgnoreCase));
+        }
+
+        AssetItemViewModel[] filtered = matches.ToArray();
+        _filteredAssetCount = filtered.Length;
+        AssetItemViewModel[] requested = filtered
+            .Take(MaximumVisibleAssets)
+            .ToArray();
+
+        for (int index = 0; index < requested.Length; index++)
+        {
+            AssetItemViewModel item = requested[index];
+            if (index < VisibleAssets.Count &&
+                ReferenceEquals(VisibleAssets[index], item))
+            {
+                continue;
+            }
+
+            int existingIndex = VisibleAssets.IndexOf(item);
+            if (existingIndex >= 0)
+            {
+                VisibleAssets.Move(existingIndex, index);
+            }
+            else
+            {
+                VisibleAssets.Insert(index, item);
+            }
+        }
+
+        while (VisibleAssets.Count > requested.Length)
+        {
+            VisibleAssets.RemoveAt(VisibleAssets.Count - 1);
+        }
+
+        OnPropertyChanged(nameof(FilteredAssetCount));
+        OnPropertyChanged(nameof(HasFilteredAssets));
+        OnPropertyChanged(nameof(EmptyResultMessage));
+        OnPropertyChanged(nameof(IsResultTruncated));
+        OnPropertyChanged(nameof(ResultSummary));
+    }
+}
+
 public sealed class AssetBrowserViewModel : ObservableObject
 {
     public const string AllKinds = "All types";

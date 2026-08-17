@@ -44,6 +44,14 @@ public enum EvaluatedCameraSource
     ProfileBone,
     Dl1FppEyeCamera,
     Dl1MovieReferenceCamera,
+
+    /// <summary>
+    /// The full DL1 FPP context evaluated against an editor-only camera bone
+    /// rather than the EyeCamera export contract. Callers that gate on DL1 FPP
+    /// fidelity must accept this alongside <see cref="Dl1FppEyeCamera"/>;
+    /// callers that assert the export contract must not.
+    /// </summary>
+    Dl1FppPreviewBone,
 }
 
 public sealed record EvaluatedCamera(

@@ -44,9 +44,14 @@ public sealed class AnimationExplorerViewModelTests : IDisposable
             .ExecuteAsync(null);
 
         Assert.True(viewModel.IsExplorerSourceModelPickerActive);
+
+        // Opening the picker must not steer the browser the operator is
+        // working in. It used to clear the search and force the mesh kind
+        // filter, which hid the animation row that was just acted on.
         Assert.Equal(
-            nameof(AssetKind.Mesh),
+            AssetBrowserViewModel.AllKinds,
             viewModel.AssetBrowser.SelectedKindFilter);
+        Assert.Same(item, viewModel.AssetBrowser.SelectedAsset);
         Assert.Contains(
             "exact fingerprinted source model",
             viewModel.ExplorerSourceModelPickerPrompt,

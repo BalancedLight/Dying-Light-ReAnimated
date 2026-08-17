@@ -153,7 +153,7 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
-    public async Task TppGeometryCannotMasqueradeAsFppEyeCameraPreview()
+    public async Task TppGeometryWarnsWithoutBlockingFppCameraPreview()
     {
         Directory.CreateDirectory(_temporaryDirectory);
         await using var assets = new Dl1AssetWorkspace(
@@ -181,11 +181,20 @@ public sealed class LinkedTargetExternalPreviewTests : IDisposable
         viewModel.ApplyEvaluatedPreviewCamera(
             CreateFrame("FPP", skeleton));
 
-        Assert.False(
+        // Mesh classification confidence says nothing about whether the camera
+        // transform is usable, so an unclassified or third-person target warns
+        // instead of disabling the preview outright. The claim that must not
+        // leak is that this geometry is FPP hands geometry.
+        Assert.True(
             viewModel.SourceViewport.IsCameraViewActive);
+        Assert.Null(viewModel.SourceViewport.DiagnosticOverlay);
         Assert.Contains(
-            "requires an FPP retail target",
-            viewModel.SourceViewport.DiagnosticOverlay,
+            "not classified as FPP hands geometry",
+            viewModel.FppPlaybackCameraStatus,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "not classified as FPP hands geometry",
+            viewModel.SourceViewport.FidelityLabel,
             StringComparison.Ordinal);
         Assert.Equal(
             RenderCameraNavigationResult.Applied,

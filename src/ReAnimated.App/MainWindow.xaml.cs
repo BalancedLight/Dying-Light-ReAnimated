@@ -14,6 +14,8 @@ public partial class MainWindow : Window
     private readonly WorkspaceAutosaveService _autosave;
     private GridLength _visibleSourceViewportWidth =
         new(1.0, GridUnitType.Star);
+    private GridLength _visiblePlaybackFppWidth =
+        new(1.0, GridUnitType.Star);
     private bool _isLoaded;
 
     public MainWindow(
@@ -33,10 +35,18 @@ public partial class MainWindow : Window
         // A direct reference is stable for the lifetime of this window and is
         // retained across every detach/reattach cycle.
         ModelsWorkspaceSurface.DataContext = _viewModel.Models;
+
+        // The FPP camera pane leaves and re-enters the visual tree on every
+        // toggle, so it needs the same direct reference for the same reason.
+        // With an inherited binding it came back with a null source: the pane
+        // kept rendering its own chrome at full frame rate while its title and
+        // SceneSource silently bound to nothing, so the viewport stayed black.
+        PlaybackFppViewportPane.DataContext = _viewModel.SourceViewport;
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         ApplyWorkspaceSurfaceLayout();
         ApplyWorkflowAirspaceLayout();
         ApplyViewportColumnLayout();
+        ApplyPlaybackViewportLayout();
         Loaded += OnWindowLoaded;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
@@ -110,6 +120,12 @@ public partial class MainWindow : Window
             string.Equals(
                 args.PropertyName,
                 nameof(MainWindowViewModel.IsRetargetWorkspace),
+                StringComparison.Ordinal) ||
+            // Playback and Fpp share IsPlaybackWorkspace, so toggling the FPP
+            // camera never raises it. The split pane keys on IsFppWorkspace.
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsFppWorkspace),
                 StringComparison.Ordinal);
         bool viewportLayoutChanged = string.Equals(
             args.PropertyName,
@@ -142,12 +158,63 @@ public partial class MainWindow : Window
         {
             ApplyWorkspaceSurfaceLayout();
             ApplyWorkflowAirspaceLayout();
+            ApplyPlaybackViewportLayout();
         }
 
         if (workspaceSurfaceChanged || viewportLayoutChanged)
         {
             ApplyViewportColumnLayout();
         }
+    }
+
+    private void ApplyPlaybackViewportLayout()
+    {
+        // The Playback surface is single-pane until the FPP camera is enabled.
+        // The evaluated camera pane is the source viewport, which
+        // PublishLinkedTargetExternalView already fills and locks; the target
+        // viewport stays a free external orbit on the right.
+        if (_viewModel.IsFppWorkspace)
+        {
+            PlaybackFppCameraColumn.MinWidth = 0.0;
+            PlaybackFppCameraColumn.MaxWidth = double.PositiveInfinity;
+            PlaybackFppCameraColumn.Width =
+                _visiblePlaybackFppWidth.Value > 0.0
+                    ? _visiblePlaybackFppWidth
+                    : new GridLength(1.0, GridUnitType.Star);
+            PlaybackFppSplitterColumn.Width = new GridLength(6.0);
+
+            // Re-assert the binding source at the detach/reattach boundary,
+            // exactly as ApplyWorkspaceSurfaceLayout does for the Models
+            // surface, so a reattached pane can never render against a null
+            // DataContext.
+            PlaybackFppViewportPane.DataContext = _viewModel.SourceViewport;
+            if (!PlaybackViewportGrid.Children.Contains(
+                    PlaybackFppViewportPane))
+            {
+                Grid.SetColumn(PlaybackFppViewportPane, 0);
+                PlaybackViewportGrid.Children.Add(PlaybackFppViewportPane);
+            }
+
+            PlaybackViewportGrid.InvalidateMeasure();
+            PlaybackViewportGrid.InvalidateArrange();
+            return;
+        }
+
+        if (PlaybackFppCameraColumn.Width.Value > 0.0)
+        {
+            _visiblePlaybackFppWidth = PlaybackFppCameraColumn.Width;
+        }
+
+        // Same HwndHost discipline as ApplyViewportColumnLayout: a collapsed
+        // pane can retain its native child and leave a stale Direct3D strip,
+        // so the pane leaves the visual tree in the single-pane layout.
+        PlaybackViewportGrid.Children.Remove(PlaybackFppViewportPane);
+        PlaybackFppCameraColumn.MinWidth = 0.0;
+        PlaybackFppCameraColumn.MaxWidth = 0.0;
+        PlaybackFppCameraColumn.Width = new GridLength(0.0);
+        PlaybackFppSplitterColumn.Width = new GridLength(0.0);
+        PlaybackViewportGrid.InvalidateMeasure();
+        PlaybackViewportGrid.InvalidateArrange();
     }
 
     private void ApplyWorkspaceSurfaceLayout()

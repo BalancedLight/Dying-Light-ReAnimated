@@ -551,8 +551,55 @@ public sealed class Dl1PreviewContextTests
     {
         RigDefinition rig = CreateMovieRigWithRefCamera();
         AnimationClip clip = new("fpp", new FrameRate(30, 1), 1);
-        var misleadingProfile = new PreviewProfile(
+
+        // No preview bone is requested, so auto-detection runs. A RefCamera
+        // helper must never stand in for a missing EyeCamera, and this rig
+        // offers no head or neck to fall back to either.
+        var autoDetectProfile = new PreviewProfile(
             "fpp-refcamera-is-not-eye",
+            PreviewViewMode.FirstPerson,
+            AuthoringPreviewFidelity.AuthoringAccurate,
+            PreviewVisualStyle.MaterialApproximation,
+            Dl1PreviewContract.EyeCameraBoneName,
+            CameraLens.Default,
+            TransformTRS.Identity,
+            PreviewFidelityTier.Dl1Profile,
+            Dl1PreviewContext.Dl1Fpp);
+
+        EvaluationFrame frame = new AnimationEvaluator().Evaluate(
+            new EvaluationRequest(
+                rig,
+                rig,
+                clip,
+                0.0,
+                autoDetectProfile));
+
+        Assert.Null(frame.Camera);
+        AssertStage(
+            frame,
+            Dl1PreviewStageIds.FppCameraHelpers,
+            Dl1PreviewStageStatus.Unavailable);
+        AssertStage(
+            frame,
+            Dl1PreviewStageIds.FppViewTransform,
+            Dl1PreviewStageStatus.Unavailable);
+        Assert.Contains(
+            frame.Diagnostics,
+            diagnostic => diagnostic.Code == "dl1_fpp_eye_camera_missing");
+    }
+
+    [Fact]
+    public void FppHonorsExplicitRefCameraRequestWithoutClaimingEyeCamera()
+    {
+        RigDefinition rig = CreateMovieRigWithRefCamera();
+        AnimationClip clip = new("fpp", new FrameRate(30, 1), 1);
+
+        // An operator may deliberately anchor the editor preview to any bone.
+        // That request is honored, but it must report the editor-only camera
+        // source and helper role so it can never be mistaken for the DL1
+        // EyeCamera export contract.
+        var explicitProfile = new PreviewProfile(
+            "fpp-explicit-refcamera-preview",
             PreviewViewMode.FirstPerson,
             AuthoringPreviewFidelity.AuthoringAccurate,
             PreviewVisualStyle.MaterialApproximation,
@@ -568,20 +615,83 @@ public sealed class Dl1PreviewContextTests
                 rig,
                 clip,
                 0.0,
-                misleadingProfile));
+                explicitProfile));
 
-        Assert.Null(frame.Camera);
-        AssertStage(
-            frame,
-            Dl1PreviewStageIds.FppCameraHelpers,
-            Dl1PreviewStageStatus.Unavailable);
-        AssertStage(
-            frame,
-            Dl1PreviewStageIds.FppViewTransform,
-            Dl1PreviewStageStatus.Unavailable);
+        Assert.NotNull(frame.Camera);
+        Assert.Equal(
+            EvaluatedCameraSource.Dl1FppPreviewBone,
+            frame.Camera!.Source);
+        Assert.DoesNotContain(
+            frame.CameraHelpers,
+            helper => helper.Role ==
+                Dl1PreviewContract.EyeCameraHelperRole);
+        Assert.Contains(
+            frame.CameraHelpers,
+            helper => helper.Role ==
+                Dl1PreviewContract.PreviewCameraHelperRole &&
+                helper.BoneName ==
+                    Dl1PreviewContract.ReferenceCameraBoneName);
         Assert.Contains(
             frame.Diagnostics,
-            diagnostic => diagnostic.Code == "dl1_fpp_eye_camera_missing");
+            diagnostic =>
+                diagnostic.Code == "dl1_fpp_preview_camera_substituted");
+    }
+
+    [Fact]
+    public void EditorPreviewBoneKeepsFullDl1FppStageFidelity()
+    {
+        RigDefinition rig = CreatePlayerRig();
+        AnimationClip clip = CreateRootAnimation();
+        CameraLens sceneLens = new(68.0, 21.0 / 9.0, 0.03, 800.0);
+        var inputs = new Dl1PreviewInputs(
+            new Dl1FppProjectionSnapshot(
+                sceneLens,
+                new Dl1ProjectionParameters(
+                    52.0,
+                    Dl1ProjectionFovAxis.Horizontal,
+                    21.0 / 9.0,
+                    0.005,
+                    Dl1ProjectionFarPlane.Infinite)));
+
+        // Anchoring the preview to a non-EyeCamera bone used to drop the
+        // profile into the Raw context, silently discarding the hands and
+        // scene projection stages. The export contract is enforced by the
+        // camera source instead, so preview fidelity is unchanged.
+        var previewBoneProfile = new PreviewProfile(
+            "dl1_fpp_authoring_preview_camera",
+            PreviewViewMode.Split,
+            AuthoringPreviewFidelity.AuthoringAccurate |
+            AuthoringPreviewFidelity.FirstPersonOcclusion,
+            PreviewVisualStyle.MaterialApproximation,
+            Dl1PreviewContract.ReferenceCameraBoneName,
+            CameraLens.Default,
+            TransformTRS.Identity,
+            PreviewFidelityTier.Dl1Profile,
+            Dl1PreviewContext.Dl1Fpp,
+            proceduralToggles: [Dl1PreviewStageIds.FppHandsProjection]);
+
+        EvaluationFrame frame = new AnimationEvaluator().Evaluate(
+            new EvaluationRequest(
+                rig,
+                rig,
+                clip,
+                0.0,
+                previewBoneProfile,
+                dl1PreviewInputs: inputs));
+
+        Assert.NotNull(frame.Camera);
+        Assert.Equal(
+            EvaluatedCameraSource.Dl1FppPreviewBone,
+            frame.Camera!.Source);
+        Assert.NotNull(frame.Camera.HandsProjection);
+        AssertStage(
+            frame,
+            Dl1PreviewStageIds.FppSceneProjection,
+            Dl1PreviewStageStatus.Applied);
+        AssertStage(
+            frame,
+            Dl1PreviewStageIds.FppHandsProjection,
+            Dl1PreviewStageStatus.Applied);
     }
 
     [Fact]

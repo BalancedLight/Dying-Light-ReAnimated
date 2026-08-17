@@ -326,13 +326,23 @@ public sealed class LinkedViewportCoordinator
 
 public static class Dl1PreviewCameraAdapter
 {
-    private static readonly Vector3D Dl1CameraForward = new(0.0, 0.0, 1.0);
-    private static readonly Vector3D Dl1CameraUp = new(0.0, -1.0, 0.0);
+    // Measured from the decoded retail player_11_fpp rig: the EyeCamera helper
+    // basis maps localX -> world +X, localY -> world +Z, localZ -> world -Y.
+    // The same pose puts the pelvis at y=0.93 below the head at y=1.63 (world
+    // up is +Y), the hands at negative Z ahead of the spine (the character
+    // faces world -Z), and the right hand at positive X. So the view direction
+    // is local -Y and up is local -Z.
+    //
+    // Using local +Z as forward aimed the camera at world -Y, straight down
+    // into the torso, which is why the first-person pane rendered the inside
+    // of the shirt with the hands splayed around it.
+    private static readonly Vector3D Dl1CameraForward = new(0.0, -1.0, 0.0);
+    private static readonly Vector3D Dl1CameraUp = new(0.0, 0.0, -1.0);
 
     /// <summary>
     /// Converts Chrome Engine's mtx34 camera basis to the renderer's look-at
-    /// camera. DL1 reads direction from the third matrix column and up from
-    /// the negated second column in the inspected PlayerFppVis paths.
+    /// camera, resolving the DL1 helper axes into the renderer's right-handed
+    /// Y-up basis.
     /// </summary>
     public static RenderCamera ToRenderCamera(
         EvaluatedCamera camera,

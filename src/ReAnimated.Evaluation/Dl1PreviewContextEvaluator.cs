@@ -77,6 +77,7 @@ internal static class Dl1PreviewContextEvaluator
         int eyeCameraIndex = -1;
         int referenceCameraIndex = -1;
         TransformMatrix eyeCameraWorld = TransformMatrix.Identity;
+        Dl1FppCameraResolution? cameraResolution = null;
         if (!cameraRequested)
         {
             stages.Add(
@@ -86,14 +87,19 @@ internal static class Dl1PreviewContextEvaluator
         }
         else
         {
-            eyeCameraIndex = ResolveCameraHelper(
+            // The preview anchor may be the EyeCamera contract helper, an
+            // explicitly selected editor bone, or an anatomical fallback. Only
+            // the contract bindings are ever reported as EyeCamera.
+            cameraResolution = Dl1FppCameraResolver.Resolve(
                 previewPose.Rig,
-                Dl1PreviewContract.EyeCameraSemanticRole,
-                Dl1PreviewContract.EyeCameraBoneName,
-                diagnostics);
+                profile.CameraBoneName);
+            eyeCameraIndex = cameraResolution.BoneIndex;
             referenceCameraIndex = ResolveCameraHelper(
                 previewPose.Rig,
-                Dl1PreviewContract.ReferenceCameraSemanticRole,
+                [
+                    Dl1PreviewContract.ReferenceCameraSemanticRole,
+                    Dl1PreviewContract.ReferenceCameraHelperSemanticRole,
+                ],
                 Dl1PreviewContract.ReferenceCameraBoneName,
                 diagnostics);
 
@@ -103,24 +109,41 @@ internal static class Dl1PreviewContextEvaluator
                     new(
                         "dl1_fpp_eye_camera_missing",
                         EvaluationDiagnosticSeverity.Error,
-                        $"Rig '{previewPose.Rig.Id}' has no unambiguous EyeCamera helper."));
+                        cameraResolution.Evidence));
                 stages.Add(
                     Unavailable(
                         Dl1PreviewStageIds.FppCameraHelpers,
-                        "EyeCamera is required for the DL1 FPP camera context."));
+                        cameraResolution.Evidence));
             }
             else
             {
+                bool isContract = cameraResolution.IsEyeCameraContract;
+                string boneName =
+                    previewPose.Rig.Bones[eyeCameraIndex].Name;
                 eyeCameraWorld =
                     previewPose.GlobalMatrices[eyeCameraIndex] *
                     profile.CameraOffset.ToMatrix();
                 helpers.Add(
                     new(
-                        Dl1PreviewContract.EyeCameraHelperRole,
-                        previewPose.Rig.Bones[eyeCameraIndex].Name,
+                        isContract
+                            ? Dl1PreviewContract.EyeCameraHelperRole
+                            : Dl1PreviewContract.PreviewCameraHelperRole,
+                        boneName,
                         eyeCameraIndex,
                         previewPose.GlobalMatrices[eyeCameraIndex]));
 
+                if (!isContract)
+                {
+                    diagnostics.Add(
+                        new(
+                            "dl1_fpp_preview_camera_substituted",
+                            EvaluationDiagnosticSeverity.Warning,
+                            $"{cameraResolution.Evidence} This is an editor preview anchor only; DL1 FPP export still requires a helper named exactly '{Dl1PreviewContract.EyeCameraBoneName}'."));
+                }
+
+                string anchorSummary = isContract
+                    ? $"EyeCamera helper '{boneName}' is bound from the evaluated player rig."
+                    : $"Editor preview camera '{boneName}' is bound from the evaluated player rig; it is not the EyeCamera export contract.";
                 if (referenceCameraIndex >= 0)
                 {
                     helpers.Add(
@@ -130,9 +153,13 @@ internal static class Dl1PreviewContextEvaluator
                             referenceCameraIndex,
                             previewPose.GlobalMatrices[referenceCameraIndex]));
                     stages.Add(
-                        Applied(
-                            Dl1PreviewStageIds.FppCameraHelpers,
-                            "EyeCamera and RefCamera helpers are bound from the evaluated player rig."));
+                        isContract
+                            ? Applied(
+                                Dl1PreviewStageIds.FppCameraHelpers,
+                                "EyeCamera and RefCamera helpers are bound from the evaluated player rig.")
+                            : Fallback(
+                                Dl1PreviewStageIds.FppCameraHelpers,
+                                $"{anchorSummary} The RefCamera helper is bound."));
                 }
                 else
                 {
@@ -140,11 +167,11 @@ internal static class Dl1PreviewContextEvaluator
                         new(
                             "dl1_fpp_reference_helper_missing",
                             EvaluationDiagnosticSeverity.Warning,
-                            $"Rig '{previewPose.Rig.Id}' has no unambiguous RefCamera helper; EyeCamera preview remains available."));
+                            $"Rig '{previewPose.Rig.Id}' has no unambiguous RefCamera helper; the FPP preview remains available."));
                     stages.Add(
                         Fallback(
                             Dl1PreviewStageIds.FppCameraHelpers,
-                            "EyeCamera is bound, but RefCamera helper diagnostics are unavailable."));
+                            $"{anchorSummary} RefCamera helper diagnostics are unavailable."));
                 }
             }
         }
@@ -161,23 +188,29 @@ internal static class Dl1PreviewContextEvaluator
             stages.Add(
                 Unavailable(
                     Dl1PreviewStageIds.FppViewTransform,
-                    "EyeCamera is required for an editor FPP view."));
+                    "A camera bone is required for an editor FPP view."));
         }
         else
         {
             // GetCameraPos/GetCameraDir branch through live selfie, cinematic,
             // model, look, shaker, vehicle, and eye-tracking state. The
-            // evaluated EyeCamera helper is useful authoring context, but is
+            // evaluated camera helper is useful authoring context, but is
             // not claimed as the complete runtime camera transform.
+            string anchorName =
+                previewPose.Rig.Bones[eyeCameraIndex].Name;
+            string anchorKind =
+                cameraResolution?.IsEyeCameraContract == true
+                    ? "EyeCamera helper"
+                    : $"editor preview bone '{anchorName}'";
             diagnostics.Add(
                 new(
                     "dl1_fpp_view_transform_fallback",
                     EvaluationDiagnosticSeverity.Warning,
-                    "The editor view is anchored to the evaluated EyeCamera helper; live DL1 camera offsets and controller state are not available."));
+                    $"The editor view is anchored to the evaluated {anchorKind}; live DL1 camera offsets and controller state are not available."));
             stages.Add(
                 Fallback(
                     Dl1PreviewStageIds.FppViewTransform,
-                    "Using the evaluated EyeCamera helper as an editor fallback, not a game-validated runtime camera transform."));
+                    $"Using the evaluated {anchorKind} as an editor fallback, not a game-validated runtime camera transform."));
         }
 
         CameraLens sceneLens = profile.CameraLens;
@@ -231,7 +264,7 @@ internal static class Dl1PreviewContextEvaluator
             stages.Add(
                 Unavailable(
                     Dl1PreviewStageIds.FppHandsProjection,
-                    "A separate hands projection cannot be used without EyeCamera."));
+                    "A separate hands projection cannot be used without a resolved camera bone."));
         }
         else if (projection is null)
         {
@@ -282,7 +315,9 @@ internal static class Dl1PreviewContextEvaluator
                 eyeCameraWorld,
                 sceneLens,
                 true,
-                EvaluatedCameraSource.Dl1FppEyeCamera,
+                cameraResolution?.IsEyeCameraContract == true
+                    ? EvaluatedCameraSource.Dl1FppEyeCamera
+                    : EvaluatedCameraSource.Dl1FppPreviewBone,
                 handsProjection)
             : null;
         return new(
@@ -404,18 +439,26 @@ internal static class Dl1PreviewContextEvaluator
                     PreviewViewMode.FirstPerson or PreviewViewMode.Split));
     }
 
+    /// <summary>
+    /// Resolves a camera helper from any of <paramref name="semanticRoles"/>,
+    /// falling back to <paramref name="canonicalName"/>. Multiple roles are
+    /// accepted because decoded retail rigs and authored rigs disagree on the
+    /// reference-camera role string, and neither can be renamed without
+    /// invalidating persisted rig signatures.
+    /// </summary>
     private static int ResolveCameraHelper(
         RigDefinition rig,
-        string semanticRole,
+        IReadOnlyList<string> semanticRoles,
         string canonicalName,
         ImmutableArray<EvaluationDiagnostic>.Builder diagnostics)
     {
         int[] semanticMatches = rig.Bones
             .Where(
-                bone => string.Equals(
-                    bone.SemanticRole,
-                    semanticRole,
-                    StringComparison.OrdinalIgnoreCase))
+                bone => semanticRoles.Any(
+                    role => string.Equals(
+                        bone.SemanticRole,
+                        role,
+                        StringComparison.OrdinalIgnoreCase)))
             .Select(static bone => bone.Index)
             .ToArray();
         if (semanticMatches.Length > 1)
@@ -424,7 +467,7 @@ internal static class Dl1PreviewContextEvaluator
                 new(
                     "dl1_camera_helper_role_ambiguous",
                     EvaluationDiagnosticSeverity.Error,
-                    $"Rig '{rig.Id}' has multiple bones with semantic role '{semanticRole}'."));
+                    $"Rig '{rig.Id}' has multiple bones with semantic role '{string.Join("' or '", semanticRoles)}'."));
             return -1;
         }
 

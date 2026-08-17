@@ -127,7 +127,7 @@ internal static class RendererAuthoringStageFixture
                     EyeCameraBoneIndex,
                     Dl1PreviewContract.EyeCameraBoneName,
                     RootBoneIndex,
-                    Translation(0.50, 0.15, -1.40),
+                    EyeCameraBind(0.50, 0.15, 1.40),
                     BoneKind.Camera,
                     Dl1PreviewContract.EyeCameraSemanticRole,
                     requiredForExport: false),
@@ -501,6 +501,27 @@ internal static class RendererAuthoringStageFixture
         new(
             new Vector3D(x, y, z),
             QuaternionD.Identity,
+            Vector3D.One);
+
+    /// <summary>
+    /// A camera helper carrying the DL1 EyeCamera basis rather than an
+    /// identity rotation. Measured on the decoded retail player_11_fpp rig,
+    /// the helper maps localX to world +X, localY to world +Z, and localZ to
+    /// world -Y, which is a quarter turn about X. The view direction is
+    /// therefore local -Y, i.e. world -Z, so the helper is placed at positive
+    /// Z to look back at the actor. An identity rotation here would aim the
+    /// camera at the floor and leave the FPP capture showing nothing but the
+    /// camera-independent safe frame.
+    /// </summary>
+    private static TransformTRS EyeCameraBind(
+        double x,
+        double y,
+        double z) =>
+        new(
+            new Vector3D(x, y, z),
+            QuaternionD.FromAxisAngle(
+                Vector3D.UnitX,
+                Math.PI / 2.0),
             Vector3D.One);
 
     private static QuaternionD RotationDegrees(double degrees) =>

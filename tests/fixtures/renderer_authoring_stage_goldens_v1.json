@@ -65,9 +65,9 @@
     },
     {
       "name": "fpp_projection",
-      "pixelSha256": "cde4d5598ef4b0eca35676a11aab0a5a16ddb50532fb7524da06c2a6fa00467a",
-      "coverageSha256": "da3f4a8d48d101ae7f0d797244ba2c3ae23292adc118108e272d3fad6840327c",
-      "pixelCount": 4148,
+      "pixelSha256": "cc8e14bdc59c96c33962434612a8701645c81db4655a601fca6f4bcc2dae32b5",
+      "coverageSha256": "e9f16a68e5357254fd4f6624e65e4a81a24693283cd5e8ee4bfb67df312f2031",
+      "pixelCount": 3127,
       "left": 0,
       "top": 17,
       "right": 191,

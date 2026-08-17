@@ -24,6 +24,8 @@
         <SolidColorBrush x:Key="{x:Static SystemColors.MenuHighlightBrushKey}" Color="#244A5A" />
         <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightBrushKey}" Color="#293746" />
         <SolidColorBrush x:Key="{x:Static SystemColors.InactiveSelectionHighlightTextBrushKey}" Color="#E7ECF3" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InfoBrushKey}" Color="#202733" />
+        <SolidColorBrush x:Key="{x:Static SystemColors.InfoTextBrushKey}" Color="#E7ECF3" />
 
         <SolidColorBrush x:Key="WindowBackgroundBrush" Color="#12151C" />
         <SolidColorBrush x:Key="PanelBackgroundBrush" Color="#191E27" />
@@ -95,6 +97,41 @@
                     <ControlTemplate TargetType="{x:Type Separator}">
                         <Border Height="{TemplateBinding Height}"
                                 Background="{TemplateBinding Background}" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ToolTip is hosted in its own popup window, so it keeps the light
+             system Info background while the implicit TextBlock style above
+             paints its generated content near-white. That combination made
+             every hover tip white-on-white. Give it an explicit dark
+             template, and drop the inherited ellipsis trimming so the long
+             explanatory tips wrap instead of being clipped. -->
+        <Style TargetType="{x:Type ToolTip}">
+            <Setter Property="Background" Value="{StaticResource PanelRaisedBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Padding" Value="8,5" />
+            <Setter Property="MaxWidth" Value="420" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="{x:Type ToolTip}">
+                        <ControlTemplate.Resources>
+                            <Style TargetType="{x:Type TextBlock}">
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                <Setter Property="TextTrimming" Value="None" />
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                            </Style>
+                        </ControlTemplate.Resources>
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter />
+                        </Border>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>

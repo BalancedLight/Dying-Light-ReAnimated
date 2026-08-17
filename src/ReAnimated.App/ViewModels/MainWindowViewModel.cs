@@ -425,6 +425,7 @@ public sealed partial class MainWindowViewModel :
     private const double RetailRenderBindDecompositionTolerance = 1.0e-4;
     private const int MaximumDecodedAttachmentAssetCacheEntries = 64;
     private const string RawPreviewModeLabel = "Raw";
+    private const string AutoDetectPreviewCameraOption = "(auto-detect)";
     private const string Dl1ProfilePreviewModeLabel = "DL1 profile";
     private const string PreviewFidelityBadgeLabel = "Preview fidelity";
     private const string InstalledBuildBadgeLabel = "Installed DL1 build";
@@ -585,6 +586,13 @@ public sealed partial class MainWindowViewModel :
     private string? _animationOperationFailureMessage;
     private RenderFppProjectionState? _suspendedTargetProjection;
     private RenderFrameSnapshot? _lastFppExternalOrbitFrame;
+    private string? _lastFppGeometryWarning;
+    private string _selectedTargetPreviewCameraBone =
+        AutoDetectPreviewCameraOption;
+    private string _fppPlaybackCameraStatus = string.Empty;
+    private bool _synchronizingPreviewCameraOptions;
+    private int _ambiguousTargetBoneCount;
+    private bool _isRetailAnimationBrowserVisible;
     private RenderFrameSnapshot? _isolatedBrowsePreviewFrame;
     private DecodedRetailModelSession? _isolatedBrowsePreviewModel;
     private string? _isolatedBrowsePreviewTitle;
@@ -759,6 +767,11 @@ public sealed partial class MainWindowViewModel :
         PlaySelectedExplorerAnimationCommand = new AsyncRelayCommand(
             PlaySelectedExplorerAnimationAsync,
             CanPlaySelectedExplorerAnimation);
+        AddSelectedRetailAnimationCommand = new AsyncRelayCommand(
+            AddSelectedRetailAnimationAsync,
+            CanAddSelectedRetailAnimation);
+        AnimationBrowser.SelectedAssetChanged +=
+            OnSelectedRetailAnimationChanged;
         AddSelectedModelToProjectCommand = new AsyncRelayCommand(
             AddSelectedModelToProjectAsync,
             CanUseSelectedMeshAsset);
@@ -989,6 +1002,18 @@ public sealed partial class MainWindowViewModel :
 
     public AssetBrowserViewModel AssetBrowser { get; } = new();
 
+    public RetailAnimationBrowserViewModel AnimationBrowser { get; } = new();
+
+    /// <summary>
+    /// Whether the Animations workspace shows the base-game animation browser
+    /// next to the project animation library.
+    /// </summary>
+    public bool IsRetailAnimationBrowserVisible
+    {
+        get => _isRetailAnimationBrowserVisible;
+        set => SetProperty(ref _isRetailAnimationBrowserVisible, value);
+    }
+
     public ObservableCollection<SkeletonNodeViewModel> SkeletonRoots { get; } = [];
 
     public ObservableCollection<BoneMappingViewModel> BoneMappings { get; } = [];
@@ -1211,6 +1236,8 @@ public sealed partial class MainWindowViewModel :
     public AsyncRelayCommand UseSelectedAssetAsTargetCommand { get; }
 
     public AsyncRelayCommand PlaySelectedExplorerAnimationCommand { get; }
+
+    public AsyncRelayCommand AddSelectedRetailAnimationCommand { get; }
 
     public AsyncRelayCommand AddSelectedModelToProjectCommand { get; }
 
@@ -1594,6 +1621,8 @@ public sealed partial class MainWindowViewModel :
                     .NotifyCanExecuteChanged();
                 PlaySelectedExplorerAnimationCommand
                     .NotifyCanExecuteChanged();
+                AddSelectedRetailAnimationCommand
+                    .NotifyCanExecuteChanged();
                 ConfirmExplorerAnimationTimingCommand
                     .NotifyCanExecuteChanged();
                 CancelExplorerAnimationTimingCommand
@@ -1745,8 +1774,195 @@ public sealed partial class MainWindowViewModel :
                     ? EditorWorkspaceMode.Fpp
                     : EditorWorkspaceMode.Playback,
                 preserveLegacyCutscene: false);
+            RefreshTargetPreviewCameraOptions();
             RefreshAnimationPreview();
         }
+    }
+
+    /// <summary>
+    /// Bones the Playback FPP camera can be anchored to, led by an auto-detect
+    /// sentinel. Only uniquely named bones are listed: a repeated name cannot
+    /// be addressed unambiguously, so offering it would select nothing.
+    /// </summary>
+    public ObservableCollection<string> TargetPreviewCameraBoneOptions
+    {
+        get;
+    } = [];
+
+    public string SelectedTargetPreviewCameraBone
+    {
+        get => _selectedTargetPreviewCameraBone;
+        set
+        {
+            string next = string.IsNullOrWhiteSpace(value)
+                ? AutoDetectPreviewCameraOption
+                : value;
+            if (!SetProperty(
+                    ref _selectedTargetPreviewCameraBone,
+                    next))
+            {
+                return;
+            }
+
+            // Rebuilding the option list makes WPF null the selection before
+            // it re-selects. Persisting that transient null would silently
+            // discard the saved bone, so only user edits reach the project.
+            if (_synchronizingPreviewCameraOptions)
+            {
+                return;
+            }
+
+            PersistTargetPreviewCameraBone(next);
+        }
+    }
+
+    public string FppPlaybackCameraStatus
+    {
+        get => _fppPlaybackCameraStatus;
+        private set => SetProperty(ref _fppPlaybackCameraStatus, value);
+    }
+
+    private void RefreshTargetPreviewCameraOptions()
+    {
+        string persisted = ResolveTargetPreviewCameraSelection();
+        List<string> options = [AutoDetectPreviewCameraOption];
+        int ambiguousBoneCount = 0;
+        if (_targetRig is { } rig)
+        {
+            foreach (BoneDefinition bone in rig.Bones)
+            {
+                if (rig.GetBoneIndex(bone.Name) < 0)
+                {
+                    ambiguousBoneCount++;
+                    continue;
+                }
+
+                options.Add(bone.Name);
+            }
+        }
+
+        // A saved bone that the current rig no longer provides stays selectable
+        // so switching back to its model does not quietly erase the choice.
+        if (!string.Equals(
+                persisted,
+                AutoDetectPreviewCameraOption,
+                StringComparison.Ordinal) &&
+            !options.Contains(persisted, StringComparer.Ordinal))
+        {
+            options.Add(persisted);
+        }
+
+        _ambiguousTargetBoneCount = ambiguousBoneCount;
+        if (options.SequenceEqual(
+                TargetPreviewCameraBoneOptions,
+                StringComparer.Ordinal) &&
+            string.Equals(
+                persisted,
+                _selectedTargetPreviewCameraBone,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _synchronizingPreviewCameraOptions = true;
+        try
+        {
+            TargetPreviewCameraBoneOptions.Clear();
+            foreach (string option in options)
+            {
+                TargetPreviewCameraBoneOptions.Add(option);
+            }
+
+            SelectedTargetPreviewCameraBone = persisted;
+        }
+        finally
+        {
+            _synchronizingPreviewCameraOptions = false;
+        }
+    }
+
+    private string ResolveTargetPreviewCameraSelection()
+    {
+        ProjectModelEntry? model = FindTargetProjectModel();
+        return string.IsNullOrWhiteSpace(model?.PreviewCameraNodeName)
+            ? AutoDetectPreviewCameraOption
+            : model.PreviewCameraNodeName;
+    }
+
+    private ProjectModelEntry? FindTargetProjectModel() =>
+        _targetProjectAsset is { } targetAsset
+            ? _project.Models.FirstOrDefault(model =>
+                model.AssetId == targetAsset.Id)
+            : null;
+
+    private void PersistTargetPreviewCameraBone(string option)
+    {
+        if (FindTargetProjectModel() is not { } model)
+        {
+            return;
+        }
+
+        string? nodeName = string.Equals(
+            option,
+            AutoDetectPreviewCameraOption,
+            StringComparison.Ordinal)
+            ? null
+            : option;
+        if (string.Equals(
+                model.PreviewCameraNodeName,
+                nodeName,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        DlraProject updated = _project with
+        {
+            Models = _project.Models
+                .Select(entry => entry.Id == model.Id
+                    ? entry with { PreviewCameraNodeName = nodeName }
+                    : entry)
+                .ToImmutableArray(),
+        };
+        updated.Validate();
+        CommitProject(updated);
+        RefreshAnimationPreview();
+    }
+
+    /// <summary>
+    /// Composes the Playback FPP header status. The retarget workspace hosts
+    /// the only other binding for <c>FacialFpp.PreviewStatus</c>, so without
+    /// this the FPP diagnostics were written but never rendered in Playback.
+    /// </summary>
+    private void RefreshFppPlaybackCameraStatus()
+    {
+        if (!IsFppWorkspace)
+        {
+            FppPlaybackCameraStatus = string.Empty;
+            return;
+        }
+
+        var parts = new List<string>(3)
+        {
+            string.Equals(
+                _selectedTargetPreviewCameraBone,
+                AutoDetectPreviewCameraOption,
+                StringComparison.Ordinal)
+                ? "Camera bone: auto-detect."
+                : $"Camera bone: '{_selectedTargetPreviewCameraBone}' (selected for this target model).",
+        };
+        if (_ambiguousTargetBoneCount > 0)
+        {
+            parts.Add(
+                $"{_ambiguousTargetBoneCount} bone(s) share a name with another bone and cannot be selected.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(FacialFpp.PreviewStatus))
+        {
+            parts.Add(FacialFpp.PreviewStatus);
+        }
+
+        FppPlaybackCameraStatus = string.Join(" ", parts);
     }
 
     public bool IsRetargetSetupVisible =>
@@ -6478,6 +6694,37 @@ public sealed partial class MainWindowViewModel :
             RetailAsset: not null,
         };
 
+    private bool CanAddSelectedRetailAnimation() =>
+        !IsBusy &&
+        AnimationBrowser.SelectedAsset is
+        {
+            Kind: AssetKind.Animation,
+            RetailAsset: not null,
+        };
+
+    private Task AddSelectedRetailAnimationAsync()
+    {
+        if (AnimationBrowser.SelectedAsset is not
+            {
+                Kind: AssetKind.Animation,
+                RetailAsset: not null,
+            } selected)
+        {
+            return Task.CompletedTask;
+        }
+
+        return PlayExplorerAnimationAsync(
+            selected,
+            selectedTiming: null);
+    }
+
+    private void OnSelectedRetailAnimationChanged(
+        object? sender,
+        AssetItemViewModel? selected)
+    {
+        AddSelectedRetailAnimationCommand.NotifyCanExecuteChanged();
+    }
+
     private async Task<DecodedProjectModelSession?>
         ResolveSuggestedLocalAnm2SourceModelAsync(
             CancellationToken cancellationToken)
@@ -6870,7 +7117,6 @@ public sealed partial class MainWindowViewModel :
         }
 
         ClearExplorerAnimationTimingPicker();
-        AssetBrowser.SelectedAsset = animation;
         await PlayExplorerAnimationAsync(animation, timing);
     }
 
@@ -6900,8 +7146,11 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(ExplorerSourceModelPickerPrompt));
         CancelExplorerSourceModelPickerCommand.NotifyCanExecuteChanged();
         UseSelectedProjectModelAsSourceCommand.NotifyCanExecuteChanged();
-        AssetBrowser.SearchText = string.Empty;
-        AssetBrowser.SelectedKindFilter = nameof(AssetKind.Mesh);
+
+        // The mesh browser is deliberately left alone. Steering it here used
+        // to clear the search and kind filter of the very list the operator
+        // was working in, so the animation they had just selected vanished at
+        // the moment they asked to add it.
         AddDiagnostic(
             "Info",
             "Animation explorer",
@@ -17695,6 +17944,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         AssetBrowser.SetCatalogLoading(true);
+        AnimationBrowser.SetCatalogLoading(true);
         JobViewModel job = AddJob(
             "Load Dying Light 1 asset catalog",
             "Discovery",
@@ -17732,6 +17982,7 @@ public sealed partial class MainWindowViewModel :
 
             _indexedAssetItems = assets;
             AssetBrowser.ReplaceAssets(assets);
+            AnimationBrowser.ReplaceAssets(assets);
             AttachmentEditor.ReplaceCatalogAssets(assets);
             ProjectAnimation? activeAnimation = GetActiveAnimation();
             bool restoreActiveAnimation =
@@ -17817,6 +18068,7 @@ public sealed partial class MainWindowViewModel :
         finally
         {
             AssetBrowser.SetCatalogLoading(false);
+            AnimationBrowser.SetCatalogLoading(false);
         }
     }
 
@@ -18613,9 +18865,14 @@ public sealed partial class MainWindowViewModel :
                     nameof(ExplorerSourceModelPickerPrompt));
                 CancelExplorerSourceModelPickerCommand
                     .NotifyCanExecuteChanged();
-                AssetBrowser.SelectedAsset = pending;
                 IsBusy = false;
-                await PlaySelectedExplorerAnimationAsync();
+
+                // Resume the exact pending row instead of routing back through
+                // the mesh browser's selection, so the flow works from any
+                // surface that started it.
+                await PlayExplorerAnimationAsync(
+                    pending,
+                    selectedTiming: null);
             }
             else if (_pendingLocalAnm2ImportPath is { } localAnm2Path)
             {
@@ -18772,8 +19029,9 @@ public sealed partial class MainWindowViewModel :
             IsBusy = false;
             if (pendingRetailAnimation is not null)
             {
-                AssetBrowser.SelectedAsset = pendingRetailAnimation;
-                await PlaySelectedExplorerAnimationAsync();
+                await PlayExplorerAnimationAsync(
+                    pendingRetailAnimation,
+                    selectedTiming: null);
             }
             else if (pendingLocalPath is not null)
             {
@@ -22766,13 +23024,19 @@ public sealed partial class MainWindowViewModel :
             toggles.Add(Dl1PreviewStageIds.NoProceduralStages);
         }
 
+        // A non-EyeCamera preview bone keeps a distinct profile id for
+        // provenance, but stays in the DL1 FPP context. Dropping to Raw here
+        // silently discarded the hands and HSpine stages, which made every
+        // custom preview camera look wrong rather than merely unofficial. The
+        // EyeCamera export contract is enforced separately, by the evaluated
+        // camera source, not by degrading the preview.
         PreviewProfile activeProfile = new(
             string.Equals(
                 previewCameraNode,
                 Dl1PreviewContract.EyeCameraBoneName,
                 StringComparison.Ordinal)
                 ? baseline.Id
-                : "project_model_preview_camera",
+                : "dl1_fpp_authoring_preview_camera",
             baseline.ViewMode,
             fidelity,
             baseline.VisualStyle,
@@ -22784,12 +23048,7 @@ public sealed partial class MainWindowViewModel :
                 baseline.CameraLens.FarClipMeters),
             baseline.CameraOffset,
             baseline.FidelityTier,
-            string.Equals(
-                previewCameraNode,
-                Dl1PreviewContract.EyeCameraBoneName,
-                StringComparison.Ordinal)
-                ? baseline.Context
-                : Dl1PreviewContext.Raw,
+            baseline.Context,
             baseline.ProfileVersion,
             baseline.BuildFingerprint,
             toggles.ToImmutable(),
@@ -22980,6 +23239,19 @@ public sealed partial class MainWindowViewModel :
 
     internal void ApplyEvaluatedPreviewCamera(EvaluationFrame frame)
     {
+        RefreshTargetPreviewCameraOptions();
+        try
+        {
+            ApplyEvaluatedPreviewCameraCore(frame);
+        }
+        finally
+        {
+            RefreshFppPlaybackCameraStatus();
+        }
+    }
+
+    private void ApplyEvaluatedPreviewCameraCore(EvaluationFrame frame)
+    {
         if (ActiveWorkspaceMode == "Cutscene")
         {
             _viewportCoordinator.SetPreviewCameraOverride(
@@ -23045,8 +23317,9 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        if (frame.Camera.Source !=
-            EvaluatedCameraSource.Dl1FppEyeCamera)
+        if (frame.Camera.Source is not (
+                EvaluatedCameraSource.Dl1FppEyeCamera or
+                EvaluatedCameraSource.Dl1FppPreviewBone))
         {
             TargetViewport.SceneSource.SetFppProjectionState(null);
             _viewportCoordinator.SetTargetPreviewCameraOverride(null);
@@ -23055,37 +23328,28 @@ public sealed partial class MainWindowViewModel :
                 Dl1PreviewCameraAdapter.ToRenderCamera(
                     frame.Camera,
                     preserveLensAspectRatio: false));
-            string cameraName =
-                ResolveTargetPreviewCameraNodeName();
+            string rawCameraName =
+                ResolveEvaluatedPreviewCameraName(frame);
+            _lastFppGeometryWarning = null;
             FacialFpp.PreviewStatus =
-                $"Left viewport follows the target model's editor preview camera '{cameraName}'; animation data is unchanged and the right viewport remains a free external orbit.";
+                $"Left viewport follows the target model's editor preview camera '{rawCameraName}'; animation data is unchanged and the right viewport remains a free external orbit.";
             PublishLinkedTargetExternalView(frame);
             return;
         }
 
+        // Geometry classification confidence describes how the target meshes
+        // were labeled, not whether the camera transform is usable. Blocking
+        // the whole preview on it left a valid FPP camera with nothing to
+        // show, so an unclassified or third-person target now warns instead.
         bool hasFirstPersonTargetGeometry =
             _targetProjectAsset?.Kind ==
                 ProjectAssetKind.CustomModelSource ||
             TargetViewport.SceneSource.CaptureFrame().Meshes.Any(
                 static mesh =>
                     mesh.ProjectionRole == MeshProjectionRole.FppHands);
-        if (!hasFirstPersonTargetGeometry)
-        {
-            _viewportCoordinator.SetPreviewCameraOverride(
-                ViewportSide.Source,
-                null);
-            _viewportCoordinator.SetTargetPreviewCameraOverride(null);
-            TargetViewport.SceneSource.SetFppProjectionState(null);
-            string targetName =
-                _targetProjectAsset?.RetailIdentity?.ResourceName ??
-                "the current target";
-            string unavailable =
-                $"FPP EyeCamera preview requires an FPP retail target, but '{targetName}' is not classified as FPP geometry. Choose the matching player_*_fpp model as Target.";
-            FacialFpp.PreviewStatus = unavailable;
-            SourceViewport.SetDiagnosticOverlay(unavailable);
-            PublishLinkedTargetExternalView(frame);
-            return;
-        }
+        _lastFppGeometryWarning = hasFirstPersonTargetGeometry
+            ? null
+            : $"Target '{_targetProjectAsset?.RetailIdentity?.ResourceName ?? "the current target"}' is not classified as FPP hands geometry, so the view may show body meshes DL1 would hide. Choose the matching player_*_fpp model as Target for an exact preview.";
 
         SourceViewport.SetDiagnosticOverlay(null);
 
@@ -23131,15 +23395,42 @@ public sealed partial class MainWindowViewModel :
                         Dl1PreviewStageIds.FppHandInertia)
                 .Select(stage =>
                     $"{Humanize(stage.StageId)}: {stage.Status}"));
-        FacialFpp.PreviewStatus =
-            "Left viewport follows the evaluated EyeCamera authoring fallback; the right viewport remains a free external orbit. " +
-            (string.IsNullOrWhiteSpace(stageSummary)
-                ? string.Empty
-                : stageSummary);
+        string cameraName = ResolveEvaluatedPreviewCameraName(frame);
+        var status = new List<string>(3)
+        {
+            frame.Camera.Source == EvaluatedCameraSource.Dl1FppEyeCamera
+                ? $"Left viewport follows the evaluated EyeCamera helper '{cameraName}'; the right viewport remains a free external orbit."
+                : $"Left viewport follows the editor preview camera '{cameraName}'; the right viewport remains a free external orbit. This is an editor anchor only - DL1 FPP export still requires a helper named exactly {Dl1PreviewContract.EyeCameraBoneName}.",
+        };
+        if (_lastFppGeometryWarning is { } geometryWarning)
+        {
+            status.Add(geometryWarning);
+        }
+
+        if (!string.IsNullOrWhiteSpace(stageSummary))
+        {
+            status.Add(stageSummary);
+        }
+
+        FacialFpp.PreviewStatus = string.Join(" ", status);
         PublishLinkedTargetExternalView(
             frame,
             projectionState);
     }
+
+    /// <summary>
+    /// The bone the evaluator actually anchored the preview to, which may
+    /// differ from the requested name when auto-detection fell back. Falls
+    /// back to the requested name when no camera was evaluated.
+    /// </summary>
+    private string ResolveEvaluatedPreviewCameraName(EvaluationFrame frame) =>
+        frame.CameraHelpers
+            .FirstOrDefault(static helper =>
+                helper.Role is
+                    Dl1PreviewContract.EyeCameraHelperRole or
+                    Dl1PreviewContract.PreviewCameraHelperRole)
+            ?.BoneName ??
+        ResolveTargetPreviewCameraNodeName();
 
     private bool UsesLinkedTargetExternalView() =>
         ActiveWorkspaceMode is "FPP" or "Cutscene";
@@ -23188,7 +23479,11 @@ public sealed partial class MainWindowViewModel :
             frame.Camera is not null &&
             _viewportCoordinator.HasPreviewCameraOverride(
                 ViewportSide.Source);
-        SourceViewport.SetCameraViewActive(hasFppCamera);
+        SourceViewport.SetCameraViewActive(
+            hasFppCamera,
+            hasFppCamera
+                ? ResolveEvaluatedPreviewCameraName(frame)
+                : null);
         _suspendedTargetProjection = fppProjection;
         SourceViewport.SceneSource.SetExternalPreviewScene(
             targetFrame with
@@ -23202,15 +23497,25 @@ public sealed partial class MainWindowViewModel :
         TargetViewport.SceneSource.SetExternalPreviewScene(
             authoredOrbitFrame);
         RenderFppProjectionState? projection = fppProjection;
-        string cameraName = ResolveTargetPreviewCameraNodeName();
+        string cameraName = ResolveEvaluatedPreviewCameraName(frame);
         string fidelity = hasFppCamera
-            ? frame.Camera!.Source ==
-                EvaluatedCameraSource.Dl1FppEyeCamera
-                ? projection?.HandsProjection is not null
-                    ? "Evaluated EyeCamera | captured scene and separate hands projections"
-                    : "Evaluated EyeCamera | hands projection unavailable or disabled"
-                : $"Evaluated editor camera '{cameraName}' | ordinary scene projection"
+            ? frame.Camera!.Source switch
+            {
+                EvaluatedCameraSource.Dl1FppEyeCamera =>
+                    projection?.HandsProjection is not null
+                        ? "Evaluated EyeCamera | captured scene and separate hands projections"
+                        : "Evaluated EyeCamera | hands projection unavailable or disabled",
+                EvaluatedCameraSource.Dl1FppPreviewBone =>
+                    $"Editor preview camera '{cameraName}' | DL1 FPP stages applied | not the EyeCamera export contract",
+                _ =>
+                    $"Evaluated editor camera '{cameraName}' | ordinary scene projection",
+            }
             : $"Evaluated target | camera '{cameraName}' unavailable";
+        if (hasFppCamera && _lastFppGeometryWarning is not null)
+        {
+            fidelity += " | target is not classified as FPP hands geometry";
+        }
+
         SourceViewport.SetPresentation(
             hasFppCamera
                 ? $"Target / {cameraName}"
@@ -23218,7 +23523,9 @@ public sealed partial class MainWindowViewModel :
             fidelity);
         TargetViewport.SetPresentation(
             "DL1 Target / External Orbit",
-            "Same evaluated target | free orbit | FPP camera projection disabled");
+            hasFppCamera
+                ? "Same evaluated target | free external orbit | camera projection applies to the left pane only"
+                : "Same evaluated target | free external orbit | no evaluated preview camera");
     }
 
     private void ClearLinkedTargetExternalView(
@@ -23311,7 +23618,9 @@ public sealed partial class MainWindowViewModel :
                 hasPreviewCamera
                     ? null
                     : $"Preview camera '{cameraName}' is missing or ambiguous. The external orbit remains usable on the right.");
-            SourceViewport.SetCameraViewActive(hasPreviewCamera);
+            SourceViewport.SetCameraViewActive(
+                hasPreviewCamera,
+                hasPreviewCamera ? cameraName : null);
             if (authoredOrbitFrame is not null)
             {
                 TargetViewport.SceneSource.SetExternalPreviewScene(
@@ -23319,7 +23628,9 @@ public sealed partial class MainWindowViewModel :
             }
             TargetViewport.SetPresentation(
                 "DL1 Target / External Orbit",
-                "Same evaluated target | free orbit | FPP camera projection disabled");
+                hasPreviewCamera
+                    ? "Same evaluated target | free external orbit | camera projection applies to the left pane only"
+                    : "Same evaluated target | free external orbit | no evaluated preview camera");
             return;
         }
 
@@ -23410,6 +23721,8 @@ public sealed partial class MainWindowViewModel :
             _ =>
                 "Orbit preview active. Enable FPP to use the target model's selected preview camera.",
         };
+        RefreshTargetPreviewCameraOptions();
+        RefreshFppPlaybackCameraStatus();
     }
 
     private static GizmoRenderData[] BuildCameraHelperGizmos(
@@ -23425,12 +23738,14 @@ public sealed partial class MainWindowViewModel :
             Vector3 right = Vector3.Normalize(ToRenderVector(
                 helper.WorldTransform.TransformDirection(
                     new Vector3D(1.0, 0.0, 0.0))));
+            // Must match Dl1PreviewCameraAdapter's helper axes, or the drawn
+            // gizmo contradicts the camera it describes.
             Vector3 up = Vector3.Normalize(ToRenderVector(
                 helper.WorldTransform.TransformDirection(
-                    new Vector3D(0.0, -1.0, 0.0))));
+                    new Vector3D(0.0, 0.0, -1.0))));
             Vector3 forward = Vector3.Normalize(ToRenderVector(
                 helper.WorldTransform.TransformDirection(
-                    new Vector3D(0.0, 0.0, 1.0))));
+                    new Vector3D(0.0, -1.0, 0.0))));
             gizmos.Add(
                 new(
                     GizmoKind.Axis,
@@ -24979,10 +25294,13 @@ public sealed partial class MainWindowViewModel :
 
 public sealed class ViewportPaneViewModel : ObservableObject
 {
+    private const string DefaultCameraViewBadge = "EYE CAMERA";
+
     private string _title;
     private string _fidelityLabel;
     private string? _diagnosticOverlay;
     private bool _isCameraViewActive;
+    private string _cameraViewBadge = DefaultCameraViewBadge;
 
     public ViewportPaneViewModel(
         string title,
@@ -25022,6 +25340,17 @@ public sealed class ViewportPaneViewModel : ObservableObject
         private set => SetProperty(ref _isCameraViewActive, value);
     }
 
+    /// <summary>
+    /// The badge shown while a preview camera is locked. It names the bone the
+    /// view is actually anchored to, so an editor fallback never claims to be
+    /// the EyeCamera contract.
+    /// </summary>
+    public string CameraViewBadge
+    {
+        get => _cameraViewBadge;
+        private set => SetProperty(ref _cameraViewBadge, value);
+    }
+
     internal void SetPresentation(
         string title,
         string fidelityLabel)
@@ -25039,8 +25368,14 @@ public sealed class ViewportPaneViewModel : ObservableObject
             : message.Trim();
     }
 
-    internal void SetCameraViewActive(bool active)
+    internal void SetCameraViewActive(bool active, string? badge = null)
     {
         IsCameraViewActive = active;
+        if (active)
+        {
+            CameraViewBadge = string.IsNullOrWhiteSpace(badge)
+                ? DefaultCameraViewBadge
+                : badge.Trim().ToUpperInvariant();
+        }
     }
 }

@@ -178,8 +178,10 @@ public sealed class RendererSceneSourceTests
             Dl1PreviewCameraAdapter.ToRenderCamera(camera);
 
         Assert.Equal(new Vector3(2.0f, 3.0f, 4.0f), rendered.Eye);
-        Assert.Equal(new Vector3(2.0f, 3.0f, 5.0f), rendered.Target);
-        Assert.Equal(-Vector3.UnitY, rendered.Up);
+        // The DL1 EyeCamera helper looks along local -Y with local -Z up.
+        // Local +Z aims at world -Y, i.e. straight down into the torso.
+        Assert.Equal(new Vector3(2.0f, 2.0f, 4.0f), rendered.Target);
+        Assert.Equal(-Vector3.UnitZ, rendered.Up);
         Assert.Equal(72.0f, rendered.VerticalFieldOfViewDegrees);
         Assert.Equal(0.03f, rendered.NearPlane);
         Assert.Equal(900.0f, rendered.FarPlane);

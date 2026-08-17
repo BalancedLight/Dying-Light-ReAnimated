@@ -26,9 +26,27 @@ public static class Dl1PreviewContract
 
     public const string ReferenceCameraSemanticRole = "camera.reference";
 
+    /// <summary>
+    /// The reference-camera role actually emitted by decoded retail rigs. It
+    /// differs from <see cref="ReferenceCameraSemanticRole"/> for historical
+    /// reasons and cannot be reconciled at the source: rig semantic roles are
+    /// hashed into RigSignature, so renaming either string invalidates every
+    /// persisted rig signature and retail source binding. Consumers accept both.
+    /// </summary>
+    public const string ReferenceCameraHelperSemanticRole =
+        "camera.reference_helper";
+
     public const string EyeCameraHelperRole = "fpp.eye_camera";
 
     public const string ReferenceCameraHelperRole = "fpp.reference_camera";
+
+    /// <summary>
+    /// Marks an evaluated camera helper anchored to an editor-only preview
+    /// bone. It is deliberately distinct from
+    /// <see cref="EyeCameraHelperRole"/> so no consumer can mistake a preview
+    /// anchor for an exportable EyeCamera helper.
+    /// </summary>
+    public const string PreviewCameraHelperRole = "fpp.preview_camera";
 }
 
 /// <summary>
