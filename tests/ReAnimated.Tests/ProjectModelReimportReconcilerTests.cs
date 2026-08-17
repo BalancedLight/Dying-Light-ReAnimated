@@ -1,10 +1,105 @@
 using System.Collections.Immutable;
+using ReAnimated.Core.Domain;
 using ReAnimated.Core.Project;
 
 namespace ReAnimated.Tests;
 
 public sealed class ProjectModelReimportReconcilerTests
 {
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void ReplacementPackageDetachesOwnershipFromImmutableOldStack()
+    {
+        Guid previousAssetId = Guid.NewGuid();
+        Guid replacementAssetId = Guid.NewGuid();
+        Guid modelId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        string rig = Sha('1');
+        var model = new ProjectModelEntry
+        {
+            Id = modelId,
+            AssetId = previousAssetId,
+            Name = "Generic character",
+            RigSignature = rig,
+        };
+        var source = new ProjectAnimationSource
+        {
+            Id = sourceId,
+            Name = "Immutable embedded take",
+            SourceAssetId = previousAssetId,
+            EmbeddedCustomModelStack =
+                new ProjectEmbeddedAnimationStackIdentity
+                {
+                    ClipId = Guid.NewGuid(),
+                    FbxObjectId = 42,
+                    StackFingerprint = Sha('2'),
+                    SourceRigSignature = rig,
+                    Roles = AnimationSourceRoles.Body,
+                },
+            Presentation = new ProjectAnimationSourcePresentation
+            {
+                OriginKind =
+                    ProjectAnimationSourceOriginKind.OwningCustomModel,
+                OriginName = model.Name,
+                OwningModelId = modelId,
+                ProjectAssetId = previousAssetId,
+                SourceRigIdentity = rig,
+            },
+            FrameCount = 2,
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = sourceId,
+            Name = source.Name,
+            TargetModelId = modelId,
+            TargetRigId = "generic-rig",
+            TargetRigSignature = rig,
+            BindingMode = ProjectAnimationBindingMode.ExactDirect,
+        };
+        DlraProject project = DlraProject.Create("Immutable source") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = previousAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "Sources/character-old.dlrmodel",
+                    ContentSha256 = Sha('3'),
+                },
+                new ProjectAssetReference
+                {
+                    Id = replacementAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "Sources/character-new.dlrmodel",
+                    ContentSha256 = Sha('4'),
+                },
+            ],
+            Models = [model],
+            AnimationSources = [source],
+            AnimationVariants = [variant],
+        };
+        project.Validate();
+
+        DlraProject result = ProjectModelReimportReconciler.Apply(
+            project,
+            model with { AssetId = replacementAssetId });
+
+        ProjectAnimationSource retained = Assert.Single(
+            result.AnimationSources);
+        Assert.Equal(previousAssetId, retained.SourceAssetId);
+        ProjectAnimationSourcePresentation presentation = Assert.IsType<
+            ProjectAnimationSourcePresentation>(retained.Presentation);
+        Assert.Equal(
+            ProjectAnimationSourceOriginKind.ImportedFbxRig,
+            presentation.OriginKind);
+        Assert.Null(presentation.OwningModelId);
+        Assert.Equal(previousAssetId, presentation.ProjectAssetId);
+        result.Validate();
+    }
+
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ProjectSchema")]

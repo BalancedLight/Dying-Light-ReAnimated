@@ -7,6 +7,24 @@ namespace ReAnimated.Tests;
 
 public sealed class ProjectAnimationPackBuilderTests
 {
+    [Theory]
+    [InlineData("custom_player_anims", "custom_player_anims.rpack")]
+    [InlineData("custom_player_anims.rpack", "custom_player_anims.rpack")]
+    public void AnimationPackNameIsUserConfigurable(
+        string input,
+        string expected) =>
+        Assert.Equal(
+            expected,
+            MainWindowViewModel.NormalizeAnimationRpackFileName(input));
+
+    [Theory]
+    [InlineData("nested/custom.rpack")]
+    [InlineData("wrong.zip")]
+    [InlineData(".rpack")]
+    public void AnimationPackNameRejectsUnsafeOrWrongExtension(string input) =>
+        Assert.Throws<ArgumentException>(() =>
+            MainWindowViewModel.NormalizeAnimationRpackFileName(input));
+
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "AnimationProjectExport")]

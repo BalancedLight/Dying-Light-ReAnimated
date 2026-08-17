@@ -117,7 +117,11 @@ public sealed class PythonOracleParityTests
         Assert.Equal(
             RequiredString(oracle, "sourceSha256"),
             Convert.ToHexString(SHA256.HashData(bytes)));
-        CompareAnm2Payload(oracle, Anm2Reader.Read(bytes), tolerance);
+        CompareAnm2Payload(
+            oracle,
+            Anm2Reader.Read(bytes),
+            tolerance,
+            compareFractionalRotations: true);
     }
 
     private static ImmutableArray<Anm2Frame> BuildGeneratedFrames(int frameCount)
@@ -182,14 +186,23 @@ public sealed class PythonOracleParityTests
             Assert.Equal(
                 RequiredString(oracle, "preservingRoundTripSha256"),
                 Convert.ToHexString(SHA256.HashData(clip.EncodePreservingBody().Span)));
-            CompareAnm2Payload(oracle, clip, tolerance);
+            // This versioned stock oracle predates the engine-faithful
+            // quaternion interpolation rule. Keep endpoint rotations and all
+            // translation/scale values under Python parity; the dedicated
+            // shadow-branch test owns fractional rotation semantics.
+            CompareAnm2Payload(
+                oracle,
+                clip,
+                tolerance,
+                compareFractionalRotations: false);
         }
     }
 
     private static void CompareAnm2Payload(
         JsonElement oracle,
         Anm2Clip clip,
-        double tolerance)
+        double tolerance,
+        bool compareFractionalRotations)
     {
         JsonElement header = RequiredProperty(oracle, "header");
         Assert.Equal(RequiredUInt16(header, "formatVersion"), clip.Header.FormatVersion);
@@ -249,6 +262,13 @@ public sealed class PythonOracleParityTests
                 Assert.Equal(9, expectedComponents.Length);
                 for (var component = 0; component < expectedComponents.Length; component++)
                 {
+                    if (!compareFractionalRotations &&
+                        component < 3 &&
+                        actual.Fraction is > 0 and < 1)
+                    {
+                        continue;
+                    }
+
                     Assert.InRange(
                         Math.Abs(
                             expectedComponents[component] -

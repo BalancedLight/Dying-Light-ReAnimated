@@ -327,6 +327,117 @@ public sealed class Anm2CodecTests
     }
 
     [Fact]
+    public void SemanticDecoderSlerpsShadowBranchRotationsAtFractionalDurationFrames()
+    {
+        const int frameCount = 17;
+        ImmutableArray<uint> descriptors =
+            [0xA0B0C0D0u, 0x10293847u];
+        ImmutableArray<Anm2Frame> frames = Enumerable
+            .Range(0, frameCount)
+            .Select(frameIndex => new Anm2Frame(
+            [
+                frameIndex == 0
+                    ? new Anm2TrackFrame(
+                        0,
+                        0.5f,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1,
+                        1,
+                        1)
+                    : new Anm2TrackFrame(
+                        0,
+                        -2.0f,
+                        0,
+                        0,
+                        0,
+                        0,
+                        1,
+                        1,
+                        1),
+                frameIndex == 0
+                    ? new Anm2TrackFrame(
+                        0.2f,
+                        0.8f,
+                        0.1f,
+                        0,
+                        0,
+                        0,
+                        1,
+                        1,
+                        1)
+                    : new Anm2TrackFrame(
+                        0.2f,
+                        -0.8f,
+                        -0.1f,
+                        0,
+                        0,
+                        0,
+                        1,
+                        1,
+                        1),
+            ]))
+            .ToImmutableArray();
+        byte[] bytes = Anm2PayloadWriter.Build(
+            new Anm2Header(
+                Anm2Header.Dl1FormatVersion,
+                Anm2Header.Dl1SamplerVersion,
+                frameCount,
+                checked((ushort)descriptors.Length),
+                0,
+                0,
+                0,
+                1,
+                0,
+                0),
+            descriptors,
+            frames,
+            [
+                Anm2PackedComponents.RotationX |
+                Anm2PackedComponents.RotationY |
+                Anm2PackedComponents.RotationZ,
+                Anm2PackedComponents.RotationY |
+                Anm2PackedComponents.RotationZ,
+            ]);
+        RewriteSingleDurationTable(
+            bytes,
+            descriptors.Length,
+            pageCount: 1,
+            scale: 2,
+            duration: checked((ushort)(2 * (frameCount - 1))),
+            speed: 1);
+        Anm2Clip clip = Anm2Reader.Read(bytes);
+        Anm2DecodedSample first =
+            Anm2SemanticDecoder.Sample(clip, 0);
+        Anm2DecodedSample second =
+            Anm2SemanticDecoder.Sample(clip, 2);
+
+        Anm2BulkDecodeResult decoded =
+            Anm2SemanticDecoder.DecodeFrames(clip);
+
+        Assert.Equal(0.5f, Anm2SemanticDecoder.Sample(clip, 1).Fraction, 6);
+        Assert.Equal(frameCount, decoded.Frames.Length);
+        for (var trackIndex = 0;
+             trackIndex < descriptors.Length;
+             trackIndex++)
+        {
+            QuaternionD from = ToQuaternion(
+                first.Frame.Tracks[trackIndex]);
+            QuaternionD to = ToQuaternion(
+                second.Frame.Tracks[trackIndex]);
+            QuaternionD expected = QuaternionD.Slerp(from, to, 0.5);
+            QuaternionD actual = ToQuaternion(
+                decoded.Frames[1].Tracks[trackIndex]);
+            Assert.InRange(
+                Math.Abs(QuaternionD.Dot(expected, actual)),
+                1.0 - 1e-6,
+                1.0 + 1e-6);
+        }
+    }
+
+    [Fact]
     public void BulkDecoderCachesPackedSlotsAndSelectsDescriptors()
     {
         const int frameCount = 47;
@@ -941,6 +1052,36 @@ public sealed class Anm2CodecTests
             descriptor,
             frames,
             [Anm2PackedComponents.RotationX]);
+    }
+
+    private static QuaternionD ToQuaternion(
+        Anm2TrackFrame frame) =>
+        Anm2DomainAdapter.QuaternionFromCayley(
+            frame.RotationX,
+            frame.RotationY,
+            frame.RotationZ);
+
+    private static void RewriteSingleDurationTable(
+        byte[] bytes,
+        int trackCount,
+        int pageCount,
+        ushort scale,
+        ushort duration,
+        ushort speed)
+    {
+        int offset = checked(
+            Anm2Header.Size +
+            (4 * trackCount) +
+            (2 * pageCount));
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(offset),
+            scale);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(offset + 2),
+            duration);
+        BinaryPrimitives.WriteUInt16LittleEndian(
+            bytes.AsSpan(offset + 4),
+            speed);
     }
 
     private static void AssertFrameEqual(

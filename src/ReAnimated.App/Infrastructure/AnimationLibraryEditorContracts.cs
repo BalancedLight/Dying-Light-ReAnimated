@@ -457,6 +457,18 @@ public static class AnimationLibraryAssignmentValidator
         }
 
         ValidateResourceName(library.ResourceName);
+        if (library.Mode == ProjectAnimationLibraryMode.CustomAdditive &&
+            library.ResourceName.Contains(
+                "_dlc",
+                StringComparison.OrdinalIgnoreCase) &&
+            !ProjectAnimationLibrary.TryGetDlcNumber(
+                library.ResourceName,
+                out _))
+        {
+            throw new InvalidOperationException(
+                "A DLC animation-script resource must end with '_dlc' followed by decimal digits, for example anims_man_all_dlc60.");
+        }
+
         if (library.Mode ==
             ProjectAnimationLibraryMode.ExistingScriptExtension)
         {

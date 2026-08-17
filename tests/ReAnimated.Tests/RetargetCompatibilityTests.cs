@@ -35,7 +35,7 @@ public sealed class RetargetCompatibilityTests
             RetargetTransformComponents.Rotation |
                 RetargetTransformComponents.Scale,
             row.TransformComponents);
-        Assert.Equal("Exact · 95%", row.EvidenceMethod);
+        Assert.Equal("Exact · Not scored", row.EvidenceMethod);
 
         row.IsTranslationEnabled = true;
         Assert.Equal(
@@ -76,6 +76,35 @@ public sealed class RetargetCompatibilityTests
             RetargetTransferPolicy.RestRelative,
             row.TransferPolicy);
         Assert.False(string.IsNullOrWhiteSpace(restRelative.Description));
+    }
+
+    [Fact]
+    public void MappingTargetDropdownCommitsManualSelectionAndRestoresRejectedEdit()
+    {
+        BoneMappingViewModel row = new(
+            "mixamorig:Neck",
+            "spine_001",
+            0.9,
+            BoneMappingMethod.Semantic.ToString(),
+            targetBoneOptions: ["spine", "spine_001", "Neck"]);
+
+        Assert.Equal(
+            ["spine", "spine_001", "Neck"],
+            row.TargetBoneOptions);
+
+        row.TargetBone = "Neck";
+        row.AcceptManualEdit();
+
+        Assert.Equal("Neck", row.TargetBone);
+        Assert.Equal(BoneMappingMethod.Manual.ToString(), row.Status);
+        Assert.Equal(1.0, row.Confidence);
+        Assert.False(row.IsReviewed);
+        Assert.False(row.IsLocked);
+
+        row.TargetBone = "spine";
+        row.RestorePersistedTargetBone();
+
+        Assert.Equal("Neck", row.TargetBone);
     }
 
     [Theory]
@@ -1245,6 +1274,103 @@ public sealed class RetargetCompatibilityTests
                 entry.TargetBoneIndex == 3 &&
                 entry.MappingKind ==
                     RetargetMappingKind.HelperOverride);
+    }
+
+    [Fact]
+    public void AnatomicalRetargetUsesSplitHipRootsWhenTargetHasNoCentralPelvis()
+    {
+        static TransformTRS At(double x, double y, double z) =>
+            new(
+                new Vector3D(x, y, z),
+                QuaternionD.Identity,
+                Vector3D.One);
+
+        RigDefinition source = new(
+            "mixamo-source",
+            "Mixamo source",
+            [
+                new BoneDefinition(0, "Armature", -1, At(0, 0, 0), BoneKind.Root),
+                new BoneDefinition(1, "mixamorig:Hips", 0, At(0, 0, 0)),
+                new BoneDefinition(2, "mixamorig:Spine", 1, At(0, 1, 0)),
+                new BoneDefinition(3, "mixamorig:LeftShoulder", 2, At(-1, 1, 0)),
+                new BoneDefinition(4, "mixamorig:LeftArm", 3, At(-0.5, 0, 0)),
+                new BoneDefinition(5, "mixamorig:LeftForeArm", 4, At(-1, 0, 0)),
+                new BoneDefinition(6, "mixamorig:LeftHand", 5, At(-1, 0, 0)),
+                new BoneDefinition(7, "mixamorig:RightShoulder", 2, At(1, 1, 0)),
+                new BoneDefinition(8, "mixamorig:RightArm", 7, At(0.5, 0, 0)),
+                new BoneDefinition(9, "mixamorig:RightForeArm", 8, At(1, 0, 0)),
+                new BoneDefinition(10, "mixamorig:RightHand", 9, At(1, 0, 0)),
+                new BoneDefinition(11, "mixamorig:LeftUpLeg", 1, At(-0.5, -1, 0)),
+                new BoneDefinition(12, "mixamorig:LeftLeg", 11, At(0, -1, 0)),
+                new BoneDefinition(13, "mixamorig:LeftFoot", 12, At(0, -1, 0)),
+                new BoneDefinition(14, "mixamorig:RightUpLeg", 1, At(0.5, -1, 0)),
+                new BoneDefinition(15, "mixamorig:RightLeg", 14, At(0, -1, 0)),
+                new BoneDefinition(16, "mixamorig:RightFoot", 15, At(0, -1, 0)),
+            ]);
+        RigDefinition target = new(
+            "split-hip-target",
+            "Split hip target",
+            [
+                new BoneDefinition(0, "spine", -1, At(0, 0, 0), BoneKind.Root),
+                new BoneDefinition(1, "spine_001", 0, At(0, 0, 1)),
+                new BoneDefinition(2, "l_clavicle", 1, At(-1, 0, 1)),
+                new BoneDefinition(3, "l_upperarm", 2, At(-0.5, 0, 0)),
+                new BoneDefinition(4, "l_forearm", 3, At(-1, 0, 0)),
+                new BoneDefinition(5, "l_hand", 4, At(-1, 0, 0)),
+                new BoneDefinition(6, "r_clavicle", 1, At(1, 0, 1)),
+                new BoneDefinition(7, "r_upperarm", 6, At(0.5, 0, 0)),
+                new BoneDefinition(8, "r_forearm", 7, At(1, 0, 0)),
+                new BoneDefinition(9, "r_hand", 8, At(1, 0, 0)),
+                new BoneDefinition(10, "l_thigh", 0, At(-0.5, 0, -1)),
+                new BoneDefinition(11, "l_calf", 10, At(0, 0, -1)),
+                new BoneDefinition(12, "l_foot", 11, At(0, 0, -1)),
+                new BoneDefinition(13, "r_thigh", 0, At(0.5, 0, -1)),
+                new BoneDefinition(14, "r_calf", 13, At(0, 0, -1)),
+                new BoneDefinition(15, "r_foot", 14, At(0, 0, -1)),
+            ]);
+        var entries = new List<BoneMapEntry>
+        {
+            new(1, 0, BoneMappingMethod.Semantic, 0.9),
+            new(2, 1, BoneMappingMethod.Semantic, 0.9),
+        };
+        int[] sourceAnatomical = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        int[] targetAnatomical = [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+        entries.AddRange(sourceAnatomical.Zip(
+            targetAnatomical,
+            static (sourceIndex, targetIndex) => new BoneMapEntry(
+                sourceIndex,
+                targetIndex,
+                BoneMappingMethod.Semantic,
+                0.9,
+                transferPolicy: RetargetTransferPolicy.AnatomicalDirection,
+                componentPolicy: RetargetComponentPolicy.Rotation)));
+        RetargetMap map = new(source.Id, target.Id, entries);
+        TransformTRS[] locals = source.Bones
+            .Select(static bone => bone.LocalBindPose)
+            .ToArray();
+        locals[4] = locals[4] with
+        {
+            Rotation = QuaternionD.FromAxisAngle(
+                Vector3D.UnitZ,
+                -Math.PI / 2.0),
+        };
+        SkeletonPose sourcePose = new(source, locals);
+
+        SkeletonPose result = PoseRetargeter.Retarget(
+            sourcePose,
+            target,
+            map);
+        Vector3D targetArmDirection = (
+                result.GlobalMatrices[4].Translation -
+                result.GlobalMatrices[3].Translation)
+            .Normalized();
+
+        Assert.True(
+            Vector3D.Dot(targetArmDirection, Vector3D.UnitZ) > 0.95,
+            $"Expected the raised source arm to follow target body-up; actual {targetArmDirection}.");
+        Assert.True(
+            Math.Abs(Vector3D.Dot(targetArmDirection, Vector3D.UnitY)) < 0.2,
+            "A source-local fallback incorrectly raised the target arm along its unrelated local Y axis.");
     }
 
     [Fact]

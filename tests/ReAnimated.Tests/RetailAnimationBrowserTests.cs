@@ -12,7 +12,7 @@ public sealed class RetailAnimationBrowserTests : IDisposable
         $"ReAnimated-RetailAnimationBrowser-{Guid.NewGuid():N}");
 
     [Fact]
-    public void OnlyFingerprintedRetailAnimationsAreListed()
+    public void OnlyFingerprintedRetailAnimationResourcesAreListed()
     {
         var browser = new RetailAnimationBrowserViewModel();
 
@@ -30,9 +30,10 @@ public sealed class RetailAnimationBrowserTests : IDisposable
                 retailAsset: null),
         ]);
 
-        AssetItemViewModel listed = Assert.Single(browser.VisibleAssets);
-        Assert.Equal("fpp_fireball", listed.Name);
-        Assert.Equal(1, browser.IndexedAssetCount);
+        Assert.Equal(
+            ["fpp_fireball", "player_animations"],
+            browser.VisibleAssets.Select(static item => item.Name).ToArray());
+        Assert.Equal(2, browser.IndexedAssetCount);
     }
 
     [Fact]
@@ -52,7 +53,7 @@ public sealed class RetailAnimationBrowserTests : IDisposable
         browser.SearchText = "sprint";
         Assert.Equal("fpp_sprint", Assert.Single(browser.VisibleAssets).Name);
         Assert.Contains(
-            "1 matching animations",
+            "1 matching animation resources",
             browser.ResultSummary,
             StringComparison.Ordinal);
 
@@ -76,7 +77,7 @@ public sealed class RetailAnimationBrowserTests : IDisposable
 
         Assert.False(browser.HasFilteredAssets);
         Assert.Contains(
-            "No base-game animations match",
+            "No base-game animations or animation scripts match",
             browser.EmptyResultMessage,
             StringComparison.Ordinal);
     }
@@ -155,6 +156,30 @@ public sealed class RetailAnimationBrowserTests : IDisposable
             "exact fingerprinted source model",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Type322SelectionEnablesProjectScriptActionOnly()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "script-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "script-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "script-workspace.json")),
+            new NoOpProjectFileDialogs(),
+            assets);
+        AssetItemViewModel script = CreateItem(
+            "anims_man_all",
+            AssetKind.AnimationScript);
+        viewModel.AnimationBrowser.ReplaceAssets([script]);
+        viewModel.AnimationBrowser.SelectedAsset = script;
+
+        Assert.False(
+            viewModel.AddSelectedRetailAnimationCommand.CanExecute(null));
+        Assert.True(
+            viewModel.AddSelectedRetailAnimationScriptCommand.CanExecute(null));
     }
 
     public void Dispose()

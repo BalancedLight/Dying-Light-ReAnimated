@@ -17,10 +17,16 @@ public sealed record LocalApplicationPaths(
 {
     public const string ApplicationDirectoryName = "DLReAnimated";
 
-    public static LocalApplicationPaths CreateDefault() =>
-        Create(
-            Environment.GetFolderPath(
-                Environment.SpecialFolder.LocalApplicationData));
+    public static LocalApplicationPaths CreateDefault()
+    {
+        string? overriddenLocalData =
+            Environment.GetEnvironmentVariable("LOCALAPPDATA");
+        return Create(
+            string.IsNullOrWhiteSpace(overriddenLocalData)
+                ? Environment.GetFolderPath(
+                    Environment.SpecialFolder.LocalApplicationData)
+                : overriddenLocalData);
+    }
 
     public static LocalApplicationPaths Create(
         string localApplicationDataDirectory)

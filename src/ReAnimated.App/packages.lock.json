@@ -8,6 +8,21 @@
         "resolved": "8.4.2",
         "contentHash": "WadCzGEc2U+3e20avRLng4qNtt4zoOGWrdUISqJWrHe3/FSnrYjuM5Sb4yQb09LhkBXrrI4Zt3dLKgRMbItsrg=="
       },
+      "Dirkster.AvalonDock": {
+        "type": "Direct",
+        "requested": "[4.74.1, )",
+        "resolved": "4.74.1",
+        "contentHash": "Wf3tjZmN8cjepp5m3dlI68TzDGBnkbxLmbdGD4BkgmbpTPHC0SUSiCTI/BY55KFwWXov714DDbebSCUnl2w97Q=="
+      },
+      "Dirkster.AvalonDock.Themes.Expression": {
+        "type": "Direct",
+        "requested": "[4.74.1, )",
+        "resolved": "4.74.1",
+        "contentHash": "5gmYGWuZk48FLHW6r+KhHxVtIMhDzytat+BNgoXvUSrJ6N+9qgIs8o7GT94AsRNcYWWNNfLo0A6ITW9R335sDg==",
+        "dependencies": {
+          "Dirkster.AvalonDock": "4.74.1"
+        }
+      },
       "Microsoft.NET.ILLink.Tasks": {
         "type": "Direct",
         "requested": "[10.0.11, )",

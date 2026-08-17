@@ -80,6 +80,10 @@
                     </Grid.RowDefinitions>
 
                     <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="150" />
                             <ColumnDefinition Width="*" />
@@ -97,6 +101,13 @@
                         <TextBox Grid.Column="4"
                                  ToolTip="Extensionless SCR resource name"
                                  Text="{Binding SelectedLibrary.ResourceName, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Grid.Row="1"
+                                   Grid.Column="3"
+                                   Grid.ColumnSpan="2"
+                                   Margin="0,4,0,0"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="{Binding SelectedLibrary.DlcConventionMessage}"
+                                   TextWrapping="Wrap" />
                     </Grid>
 
                     <Grid Grid.Row="1" Margin="0,10,0,10">

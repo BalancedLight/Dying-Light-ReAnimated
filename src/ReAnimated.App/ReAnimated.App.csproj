@@ -26,11 +26,15 @@
     <ProjectReference Include="..\ReAnimated.Renderer.D3D11\ReAnimated.Renderer.D3D11.csproj" />
     <ProjectReference Include="..\ReAnimated.Retargeting\ReAnimated.Retargeting.csproj" />
     <PackageReference Include="CommunityToolkit.Mvvm" />
+    <PackageReference Include="Dirkster.AvalonDock" />
+    <PackageReference Include="Dirkster.AvalonDock.Themes.Expression" />
   </ItemGroup>
   <ItemGroup>
     <Resource Include="Assets\DLReAnimated.ico" />
     <EmbeddedResource Include="..\..\LICENSE"
                       Link="Embedded\LICENSE" />
+    <EmbeddedResource Include="..\..\THIRD_PARTY_NOTICES.md"
+                      Link="Embedded\THIRD_PARTY_NOTICES.md" />
     <EmbeddedResource Include="..\..\README.md"
                       Link="Embedded\README.md" />
     <EmbeddedResource Include="..\..\schemas\dlraproj.schema.json"

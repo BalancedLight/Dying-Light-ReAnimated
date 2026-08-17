@@ -28,7 +28,7 @@
                 <Border Grid.Column="1"
                         Margin="4"
                         Padding="7,2"
-                        Background="#3C2F1C"
+                        Background="{StaticResource PanelRaisedBrush}"
                         CornerRadius="9"
                         ToolTip="Software rendering fallback is active">
                     <Border.Style>

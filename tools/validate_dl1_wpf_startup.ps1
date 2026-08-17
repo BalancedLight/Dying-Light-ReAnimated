@@ -261,9 +261,10 @@ try {
         ConvertFrom-Json
     if ($exitCode -ne 0 -or
         $smoke.format -ne "dl-reanimated-wpf-startup-smoke" -or
-        [int]$smoke.schemaVersion -ne 3 -or
+        [int]$smoke.schemaVersion -ne 4 -or
         -not [bool]$smoke.complete -or
         -not [bool]$smoke.animationLibraryRowMaterialized -or
+        -not [bool]$smoke.floatingViewportRoundTrip -or
         [string]$smoke.processArchitecture -ne "X64" -or
         [int]$smoke.requiredViewportCount -ne 2 -or
         [long]$smoke.requiredPresentedFrames -lt 3 -or

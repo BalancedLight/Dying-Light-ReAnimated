@@ -70,8 +70,13 @@ public static class ProjectModelReimportReconciler
         // which they were sampled. ReconcileEmbeddedCustomModelStacks adds
         // source records for checked stacks in the replacement package after
         // this target-only reconciliation step.
-        ImmutableArray<ProjectAnimationSource> sources =
-            project.AnimationSources;
+        ImmutableArray<ProjectAnimationSource> sources = project
+            .AnimationSources
+            .Select(source => DetachReplacedPackageOwnership(
+                source,
+                previousModel,
+                replacementModel))
+            .ToImmutableArray();
         Dictionary<Guid, ProjectAnimationSource> sourceById = sources
             .ToDictionary(static source => source.Id);
 
@@ -109,6 +114,39 @@ public static class ProjectModelReimportReconciler
             AnimationSources = sources,
             AnimationVariants = variants,
             Animations = compatibilityAnimations,
+        };
+    }
+
+    private static ProjectAnimationSource DetachReplacedPackageOwnership(
+        ProjectAnimationSource source,
+        ProjectModelEntry previousModel,
+        ProjectModelEntry replacementModel)
+    {
+        ProjectAnimationSourcePresentation? presentation =
+            source.Presentation;
+        if (previousModel.AssetId == replacementModel.AssetId ||
+            presentation is not
+            {
+                OriginKind:
+                    ProjectAnimationSourceOriginKind.OwningCustomModel,
+            } ||
+            presentation.OwningModelId != previousModel.Id ||
+            presentation.ProjectAssetId != previousModel.AssetId)
+        {
+            return source;
+        }
+
+        // The prior package remains the immutable animation input, while the
+        // project model now owns replacement bytes. Preserve that source and
+        // remove only the ownership claim that is no longer true.
+        return source with
+        {
+            Presentation = presentation with
+            {
+                OriginKind =
+                    ProjectAnimationSourceOriginKind.ImportedFbxRig,
+                OwningModelId = null,
+            },
         };
     }
 

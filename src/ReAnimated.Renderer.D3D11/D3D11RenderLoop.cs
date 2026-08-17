@@ -533,7 +533,7 @@ internal sealed class D3D11RenderLoop : IDisposable
         catch (Exception exception)
         {
             _diagnosticSink($"Scene snapshot failed: {exception.Message}");
-            return RenderFrameSnapshot.Empty(new Vector4(0.12f, 0.025f, 0.035f, 1.0f));
+            return RenderFrameSnapshot.Empty();
         }
     }
 

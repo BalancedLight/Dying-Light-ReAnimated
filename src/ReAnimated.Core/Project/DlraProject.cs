@@ -279,6 +279,15 @@ public sealed record ProjectAnimationLibrary
                 parameterName);
         }
 
+        if (Mode == ProjectAnimationLibraryMode.CustomAdditive &&
+            ResourceName.Contains("_dlc", StringComparison.OrdinalIgnoreCase) &&
+            !TryGetDlcNumber(ResourceName, out _))
+        {
+            throw new ArgumentException(
+                "A DLC animation-script resource must end with '_dlc' followed by decimal digits, for example anims_man_all_dlc60.",
+                parameterName);
+        }
+
         foreach (ProjectAnimationLibraryImport import in Imports)
         {
             import.Validate(parameterName);
@@ -300,6 +309,40 @@ public sealed record ProjectAnimationLibrary
                 "Animation resource names must be extensionless single path components of at most 128 characters.",
                 parameterName);
         }
+    }
+
+    public static bool TryGetDlcNumber(
+        string resourceName,
+        out int dlcNumber)
+    {
+        dlcNumber = 0;
+        if (string.IsNullOrWhiteSpace(resourceName))
+        {
+            return false;
+        }
+
+        int marker = resourceName.LastIndexOf(
+            "_dlc",
+            StringComparison.OrdinalIgnoreCase);
+        if (marker <= 0 || marker + 4 >= resourceName.Length)
+        {
+            return false;
+        }
+
+        ReadOnlySpan<char> suffix = resourceName.AsSpan(marker + 4);
+        foreach (char character in suffix)
+        {
+            if (character is < '0' or > '9')
+            {
+                return false;
+            }
+        }
+
+        return int.TryParse(
+            suffix,
+            System.Globalization.NumberStyles.None,
+            System.Globalization.CultureInfo.InvariantCulture,
+            out dlcNumber);
     }
 }
 

@@ -6,6 +6,8 @@
   <ItemGroup>
     <PackageVersion Include="BCnEncoder.Net" Version="2.3.0" />
     <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageVersion Include="Dirkster.AvalonDock" Version="4.74.1" />
+    <PackageVersion Include="Dirkster.AvalonDock.Themes.Expression" Version="4.74.1" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.10" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
     <PackageVersion Include="SharpCompress" Version="0.50.1" />

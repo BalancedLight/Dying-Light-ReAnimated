@@ -2,8 +2,9 @@
              x:Name="WorkspaceRoot"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             MinWidth="900"
-             MinHeight="520">
+             xmlns:controls="clr-namespace:ReAnimated.App.Controls"
+             MinWidth="0"
+             MinHeight="0">
     <Grid>
         <Grid.ColumnDefinitions>
             <ColumnDefinition Width="300" MinWidth="245" />
@@ -13,7 +14,9 @@
             <ColumnDefinition Width="360" MinWidth="285" />
         </Grid.ColumnDefinitions>
 
-        <Border Grid.Column="0" Style="{StaticResource PaneBorderStyle}">
+        <Border x:Name="AuthoringSettingsPane"
+                Grid.Column="0"
+                Style="{StaticResource PaneBorderStyle}">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="10">
                     <TextBlock FontSize="16" FontWeight="SemiBold" Text="Custom model" />
@@ -98,11 +101,11 @@
                     </Border>
                     <Border Margin="0,6,0,0"
                             Padding="8"
-                            Background="#3B301D"
-                            BorderBrush="#735D2A"
+                            Background="{StaticResource PanelRaisedBrush}"
+                            BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
                             CornerRadius="3">
-                        <TextBlock Foreground="#F3C978"
+                        <TextBlock Foreground="{StaticResource TextBrush}"
                                    Text="{Binding BuildStatus}"
                                    TextWrapping="Wrap" />
                     </Border>
@@ -118,19 +121,21 @@
                 <RowDefinition Height="5" />
                 <RowDefinition Height="285" MinHeight="180" />
             </Grid.RowDefinitions>
-            <views:ViewportPane xmlns:views="clr-namespace:ReAnimated.App.Views"
+            <views:ViewportPane x:Name="AuthoringViewportPane"
+                                xmlns:views="clr-namespace:ReAnimated.App.Views"
                                 DataContext="{Binding Viewport}" />
             <GridSplitter Grid.Row="1" Height="5" VerticalAlignment="Stretch" HorizontalAlignment="Stretch" />
-            <views:TimelinePanel xmlns:views="clr-namespace:ReAnimated.App.Views"
-                                 Grid.Row="2"
-                                 DataContext="{Binding Timeline}" />
+            <views:TimelinePanel x:Name="AuthoringTimelinePane"
+                                 xmlns:views="clr-namespace:ReAnimated.App.Views"
+                                  Grid.Row="2"
+                                  DataContext="{Binding Timeline}" />
         </Grid>
 
         <GridSplitter Grid.Column="3" Width="5" HorizontalAlignment="Stretch" />
 
         <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
-            <TabControl>
-                <TabItem Header="Rig">
+            <TabControl x:Name="AuthoringInspectorTabs">
+                <TabItem x:Name="AuthoringRigTab" Header="Rig">
                     <Grid Margin="7">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -190,17 +195,17 @@
                                        TextWrapping="Wrap" />
                             <StackPanel IsEnabled="{Binding CanEditSelectedHelper}">
                                 <TextBlock FontSize="10" Text="Local translation offset (X / Y / Z)" />
-                                <UniformGrid Columns="3" Margin="0,2,0,4">
+                                <controls:ResponsiveUniformGrid PreferredColumns="3" Margin="0,2,0,4">
                                     <TextBox Text="{Binding HelperTranslationX, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBox Margin="3,0" Text="{Binding HelperTranslationY, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBox Text="{Binding HelperTranslationZ, UpdateSourceTrigger=PropertyChanged}" />
-                                </UniformGrid>
+                                </controls:ResponsiveUniformGrid>
                                 <TextBlock FontSize="10" Text="Local rotation offset in degrees (X / Y / Z)" />
-                                <UniformGrid Columns="3" Margin="0,2,0,4">
+                                <controls:ResponsiveUniformGrid PreferredColumns="3" Margin="0,2,0,4">
                                     <TextBox Text="{Binding HelperRotationX, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBox Margin="3,0" Text="{Binding HelperRotationY, UpdateSourceTrigger=PropertyChanged}" />
                                     <TextBox Text="{Binding HelperRotationZ, UpdateSourceTrigger=PropertyChanged}" />
-                                </UniformGrid>
+                                </controls:ResponsiveUniformGrid>
                                 <Button HorizontalAlignment="Left"
                                         Command="{Binding ApplyHelperTransformCommand}"
                                         Content="Apply local offsets" />
@@ -209,7 +214,7 @@
                     </Grid>
                 </TabItem>
 
-                <TabItem Header="Materials">
+                <TabItem x:Name="AuthoringMaterialsTab" Header="Materials">
                     <Grid Margin="7">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />
@@ -253,7 +258,7 @@
                     </Grid>
                 </TabItem>
 
-                <TabItem Header="Animation stacks">
+                <TabItem x:Name="AuthoringAnimationsTab" Header="Animation stacks">
                     <Grid Margin="7">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto" />

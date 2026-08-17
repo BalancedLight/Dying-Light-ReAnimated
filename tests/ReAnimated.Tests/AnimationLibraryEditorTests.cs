@@ -223,6 +223,82 @@ public sealed class AnimationLibraryEditorTests
     }
 
     [Fact]
+    public void FingerprintedType322ProjectAssetBecomesExtensionCandidate()
+    {
+        ProjectRetailAssetIdentity identity = RetailScript(
+            "anims_man_all",
+            'd');
+        DlraProject project = CreateProject();
+        project = project with
+        {
+            Assets = project.Assets.Add(new ProjectAssetReference
+            {
+                Kind = ProjectAssetKind.RetailGameResource,
+                RelativePath = "retail/322/00000007",
+                ResourceId = "rpack:322:anims_man_all",
+                ContentSha256 = identity.ContentSha256,
+                RetailIdentity = identity,
+            }),
+        };
+
+        AnimationLibraryEditorRequest request =
+            AnimationLibraryEditorRequest.FromProject(
+                project,
+                Assert.Single(project.AnimationVariants).Id);
+
+        AnimationLibraryRetailScriptOption option =
+            Assert.Single(request.RetailScripts);
+        Assert.Equal("anims_man_all", option.Identity.ResourceName);
+        Assert.Equal(322, option.Identity.ResourceType);
+    }
+
+    [Fact]
+    public void DlcConventionAcceptsNumericSuffixAndWarnsBelowSixty()
+    {
+        ProjectAnimationLibrary library = Library(
+            Guid.NewGuid(),
+            "anims_man_all_dlc12");
+        var viewModel = new AnimationLibraryEditorViewModel(
+            new AnimationLibraryEditorRequest
+            {
+                Assignment = Assignment("generic_output.anm2"),
+                Libraries = [library],
+                SelectedLibraryId = library.Id,
+            });
+
+        Assert.True(viewModel.TryCreateResult(out _));
+        Assert.Contains(
+            "below the conventional 60+ range",
+            viewModel.SelectedLibrary!.DlcConventionMessage,
+            StringComparison.OrdinalIgnoreCase);
+
+        viewModel.SelectedLibrary.ResourceName = "anims_man_all_dlc60";
+        Assert.True(viewModel.TryCreateResult(out _));
+        Assert.Contains(
+            "dlc60",
+            viewModel.SelectedLibrary.DlcConventionMessage,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DlcConventionRejectsMalformedSuffix()
+    {
+        ProjectAnimationLibrary library = Library(
+            Guid.NewGuid(),
+            "anims_man_all_dlc_preview");
+
+        InvalidOperationException error = Assert.Throws<
+            InvalidOperationException>(() =>
+                AnimationLibraryAssignmentValidator.ValidateLibraries(
+                    [library]));
+
+        Assert.Contains(
+            "must end with '_dlc' followed by decimal digits",
+            error.Message,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void AssignmentRejectsNamesTheOutputBuilderWouldSilentlyRewrite()
     {
         ProjectAnimationLibrary library = Library(

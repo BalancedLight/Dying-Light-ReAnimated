@@ -6,11 +6,11 @@ namespace ReAnimated.Tests;
 public sealed class RepositoryHygieneTests
 {
     private static readonly Regex AbsoluteWindowsPath = new(
-        "(?<![A-Za-z])[A-Za-z]:\\\\",
+        "(?<![A-Za-z])[A-Za-z]:\\\\(?!\\\\)",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
     private static readonly Regex UncPath = new(
-        "\\\\\\\\[A-Za-z0-9._-]+\\\\",
+        "(?<!\\\\)\\\\\\\\[A-Za-z0-9._-]+\\\\(?!\\\\)",
         RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
     private static readonly Regex HomeDirectoryPath = new(

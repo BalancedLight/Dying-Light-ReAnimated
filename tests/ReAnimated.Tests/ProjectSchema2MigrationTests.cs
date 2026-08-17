@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using ReAnimated.App.ViewModels;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Project;
 
@@ -9,6 +10,93 @@ public sealed class ProjectSchema2MigrationTests : IDisposable
     private readonly string _temporaryDirectory = Path.Combine(
         Path.GetTempPath(),
         $"ReAnimated-Schema2-{Guid.NewGuid():N}");
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void OrdinaryImportedFbxSourceCreatesPlayableRuntimeAnimation()
+    {
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid targetAssetId = Guid.NewGuid();
+        Guid modelId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        string sourceRig = Sha('1');
+        string targetRig = Sha('2');
+        var binding = new ProjectAnimationSourceBinding
+        {
+            Kind = AnimationSourceKind.LocalFbx,
+            AssetId = sourceAssetId,
+            Roles = AnimationSourceRoles.Body,
+            SourceRigSignature = sourceRig,
+            TimingProvenance = AnimationTimingProvenance.EmbeddedFbx,
+            SourceRangeStartFrame = 0,
+            SourceRangeEndFrame = 16,
+            TimingDetail = "external-fbx-stack-v1|42|generic",
+        };
+        var source = new ProjectAnimationSource
+        {
+            Id = sourceId,
+            Name = "Imported motion",
+            SourceAssetId = sourceAssetId,
+            SourceBinding = binding,
+            FrameRate = new FrameRate(30, 1),
+            FrameCount = 17,
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = Guid.NewGuid(),
+            SourceId = sourceId,
+            Name = "Imported motion - target",
+            TargetModelId = modelId,
+            TargetRigId = "generic-target",
+            TargetRigSignature = targetRig,
+            BindingMode = ProjectAnimationBindingMode.Retarget,
+        };
+        DlraProject project = DlraProject.Create("Imported FBX") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = sourceAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "Sources/imported-motion.fbx",
+                    ContentSha256 = Sha('3'),
+                },
+                new ProjectAssetReference
+                {
+                    Id = targetAssetId,
+                    Kind = ProjectAssetKind.RetailGameResource,
+                    RelativePath = "retail/target",
+                    ContentSha256 = Sha('4'),
+                },
+            ],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = modelId,
+                    AssetId = targetAssetId,
+                    Name = "Generic target",
+                    RigSignature = targetRig,
+                },
+            ],
+        };
+
+        ProjectAnimation runtime =
+            MainWindowViewModel.CreateRuntimeAnimation(
+                project,
+                source,
+                variant);
+
+        Assert.True(
+            MainWindowViewModel.HasRuntimeSourceIdentity(source));
+        Assert.Equal(binding, runtime.SourceBinding);
+        Assert.Equal(sourceAssetId, runtime.SourceAssetId);
+        Assert.Equal(targetAssetId, runtime.TargetAssetId);
+        Assert.Equal(variant.Id, runtime.Id);
+        Assert.Equal(17, runtime.FrameCount);
+    }
 
     [Fact]
     [Trait("ValidationTier", "Focused")]

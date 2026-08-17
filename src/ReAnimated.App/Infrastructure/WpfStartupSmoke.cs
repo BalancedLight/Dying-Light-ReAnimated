@@ -26,7 +26,7 @@ internal sealed class WpfStartupSmoke
         "DL_REANIMATED_WPF_STARTUP_SMOKE.json";
     public const string Format =
         "dl-reanimated-wpf-startup-smoke";
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
 
     private const int RequiredViewportCount = 2;
     private const long RequiredPresentedFrames = 3;
@@ -159,6 +159,7 @@ internal sealed class WpfStartupSmoke
             // surface in the same live state in which a user can click it,
             // rather than treating the pre-show binding queue as a failure.
             ValidateModelsWorkspaceCommands(window, viewModel);
+            ValidateDetachedWorkflowPaneContexts(window, viewModel);
 
             SeedAnimationLibrary(viewModel);
             await RunAsync(
@@ -210,6 +211,75 @@ internal sealed class WpfStartupSmoke
         }
     }
 
+    private static void ValidateDetachedWorkflowPaneContexts(
+        Window window,
+        MainWindowViewModel viewModel)
+    {
+        // These are the roots that exposed the regression: they are detached
+        // from MainWindow before first render and can therefore never rely on
+        // inherited DataContext. Checking both ordinary metadata panes and
+        // nested viewport/timeline panes keeps a black renderer from passing
+        // merely because its HwndHost continues to present empty frames.
+        ValidatePaneDataContext(
+            window,
+            "ModelsPreviewPane",
+            viewModel);
+        ValidatePaneDataContext(
+            window,
+            "AnimationsDetailsPane",
+            viewModel);
+        ValidatePaneDataContext(
+            window,
+            "AnimationsSourcePreviewPane",
+            viewModel.SourceViewport);
+        ValidatePaneDataContext(
+            window,
+            "PlaybackContextPane",
+            viewModel);
+        ValidatePaneDataContext(
+            window,
+            "PlaybackTargetViewportPane",
+            viewModel.TargetViewport);
+        ValidatePaneDataContext(
+            window,
+            "PlaybackTimelinePane",
+            viewModel.Timeline);
+        ValidatePaneDataContext(
+            window,
+            "AnimationContextStrip",
+            viewModel);
+        ValidatePaneDataContext(
+            window,
+            "SourceViewportPane",
+            viewModel.SourceViewport);
+        ValidatePaneDataContext(
+            window,
+            "RetargetTargetViewportPane",
+            viewModel);
+        ValidatePaneDataContext(
+            window,
+            "RetargetTimelinePane",
+            viewModel.Timeline);
+    }
+
+    private static void ValidatePaneDataContext(
+        Window window,
+        string paneName,
+        object expectedDataContext)
+    {
+        if (window.FindName(paneName) is not FrameworkElement pane)
+        {
+            throw new InvalidDataException(
+                $"The detachable '{paneName}' pane was not found in the real WPF window.");
+        }
+
+        if (!ReferenceEquals(pane.DataContext, expectedDataContext))
+        {
+            throw new InvalidDataException(
+                $"The detachable '{paneName}' pane lost its intended ViewModel.");
+        }
+    }
+
     public void TryWriteStartupFailure(
         Exception exception,
         string stage)
@@ -238,6 +308,7 @@ internal sealed class WpfStartupSmoke
         _stopwatch.Restart();
         D3D11RenderHost[] hosts = [];
         bool animationLibraryRowMaterialized = false;
+        bool floatingViewportRoundTrip = false;
         var latestStatuses =
             new Dictionary<D3D11RenderHost, D3D11RendererStatus>();
         List<WpfResizeSmokeStepResult> resizeSteps = [];
@@ -250,10 +321,9 @@ internal sealed class WpfStartupSmoke
                 await MaterializeAnimationLibraryRowAsync(
                     window);
 
-            // The current Retarget/Edit workspace is the only dedicated
-            // two-viewport authoring surface. Materialize it after the
-            // animation-table check so resize evidence covers the same
-            // source/target layout users now interact with.
+            // Materialize the Retarget/Edit dock workspace after the
+            // animation-table check so resize and floating-window evidence
+            // covers the source/target layout users interact with.
             if (window.DataContext is not MainWindowViewModel viewModel)
             {
                 throw new InvalidDataException(
@@ -270,19 +340,9 @@ internal sealed class WpfStartupSmoke
                 DispatcherPriority.Loaded);
 
             stage = "WPF viewport startup";
-            await window.Dispatcher.InvokeAsync(
-                () => { },
-                System.Windows.Threading.DispatcherPriority
-                    .ApplicationIdle);
-            hosts = FindVisualChildren<D3D11RenderHost>(
-                    window)
-                .Where(static host => host.IsVisible)
-                .ToArray();
-            if (hosts.Length != RequiredViewportCount)
-            {
-                throw new InvalidDataException(
-                    $"The real WPF window must contain exactly {RequiredViewportCount:N0} D3D11 viewport hosts; found {hosts.Length:N0}.");
-            }
+            hosts = await WaitForVisibleViewportHostsAsync(
+                window,
+                RequiredViewportCount);
 
             statusHandler = (
                 object? sender,
@@ -326,6 +386,14 @@ internal sealed class WpfStartupSmoke
                     $"Both packaged WPF viewports did not reach Ready with at least {RequiredPresentedFrames:N0} presented frames and matching renderer pixel dimensions inside {_timeout.TotalSeconds:N0} seconds.");
             }
 
+            stage = "WPF floating viewport";
+            floatingViewportRoundTrip =
+                await RunFloatingViewportRoundTripAsync(
+                    application,
+                    window,
+                    hosts,
+                    latestStatuses);
+
             stage = "WPF viewport resize";
             await RunResizeSequenceAsync(
                 window,
@@ -337,7 +405,8 @@ internal sealed class WpfStartupSmoke
                 hosts,
                 latestStatuses,
                 resizeSteps,
-                animationLibraryRowMaterialized);
+                animationLibraryRowMaterialized,
+                floatingViewportRoundTrip);
         }
         catch (Exception exception)
         {
@@ -348,7 +417,8 @@ internal sealed class WpfStartupSmoke
                 hosts,
                 latestStatuses,
                 resizeSteps,
-                animationLibraryRowMaterialized);
+                animationLibraryRowMaterialized,
+                floatingViewportRoundTrip);
         }
         finally
         {
@@ -361,6 +431,160 @@ internal sealed class WpfStartupSmoke
                 }
             }
         }
+    }
+
+    private static async Task<D3D11RenderHost[]>
+        WaitForVisibleViewportHostsAsync(
+            Window window,
+            int expectedCount)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+        D3D11RenderHost[] visibleHosts = [];
+        do
+        {
+            await window.Dispatcher.InvokeAsync(
+                () => { },
+                DispatcherPriority.ApplicationIdle);
+            visibleHosts = FindVisualChildren<D3D11RenderHost>(
+                    window)
+                .Where(static host => host.IsVisible)
+                .ToArray();
+            if (visibleHosts.Length == expectedCount)
+            {
+                return visibleHosts;
+            }
+
+            await Task.Delay(50);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        int materializedCount = FindVisualChildren<D3D11RenderHost>(
+                window)
+            .Count();
+        throw new InvalidDataException(
+            $"The real WPF window must contain exactly {expectedCount:N0} visible D3D11 viewport hosts; found {visibleHosts.Length:N0} visible and {materializedCount:N0} materialized.");
+    }
+
+    private static async Task<bool>
+        RunFloatingViewportRoundTripAsync(
+            Application application,
+            Window window,
+            IReadOnlyList<D3D11RenderHost> hosts,
+            Dictionary<
+                D3D11RenderHost,
+                D3D11RendererStatus> latestStatuses)
+    {
+        if (window is not MainWindow mainWindow)
+        {
+            throw new InvalidDataException(
+                "The startup-smoke window is not the dock-enabled main window.");
+        }
+
+        Dictionary<D3D11RenderHost, long> floatingBaselines =
+            hosts.ToDictionary(
+                host => host,
+                host => latestStatuses[host].PresentedFrames);
+        await window.Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (!mainWindow.FloatTargetViewportForSmoke())
+                {
+                    throw new InvalidDataException(
+                        "The DL1 target viewport did not enter a floating dock window.");
+                }
+
+                window.UpdateLayout();
+            },
+            DispatcherPriority.Loaded);
+        await window.Dispatcher.InvokeAsync(
+            () => { },
+            DispatcherPriority.ApplicationIdle);
+
+        if (!application.Windows
+                .OfType<Window>()
+                .Any(candidate =>
+                    candidate.IsVisible &&
+                    string.Equals(
+                        candidate.GetType().Name,
+                        "LayoutAnchorableFloatingWindowControl",
+                        StringComparison.Ordinal)))
+        {
+            throw new InvalidDataException(
+                "Floating the target camera did not create a visible dock window.");
+        }
+
+        await WaitForKnownViewportHostsReadyAsync(
+            hosts,
+            latestStatuses,
+            floatingBaselines,
+            "floating");
+
+        Dictionary<D3D11RenderHost, long> dockingBaselines =
+            hosts.ToDictionary(
+                host => host,
+                host => latestStatuses[host].PresentedFrames);
+        await window.Dispatcher.InvokeAsync(
+            () =>
+            {
+                if (!mainWindow.DockTargetViewportForSmoke())
+                {
+                    throw new InvalidDataException(
+                        "The floating DL1 target viewport did not dock back into Retarget/Edit.");
+                }
+
+                window.UpdateLayout();
+            },
+            DispatcherPriority.Loaded);
+        await window.Dispatcher.InvokeAsync(
+            () => { },
+            DispatcherPriority.ApplicationIdle);
+
+        await WaitForKnownViewportHostsReadyAsync(
+            hosts,
+            latestStatuses,
+            dockingBaselines,
+            "re-docked");
+        await WaitForVisibleViewportHostsAsync(
+            window,
+            RequiredViewportCount);
+
+        return true;
+    }
+
+    private static async Task
+        WaitForKnownViewportHostsReadyAsync(
+            IReadOnlyList<D3D11RenderHost> hosts,
+            Dictionary<
+                D3D11RenderHost,
+                D3D11RendererStatus> latestStatuses,
+            Dictionary<D3D11RenderHost, long> baselines,
+            string stateLabel)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(5);
+        do
+        {
+            await hosts[0].Dispatcher.InvokeAsync(
+                () => { },
+                DispatcherPriority.ApplicationIdle);
+            if (hosts.All(host =>
+                    host.IsVisible &&
+                    latestStatuses.TryGetValue(
+                        host,
+                        out D3D11RendererStatus? status) &&
+                    IsReadyAtCurrentSize(
+                        host,
+                        status,
+                        baselines[host] + 1)))
+            {
+                return;
+            }
+
+            await Task.Delay(50);
+        }
+        while (DateTime.UtcNow < deadline);
+
+        throw new InvalidDataException(
+            $"Both known D3D11 viewport hosts must remain visible, Ready, correctly sized, and advance a hardware frame while the target camera is {stateLabel}.");
     }
 
     private static void SeedAnimationLibrary(
@@ -717,7 +941,8 @@ internal sealed class WpfStartupSmoke
             D3D11RendererStatus> statuses,
         IReadOnlyList<WpfResizeSmokeStepResult>
             resizeSteps,
-        bool animationLibraryRowMaterialized)
+        bool animationLibraryRowMaterialized,
+        bool floatingViewportRoundTrip)
     {
         if (Interlocked.Exchange(
                 ref _finishing,
@@ -748,6 +973,7 @@ internal sealed class WpfStartupSmoke
             RequiredPresentedFrames,
             RequiredResizeStepCount,
             animationLibraryRowMaterialized,
+            floatingViewportRoundTrip,
             viewports,
             resizeSteps,
             ErrorStage: null,
@@ -774,7 +1000,8 @@ internal sealed class WpfStartupSmoke
             D3D11RendererStatus> statuses,
         IReadOnlyList<WpfResizeSmokeStepResult>
             resizeSteps,
-        bool animationLibraryRowMaterialized)
+        bool animationLibraryRowMaterialized,
+        bool floatingViewportRoundTrip)
     {
         if (Interlocked.Exchange(
                 ref _finishing,
@@ -791,7 +1018,8 @@ internal sealed class WpfStartupSmoke
                     hosts,
                     statuses),
                 resizeSteps,
-                animationLibraryRowMaterialized));
+                animationLibraryRowMaterialized,
+                floatingViewportRoundTrip));
         application.Shutdown(1);
     }
 
@@ -801,7 +1029,8 @@ internal sealed class WpfStartupSmoke
         IReadOnlyList<WpfViewportSmokeResult> viewports,
         IReadOnlyList<WpfResizeSmokeStepResult>
             resizeSteps,
-        bool animationLibraryRowMaterialized = false) =>
+        bool animationLibraryRowMaterialized = false,
+        bool floatingViewportRoundTrip = false) =>
         new(
             Format,
             SchemaVersion,
@@ -822,6 +1051,7 @@ internal sealed class WpfStartupSmoke
             RequiredPresentedFrames,
             RequiredResizeStepCount,
             animationLibraryRowMaterialized,
+            floatingViewportRoundTrip,
             viewports,
             resizeSteps,
             stage,
@@ -1015,6 +1245,8 @@ internal sealed class WpfStartupSmoke
         int RequiredResizeStepCount,
         [property: JsonPropertyName("animationLibraryRowMaterialized")]
         bool AnimationLibraryRowMaterialized,
+        [property: JsonPropertyName("floatingViewportRoundTrip")]
+        bool FloatingViewportRoundTrip,
         [property: JsonPropertyName("viewports")]
         IReadOnlyList<WpfViewportSmokeResult> Viewports,
         [property: JsonPropertyName("resizeSteps")]

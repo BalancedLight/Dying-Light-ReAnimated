@@ -185,6 +185,8 @@ public interface IProjectFileDialogService
 
     string? ShowSelectExportDirectoryDialog(string? initialPath) => null;
 
+    string? ShowOpenAnimationRpackDialog(string? initialPath) => null;
+
     string? ShowSelectAdditionalRpackRootDialog(string? initialPath) => null;
 
     string? ShowOpenCustomModelFbxDialog(string? initialPath) => null;
@@ -392,8 +394,8 @@ public sealed class WindowsProjectFileDialogService :
         ArgumentException.ThrowIfNullOrWhiteSpace(animationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
         MessageBoxResult result = MessageBox.Show(
-            $"'{animationName}' already plays directly on its owning model '{modelName}' and does not need retargeting.\n\n" +
-            "Yes: play on the existing model.\n" +
+            $"'{animationName}' plays directly on its owning model '{modelName}'. You can still open it for EyeCamera, helper, prop-holder, or other authoring edits.\n\n" +
+            "Yes: open and play on the existing model.\n" +
             "No: assign this source to another project model.\n" +
             "Cancel: remain in Animations.",
             "Open animation",
@@ -891,6 +893,19 @@ public sealed class WindowsProjectFileDialogService :
             Filter = CustomModelTextureFilter,
             Multiselect = false,
             Title = "Select a user-owned texture",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenAnimationRpackDialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new()
+        {
+            CheckFileExists = true,
+            Filter = RpackFilter,
+            Multiselect = false,
+            Title = "Select an existing animation RPack to append",
         };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;

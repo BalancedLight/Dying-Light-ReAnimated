@@ -138,6 +138,41 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)element.Attribute("Command"),
                 "{Binding ShowFidelityDetailsCommand}",
                 StringComparison.Ordinal));
+
+        XElement playbackControls = Assert.Single(
+            document.Descendants(Presentation + "StackPanel"),
+            static element => element.Elements(Presentation + "Button")
+                .Any(button => string.Equals(
+                    (string?)button.Attribute("Command"),
+                    "{Binding Timeline.TogglePlaybackCommand}",
+                    StringComparison.Ordinal)) &&
+                element.Ancestors(Presentation + "Grid")
+                    .Any(grid => string.Equals(
+                        (string?)grid.Attribute(Xaml + "Name"),
+                        "PrimaryToolbarLayout",
+                        StringComparison.Ordinal)));
+        Assert.Equal(
+            "1",
+            (string?)playbackControls.Attribute("Grid.Row"));
+        Assert.Equal(
+            "Center",
+            (string?)playbackControls.Attribute("HorizontalAlignment"));
+
+        string[] attachmentNumericBindings =
+        [
+            "PositionX", "PositionY", "PositionZ",
+            "RotationX", "RotationY", "RotationZ",
+            "ScaleX", "ScaleY", "ScaleZ",
+        ];
+        foreach (string propertyName in attachmentNumericBindings)
+        {
+            Assert.Contains(
+                document.Descendants(Presentation + "TextBox"),
+                element => string.Equals(
+                    (string?)element.Attribute("Text"),
+                    $"{{Binding AttachmentEditor.{propertyName}, UpdateSourceTrigger=LostFocus}}",
+                    StringComparison.Ordinal));
+        }
     }
 
     [Fact]
@@ -170,7 +205,7 @@ public sealed class EditorUsabilitySurfaceTests
             "Use as Source",
             "Use as Target",
             "Edit bones",
-            "Accept proposal & play",
+            "Accept pending proposal & play",
         ];
         foreach (string label in labels)
         {
@@ -181,6 +216,16 @@ public sealed class EditorUsabilitySurfaceTests
                     label,
                     StringComparison.Ordinal));
         }
+
+        Assert.All(
+            document.Descendants(Presentation + "Button")
+                .Where(static element => string.Equals(
+                    (string?)element.Attribute("Content"),
+                    "Accept pending proposal & play",
+                    StringComparison.Ordinal)),
+            static element => Assert.Equal(
+                "{Binding HasPendingMappingProposal, Converter={StaticResource BooleanToVisibilityConverter}}",
+                (string?)element.Attribute("Visibility")));
 
         Assert.Contains(
             document.Descendants(Presentation + "ToggleButton"),
@@ -548,6 +593,41 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)element.Attribute("Command"),
                 "{Binding ExportCharacterFilesCommand}",
                 StringComparison.Ordinal));
+        Assert.Contains(
+            shellDocument.Descendants(Presentation + "TextBox"),
+            static element => string.Equals(
+                (string?)element.Attribute("Text"),
+                "{Binding AnimationRpackFileName, UpdateSourceTrigger=PropertyChanged}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            shellDocument.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding SelectAnimationRpackAppendSourceCommand}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            shellDocument.Descendants(Presentation + "CheckBox"),
+            static element => string.Equals(
+                (string?)element.Attribute("IsChecked"),
+                "{Binding ReplaceAnimationRpackConflicts}",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            shellDocument.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding AddSelectedRetailAnimationScriptCommand}",
+                StringComparison.Ordinal));
+
+        string viewModelCode = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "ViewModels",
+                "MainWindowViewModel.cs"));
+        Assert.Contains(
+            "Rp6lAnimationLibraryCodec.AppendAtomicAsync(",
+            viewModelCode,
+            StringComparison.Ordinal);
 
         string dialogCode = File.ReadAllText(
             FindRepositoryFile(
@@ -571,55 +651,30 @@ public sealed class EditorUsabilitySurfaceTests
                 "src",
                 "ReAnimated.App",
                 "MainWindow.xaml"));
-        XElement contextStrip = Assert.Single(
-            document.Descendants(Presentation + "Border"),
-            static element => string.Equals(
-                (string?)element.Attribute(Xaml + "Name"),
-                "AnimationContextStrip",
-                StringComparison.Ordinal));
-        Assert.Equal("0", (string?)contextStrip.Attribute("Grid.Row"));
-        Assert.Null(contextStrip.Attribute("Panel.ZIndex"));
-        XElement layoutGrid = Assert.IsType<XElement>(
-            contextStrip.Parent);
-        XElement[] viewportPanes = layoutGrid
-            .Elements()
-            .Where(static element => string.Equals(
-                element.Name.LocalName,
-                "ViewportPane",
-                StringComparison.Ordinal))
-            .ToArray();
-        Assert.Equal(2, viewportPanes.Length);
-        Assert.All(
-            viewportPanes,
-            static pane => Assert.Equal(
-                "1",
-                (string?)pane.Attribute("Grid.Row")));
-        Assert.Contains(
-            viewportPanes,
-            static pane => string.Equals(
-                (string?)pane.Attribute(Xaml + "Name"),
-                "SourceViewportPane",
-                StringComparison.Ordinal));
+        XElement dockManager = Assert.Single(
+            document.Descendants(),
+            static element =>
+                element.Name.LocalName == "DockingManager" &&
+                string.Equals(
+                    (string?)element.Attribute(Xaml + "Name"),
+                    "WorkflowDockManager",
+                    StringComparison.Ordinal));
+        Assert.Equal(
+            "True",
+            (string?)dockManager.Attribute("AllowMixedOrientation"));
+        Assert.Equal(
+            "True",
+            (string?)dockManager.Attribute("IsVirtualizingAnchorable"));
+        Assert.Equal(
+            "500",
+            (string?)dockManager.Attribute("Panel.ZIndex"));
 
-        XElement sourceColumn = Assert.Single(
-            layoutGrid
-                .Element(Presentation + "Grid.ColumnDefinitions")!
-                .Elements(Presentation + "ColumnDefinition"),
-            static column => string.Equals(
-                (string?)column.Attribute(Xaml + "Name"),
-                "SourceViewportColumn",
+        Assert.Contains(
+            document.Descendants(Presentation + "MenuItem"),
+            static item => string.Equals(
+                (string?)item.Attribute(Xaml + "Name"),
+                "DockPanesMenu",
                 StringComparison.Ordinal));
-        Assert.Equal("*", (string?)sourceColumn.Attribute("Width"));
-        Assert.Empty(sourceColumn.Descendants(Presentation + "DataTrigger"));
-        XElement splitterColumn = Assert.Single(
-            layoutGrid
-                .Element(Presentation + "Grid.ColumnDefinitions")!
-                .Elements(Presentation + "ColumnDefinition"),
-            static column => string.Equals(
-                (string?)column.Attribute(Xaml + "Name"),
-                "ViewportSplitterColumn",
-                StringComparison.Ordinal));
-        Assert.Equal("6", (string?)splitterColumn.Attribute("Width"));
 
         string windowCode = File.ReadAllText(
             FindRepositoryFile(
@@ -631,65 +686,23 @@ public sealed class EditorUsabilitySurfaceTests
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "nameof(MainWindowViewModel.IsSourceViewportVisible)",
+            "_dockController.SwitchWorkflow(workflow);",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "SourceViewportColumn.MaxWidth = 0.0;",
+            "EditorDockLayoutSettingsStore.CreateDefault()",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "SourceViewportColumn.Width = new GridLength(0.0);",
+            "retarget.target-camera",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ViewportSplitterColumn.Width = new GridLength(0.0);",
+            "playback.target-camera",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "ViewportGrid.Children.Remove(SourceViewportPane)",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ViewportGrid.Children.Add(SourceViewportPane);",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "EditorRootGrid.Children.Remove(inactiveSurface);",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "EditorRootGrid.Children.Add(activeSurface);",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "nameof(MainWindowViewModel.IsModelsWorkspace)",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "nameof(MainWindowViewModel.IsAnimationWorkspaceSurfaceVisible)",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "nameof(MainWindowViewModel.IsExportWorkspace)",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ViewportRegionGrid.Children.Remove(ViewportGrid);",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "ViewportRegionGrid.Children.Add(ViewportGrid);",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "AnimationWorkspaceSurface.Children.Remove(\n" +
-            "                ModelsWorkflowSurface);",
-            windowCode,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "AnimationWorkspaceSurface.Children.Add(\n" +
-            "                    ModelsWorkflowSurface);",
+            "models.authoring.preview",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -716,13 +729,13 @@ public sealed class EditorUsabilitySurfaceTests
                     "{Binding AssetBrowser.CatalogActionLabel}" or
                     "{Binding AnimationBrowser.CatalogActionLabel}",
                 "Every catalog button must report a live catalog action label."));
-        Assert.Single(
+        Assert.Contains(
             catalogButtons,
             static catalogButton => catalogButton
-                .Ancestors(Presentation + "Border")
-                .Any(static border => string.Equals(
-                    (string?)border.Attribute("Visibility"),
-                    "{Binding IsModelsWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}",
+                .Ancestors()
+                .Any(static element => string.Equals(
+                    (string?)element.Attribute(Xaml + "Name"),
+                    "ModelsRetailBrowserPane",
                     StringComparison.Ordinal)));
         Assert.DoesNotContain(
             document.Root!.DescendantsAndSelf()
@@ -890,7 +903,7 @@ public sealed class EditorUsabilitySurfaceTests
             animationTable.Descendants(Presentation + "TextBlock"),
             static text => string.Equals(
                 (string?)text.Attribute("Text"),
-                "Immutable source",
+                "{Binding VariantGroupLabel, StringFormat=Source: {0}}",
                 StringComparison.Ordinal));
         Assert.Contains(
             animationTable.Descendants(Presentation + "DataTrigger"),
@@ -941,17 +954,38 @@ public sealed class EditorUsabilitySurfaceTests
                 "PlaybackFppViewportPane",
                 StringComparison.Ordinal));
 
-        // The pane is detached on every FPP toggle, so an inherited binding
-        // comes back null and the viewport renders black. Its source must be
-        // assigned directly in code-behind instead.
+        // Every workflow pane is detached into AvalonDock. Viewport and
+        // timeline roots therefore need direct view-model references instead
+        // of inherited bindings from MainWindow.
         Assert.Null(playbackFppPane.Attribute("DataContext"));
+        string shellCodeBehind = File.ReadAllText(
+            FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "MainWindow.xaml.cs"));
         Assert.Contains(
             "PlaybackFppViewportPane.DataContext = _viewModel.SourceViewport;",
-            File.ReadAllText(
-                FindRepositoryFile(
-                    "src",
-                    "ReAnimated.App",
-                    "MainWindow.xaml.cs")),
+            shellCodeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "AnimationsSourcePreviewPane.DataContext = _viewModel.SourceViewport;",
+            shellCodeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PlaybackTargetViewportPane.DataContext = _viewModel.TargetViewport;",
+            shellCodeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "PlaybackTimelinePane.DataContext = _viewModel.Timeline;",
+            shellCodeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "SourceViewportPane.DataContext = _viewModel.SourceViewport;",
+            shellCodeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "RetargetTimelinePane.DataContext = _viewModel.Timeline;",
+            shellCodeBehind,
             StringComparison.Ordinal);
         Assert.Contains(
             playback.Descendants(Presentation + "ColumnDefinition"),
@@ -1049,17 +1083,28 @@ public sealed class EditorUsabilitySurfaceTests
                     StringComparison.Ordinal))
             .ToArray();
         Assert.True(interactiveSplitters.Length >= 5);
+        XElement retargetViewportEditorSplitter = Assert.Single(
+            interactiveSplitters,
+            static splitter => string.Equals(
+                (string?)splitter.Attribute(Xaml + "Name"),
+                "RetargetViewportEditorSplitter",
+                StringComparison.Ordinal));
+        Assert.Equal(
+            "True",
+            (string?)retargetViewportEditorSplitter.Attribute("ShowsPreview"));
+        Assert.All(
+            interactiveSplitters.Where(static splitter => !string.Equals(
+                (string?)splitter.Attribute(Xaml + "Name"),
+                "RetargetViewportEditorSplitter",
+                StringComparison.Ordinal)),
+            static splitter => Assert.Equal(
+                "False",
+                (string?)splitter.Attribute("ShowsPreview")));
         Assert.All(
             interactiveSplitters,
-            static splitter =>
-            {
-                Assert.Equal(
-                    "False",
-                    (string?)splitter.Attribute("ShowsPreview"));
-                Assert.True(
-                    (string?)splitter.Attribute("ResizeDirection") is
-                        "Rows" or "Columns");
-            });
+            static splitter => Assert.True(
+                (string?)splitter.Attribute("ResizeDirection") is
+                    "Rows" or "Columns"));
         Assert.Contains(
             document.Descendants(Presentation + "TabItem"),
             static tab => string.Equals(
@@ -1149,7 +1194,7 @@ public sealed class EditorUsabilitySurfaceTests
             "ReAnimated.App",
             "MainWindow.xaml.cs"));
         Assert.Contains(
-            "SetWorkflowSurfaceAttached(\n            AnimationsWorkflowSurface",
+            "InitializeWorkflowDocking",
             codeBehind,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -1157,9 +1202,79 @@ public sealed class EditorUsabilitySurfaceTests
             codeBehind,
             StringComparison.Ordinal);
         Assert.Contains(
-            "_viewModel.IsRetargetWorkspace ||",
+            "_dockController.ResetCurrentLayout();",
             codeBehind,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "content.DataContext = dataContext ?? _viewModel;",
+            codeBehind,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "\"PanelBackgroundBrush\"",
+            codeBehind,
+            StringComparison.Ordinal);
+
+        string paletteSurfaces = string.Concat(
+            File.ReadAllText(FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "MainWindow.xaml")),
+            File.ReadAllText(FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "Views",
+                "ViewportPane.xaml")),
+            File.ReadAllText(FindRepositoryFile(
+                "src",
+                "ReAnimated.App",
+                "Views",
+                "ModelsWorkspaceView.xaml")));
+        string[] removedWarmSurfaceColors =
+        [
+            "#3B301D",
+            "#735D2A",
+            "#F3C978",
+            "#3A2D18",
+            "#E63B301D",
+            "#3C2F1C",
+        ];
+        foreach (string color in removedWarmSurfaceColors)
+        {
+            Assert.DoesNotContain(
+                color,
+                paletteSurfaces,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        string dockController = File.ReadAllText(FindRepositoryFile(
+            "src",
+            "ReAnimated.App",
+            "Infrastructure",
+            "WorkflowDockController.cs"));
+        Assert.Contains(
+            "Orientation.Horizontal",
+            dockController,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "retarget.target-camera",
+            dockController,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "retarget.mapping",
+            dockController,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "CanDockAsTabbedDocument = true",
+            dockController,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "new XmlLayoutSerializer(_manager)",
+            dockController,
+            StringComparison.Ordinal);
+
+        Assert.True(
+            document.Descendants().Count(static element =>
+                element.Name.LocalName == "ResponsiveUniformGrid") >= 10);
     }
 
     private static void RunOnStaThread(Action action)

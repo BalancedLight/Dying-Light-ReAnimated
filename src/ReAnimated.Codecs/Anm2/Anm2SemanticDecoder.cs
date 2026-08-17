@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using ReAnimated.Core.Mathematics;
 
 namespace ReAnimated.Codecs.Anm2;
 
@@ -703,6 +704,8 @@ public static class Anm2SemanticDecoder
             ImmutableArray.CreateBuilder<Anm2TrackFrame>(
                 selectedTrackIndices.Length);
         Span<float> components = stackalloc float[9];
+        Span<float> rotationFrom = stackalloc float[3];
+        Span<float> rotationTo = stackalloc float[3];
         for (var outputTrackIndex = 0;
              outputTrackIndex < selectedTrackIndices.Length;
              outputTrackIndex++)
@@ -723,21 +726,83 @@ public static class Anm2SemanticDecoder
                     "Selected ANM2 track index is outside the page base.");
             }
 
-            for (var componentIndex = 0; componentIndex < components.Length; componentIndex++)
+            for (var componentIndex = 0;
+                 componentIndex < rotationFrom.Length;
+                 componentIndex++)
             {
                 ComponentReference reference =
                     pageBase.References[
                         (trackIndex * 9) +
                         componentIndex];
-                var value = reference.IsDirect
+                float from = reference.IsDirect
+                    ? pageBase.DirectValues[reference.Index]
+                    : packedFrames[
+                        frameInSlot,
+                        reference.Index];
+                float to = reference.IsDirect
+                    ? from
+                    : packedFrames[
+                        Math.Min(frameInSlot + 1, 15),
+                        reference.Index];
+                if (!float.IsFinite(from) || !float.IsFinite(to))
+                {
+                    throw new InvalidDataException("ANM2 decoded component is not finite.");
+                }
+
+                rotationFrom[componentIndex] = from;
+                rotationTo[componentIndex] = to;
+            }
+
+            if (fraction <= 0)
+            {
+                rotationFrom.CopyTo(components);
+            }
+            else if (fraction >= 1)
+            {
+                rotationTo.CopyTo(components);
+            }
+            else
+            {
+                QuaternionD from =
+                    Anm2DomainAdapter.QuaternionFromCayley(
+                        rotationFrom[0],
+                        rotationFrom[1],
+                        rotationFrom[2]);
+                QuaternionD to =
+                    Anm2DomainAdapter.QuaternionFromCayley(
+                        rotationTo[0],
+                        rotationTo[1],
+                        rotationTo[2]);
+                Vector3D interpolated =
+                    Anm2DomainAdapter.CayleyFromQuaternion(
+                        QuaternionD.Slerp(from, to, fraction));
+                components[0] = checked((float)interpolated.X);
+                components[1] = checked((float)interpolated.Y);
+                components[2] = checked((float)interpolated.Z);
+            }
+
+            for (var componentIndex = 3;
+                 componentIndex < components.Length;
+                 componentIndex++)
+            {
+                ComponentReference reference =
+                    pageBase.References[
+                        (trackIndex * 9) +
+                        componentIndex];
+                float value = reference.IsDirect
                     ? pageBase.DirectValues[reference.Index]
                     : Lerp(
-                        packedFrames[frameInSlot, reference.Index],
-                        packedFrames[Math.Min(frameInSlot + 1, 15), reference.Index],
+                        packedFrames[
+                            frameInSlot,
+                            reference.Index],
+                        packedFrames[
+                            Math.Min(frameInSlot + 1, 15),
+                            reference.Index],
                         fraction);
                 if (!float.IsFinite(value))
                 {
-                    throw new InvalidDataException("ANM2 decoded component is not finite.");
+                    throw new InvalidDataException(
+                        "ANM2 decoded component is not finite.");
                 }
 
                 components[componentIndex] = value;

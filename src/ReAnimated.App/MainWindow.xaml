@@ -4,6 +4,8 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:behaviors="clr-namespace:ReAnimated.App.Behaviors"
+        xmlns:controls="clr-namespace:ReAnimated.App.Controls"
+        xmlns:avalonDock="https://github.com/Dirkster99/AvalonDock"
         xmlns:vm="clr-namespace:ReAnimated.App.ViewModels"
         xmlns:views="clr-namespace:ReAnimated.App.Views"
          mc:Ignorable="d"
@@ -98,6 +100,13 @@
                           IsChecked="{Binding ShowRootMotionTrail}"
                           ToolTip="Samples the authoritative exportable pipeline on a cancellable worker; preview-only procedural motion is excluded." />
             </MenuItem>
+            <MenuItem Header="_Window">
+                <MenuItem x:Name="DockPanesMenu"
+                          Header="_Panes"
+                          SubmenuOpened="OnDockPanesMenuOpened" />
+                <MenuItem Header="_Reset current workflow layout"
+                          Click="OnResetDockLayoutClick" />
+            </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="DL1 fidelity status" />
             </MenuItem>
@@ -141,7 +150,14 @@
                     Background="{StaticResource PanelRaisedBrush}"
                     BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="0,0,0,1">
-                <WrapPanel VerticalAlignment="Center">
+                <Grid x:Name="PrimaryToolbarLayout"
+                      VerticalAlignment="Center">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+                    <WrapPanel Grid.Row="0"
+                               VerticalAlignment="Center">
                     <StackPanel Orientation="Horizontal" Margin="5,0">
                         <Button Command="{Binding NewWorkspaceCommand}" Content="New" />
                         <Button Command="{Binding OpenWorkspaceCommand}" Content="Open" />
@@ -261,7 +277,10 @@
                                        Text="· open details" />
                         </StackPanel>
                     </Button>
-                    <StackPanel Orientation="Horizontal"
+                    </WrapPanel>
+                    <StackPanel Grid.Row="1"
+                                HorizontalAlignment="Center"
+                                Orientation="Horizontal"
                                 Margin="4,2"
                                 Visibility="{Binding IsAnimationAuthoringWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <Button Command="{Binding Timeline.StepBackwardCommand}" Content="◀|" />
@@ -275,14 +294,14 @@
                                       Visibility="{Binding IsPlaybackWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}"
                                       ToolTip="Toggle the active model's selected evaluated preview camera without changing animation data." />
                     </StackPanel>
-                </WrapPanel>
+                </Grid>
             </Border>
 
             <Border Grid.Row="1"
                     Margin="8,6,8,0"
                     Padding="10,7"
-                    Background="#3B301D"
-                    BorderBrush="#735D2A"
+                    Background="{StaticResource PanelRaisedBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1"
                     CornerRadius="3"
                     Visibility="{Binding HasRecoverySnapshot, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -292,15 +311,14 @@
                         <Button Command="{Binding DismissRecoveryCommand}" Content="Dismiss" />
                     </StackPanel>
                     <TextBlock VerticalAlignment="Center"
-                               Foreground="#F3C978"
+                               Foreground="{StaticResource TextBrush}"
                                Text="A recoverable workspace snapshot is available from the previous session." />
                 </DockPanel>
             </Border>
 
             <Grid x:Name="AnimationWorkspaceSurface"
                   Grid.Row="2"
-                  Margin="8"
-                  Visibility="{Binding IsAnimationWorkspaceSurfaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                  Margin="8">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition x:Name="RetargetExplorerColumn" Width="0" MinWidth="0" MaxWidth="0" />
                     <ColumnDefinition x:Name="RetargetExplorerSplitterColumn" Width="0" />
@@ -335,7 +353,8 @@
                             <ColumnDefinition Width="6" />
                             <ColumnDefinition Width="*" MinWidth="480" />
                         </Grid.ColumnDefinitions>
-                        <Border Style="{StaticResource PaneBorderStyle}">
+                        <Border x:Name="ModelsProjectLibraryPane"
+                                Style="{StaticResource PaneBorderStyle}">
                             <Grid Margin="9">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -378,13 +397,13 @@
                             </Grid>
                         </Border>
                         <GridSplitter Grid.Column="1" Width="6" HorizontalAlignment="Stretch" />
-                        <Expander Grid.Column="2"
-                                  MinWidth="170"
-                                  MaxWidth="520"
+                        <Expander x:Name="ModelsRetailBrowserPane"
+                                  Grid.Column="2"
+                                  HorizontalContentAlignment="Stretch"
                                   Header="Base-game model browser"
                                   IsExpanded="True"
                                   ToolTip="Collapse the retail catalog to give the model preview more room.">
-                        <Border Width="410" Style="{StaticResource PaneBorderStyle}">
+                        <Border Style="{StaticResource PaneBorderStyle}">
                             <Grid Margin="9">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -441,7 +460,9 @@
                         </Border>
                         </Expander>
                         <GridSplitter Grid.Column="3" Width="6" HorizontalAlignment="Stretch" />
-                        <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
+                        <Border x:Name="ModelsPreviewPane"
+                                Grid.Column="4"
+                                Style="{StaticResource PaneBorderStyle}">
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -487,7 +508,8 @@
                             <RowDefinition Height="*" MinHeight="230" />
                         </Grid.RowDefinitions>
 
-                        <DockPanel Margin="0,0,0,7">
+                        <DockPanel x:Name="AnimationsActionsPane"
+                                   Margin="0,0,0,7">
                             <WrapPanel DockPanel.Dock="Right">
                                 <ToggleButton Content="Base-game animations"
                                               IsChecked="{Binding IsRetailAnimationBrowserVisible}"
@@ -495,7 +517,8 @@
                                 <Button Command="{Binding ImportAnimationCommand}"
                                         Content="Import animation..." />
                                 <Button Command="{Binding AddAnimationTargetsCommand}"
-                                        Content="Add targets..." />
+                                        Content="Add target to selected clip..."
+                                        ToolTip="Create target variants only for the selected immutable animation source." />
                                 <Button Command="{Binding AssignAnimationLibraryCommand}"
                                         Content="Assign SCR..." />
                                 <Button Command="{Binding ActivateSelectedAnimationCommand}"
@@ -527,7 +550,8 @@
                                 <ColumnDefinition Width="6" />
                                 <ColumnDefinition Width="*" MinWidth="280" />
                             </Grid.ColumnDefinitions>
-                            <views:ViewportPane DataContext="{Binding SourceViewport}" />
+                            <views:ViewportPane x:Name="AnimationsSourcePreviewPane"
+                                                DataContext="{Binding SourceViewport}" />
                             <GridSplitter Grid.Column="1"
                                           Width="6"
                                           HorizontalAlignment="Stretch"
@@ -538,7 +562,8 @@
                                           ResizeDirection="Columns"
                                           ShowsPreview="False"
                                           ToolTip="Drag to resize the animation preview and details." />
-                            <Border Grid.Column="2"
+                            <Border x:Name="AnimationsDetailsPane"
+                                    Grid.Column="2"
                                     Padding="12"
                                     Style="{StaticResource PaneBorderStyle}">
                                 <Grid>
@@ -600,7 +625,6 @@
                                 <ColumnDefinition Width="*" MinWidth="320" />
                             </Grid.ColumnDefinitions>
                             <Border x:Name="RetailAnimationBrowserPane"
-                                    Width="340"
                                     Margin="0,0,0,0"
                                     Padding="10"
                                     Style="{StaticResource PaneBorderStyle}"
@@ -625,7 +649,7 @@
                                     <TextBlock Grid.Row="1"
                                                Margin="0,3,0,7"
                                                Foreground="{StaticResource MutedTextBrush}"
-                                               Text="Retail type-320 clips. Adding one records an exact fingerprinted reference and never modifies the retail asset."
+                                               Text="Retail type-320 clips and type-322 animation scripts. Adding either records an exact fingerprinted reference and never modifies the retail asset."
                                                TextWrapping="Wrap" />
                                     <Grid Grid.Row="2" Margin="0,0,0,6">
                                         <Grid.ColumnDefinitions>
@@ -675,8 +699,8 @@
                                         </Border>
                                         <Border Margin="0,0,0,5"
                                                 Padding="6"
-                                                Background="#3A2D18"
-                                                BorderBrush="{StaticResource WarningBrush}"
+                                                Background="{StaticResource PanelRaisedBrush}"
+                                                BorderBrush="{StaticResource BorderBrush}"
                                                 BorderThickness="1"
                                                 CornerRadius="3"
                                                 Visibility="{Binding IsExplorerAnimationTimingPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -708,6 +732,9 @@
                                                     <StackPanel Margin="3,5">
                                                         <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
                                                         <TextBlock FontSize="10"
+                                                                   Foreground="{StaticResource AccentBrush}"
+                                                                   Text="{Binding Kind}" />
+                                                        <TextBlock FontSize="10"
                                                                    Foreground="{StaticResource MutedTextBrush}"
                                                                    Text="{Binding LogicalPath}"
                                                                    TextTrimming="CharacterEllipsis" />
@@ -736,6 +763,9 @@
                                         <Button Command="{Binding AddSelectedRetailAnimationCommand}"
                                                 Content="Add to project &amp; play"
                                                 ToolTip="Decode this clip against the current source model, add it to the project once, and start playback." />
+                                        <Button Command="{Binding AddSelectedRetailAnimationScriptCommand}"
+                                                Content="Add script to project"
+                                                ToolTip="Fingerprint the selected type-322 AnimationScr and make it available to Extend existing script and retail-import choices." />
                                         <TextBlock Margin="8,5,0,0"
                                                    Foreground="{StaticResource MutedTextBrush}"
                                                    Text="{Binding AnimationBrowser.ResultSummary}" />
@@ -753,7 +783,9 @@
                                           ShowsPreview="False"
                                           ToolTip="Drag to resize the base-game animation browser."
                                           Visibility="{Binding IsRetailAnimationBrowserVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <Border Grid.Column="2" Style="{StaticResource PaneBorderStyle}">
+                        <Border x:Name="AnimationsLibraryPane"
+                                Grid.Column="2"
+                                Style="{StaticResource PaneBorderStyle}">
                             <DataGrid x:Name="AnimationLibraryTable"
                                       AlternationCount="2"
                                       AutoGenerateColumns="False"
@@ -772,45 +804,31 @@
                                       SelectionMode="Single"
                                       VirtualizingPanel.IsVirtualizing="True"
                                       VirtualizingPanel.VirtualizationMode="Recycling">
-                                <DataGrid.RowStyle>
-                                    <Style TargetType="{x:Type DataGridRow}"
-                                           BasedOn="{StaticResource {x:Type DataGridRow}}">
-                                        <Setter Property="DetailsVisibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding ShowVariantGroupHeader}" Value="True">
-                                                <Setter Property="DetailsVisibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </DataGrid.RowStyle>
-                                <DataGrid.RowDetailsTemplate>
-                                    <DataTemplate>
-                                        <Border Margin="0,7,0,2"
-                                                Padding="8,5"
-                                                Background="#1C2A35"
-                                                BorderBrush="#39536A"
-                                                BorderThickness="0,0,0,1">
-                                            <DockPanel>
-                                                <TextBlock DockPanel.Dock="Right"
-                                                           Margin="12,0,0,0"
-                                                           Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="Immutable source" />
-                                                <StackPanel Orientation="Horizontal">
-                                                    <TextBlock FontWeight="SemiBold" Text="Source: " />
-                                                    <TextBlock FontWeight="SemiBold" Text="{Binding VariantGroupLabel}" />
-                                                    <TextBlock Margin="12,0,0,0"
-                                                               Foreground="{StaticResource MutedTextBrush}"
-                                                               Text="{Binding OriginModel, StringFormat=Origin: {0}}" />
-                                                </StackPanel>
-                                            </DockPanel>
-                                        </Border>
-                                    </DataTemplate>
-                                </DataGrid.RowDetailsTemplate>
                                 <DataGrid.Columns>
                                     <DataGridTemplateColumn Width="230" MinWidth="160" Header="Animation">
                                         <DataGridTemplateColumn.CellTemplate>
                                             <DataTemplate>
                                                 <StackPanel>
+                                                    <Border Margin="0,0,0,5"
+                                                            Padding="6,3"
+                                                            Background="#1C2A35"
+                                                            BorderBrush="#39536A"
+                                                            BorderThickness="0,0,0,1">
+                                                        <Border.Style>
+                                                            <Style TargetType="{x:Type Border}">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding ShowVariantGroupHeader}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <TextBlock FontWeight="SemiBold"
+                                                                   Text="{Binding VariantGroupLabel, StringFormat=Source: {0}}"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   ToolTip="{Binding OriginModel, StringFormat=Origin: {0}}" />
+                                                    </Border>
                                                     <TextBlock FontWeight="SemiBold" Text="{Binding Name}" />
                                                     <TextBlock FontSize="9"
                                                                Foreground="{StaticResource AccentBrush}"
@@ -855,7 +873,8 @@
                             <RowDefinition Height="6" />
                             <RowDefinition Height="270" MinHeight="190" MaxHeight="430" />
                         </Grid.RowDefinitions>
-                        <Border Margin="0,0,0,6"
+                        <Border x:Name="PlaybackContextPane"
+                                Margin="0,0,0,6"
                                 Padding="10,7"
                                 Background="#171D25"
                                 BorderBrush="{StaticResource BorderBrush}"
@@ -923,7 +942,8 @@
                                           ResizeDirection="Columns"
                                           ShowsPreview="False"
                                           ToolTip="Drag to resize the FPP camera and external orbit panes." />
-                            <views:ViewportPane Grid.Column="2"
+                            <views:ViewportPane x:Name="PlaybackTargetViewportPane"
+                                                Grid.Column="2"
                                                 DataContext="{Binding TargetViewport}" />
                         </Grid>
                         <GridSplitter Grid.Row="2"
@@ -936,7 +956,8 @@
                                       ResizeDirection="Rows"
                                       ShowsPreview="False"
                                       ToolTip="Drag to resize the playback viewport and timeline." />
-                        <views:TimelinePanel Grid.Row="3"
+                        <views:TimelinePanel x:Name="PlaybackTimelinePane"
+                                             Grid.Row="3"
                                              DataContext="{Binding Timeline}" />
                     </Grid>
                 </Border>
@@ -952,10 +973,11 @@
                         BorderThickness="1"
                         CornerRadius="4"
                         Visibility="{Binding IsExportWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <TabControl>
-                        <TabItem Header="Files">
+                    <TabControl x:Name="ExportTabControl">
+                        <TabItem x:Name="ExportFilesTab" Header="Files">
                             <Grid Margin="10">
                                 <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
@@ -972,7 +994,52 @@
                                                    TextWrapping="Wrap" />
                                     </StackPanel>
                                 </DockPanel>
-                                <Border Grid.Row="1" Style="{StaticResource PaneBorderStyle}">
+                                <Border Grid.Row="1"
+                                        Margin="0,0,0,8"
+                                        Padding="8"
+                                        Style="{StaticResource PaneBorderStyle}">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="240" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Margin="0,5,8,0"
+                                                   Text="Animation pack name" />
+                                        <TextBox Grid.Column="1"
+                                                 Text="{Binding AnimationRpackFileName, UpdateSourceTrigger=PropertyChanged}"
+                                                 ToolTip="Portable output file name. The .rpack extension is added when omitted." />
+                                        <Button Grid.Column="2"
+                                                Margin="8,0,0,0"
+                                                Command="{Binding SelectAnimationRpackAppendSourceCommand}"
+                                                Content="Append existing..."
+                                                ToolTip="Choose an existing animation RPack whose resources should be preserved and merged into the exported pack." />
+                                        <Button Grid.Column="3"
+                                                Command="{Binding ClearAnimationRpackAppendSourceCommand}"
+                                                Content="Clear append" />
+                                        <CheckBox Grid.Column="4"
+                                                  Margin="10,4,0,0"
+                                                  IsChecked="{Binding ReplaceAnimationRpackConflicts}"
+                                                  Content="Replace conflicts"
+                                                  ToolTip="When checked, project animation and script resources replace same-name resources from the selected existing pack. Otherwise a collision blocks export." />
+                                        <TextBlock Grid.Row="1"
+                                                   Grid.Column="1"
+                                                   Grid.ColumnSpan="5"
+                                                   Margin="0,5,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding AnimationRpackAppendSummary}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding AnimationRpackAppendSummary}" />
+                                    </Grid>
+                                </Border>
+                                <Border Grid.Row="2" Style="{StaticResource PaneBorderStyle}">
                                     <DataGrid x:Name="ExportVariantTable"
                                               AlternationCount="2"
                                               AutoGenerateColumns="False"
@@ -1010,7 +1077,7 @@
                                         </DataGrid.Columns>
                                     </DataGrid>
                                 </Border>
-                                <DockPanel Grid.Row="2" Margin="0,8,0,0">
+                                <DockPanel Grid.Row="3" Margin="0,8,0,0">
                                     <TextBlock VerticalAlignment="Center"
                                                Margin="5,0,12,0"
                                                Foreground="{StaticResource AccentBrush}"
@@ -1025,7 +1092,7 @@
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="Developer Tools">
+                        <TabItem x:Name="ExportDeveloperToolsTab" Header="Developer Tools">
                             <Grid Margin="12">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1051,7 +1118,7 @@
                                            Foreground="{StaticResource AccentBrush}"
                                            Text="{Binding Models.DeveloperToolsProjectStatus}"
                                            TextWrapping="Wrap" />
-                                <UniformGrid Grid.Row="2" Columns="4" Margin="0,0,0,12">
+                                <controls:ResponsiveUniformGrid Grid.Row="2" PreferredColumns="4" Margin="0,0,0,12">
                                     <ToggleButton Padding="12,10"
                                                   Command="{Binding SelectDeveloperToolsExportModeCommand}"
                                                   CommandParameter="AnimationsOnly"
@@ -1072,7 +1139,7 @@
                                                   CommandParameter="Full"
                                                   Content="Initial / full export"
                                                   IsChecked="{Binding IsDeveloperToolsFullProjectSelected, Mode=OneWay}" />
-                                </UniformGrid>
+                                </controls:ResponsiveUniformGrid>
                                 <Border Grid.Row="3"
                                         Padding="14"
                                         Style="{StaticResource PaneBorderStyle}">
@@ -1119,7 +1186,7 @@
                 <Border Grid.Column="0" Style="{StaticResource PaneBorderStyle}">
                     <TabControl x:Name="ExplorerTabControl"
                                 SelectedIndex="{Binding SelectedExplorerTabIndex}">
-                        <TabItem Header="Assets">
+                        <TabItem x:Name="ExplorerAssetsTab" Header="Assets">
                             <Grid Margin="6">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1207,8 +1274,8 @@
                                     </Border>
                                     <Border Margin="0,0,0,5"
                                             Padding="6"
-                                            Background="#3A2D18"
-                                            BorderBrush="{StaticResource WarningBrush}"
+                                            Background="{StaticResource PanelRaisedBrush}"
+                                            BorderBrush="{StaticResource BorderBrush}"
                                             BorderThickness="1"
                                             CornerRadius="3"
                                             Visibility="{Binding IsExplorerAnimationTimingPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -1235,7 +1302,7 @@
                                           Header="Decoded mesh filters"
                                           ToolTip="Family, geometry, perspective, facial, DLC, and variant filters use decoded classification evidence only.">
                                     <StackPanel Margin="0,4,0,0">
-                                        <UniformGrid Columns="2">
+                                        <controls:ResponsiveUniformGrid PreferredColumns="2">
                                             <ComboBox Margin="0,0,2,2"
                                                       DisplayMemberPath="Label"
                                                       ItemsSource="{Binding AssetBrowser.GeometryFilters}"
@@ -1276,7 +1343,7 @@
                                                       ItemsSource="{Binding AssetBrowser.VariantFilters}"
                                                       SelectedItem="{Binding AssetBrowser.SelectedVariantFilter}"
                                                       ToolTip="Decoded variant inventory or a specific variant" />
-                                        </UniformGrid>
+                                        </controls:ResponsiveUniformGrid>
                                         <WrapPanel>
                                             <Button Command="{Binding AssetBrowser.ClassifyFilteredMeshesCommand}"
                                                     Content="Classify next 128"
@@ -1441,7 +1508,9 @@
                                            TextWrapping="Wrap" />
                                 <WrapPanel Grid.Row="1" Margin="0,0,0,5">
                                     <Button Command="{Binding ActivateSelectedAnimationCommand}" Content="Activate" />
-                                    <Button Command="{Binding AddAnimationTargetsCommand}" Content="Add targets..." />
+                                    <Button Command="{Binding AddAnimationTargetsCommand}"
+                                            Content="Add target to selected clip..."
+                                            ToolTip="Create target variants only for the selected immutable animation source." />
                                     <Button Command="{Binding RenameSelectedAnimationCommand}" Content="Rename" />
                                     <Button Command="{Binding DuplicateSelectedAnimationCommand}" Content="Duplicate" />
                                     <Button Command="{Binding RebindSelectedAnimationSourceCommand}" Content="Rebind Source" />
@@ -1518,7 +1587,7 @@
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="Skeleton">
+                        <TabItem x:Name="ExplorerSkeletonTab" Header="Skeleton">
                             <Grid Margin="6">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto" />
@@ -1643,7 +1712,7 @@
                                             Padding="8,3"
                                             Click="OnResetRetargetLayoutClick"
                                             Content="Reset layout"
-                                            ToolTip="Restore the Retarget/Edit viewport, editor, and bottom-dock splitters." />
+                                            ToolTip="Restore the default dock arrangement for the current workflow." />
                                     <TextBlock VerticalAlignment="Center"
                                                FontWeight="SemiBold"
                                                TextTrimming="CharacterEllipsis">
@@ -1662,8 +1731,8 @@
                                 </TextBlock>
                                 <Border Margin="0,5,0,0"
                                         Padding="7,5"
-                                        Background="#3A2D18"
-                                        BorderBrush="{StaticResource WarningBrush}"
+                                        Background="{StaticResource PanelRaisedBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="3"
                                         Visibility="{Binding IsTargetPlaybackBlocked, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -1674,11 +1743,12 @@
                                                     CommandParameter="Retarget/Edit"
                                                     Content="Open retarget setup" />
                                             <Button Command="{Binding AcceptMappingProposalCommand}"
-                                                    Content="Accept proposal &amp; play"
+                                                    Content="Accept pending proposal &amp; play"
+                                                    Visibility="{Binding HasPendingMappingProposal, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                     ToolTip="Explicitly review every visible proposed mapping and required bind fallback, save that decision, then start target playback." />
                                         </WrapPanel>
                                         <TextBlock VerticalAlignment="Center"
-                                                   Foreground="#F3C978"
+                                                   Foreground="{StaticResource TextBrush}"
                                                    Text="{Binding TargetPlaybackMessage}"
                                                    TextWrapping="Wrap" />
                                     </DockPanel>
@@ -1717,38 +1787,39 @@
                                       ResizeDirection="Columns"
                                       ShowsPreview="False"
                                       ToolTip="Drag to resize the source and target viewports." />
-                        <views:ViewportPane Grid.Row="1"
-                                            Grid.Column="2"
-                                            DataContext="{Binding TargetViewport}" />
-                        <Border Grid.Row="1"
-                                Grid.Column="2"
-                                Panel.ZIndex="25"
-                                Width="300"
-                                Padding="12"
-                                HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Background="#E63B301D"
-                                BorderBrush="{StaticResource WarningBrush}"
-                                BorderThickness="1"
-                                CornerRadius="4"
-                                Visibility="{Binding IsTargetPlaybackBlocked, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <StackPanel>
-                                <TextBlock FontSize="15"
-                                           FontWeight="SemiBold"
-                                           Foreground="#F3C978"
-                                           Text="{Binding TargetBindingStatusText}"
-                                           TextAlignment="Center" />
-                                <TextBlock Margin="0,6,0,0"
-                                           Foreground="{StaticResource TextBrush}"
-                                           Text="{Binding TargetPlaybackMessage}"
-                                           TextAlignment="Center"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-                        </Border>
+                        <Grid x:Name="RetargetTargetViewportPane"
+                              Grid.Row="1"
+                              Grid.Column="2">
+                            <views:ViewportPane DataContext="{Binding TargetViewport}" />
+                            <Border Panel.ZIndex="25"
+                                    Width="300"
+                                    Padding="12"
+                                    HorizontalAlignment="Center"
+                                    VerticalAlignment="Center"
+                                    Background="{StaticResource PanelRaisedBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4"
+                                    Visibility="{Binding IsTargetPlaybackBlocked, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <StackPanel>
+                                    <TextBlock FontSize="15"
+                                               FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextBrush}"
+                                               Text="{Binding TargetBindingStatusText}"
+                                               TextAlignment="Center" />
+                                    <TextBlock Margin="0,6,0,0"
+                                               Foreground="{StaticResource TextBrush}"
+                                               Text="{Binding TargetPlaybackMessage}"
+                                               TextAlignment="Center"
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </Border>
+                        </Grid>
                     </Grid>
                 </Grid>
 
-                <GridSplitter Grid.Row="1"
+                <GridSplitter x:Name="RetargetViewportEditorSplitter"
+                              Grid.Row="1"
                               Grid.ColumnSpan="5"
                               Height="6"
                               VerticalAlignment="Stretch"
@@ -1757,7 +1828,7 @@
                               Cursor="SizeNS"
                               ResizeBehavior="PreviousAndNext"
                               ResizeDirection="Rows"
-                              ShowsPreview="False"
+                              ShowsPreview="True"
                               ToolTip="Drag to resize the viewports and retarget editor."
                               Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
@@ -1766,8 +1837,9 @@
                         Grid.ColumnSpan="5"
                         Style="{StaticResource PaneBorderStyle}"
                         Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <TabControl SelectedIndex="{Binding SelectedInspectorTabIndex}">
-                        <TabItem Header="Mapping"
+                    <TabControl x:Name="RetargetInspectorTabControl"
+                                SelectedIndex="{Binding SelectedInspectorTabIndex}">
+                        <TabItem x:Name="RetargetMappingTab" Header="Mapping"
                                  Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <Grid Margin="6">
                                 <Grid.RowDefinitions>
@@ -1823,7 +1895,8 @@
                                                 Content="Save selections"
                                                 ToolTip="Persist only the individually checked mapping and required target-bind review rows. This action never accepts every row automatically." />
                                         <Button Command="{Binding AcceptMappingProposalCommand}"
-                                                Content="Accept proposal &amp; play"
+                                                Content="Accept pending proposal &amp; play"
+                                                Visibility="{Binding HasPendingMappingProposal, Converter={StaticResource BooleanToVisibilityConverter}}"
                                                 ToolTip="Explicitly review every proposed row and required bind fallback, save the mapping, reset to frame zero, and start target playback." />
                                     </WrapPanel>
                                     <Expander Margin="0,6,0,0"
@@ -1907,9 +1980,19 @@
                                                             Binding="{Binding SourceBone}"
                                                             Header="Source"
                                                             IsReadOnly="True" />
-                                        <DataGridTextColumn Width="150"
-                                                            Binding="{Binding TargetBone}"
-                                                            Header="DL1 target" />
+                                        <DataGridTemplateColumn Width="170"
+                                                                Header="DL1 target">
+                                            <DataGridTemplateColumn.CellTemplate>
+                                                <DataTemplate>
+                                                    <ComboBox IsEditable="False"
+                                                              IsTextSearchEnabled="True"
+                                                              ItemsSource="{Binding TargetBoneOptions}"
+                                                              SelectedItem="{Binding TargetBone, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                              StaysOpenOnEdit="True"
+                                                              ToolTip="Choose a valid bone from the active target rig. Typing jumps to matching entries." />
+                                                </DataTemplate>
+                                            </DataGridTemplateColumn.CellTemplate>
+                                        </DataGridTemplateColumn>
                                         <DataGridTextColumn Width="105"
                                                             Binding="{Binding MappingKindLabel}"
                                                             Header="Kind"
@@ -1930,7 +2013,7 @@
                                                                 Header="Components">
                                             <DataGridTemplateColumn.CellTemplate>
                                                 <DataTemplate>
-                                                    <UniformGrid Columns="3"
+                                                    <controls:ResponsiveUniformGrid PreferredColumns="3"
                                                                  IsEnabled="{Binding HasTarget}"
                                                                  ToolTip="Choose any combination of Translation, Rotation, and Scale.">
                                                         <CheckBox HorizontalAlignment="Center"
@@ -1942,7 +2025,7 @@
                                                         <CheckBox HorizontalAlignment="Center"
                                                                   Content="S"
                                                                   IsChecked="{Binding IsScaleEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                                                    </UniformGrid>
+                                                    </controls:ResponsiveUniformGrid>
                                                 </DataTemplate>
                                             </DataGridTemplateColumn.CellTemplate>
                                         </DataGridTemplateColumn>
@@ -2032,18 +2115,18 @@
                                 </Expander>
                                 <Border Grid.Row="4"
                                         Padding="8"
-                                        Background="#3B301D"
-                                        BorderBrush="#735D2A"
+                                        Background="{StaticResource PanelRaisedBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="3">
-                                    <TextBlock Foreground="#F3C978"
+                                    <TextBlock Foreground="{StaticResource TextBrush}"
                                                TextWrapping="Wrap"
                                                Text="{Binding MappingReviewStatus}" />
                                 </Border>
                             </Grid>
                         </TabItem>
 
-                        <TabItem Header="Edit"
+                        <TabItem x:Name="RetargetEditTab" Header="Edit"
                                  Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel Margin="10">
@@ -2075,7 +2158,7 @@
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
                                                Text="Translation" />
-                                    <UniformGrid Margin="6,0" Columns="3">
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
                                         <StackPanel Margin="2">
                                             <TextBlock FontSize="9" Text="X" />
                                             <TextBox Text="{Binding BoneEditor.Bone.PositionX, UpdateSourceTrigger=PropertyChanged}" />
@@ -2088,12 +2171,12 @@
                                             <TextBlock FontSize="9" Text="Z" />
                                             <TextBox Text="{Binding BoneEditor.Bone.PositionZ, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
-                                    </UniformGrid>
+                                    </controls:ResponsiveUniformGrid>
 
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
                                                Text="Rotation (degrees)" />
-                                    <UniformGrid Margin="6,0" Columns="3">
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
                                         <StackPanel Margin="2">
                                             <TextBlock FontSize="9" Text="X" />
                                             <TextBox Text="{Binding BoneEditor.Bone.RotationX, UpdateSourceTrigger=PropertyChanged}" />
@@ -2106,12 +2189,12 @@
                                             <TextBlock FontSize="9" Text="Z" />
                                             <TextBox Text="{Binding BoneEditor.Bone.RotationZ, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
-                                    </UniformGrid>
+                                    </controls:ResponsiveUniformGrid>
 
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
                                                Text="Scale" />
-                                    <UniformGrid Margin="6,0" Columns="3">
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
                                         <StackPanel Margin="2">
                                             <TextBlock FontSize="9" Text="X" />
                                             <TextBox Text="{Binding BoneEditor.Bone.ScaleX, UpdateSourceTrigger=PropertyChanged}" />
@@ -2124,7 +2207,7 @@
                                             <TextBlock FontSize="9" Text="Z" />
                                             <TextBox Text="{Binding BoneEditor.Bone.ScaleZ, UpdateSourceTrigger=PropertyChanged}" />
                                         </StackPanel>
-                                    </UniformGrid>
+                                    </controls:ResponsiveUniformGrid>
 
                                     <StackPanel Margin="6,12" Orientation="Horizontal">
                                         <Button Command="{Binding BoneEditor.ApplyCommand}" Content="Apply transform" />
@@ -2276,7 +2359,7 @@
                             </ScrollViewer>
                         </TabItem>
 
-                        <TabItem Header="Attachments"
+                        <TabItem x:Name="RetargetAttachmentsTab" Header="Attachments"
                                  Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel Margin="10">
@@ -2355,29 +2438,29 @@
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
                                                Text="Local translation" />
-                                    <UniformGrid Margin="6,0" Columns="3">
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionX, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionY, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionZ, UpdateSourceTrigger=PropertyChanged}" />
-                                    </UniformGrid>
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionX, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionY, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.PositionZ, UpdateSourceTrigger=LostFocus}" />
+                                    </controls:ResponsiveUniformGrid>
 
                                     <TextBlock Margin="8,10,8,3"
                                                FontWeight="SemiBold"
                                                Text="Local rotation (degrees)" />
-                                    <UniformGrid Margin="6,0" Columns="3">
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationX, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationY, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationZ, UpdateSourceTrigger=PropertyChanged}" />
-                                    </UniformGrid>
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationX, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationY, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.RotationZ, UpdateSourceTrigger=LostFocus}" />
+                                    </controls:ResponsiveUniformGrid>
 
                                     <TextBlock Margin="8,10,8,3"
                                                FontWeight="SemiBold"
                                                Text="Local scale" />
-                                    <UniformGrid Margin="6,0" Columns="3">
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleX, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleY, UpdateSourceTrigger=PropertyChanged}" />
-                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleZ, UpdateSourceTrigger=PropertyChanged}" />
-                                    </UniformGrid>
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleX, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleY, UpdateSourceTrigger=LostFocus}" />
+                                        <TextBox Margin="2" Text="{Binding AttachmentEditor.ScaleZ, UpdateSourceTrigger=LostFocus}" />
+                                    </controls:ResponsiveUniformGrid>
 
                                     <WrapPanel Margin="6,10">
                                         <Button Command="{Binding ApplyAttachmentCommand}"
@@ -2393,11 +2476,11 @@
 
                                     <Border Margin="8"
                                             Padding="8"
-                                            Background="#3B301D"
-                                            BorderBrush="#735D2A"
+                                            Background="{StaticResource PanelRaisedBrush}"
+                                            BorderBrush="{StaticResource BorderBrush}"
                                             BorderThickness="1"
                                             CornerRadius="3">
-                                        <TextBlock Foreground="#F3C978"
+                                        <TextBlock Foreground="{StaticResource TextBrush}"
                                                    TextWrapping="Wrap"
                                                    Text="New attachments start at the selected bone/helper with zero local offset, so a prop may initially sit inside the actor. The selected attachment is highlighted and Frame attachment isolates it for inspection. A missing retail fingerprint or changed parent fails visibly and is never substituted." />
                                     </Border>
@@ -2405,7 +2488,7 @@
                             </ScrollViewer>
                         </TabItem>
 
-                        <TabItem Header="IK"
+                        <TabItem x:Name="RetargetIkTab" Header="IK"
                                  Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
                             <ScrollViewer VerticalScrollBarVisibility="Auto">
                                 <StackPanel Margin="10">
@@ -2423,20 +2506,20 @@
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
                                                Text="Effector (world)" />
-                                    <UniformGrid Margin="6,0" Columns="3">
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
                                         <TextBox Margin="2" Text="{Binding IkEditor.EffectorX, UpdateSourceTrigger=PropertyChanged}" />
                                         <TextBox Margin="2" Text="{Binding IkEditor.EffectorY, UpdateSourceTrigger=PropertyChanged}" />
                                         <TextBox Margin="2" Text="{Binding IkEditor.EffectorZ, UpdateSourceTrigger=PropertyChanged}" />
-                                    </UniformGrid>
+                                    </controls:ResponsiveUniformGrid>
 
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
                                                Text="Pole target (world)" />
-                                    <UniformGrid Margin="6,0" Columns="3">
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
                                         <TextBox Margin="2" Text="{Binding IkEditor.PoleX, UpdateSourceTrigger=PropertyChanged}" />
                                         <TextBox Margin="2" Text="{Binding IkEditor.PoleY, UpdateSourceTrigger=PropertyChanged}" />
                                         <TextBox Margin="2" Text="{Binding IkEditor.PoleZ, UpdateSourceTrigger=PropertyChanged}" />
-                                    </UniformGrid>
+                                    </controls:ResponsiveUniformGrid>
 
                                     <TextBlock Margin="8,12,8,3"
                                                FontWeight="SemiBold"
@@ -2449,11 +2532,11 @@
                                     <CheckBox Margin="8,12,8,3"
                                               Content="Author end orientation"
                                               IsChecked="{Binding IkEditor.UseEndOrientation}" />
-                                    <UniformGrid Margin="6,0" Columns="3">
+                                    <controls:ResponsiveUniformGrid Margin="6,0" PreferredColumns="3">
                                         <TextBox Margin="2" Text="{Binding IkEditor.EndRotationX, UpdateSourceTrigger=PropertyChanged}" />
                                         <TextBox Margin="2" Text="{Binding IkEditor.EndRotationY, UpdateSourceTrigger=PropertyChanged}" />
                                         <TextBox Margin="2" Text="{Binding IkEditor.EndRotationZ, UpdateSourceTrigger=PropertyChanged}" />
-                                    </UniformGrid>
+                                    </controls:ResponsiveUniformGrid>
 
                                     <Button Margin="6,12"
                                             Command="{Binding KeyIkConstraintCommand}"
@@ -2469,10 +2552,10 @@
                             </ScrollViewer>
                         </TabItem>
 
-                        <TabItem Header="Facial / FPP"
+                        <TabItem x:Name="RetargetFacialFppTab" Header="Facial / FPP"
                                  Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
-                            <TabControl>
-                                <TabItem Header="Facial">
+                            <TabControl x:Name="RetargetFacialTabs">
+                                <TabItem x:Name="RetargetFacialTab" Header="Facial">
                                     <Grid Margin="8">
                                         <Grid.RowDefinitions>
                                             <RowDefinition Height="Auto" />
@@ -2666,7 +2749,7 @@
                                     </Grid>
                                 </TabItem>
 
-                                <TabItem Header="FPP / camera">
+                                <TabItem x:Name="RetargetFppCameraTab" Header="FPP / camera">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Margin="10">
                                             <Border Margin="4"
@@ -2813,11 +2896,11 @@
 
                                             <Border Margin="0,15,0,0"
                                                     Padding="9"
-                                                    Background="#3B301D"
-                                                    BorderBrush="#735D2A"
+                                                    Background="{StaticResource PanelRaisedBrush}"
+                                                    BorderBrush="{StaticResource BorderBrush}"
                                                     BorderThickness="1"
                                                     CornerRadius="3">
-                                                <TextBlock Foreground="#F3C978"
+                                                <TextBlock Foreground="{StaticResource TextBrush}"
                                                            TextWrapping="Wrap"
                                                            Text="{Binding FacialFpp.PreviewStatus}" />
                                             </Border>
@@ -2825,7 +2908,7 @@
                                     </ScrollViewer>
                                 </TabItem>
 
-                                <TabItem Header="Movie camera">
+                                <TabItem x:Name="RetargetMovieCameraTab" Header="Movie camera">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Margin="10">
                                             <TextBlock Margin="4,0,4,8"
@@ -2843,8 +2926,8 @@
                                             <TextBlock Margin="4,2"
                                                        FontWeight="SemiBold"
                                                        Text="World position" />
-                                            <UniformGrid Margin="4,2,4,8"
-                                                         Columns="3">
+                                            <controls:ResponsiveUniformGrid Margin="4,2,4,8"
+                                                                            PreferredColumns="3">
                                                 <StackPanel Margin="0,0,4,0">
                                                     <TextBlock Text="X" />
                                                     <TextBox Text="{Binding FacialFpp.MovieCameraPositionX, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
@@ -2857,13 +2940,13 @@
                                                     <TextBlock Text="Z" />
                                                     <TextBox Text="{Binding FacialFpp.MovieCameraPositionZ, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
                                                 </StackPanel>
-                                            </UniformGrid>
+                                            </controls:ResponsiveUniformGrid>
 
                                             <TextBlock Margin="4,2"
                                                        FontWeight="SemiBold"
                                                        Text="World rotation quaternion (XYZW)" />
-                                            <UniformGrid Margin="4,2,4,8"
-                                                         Columns="4">
+                                            <controls:ResponsiveUniformGrid Margin="4,2,4,8"
+                                                                            PreferredColumns="4">
                                                 <StackPanel Margin="0,0,4,0">
                                                     <TextBlock Text="X" />
                                                     <TextBox Text="{Binding FacialFpp.MovieCameraRotationX, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
@@ -2880,13 +2963,13 @@
                                                     <TextBlock Text="W" />
                                                     <TextBox Text="{Binding FacialFpp.MovieCameraRotationW, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
                                                 </StackPanel>
-                                            </UniformGrid>
+                                            </controls:ResponsiveUniformGrid>
 
                                             <TextBlock Margin="4,2"
                                                        FontWeight="SemiBold"
                                                        Text="Captured lens" />
-                                            <UniformGrid Margin="4,2,4,10"
-                                                         Columns="2">
+                                            <controls:ResponsiveUniformGrid Margin="4,2,4,10"
+                                                                            PreferredColumns="2">
                                                 <StackPanel Margin="0,0,4,5">
                                                     <TextBlock Text="Vertical FOV" />
                                                     <TextBox Text="{Binding FacialFpp.MovieCameraVerticalFieldOfView, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
@@ -2903,7 +2986,7 @@
                                                     <TextBlock Text="Far (m)" />
                                                     <TextBox Text="{Binding FacialFpp.MovieCameraFarPlane, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
                                                 </StackPanel>
-                                            </UniformGrid>
+                                            </controls:ResponsiveUniformGrid>
 
                                             <Button Margin="4"
                                                     HorizontalAlignment="Left"
@@ -2916,11 +2999,11 @@
                                                        Text="{Binding FacialFpp.MovieReferenceCameraStatus}" />
                                             <Border Margin="4,15,4,0"
                                                     Padding="9"
-                                                    Background="#3B301D"
-                                                    BorderBrush="#735D2A"
+                                                    Background="{StaticResource PanelRaisedBrush}"
+                                                    BorderBrush="{StaticResource BorderBrush}"
                                                     BorderThickness="1"
                                                     CornerRadius="3">
-                                                <TextBlock Foreground="#F3C978"
+                                                <TextBlock Foreground="{StaticResource TextBrush}"
                                                            TextWrapping="Wrap"
                                                            Text="{Binding FacialFpp.PreviewStatus}" />
                                             </Border>
@@ -2949,7 +3032,7 @@
                             Grid.Row="4"
                             Grid.ColumnSpan="5"
                             Visibility="{Binding IsRetargetWorkspace, Converter={StaticResource BooleanToVisibilityConverter}}">
-                    <TabItem Header="Animations">
+                    <TabItem x:Name="RetargetAnimationsTab" Header="Animations">
                         <DataGrid x:Name="RetargetAnimationLibraryTable"
                                   AlternationCount="2"
                                   AutoGenerateColumns="False"
@@ -2975,23 +3058,38 @@
                             </DataGrid.Columns>
                         </DataGrid>
                     </TabItem>
-                    <TabItem Header="Timeline / curves">
-                        <views:TimelinePanel DataContext="{Binding Timeline}" />
+                    <TabItem x:Name="RetargetTimelineTab" Header="Timeline / curves">
+                        <views:TimelinePanel x:Name="RetargetTimelinePane"
+                                             DataContext="{Binding Timeline}" />
                     </TabItem>
                 </TabControl>
+
+                <avalonDock:DockingManager x:Name="WorkflowDockManager"
+                                           Grid.RowSpan="5"
+                                           Grid.ColumnSpan="5"
+                                           Panel.ZIndex="500"
+                                           AllowMixedOrientation="True"
+                                           AutoWindowSizeWhenOpened="True"
+                                           Background="{StaticResource WindowBackgroundBrush}"
+                                           GridSplitterHeight="6"
+                                           GridSplitterWidth="6"
+                                           IsVirtualizingAnchorable="True"
+                                           IsVirtualizingDocument="True" />
             </Grid>
 
             <views:ModelsWorkspaceView x:Name="ModelsWorkspaceSurface"
                                        Grid.Row="2"
                                        Margin="8" />
 
-            <Border Grid.Row="3"
+            <Border x:Name="DiagnosticsDrawerPane"
+                    Grid.Row="3"
                     Margin="8,0,8,8"
                     MaxHeight="250"
                     Style="{StaticResource PaneBorderStyle}"
                     Visibility="{Binding IsAnimationDiagnosticsDrawerVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
-                <TabControl SelectedIndex="{Binding SelectedDiagnosticsTabIndex}">
-                    <TabItem Header="Jobs">
+                <TabControl x:Name="DiagnosticsTabControl"
+                            SelectedIndex="{Binding SelectedDiagnosticsTabIndex}">
+                    <TabItem x:Name="JobsTab" Header="Jobs">
                         <Grid Margin="6">
                             <DataGrid AutoGenerateColumns="False"
                                       CanUserAddRows="False"
@@ -3036,7 +3134,7 @@
                         </Grid>
                     </TabItem>
 
-                    <TabItem Header="Diagnostics">
+                    <TabItem x:Name="DiagnosticsTab" Header="Diagnostics">
                         <ListBox Margin="5" ItemsSource="{Binding Diagnostics}">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
@@ -3064,7 +3162,7 @@
                         </ListBox>
                     </TabItem>
 
-                    <TabItem Header="Fidelity">
+                    <TabItem x:Name="FidelityTab" Header="Fidelity">
                         <ScrollViewer HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollBarVisibility="Auto">
                             <ItemsControl Margin="8" ItemsSource="{Binding FidelityBadges}">

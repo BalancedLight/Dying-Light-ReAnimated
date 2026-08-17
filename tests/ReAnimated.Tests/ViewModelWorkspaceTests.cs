@@ -4,9 +4,11 @@ using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Core.Project;
 using ReAnimated.Evaluation;
 using ReAnimated.Renderer.D3D11;
+using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.Tests;
 
@@ -14,6 +16,272 @@ public sealed class ViewModelWorkspaceTests : IDisposable
 {
     private readonly string _temporaryDirectory =
         Path.Combine(Path.GetTempPath(), $"ReAnimated-ViewModelTests-{Guid.NewGuid():N}");
+
+    [Fact]
+    public void TargetTreeSelectionResolvesSourceThroughMappingInsteadOfArrayIndex()
+    {
+        RigDefinition source = new(
+            "source",
+            "Source",
+            [
+                new BoneDefinition(0, "root", -1, TransformTRS.Identity),
+                new BoneDefinition(1, "pelvis", 0, TransformTRS.Identity),
+                new BoneDefinition(2, "spine", 1, TransformTRS.Identity),
+                new BoneDefinition(3, "Neck", 2, TransformTRS.Identity),
+            ]);
+        RigDefinition target = new(
+            "target",
+            "Target",
+            [
+                new BoneDefinition(0, "target_root", -1, TransformTRS.Identity),
+                new BoneDefinition(1, "Neck", 0, TransformTRS.Identity),
+                new BoneDefinition(2, "target_only", 0, TransformTRS.Identity),
+            ]);
+        RetargetMap mapping = new(
+            source.Id,
+            target.Id,
+            [
+                new BoneMapEntry(
+                    3,
+                    1,
+                    BoneMappingMethod.Manual,
+                    1.0),
+            ]);
+
+        var neck = new SkeletonNodeViewModel(
+            "Neck",
+            "target_root/Neck",
+            1,
+            0);
+        (int? sourceIndex, int? targetIndex) =
+            MainWindowViewModel.ResolveViewportBoneSelection(
+                neck,
+                source,
+                target,
+                mapping,
+                directBinding: null);
+
+        Assert.Equal(3, sourceIndex);
+        Assert.Equal(1, targetIndex);
+        Assert.NotEqual(neck.Index, sourceIndex);
+
+        var targetOnly = new SkeletonNodeViewModel(
+            "target_only",
+            "target_root/target_only",
+            2,
+            0);
+        (sourceIndex, targetIndex) =
+            MainWindowViewModel.ResolveViewportBoneSelection(
+                targetOnly,
+                source,
+                target,
+                mapping,
+                directBinding: null);
+
+        Assert.Null(sourceIndex);
+        Assert.Equal(2, targetIndex);
+    }
+
+    [Fact]
+    public void EmbeddedStackReconciliationReusesImmutableSourceAcrossModelPackageRevision()
+    {
+        Guid modelId = Guid.NewGuid();
+        Guid packageModelId = Guid.NewGuid();
+        Guid oldAssetId = Guid.NewGuid();
+        Guid newAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid currentSourceId = Guid.NewGuid();
+        Guid clipId = Guid.NewGuid();
+        Guid secondaryTargetModelId = Guid.NewGuid();
+        string rigSignature = new('a', 64);
+        string skeletonSignature = new('b', 64);
+        string stackFingerprint = new('c', 64);
+        FrameRate frameRate = new(30, 1);
+        var model = new ProjectModelEntry
+        {
+            Id = modelId,
+            AssetId = newAssetId,
+            Name = "Custom actor",
+            RigSignature = rigSignature,
+            AnimationSkeletonSignature = skeletonSignature,
+        };
+        var oldAsset = new ProjectAssetReference
+        {
+            Id = oldAssetId,
+            Kind = ProjectAssetKind.CustomModelSource,
+            RelativePath = "Sources/custom-old.dlrmodel",
+            ResourceId = $"custom-model:{packageModelId:N}:custom",
+            ContentSha256 = new string('1', 64),
+        };
+        var newAsset = oldAsset with
+        {
+            Id = newAssetId,
+            RelativePath = "Sources/custom-new.dlrmodel",
+            ContentSha256 = new string('2', 64),
+        };
+        var secondaryAsset = oldAsset with
+        {
+            Id = Guid.NewGuid(),
+            RelativePath = "Sources/secondary.dlrmodel",
+            ResourceId = $"custom-model:{Guid.NewGuid():N}:secondary",
+            ContentSha256 = new string('3', 64),
+        };
+        var secondaryModel = model with
+        {
+            Id = secondaryTargetModelId,
+            AssetId = secondaryAsset.Id,
+            Name = "Secondary target",
+            RigSignature = new string('f', 64),
+            AnimationSkeletonSignature = new string('9', 64),
+        };
+        var source = new ProjectAnimationSource
+        {
+            Id = sourceId,
+            Name = "custom_idle",
+            SourceAssetId = oldAssetId,
+            EmbeddedCustomModelStack =
+                new ProjectEmbeddedAnimationStackIdentity
+                {
+                    ClipId = clipId,
+                    FbxObjectId = 77,
+                    StackFingerprint = stackFingerprint,
+                    SourceRigSignature = rigSignature,
+                    SourceAnimationSkeletonSignature = skeletonSignature,
+                    Roles = AnimationSourceRoles.Body,
+                },
+            SourceAnimationSkeletonSignature = skeletonSignature,
+            FrameRate = frameRate,
+            FrameCount = 42,
+            Presentation = new ProjectAnimationSourcePresentation
+            {
+                OriginKind =
+                    ProjectAnimationSourceOriginKind.ImportedFbxRig,
+                OriginName = model.Name,
+                OwningModelId = null,
+                ProjectAssetId = oldAssetId,
+                SourceRigIdentity = "custom-rig",
+            },
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            SourceId = sourceId,
+            Name = source.Name,
+            TargetModelId = modelId,
+            TargetRigId = "custom-rig",
+            TargetRigSignature = rigSignature,
+            TargetAnimationSkeletonSignature = skeletonSignature,
+            BindingMode = ProjectAnimationBindingMode.ExactDirect,
+            OutputAnm2Name = "custom_idle.anm2",
+        };
+        ProjectAnimationSource currentSource = source with
+        {
+            Id = currentSourceId,
+            SourceAssetId = newAssetId,
+            Presentation = new ProjectAnimationSourcePresentation
+            {
+                OriginKind =
+                    ProjectAnimationSourceOriginKind.OwningCustomModel,
+                OriginName = model.Name,
+                OwningModelId = modelId,
+                ProjectAssetId = newAssetId,
+                SourceRigIdentity = "custom-rig",
+            },
+        };
+        ProjectAnimationVariant currentVariant = variant with
+        {
+            Id = Guid.NewGuid(),
+            SourceId = currentSourceId,
+            OutputAnm2Name = "custom_idle_duplicate.anm2",
+        };
+        ProjectAnimationVariant secondaryVariant = variant with
+        {
+            Id = Guid.NewGuid(),
+            SourceId = sourceId,
+            TargetModelId = secondaryTargetModelId,
+            TargetRigId = "secondary-target",
+            TargetRigSignature = new string('f', 64),
+            TargetAnimationSkeletonSignature = new string('9', 64),
+            BindingMode = ProjectAnimationBindingMode.Retarget,
+            OutputAnm2Name = "custom_idle_secondary.anm2",
+        };
+        DlraProject project = DlraProject.Create("Custom actor") with
+        {
+            Assets = [oldAsset, newAsset, secondaryAsset],
+            Models = [model, secondaryModel],
+            AnimationSources = [source, currentSource],
+            AnimationVariants =
+                [variant, currentVariant, secondaryVariant],
+            Workflow = new ProjectWorkflowState
+            {
+                ActiveTab = ProjectWorkflowTab.RetargetEdit,
+                SelectedModelId = modelId,
+                SelectedAnimationSourceId = sourceId,
+                SelectedAnimationVariantId = variant.Id,
+            },
+            ActiveAnimationId = variant.Id,
+        };
+        var selection = new CustomModelAnimationClip
+        {
+            Id = clipId,
+            FbxObjectId = 77,
+            SourceName = "Take 001",
+            DisplayName = source.Name,
+            FrameRate = frameRate,
+            FrameCount = 42,
+            SourceFingerprint = stackFingerprint,
+            HasSkeletalTracks = true,
+        };
+        var payload = new ModelsWorkspacePersistencePayload(
+            packageModelId,
+            "custom.dlrmodel",
+            [],
+            rigSignature,
+            new string('d', 64),
+            skeletonSignature,
+            null,
+            null,
+            new string('e', 64),
+            null,
+            null,
+            0,
+            "custom-rig",
+            [new ModelsWorkspaceEmbeddedStackPayload(selection, true)],
+            clipId,
+            ProjectCustomModelPreviewMode.Dl1Output,
+            true,
+            true,
+            true,
+            true,
+            true);
+
+        DlraProject reconciled =
+            MainWindowViewModel.ReconcileEmbeddedCustomModelStacks(
+                project,
+                newAsset,
+                model,
+                payload);
+
+        Assert.Equal(
+            currentSourceId,
+            Assert.Single(reconciled.AnimationSources).Id);
+        Assert.Equal(2, reconciled.AnimationVariants.Length);
+        Assert.All(
+            reconciled.AnimationVariants,
+            row => Assert.Equal(currentSourceId, row.SourceId));
+        Assert.Single(
+            reconciled.AnimationVariants,
+            row => row.TargetModelId == modelId);
+        Assert.Single(
+            reconciled.AnimationVariants,
+            row => row.TargetModelId == secondaryTargetModelId);
+        Assert.Equal(currentSourceId, reconciled.Workflow.SelectedAnimationSourceId);
+        Assert.Equal(variant.Id, reconciled.Workflow.SelectedAnimationVariantId);
+        Assert.Equal(variant.Id, reconciled.ActiveAnimationId);
+        Assert.Contains(
+            reconciled.AnimationVariants,
+            row => row.Id == reconciled.Workflow.SelectedAnimationVariantId);
+        reconciled.Validate();
+    }
 
     [Fact]
     public void AssetBrowserDescribesAutomaticCachedCatalogLoadingClearly()
@@ -112,7 +380,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
     }
 
     [Fact]
-    public async Task ViewportInspectionBackgroundsRemainReadableAndDistinct()
+    public async Task ViewportInspectionBackgroundsUseOneNeutralSurface()
     {
         Directory.CreateDirectory(_temporaryDirectory);
         await using var assets = new Dl1AssetWorkspace(
@@ -129,13 +397,108 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         Vector4 target =
             viewModel.TargetViewport.SceneSource.CaptureFrame().ClearColor;
 
-        Assert.True(
-            (source.X + source.Y + source.Z) / 3.0f >= 0.14f,
-            $"Source viewport background is too dark for mesh inspection: {source}.");
-        Assert.True(
-            (target.X + target.Y + target.Z) / 3.0f >= 0.14f,
-            $"Target viewport background is too dark for mesh inspection: {target}.");
-        Assert.NotEqual(source, target);
+        Assert.Equal(source, target);
+        Assert.InRange(
+            (source.X + source.Y + source.Z) / 3.0f,
+            0.09f,
+            0.14f);
+    }
+
+    [Fact]
+    public async Task DoubleClickingUnresolvedSchemaTwoVariantReportsInsteadOfCrashing()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string projectPath = Path.Combine(
+            _temporaryDirectory,
+            "unresolved-source.dlraproj");
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid targetAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid targetModelId = Guid.NewGuid();
+        Guid variantId = Guid.NewGuid();
+        string targetSignature = new('b', 64);
+        DlraProject project = DlraProject.Create("Unresolved source") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = sourceAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "inputs/unresolved.fbx",
+                    ContentSha256 = new string('1', 64),
+                },
+                new ProjectAssetReference
+                {
+                    Id = targetAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "models/target.dlrmodel",
+                    ContentSha256 = new string('2', 64),
+                },
+            ],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = targetModelId,
+                    AssetId = targetAssetId,
+                    Name = "Target",
+                    RigSignature = targetSignature,
+                },
+            ],
+            AnimationSources =
+            [
+                new ProjectAnimationSource
+                {
+                    Id = sourceId,
+                    Name = "Unresolved take",
+                    SourceAssetId = sourceAssetId,
+                    RequiresSourceRebind = true,
+                    MigrationNote = "Original FBX stack identity is unavailable.",
+                    FrameCount = 2,
+                },
+            ],
+            AnimationVariants =
+            [
+                new ProjectAnimationVariant
+                {
+                    Id = variantId,
+                    SourceId = sourceId,
+                    Name = "Unresolved take",
+                    TargetModelId = targetModelId,
+                    TargetRigId = "target",
+                    TargetRigSignature = targetSignature,
+                    BindingMode = ProjectAnimationBindingMode.Retarget,
+                    IncludeInPackage = false,
+                },
+            ],
+        };
+        ProjectSerializer.SaveAtomic(project, projectPath);
+
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "unresolved-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "unresolved-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(projectPath),
+            assets);
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        AnimationLibraryItemViewModel row = Assert.Single(
+            viewModel.AnimationLibrary);
+        Assert.False(row.IsRuntimeAvailable);
+
+        await viewModel.OpenSelectedAnimationCommand.ExecuteAsync(null);
+
+        Assert.True(viewModel.HasAnimationOperationFailure);
+        Assert.Contains(
+            "Rebind Source",
+            viewModel.AnimationOperationFailureMessage,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Previous animation retained",
+            viewModel.StatusText,
+            StringComparison.Ordinal);
     }
 
     [Fact]

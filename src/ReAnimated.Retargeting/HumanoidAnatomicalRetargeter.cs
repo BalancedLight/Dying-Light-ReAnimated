@@ -257,9 +257,7 @@ internal static class HumanoidAnatomicalRetargeter
         targetRight = Vector3D.Zero;
 
         if (!TryGetRow(rows, "arm.left.clavicle", out BoneMapEntry left) ||
-            !TryGetRow(rows, "arm.right.clavicle", out BoneMapEntry right) ||
-            !TryGetRow(rows, "body.pelvis", out BoneMapEntry pelvis) ||
-            !TryGetHighestSpineRow(rows, out BoneMapEntry spine))
+            !TryGetRow(rows, "arm.right.clavicle", out BoneMapEntry right))
         {
             return false;
         }
@@ -267,21 +265,25 @@ internal static class HumanoidAnatomicalRetargeter
         Vector3D sourcePoseRight =
             Position(sourcePose, right.SourceBoneIndex) -
             Position(sourcePose, left.SourceBoneIndex);
-        Vector3D sourcePoseUp =
-            Position(sourcePose, spine.SourceBoneIndex) -
-            Position(sourcePose, pelvis.SourceBoneIndex);
         Vector3D sourceBindRight =
             Position(sourceBind, right.SourceBoneIndex) -
             Position(sourceBind, left.SourceBoneIndex);
-        Vector3D sourceBindUp =
-            Position(sourceBind, spine.SourceBoneIndex) -
-            Position(sourceBind, pelvis.SourceBoneIndex);
         Vector3D targetPoseRight =
             Position(targetBind, right.TargetBoneIndex) -
             Position(targetBind, left.TargetBoneIndex);
-        Vector3D targetPoseUp =
-            Position(targetBind, spine.TargetBoneIndex) -
-            Position(targetBind, pelvis.TargetBoneIndex);
+        if (!TryGetBodyUpDirections(
+                sourcePose,
+                sourceBind,
+                targetBind,
+                rows,
+                left,
+                right,
+                out Vector3D sourcePoseUp,
+                out Vector3D sourceBindUp,
+                out Vector3D targetPoseUp))
+        {
+            return false;
+        }
 
         if (!TryFrame(
                 sourcePoseRight,
@@ -308,6 +310,83 @@ internal static class HumanoidAnatomicalRetargeter
         targetRight = targetPoseRight.Normalized();
         return true;
     }
+
+    private static bool TryGetBodyUpDirections(
+        SkeletonPose sourcePose,
+        SkeletonPose sourceBind,
+        SkeletonPose targetBind,
+        IReadOnlyDictionary<string, BoneMapEntry> rows,
+        BoneMapEntry leftClavicle,
+        BoneMapEntry rightClavicle,
+        out Vector3D sourcePoseUp,
+        out Vector3D sourceBindUp,
+        out Vector3D targetBindUp)
+    {
+        if (TryGetRow(rows, "body.pelvis", out BoneMapEntry pelvis) &&
+            TryGetHighestSpineRow(rows, out BoneMapEntry spine))
+        {
+            sourcePoseUp =
+                Position(sourcePose, spine.SourceBoneIndex) -
+                Position(sourcePose, pelvis.SourceBoneIndex);
+            sourceBindUp =
+                Position(sourceBind, spine.SourceBoneIndex) -
+                Position(sourceBind, pelvis.SourceBoneIndex);
+            targetBindUp =
+                Position(targetBind, spine.TargetBoneIndex) -
+                Position(targetBind, pelvis.TargetBoneIndex);
+            return true;
+        }
+
+        // Some authored/custom rigs split the pelvis into left and right
+        // controls and deliberately have no single body.pelvis row.  The
+        // previous solver treated that as a total anatomical-solve failure,
+        // after which every limb silently fell back to a source-local rotation
+        // delta.  That fallback is invalid when source and target bind axes
+        // differ (for example Mixamo versus a custom DL1 character), producing
+        // crossed legs and raised/backwards arms.  A shoulder midpoint and the
+        // two mapped upper-leg roots define the same stable body-up axis while
+        // preserving each rig's own coordinate basis.
+        if (!TryGetRow(
+                rows,
+                "leg.left.upper",
+                out BoneMapEntry leftUpperLeg) ||
+            !TryGetRow(
+                rows,
+                "leg.right.upper",
+                out BoneMapEntry rightUpperLeg))
+        {
+            sourcePoseUp = Vector3D.Zero;
+            sourceBindUp = Vector3D.Zero;
+            targetBindUp = Vector3D.Zero;
+            return false;
+        }
+
+        Vector3D sourcePoseShoulders = Midpoint(
+            Position(sourcePose, leftClavicle.SourceBoneIndex),
+            Position(sourcePose, rightClavicle.SourceBoneIndex));
+        Vector3D sourcePoseHips = Midpoint(
+            Position(sourcePose, leftUpperLeg.SourceBoneIndex),
+            Position(sourcePose, rightUpperLeg.SourceBoneIndex));
+        Vector3D sourceBindShoulders = Midpoint(
+            Position(sourceBind, leftClavicle.SourceBoneIndex),
+            Position(sourceBind, rightClavicle.SourceBoneIndex));
+        Vector3D sourceBindHips = Midpoint(
+            Position(sourceBind, leftUpperLeg.SourceBoneIndex),
+            Position(sourceBind, rightUpperLeg.SourceBoneIndex));
+        Vector3D targetBindShoulders = Midpoint(
+            Position(targetBind, leftClavicle.TargetBoneIndex),
+            Position(targetBind, rightClavicle.TargetBoneIndex));
+        Vector3D targetBindHips = Midpoint(
+            Position(targetBind, leftUpperLeg.TargetBoneIndex),
+            Position(targetBind, rightUpperLeg.TargetBoneIndex));
+        sourcePoseUp = sourcePoseShoulders - sourcePoseHips;
+        sourceBindUp = sourceBindShoulders - sourceBindHips;
+        targetBindUp = targetBindShoulders - targetBindHips;
+        return true;
+    }
+
+    private static Vector3D Midpoint(Vector3D left, Vector3D right) =>
+        (left + right) * 0.5;
 
     private static void AddPelvis(
         SkeletonPose targetBind,

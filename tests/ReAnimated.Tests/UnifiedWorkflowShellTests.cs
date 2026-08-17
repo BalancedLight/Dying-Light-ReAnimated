@@ -334,6 +334,110 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         Assert.Contains(
             synchronized.AnimationVariants,
             variant => variant.Id == embeddedVariantId);
+
+        DlraProject removed = MainWindowViewModel
+            .SynchronizeSchema2FromCompatibilityAnimations(
+                project,
+                project with { Animations = [] });
+        Assert.DoesNotContain(
+            removed.AnimationVariants,
+            variant => variant.Id == variantId);
+        Assert.Contains(
+            removed.AnimationVariants,
+            variant => variant.Id == embeddedVariantId);
+    }
+
+    [Fact]
+    public void CompatibilitySynchronizationPreservesNewExplicitTargetVariants()
+    {
+        string sourceSignature = new('a', 64);
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        var sourceAsset = new ProjectAssetReference
+        {
+            Id = sourceAssetId,
+            Kind = ProjectAssetKind.SourceAnimation,
+            RelativePath = "assets/generic-source.fbx",
+            ContentSha256 = new string('1', 64),
+        };
+        var sourceBinding = new ProjectAnimationSourceBinding
+        {
+            Kind = AnimationSourceKind.LocalFbx,
+            AssetId = sourceAssetId,
+            Roles = AnimationSourceRoles.Body,
+            SourceRigSignature = sourceSignature,
+            TimingProvenance = AnimationTimingProvenance.EmbeddedFbx,
+            SourceRangeStartFrame = 0,
+            SourceRangeEndFrame = 29,
+        };
+        var source = new ProjectAnimationSource
+        {
+            Id = sourceId,
+            Name = "Generic source",
+            SourceAssetId = sourceAssetId,
+            SourceBinding = sourceBinding,
+            FrameCount = 30,
+        };
+        ProjectAssetReference[] targetAssets =
+        [
+            new ProjectAssetReference
+            {
+                Kind = ProjectAssetKind.CustomModelSource,
+                RelativePath = "models/target-a.dlrmodel",
+                ContentSha256 = new string('2', 64),
+            },
+            new ProjectAssetReference
+            {
+                Kind = ProjectAssetKind.CustomModelSource,
+                RelativePath = "models/target-b.dlrmodel",
+                ContentSha256 = new string('3', 64),
+            },
+        ];
+        ProjectModelEntry[] targetModels = targetAssets
+            .Select((asset, index) => new ProjectModelEntry
+            {
+                AssetId = asset.Id,
+                Name = $"Target {index + 1}",
+                RigSignature = new string((char)('b' + index), 64),
+            })
+            .ToArray();
+        DlraProject previous = DlraProject.Create("Explicit targets") with
+        {
+            Assets = [sourceAsset, .. targetAssets],
+            Models = [.. targetModels],
+            AnimationSources = [source],
+        };
+        DlraProject edited = previous with
+        {
+            AnimationVariants =
+            [
+                .. targetModels.Select(model => new ProjectAnimationVariant
+                {
+                    SourceId = sourceId,
+                    Name = "Generic source",
+                    TargetModelId = model.Id,
+                    TargetRigId = $"target:{model.Id:N}",
+                    TargetRigSignature = model.RigSignature,
+                    BindingMode = ProjectAnimationBindingMode.Retarget,
+                }),
+            ],
+        };
+
+        DlraProject synchronized = MainWindowViewModel
+            .SynchronizeSchema2FromCompatibilityAnimations(
+                previous,
+                edited);
+
+        Assert.Equal(2, synchronized.AnimationVariants.Length);
+        synchronized.Validate();
+
+        string path = Path.Combine(
+            _tempDirectory,
+            "explicit-targets.dlraproj");
+        ProjectSerializer.SaveAtomic(synchronized, path);
+        DlraProject reloaded = ProjectSerializer.Load(path);
+        Assert.Equal(2, reloaded.AnimationVariants.Length);
+        Assert.Equal(2, reloaded.Animations.Length);
     }
 
     [Fact]
@@ -510,10 +614,16 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
                 batch.Animations[0].VariantGroupId,
                 animation.VariantGroupId);
         });
-        Assert.Empty(batch.Animations[0].BoneMappings);
-        Assert.Null(batch.Animations[0].MappingFingerprint);
-        Assert.Empty(batch.Animations[1].BoneMappings);
-        Assert.Null(batch.Animations[1].MappingFingerprint);
+        Assert.All(batch.Animations, animation =>
+        {
+            ProjectBoneMapping mapping = Assert.Single(
+                animation.BoneMappings);
+            Assert.Equal("root", mapping.SourceBoneName);
+            Assert.Equal("root", mapping.TargetBoneName);
+            Assert.Equal("ExactName", mapping.Method);
+            Assert.Equal(1.0, mapping.Confidence);
+            Assert.NotNull(animation.MappingFingerprint);
+        });
         Assert.Equal(
             ProjectAnimationBindingMode.CompatibleDirect,
             batch.Animations[1].BindingMode);

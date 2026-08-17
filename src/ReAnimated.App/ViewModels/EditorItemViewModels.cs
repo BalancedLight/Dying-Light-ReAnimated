@@ -548,7 +548,8 @@ public sealed record ExportReadinessItemViewModel(
     bool IsReady);
 
 /// <summary>
-/// Retail catalog browser scoped to base-game animation resources.
+/// Retail catalog browser scoped to base-game animation and animation-script
+/// resources.
 /// </summary>
 /// <remarks>
 /// This deliberately does not reuse the shared <see cref="AssetBrowserViewModel"/>.
@@ -651,17 +652,17 @@ public sealed class RetailAnimationBrowserViewModel : ObservableObject
     public string EmptyResultMessage => IsCatalogLoading
         ? "Loading the saved Dying Light 1 asset catalog..."
         : HasIndexedAssets
-            ? "No base-game animations match the current filters."
+            ? "No base-game animations or animation scripts match the current filters."
             : "No saved asset catalog is available. Load the Dying Light 1 assets once; later launches reuse the validated local cache.";
 
     public string ResultSummary => IsCatalogLoading
         ? "Loading saved catalog"
         : IsResultTruncated
-            ? $"Showing {VisibleAssets.Count:N0} of {FilteredAssetCount:N0} animations"
-            : $"{FilteredAssetCount:N0} matching animations";
+            ? $"Showing {VisibleAssets.Count:N0} of {FilteredAssetCount:N0} animation resources"
+            : $"{FilteredAssetCount:N0} matching animation resources";
 
     /// <summary>
-    /// Keeps only fingerprinted retail animation resources. Every other
+    /// Keeps only fingerprinted retail animation and script resources. Every other
     /// catalog row is irrelevant here and would only make the list unusable.
     /// </summary>
     public void ReplaceAssets(IEnumerable<AssetItemViewModel> assets)
@@ -671,7 +672,8 @@ public sealed class RetailAnimationBrowserViewModel : ObservableObject
         _allAssets.Clear();
         _allAssets.AddRange(
             assets.Where(static asset =>
-                asset.Kind == AssetKind.Animation &&
+                asset.Kind is (AssetKind.Animation or
+                    AssetKind.AnimationScript) &&
                 asset.RetailAsset is not null));
 
         string previousProvider = SelectedProviderFilter;
@@ -2317,11 +2319,18 @@ public sealed class BoneMappingViewModel : ObservableObject
         ];
 
     private string? _targetBone;
+    private string? _persistedTargetBone;
     private bool _isLocked;
     private bool _isReviewed;
     private RetargetTransferPolicy _transferPolicy;
     private RetargetComponentPolicy _componentPolicy;
     private RetargetTransformComponents _transformComponents;
+    private double _confidence;
+    private string _status;
+    private string _evidence;
+    private ProjectMappingReviewOrigin _reviewOrigin;
+    private string _scorerVersion;
+    private string _evidenceFingerprint;
 
     public BoneMappingViewModel(
         string sourceBone,
@@ -2341,12 +2350,15 @@ public sealed class BoneMappingViewModel : ObservableObject
             ProjectMappingReviewOrigin.None,
         string scorerVersion = "unscored-v1",
         string evidenceFingerprint = "",
-        RetargetTransformComponents? transformComponents = null)
+        RetargetTransformComponents? transformComponents = null,
+        IReadOnlyList<string>? targetBoneOptions = null)
     {
         SourceBone = sourceBone;
         _targetBone = targetBone;
-        Confidence = confidence;
-        Status = status;
+        _persistedTargetBone = targetBone;
+        TargetBoneOptions = targetBoneOptions ?? Array.Empty<string>();
+        _confidence = confidence;
+        _status = status;
         MappingKind = mappingKind;
         _transferPolicy = transferPolicy;
         _transformComponents = transformComponents ??
@@ -2367,10 +2379,10 @@ public sealed class BoneMappingViewModel : ObservableObject
                 out RetargetComponentPolicy compatiblePolicy)
                 ? compatiblePolicy
                 : componentPolicy;
-        Evidence = evidence ?? string.Empty;
-        ReviewOrigin = reviewOrigin;
-        ScorerVersion = scorerVersion ?? string.Empty;
-        EvidenceFingerprint = evidenceFingerprint ?? string.Empty;
+        _evidence = evidence ?? string.Empty;
+        _reviewOrigin = reviewOrigin;
+        _scorerVersion = scorerVersion ?? string.Empty;
+        _evidenceFingerprint = evidenceFingerprint ?? string.Empty;
         _isLocked =
             !string.IsNullOrWhiteSpace(targetBone) &&
             isLocked;
@@ -2381,23 +2393,32 @@ public sealed class BoneMappingViewModel : ObservableObject
 
     public string SourceBone { get; }
 
-    public double Confidence { get; }
+    public IReadOnlyList<string> TargetBoneOptions { get; }
 
-    public string Status { get; }
+    public double Confidence => _confidence;
 
-    public string Evidence { get; }
+    public string Status => _status;
 
-    public ProjectMappingReviewOrigin ReviewOrigin { get; }
+    public string Evidence => _evidence;
 
-    public string ScorerVersion { get; }
+    public ProjectMappingReviewOrigin ReviewOrigin => _reviewOrigin;
 
-    public string EvidenceFingerprint { get; }
+    public string ScorerVersion => _scorerVersion;
 
-    public string EvidenceSummary =>
-        $"{Confidence:P0} | {ReviewOrigin} | {ScorerVersion}\n{Evidence}";
+    public string EvidenceFingerprint => _evidenceFingerprint;
 
-    public string EvidenceMethod =>
-        $"{CompactMethodLabel} · {Confidence:P0}";
+    public string EvidenceSummary => IsUnscored
+        ? $"Not scored | {ReviewOrigin}\n{Evidence}"
+        : $"{Confidence:P0} | {ReviewOrigin} | {ScorerVersion}\n{Evidence}";
+
+    private bool IsUnscored => string.Equals(
+        ScorerVersion,
+        "unscored-v1",
+        StringComparison.OrdinalIgnoreCase);
+
+    public string EvidenceMethod => IsUnscored
+        ? $"{CompactMethodLabel} · Not scored"
+        : $"{CompactMethodLabel} · {Confidence:P0}";
 
     private string CompactMethodLabel => Status switch
     {
@@ -2472,6 +2493,52 @@ public sealed class BoneMappingViewModel : ObservableObject
     }
 
     public bool HasTarget => !string.IsNullOrWhiteSpace(TargetBone);
+
+    internal void AcceptPersistedTargetBone() =>
+        _persistedTargetBone = _targetBone;
+
+    internal void AcceptManualEdit()
+    {
+        _persistedTargetBone = _targetBone;
+        _confidence = 1.0;
+        _status = BoneMappingMethod.Manual.ToString();
+        _evidence =
+            "Manual mapping or transfer-policy selection; automatic approval is not allowed.";
+        _reviewOrigin = ProjectMappingReviewOrigin.None;
+        _scorerVersion = "unscored-v1";
+        _evidenceFingerprint = new string('0', 64);
+        _isLocked = false;
+        _isReviewed = false;
+        OnPropertyChanged(nameof(Confidence));
+        OnPropertyChanged(nameof(Status));
+        OnPropertyChanged(nameof(Evidence));
+        OnPropertyChanged(nameof(ReviewOrigin));
+        OnPropertyChanged(nameof(ScorerVersion));
+        OnPropertyChanged(nameof(EvidenceFingerprint));
+        OnPropertyChanged(nameof(EvidenceSummary));
+        OnPropertyChanged(nameof(EvidenceMethod));
+        OnPropertyChanged(nameof(IsLocked));
+        OnPropertyChanged(nameof(IsReviewed));
+        OnPropertyChanged(nameof(RequiresExplicitReview));
+        OnPropertyChanged(nameof(ReviewState));
+    }
+
+    internal void RestorePersistedTargetBone()
+    {
+        if (string.Equals(
+                _targetBone,
+                _persistedTargetBone,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _targetBone = _persistedTargetBone;
+        OnPropertyChanged(nameof(TargetBone));
+        OnPropertyChanged(nameof(HasTarget));
+        OnPropertyChanged(nameof(RequiresExplicitReview));
+        OnPropertyChanged(nameof(ReviewState));
+    }
 
     public RetargetTransferPolicy TransferPolicy
     {

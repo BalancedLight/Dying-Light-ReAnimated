@@ -106,6 +106,7 @@ public sealed class AnimationLibraryEditRowViewModel : ObservableObject
             if (SetProperty(ref _resourceName, value ?? string.Empty))
             {
                 OnPropertyChanged(nameof(Summary));
+                OnPropertyChanged(nameof(DlcConventionMessage));
             }
         }
     }
@@ -127,6 +128,27 @@ public sealed class AnimationLibraryEditRowViewModel : ObservableObject
             ? "Unnamed animation library"
             : ResourceName
         : DisplayName;
+
+    public string DlcConventionMessage
+    {
+        get
+        {
+            if (ProjectAnimationLibrary.TryGetDlcNumber(
+                    ResourceName.Trim(),
+                    out int dlcNumber))
+            {
+                return dlcNumber < 60
+                    ? $"Valid DLC append name, but dlc{dlcNumber} is below the conventional 60+ range."
+                    : $"DLC append convention detected: dlc{dlcNumber}.";
+            }
+
+            return ResourceName.Contains(
+                "_dlc",
+                StringComparison.OrdinalIgnoreCase)
+                ? "Invalid DLC suffix. Use <base>_dlc<NN>, for example anims_man_all_dlc60."
+                : "For a base-game character append script, use <base>_dlc<NN>; 60+ is conventional.";
+        }
+    }
 
     public AnimationLibraryModeOption SelectedMode
     {

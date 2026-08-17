@@ -170,6 +170,10 @@ public sealed class WpfStartupSmokeTests
                 root.GetProperty(
                         "animationLibraryRowMaterialized")
                     .GetBoolean());
+            Assert.False(
+                root.GetProperty(
+                        "floatingViewportRoundTrip")
+                    .GetBoolean());
             Assert.Empty(
                 root.GetProperty("resizeSteps")
                     .EnumerateArray());
