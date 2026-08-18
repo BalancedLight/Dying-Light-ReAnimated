@@ -1,4 +1,4 @@
-<Window x:Class="ReAnimated.App.MainWindow"
+﻿<Window x:Class="ReAnimated.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -1055,14 +1055,30 @@
                                               ItemsSource="{Binding ExportVariants}"
                                               VirtualizingPanel.IsVirtualizing="True"
                                               VirtualizingPanel.VirtualizationMode="Recycling">
+                                        <DataGrid.RowStyle>
+                                            <Style TargetType="{x:Type DataGridRow}"
+                                                   BasedOn="{StaticResource {x:Type DataGridRow}}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsEnabled}" Value="False">
+                                                        <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                                        <Setter Property="ToolTip" Value="{Binding Readiness}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </DataGrid.RowStyle>
                                         <DataGrid.Columns>
                                             <DataGridTemplateColumn Width="70" Header="Export">
                                                 <DataGridTemplateColumn.CellTemplate>
                                                     <DataTemplate>
+                                                        <!-- WPF hides tooltips on disabled controls unless
+                                                             asked. A blocked row's checkbox is disabled, so
+                                                             without this the reason never reaches the pointer
+                                                             and the control reads as simply broken. -->
                                                         <CheckBox HorizontalAlignment="Center"
                                                                   IsChecked="{Binding IsSelected}"
                                                                   IsEnabled="{Binding IsEnabled}"
-                                                                  ToolTip="{Binding Readiness}" />
+                                                                  ToolTip="{Binding Readiness}"
+                                                                  ToolTipService.ShowOnDisabled="True" />
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>

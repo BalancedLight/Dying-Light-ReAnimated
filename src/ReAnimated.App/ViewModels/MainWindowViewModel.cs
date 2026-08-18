@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
@@ -39,6 +39,25 @@ public enum DeveloperToolsExportMode
     CharactersOnly,
     Anm2Only,
     Full,
+}
+
+/// <summary>
+/// Why a target model's DL1 descriptor inventory was accepted or rejected.
+/// The reason is shown verbatim in the export readiness column, so it must
+/// name something the operator can act on.
+/// </summary>
+internal sealed record DescriptorInventoryValidation(
+    bool IsValid,
+    string? Reason)
+{
+    public static DescriptorInventoryValidation Valid { get; } =
+        new(true, null);
+
+    public static DescriptorInventoryValidation Invalid(string reason)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+        return new(false, reason);
+    }
 }
 
 public sealed partial class MainWindowViewModel :
@@ -10395,18 +10414,25 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
-    private bool TryValidateProjectModelDl1DescriptorInventory(
-        ProjectModelEntry model,
-        ProjectAssetReference? asset)
+    /// <summary>
+    /// Validates a target model's DL1 descriptor inventory and reports why it
+    /// failed. Every rejection here blocks export, so a caller that collapses
+    /// them into one message leaves the operator with nothing to act on.
+    /// </summary>
+    private DescriptorInventoryValidation
+        ValidateProjectModelDl1DescriptorInventory(
+            ProjectModelEntry model,
+            ProjectAssetReference? asset)
     {
         if (asset?.Kind == ProjectAssetKind.RetailGameResource)
         {
-            return true;
+            return DescriptorInventoryValidation.Valid;
         }
 
         if (asset?.Kind != ProjectAssetKind.CustomModelSource)
         {
-            return false;
+            return DescriptorInventoryValidation.Invalid(
+                "Target model has no retail or custom-model asset to validate");
         }
 
         try
@@ -10414,7 +10440,8 @@ public sealed partial class MainWindowViewModel :
             string packagePath = ResolveLocalProjectAssetPath(asset);
             if (string.IsNullOrWhiteSpace(asset.ContentSha256))
             {
-                return false;
+                return DescriptorInventoryValidation.Invalid(
+                    "Custom model package has no recorded content fingerprint");
             }
 
             using (FileStream stream = new(
@@ -10433,15 +10460,29 @@ public sealed partial class MainWindowViewModel :
                         asset.ContentSha256,
                         StringComparison.OrdinalIgnoreCase))
                 {
-                    return false;
+                    return DescriptorInventoryValidation.Invalid(
+                        "Custom model package changed on disk after it was added; re-import it");
                 }
             }
 
             CustomModelPackage package = CustomModelPackageSerializer.Load(
                 packagePath);
-            if (package.Document.ModelId != model.Id)
+
+            // The package carries a deterministic, content-derived model id
+            // while ProjectModelEntry.Id is a per-project Guid, so those two
+            // are never equal. The asset's resource id is what records the
+            // package identity, and comparing against it is what the decode
+            // path already does.
+            Guid expectedModelId =
+                TryParseCustomModelResourceId(
+                    asset.ResourceId,
+                    out Guid assetModelId)
+                    ? assetModelId
+                    : model.Id;
+            if (package.Document.ModelId != expectedModelId)
             {
-                return false;
+                return DescriptorInventoryValidation.Invalid(
+                    "Custom model package identity differs from the reference recorded for this model; re-import it");
             }
 
             FbxModelAuthoringImportResult imported =
@@ -10455,21 +10496,27 @@ public sealed partial class MainWindowViewModel :
                 !string.Equals(
                     expectedRig,
                     RigSignature.Compute(outputRig),
-                    StringComparison.OrdinalIgnoreCase) ||
-                model.Dl1DescriptorInventoryFingerprint is
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return DescriptorInventoryValidation.Invalid(
+                    "Custom model DL1 output rig signature is stale; re-prepare the model");
+            }
+
+            if (model.Dl1DescriptorInventoryFingerprint is
                     { } expectedDescriptors &&
                 !string.Equals(
                     expectedDescriptors,
                     prepared.Contract.DescriptorFingerprint,
                     StringComparison.OrdinalIgnoreCase))
             {
-                return false;
+                return DescriptorInventoryValidation.Invalid(
+                    "Custom model descriptor inventory fingerprint is stale; re-prepare the model");
             }
             // The package's DL1-output rig is a compiler/descriptor contract,
             // not the source FBX runtime-rig identity stored in RigSignature.
             // Comparing those two independent signatures made every valid
             // owning-model variant look stale and disabled its export row.
-            return true;
+            return DescriptorInventoryValidation.Valid;
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -10479,7 +10526,8 @@ public sealed partial class MainWindowViewModel :
             UnauthorizedAccessException or
             JsonException)
         {
-            return false;
+            return DescriptorInventoryValidation.Invalid(
+                $"Custom model descriptors could not be validated: {exception.Message}");
         }
     }
 
@@ -14438,10 +14486,12 @@ public sealed partial class MainWindowViewModel :
                         model.RigSignature,
                         variant.TargetRigSignature,
                         StringComparison.OrdinalIgnoreCase);
-                bool descriptorReady = targetReady &&
-                    TryValidateProjectModelDl1DescriptorInventory(
+                DescriptorInventoryValidation descriptors = targetReady
+                    ? ValidateProjectModelDl1DescriptorInventory(
                         model!,
-                        targetAsset);
+                        targetAsset)
+                    : DescriptorInventoryValidation.Valid;
+                bool descriptorReady = targetReady && descriptors.IsValid;
                 bool direct = sourceReady &&
                     descriptorReady &&
                     variant.BindingMode is
@@ -14493,7 +14543,8 @@ public sealed partial class MainWindowViewModel :
                             : !targetReady
                                 ? "Target fingerprint or rig signature is stale"
                                 : !descriptorReady
-                                    ? "Target DL1 bone/helper/morph descriptors collide or cannot be validated"
+                                    ? descriptors.Reason ??
+                                      "Target DL1 bone/helper/morph descriptors collide or cannot be validated"
                                 : !currentBoneEvidence
                                     ? "Bone scorer evidence is stale"
                             : !boneReady
@@ -16670,10 +16721,19 @@ public sealed partial class MainWindowViewModel :
         CustomModelPackage package = await Task.Run(
             () => CustomModelPackageSerializer.Load(packagePath),
             cancellationToken);
-        if (package.Document.ModelId != model.Id)
+        // Match the recorded asset identity rather than ProjectModelEntry.Id,
+        // which is a per-project Guid and never equals the package's
+        // content-derived model id.
+        Guid expectedPackageModelId =
+            TryParseCustomModelResourceId(
+                asset.ResourceId,
+                out Guid recordedModelId)
+                ? recordedModelId
+                : model.Id;
+        if (package.Document.ModelId != expectedPackageModelId)
         {
             throw new InvalidDataException(
-                $"Custom model '{model.Name}' package identity differs from its project-model identity.");
+                $"Custom model '{model.Name}' package identity differs from the reference recorded for it.");
         }
 
         FbxModelAuthoringImportResult imported = await Task.Run(
