@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
@@ -25,6 +25,7 @@ using ReAnimated.DL1.Assets.Catalog;
 using ReAnimated.DL1.Assets.Discovery;
 using ReAnimated.DL1.Assets.Meshes;
 using ReAnimated.DL1.Assets.Providers;
+using ReAnimated.DL1.Assets.Scripts;
 using ReAnimated.Evaluation;
 using ReAnimated.Renderer.D3D11;
 using ReAnimated.Retargeting;
@@ -203,11 +204,22 @@ public sealed partial class MainWindowViewModel :
         bool IsCustomModel,
         ImmutableArray<Dl1PortableAnimationResource> Animations);
 
+    /// <summary>
+    /// A built animation pack. <see cref="EventOnlyScripts"/> names the
+    /// libraries whose authored loose text carries event blocks the compiled
+    /// type-322 resource in <see cref="Rpack"/> cannot represent, so the
+    /// caller can say so rather than let the difference pass silently.
+    /// </summary>
     internal sealed record BuiltProjectAnimationPack(
         byte[] Rpack,
         ImmutableDictionary<string, byte[]> Animations,
         ImmutableDictionary<string, Rp6lAnimationScript> Scripts,
-        ImmutableDictionary<string, string> LooseScripts);
+        ImmutableDictionary<string, string> LooseScripts,
+        ImmutableArray<string> EventOnlyScripts = default)
+    {
+        public ImmutableArray<string> EventOnlyScripts { get; init; } =
+            EventOnlyScripts.IsDefault ? [] : EventOnlyScripts;
+    }
 
     private sealed record StandaloneExportArtifact(
         string RelativePath,
@@ -521,6 +533,19 @@ public sealed partial class MainWindowViewModel :
     private bool _showBoneLocalAxes;
     private bool _highlightSelectedMeshes;
     private bool _hasRecoverySnapshot;
+    private bool _suppressAnimationRowCommit;
+    private bool _suppressExportRowCommit;
+    private JobViewModel? _activeJob;
+    private bool _hasDuplicateExportOutputNames;
+    private Dl1RetailAnimationScriptIndex? _retailAnimationScripts;
+    private bool _retailAnimationScriptsAttempted;
+    private ExportVariantSelectionViewModel? _selectedExportVariant;
+    private string? _selectedTargetAnimationScript;
+    private bool _isDlcOverrideEnabled = true;
+    private string _dlcOverrideScriptName = string.Empty;
+    private AnimationScriptEditorItemViewModel? _selectedScriptLibrary;
+    private string _animationScriptText = string.Empty;
+    private bool _suppressAnimationScriptTextChange;
     private bool _isBusy;
     private bool _isDirty;
     private bool _disposed;
@@ -622,6 +647,11 @@ public sealed partial class MainWindowViewModel :
     private ViewportOrbitCameraPair? _authoringOrbitCameras;
     private ViewportOrbitCameraPair? _browseOrbitCameras;
     private string? _lastComparisonFramingKey;
+    private static readonly TimeSpan KeepFramedMinimumInterval =
+        TimeSpan.FromMilliseconds(60.0);
+    private bool _keepFramed;
+    private string? _lastKeepFramedKey;
+    private DateTimeOffset _lastKeepFramedAt;
     private DeveloperToolsExportMode _developerToolsExportMode =
         DeveloperToolsExportMode.AnimationsOnly;
 
@@ -893,6 +923,24 @@ public sealed partial class MainWindowViewModel :
         ApplyExportSelectionCommand = new RelayCommand(
             ApplyExportSelection,
             () => !IsBusy && !_project.AnimationVariants.IsEmpty);
+        ApplyAnimationScriptTargetCommand = new RelayCommand(
+            ApplyAnimationScriptTarget,
+            CanApplyAnimationScriptTarget);
+        ResolveDuplicateExportOutputNamesCommand = new RelayCommand(
+            ResolveDuplicateExportOutputNames,
+            CanResolveDuplicateExportOutputNames);
+        CopyDiagnosticsCommand = new RelayCommand(
+            CopyDiagnostics,
+            () => Diagnostics.Count > 0);
+        ClearDiagnosticsCommand = new RelayCommand(
+            Diagnostics.Clear,
+            () => Diagnostics.Count > 0);
+        CommitAnimationScriptTextCommand = new RelayCommand(
+            CommitAnimationScriptText,
+            CanCommitAnimationScriptText);
+        RevertAnimationScriptTextCommand = new RelayCommand(
+            RevertAnimationScriptText,
+            CanRevertAnimationScriptText);
         ExportCheckedPortableCommand = new AsyncRelayCommand(
             ExportCheckedPortableAsync,
             CanRunCheckedExportWorkflow);
@@ -1384,6 +1432,18 @@ public sealed partial class MainWindowViewModel :
     public AsyncRelayCommand ExportBodyAndMimicCommand { get; }
 
     public RelayCommand ApplyExportSelectionCommand { get; }
+
+    public RelayCommand ApplyAnimationScriptTargetCommand { get; }
+
+    public RelayCommand ResolveDuplicateExportOutputNamesCommand { get; }
+
+    public RelayCommand CopyDiagnosticsCommand { get; }
+
+    public RelayCommand ClearDiagnosticsCommand { get; }
+
+    public RelayCommand CommitAnimationScriptTextCommand { get; }
+
+    public RelayCommand RevertAnimationScriptTextCommand { get; }
 
     public AsyncRelayCommand ExportCheckedPortableCommand { get; }
 
@@ -2394,6 +2454,34 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    /// <summary>
+    /// Keeps refitting the viewport camera to the animated subject instead of
+    /// fitting it once per press. Framing preserves the current view direction
+    /// and up vector, so orbiting still works; panning and dollying are
+    /// overridden by the next refit.
+    /// </summary>
+    public bool KeepFramed
+    {
+        get => _keepFramed;
+        set
+        {
+            if (!SetProperty(ref _keepFramed, value))
+            {
+                return;
+            }
+
+            _lastKeepFramedKey = null;
+            if (value)
+            {
+                // Fit immediately so the toggle reads as instant rather than
+                // waiting for the next scene change.
+                FrameSelection();
+                _lastKeepFramedKey = TryBuildKeepFramedKey();
+                _lastKeepFramedAt = DateTimeOffset.UtcNow;
+            }
+        }
+    }
+
     public bool ShowHelpers
     {
         get => _showHelpers;
@@ -3100,7 +3188,8 @@ public sealed partial class MainWindowViewModel :
             _pendingProjectAssets.Values
                 .OrderBy(static receipt => receipt.RelativePath,
                     StringComparer.OrdinalIgnoreCase)
-                .ToImmutableArray());
+                .ToImmutableArray(),
+            KeepFramed);
     }
 
     public void RestoreSnapshot(WorkspaceSnapshot snapshot)
@@ -3150,6 +3239,7 @@ public sealed partial class MainWindowViewModel :
         ShowMeshes = snapshot.MeshesVisible ?? true;
         ShowSkeletonOverlay =
             snapshot.SkeletonOverlayVisible ?? true;
+        KeepFramed = snapshot.KeepFramed ?? false;
         SelectedBone = FindBone(snapshot.SelectedBonePath);
         StatusText = $"Recovered workspace from {snapshot.SavedAt.LocalDateTime:g}";
     }
@@ -3190,6 +3280,90 @@ public sealed partial class MainWindowViewModel :
     {
         Timeline.Tick(now);
         Models.Tick(now);
+        TickKeepFramed(now);
+    }
+
+    /// <summary>
+    /// Refits the camera while Keep Framed is on.
+    /// </summary>
+    /// <remarks>
+    /// This runs off the compositor tick, so it has to stay cheap.
+    /// <see cref="RenderCameraFraming.TryFrame"/> walks every vertex of every
+    /// mesh and rebuilds the skinning palette per mesh, which is fine once per
+    /// button press and far too expensive every frame. So the refit only runs
+    /// when the posed scene identity actually changes, and never more often
+    /// than <see cref="KeepFramedMinimumInterval"/>.
+    /// </remarks>
+    private void TickKeepFramed(DateTimeOffset now)
+    {
+        if (!_keepFramed || IsBusy)
+        {
+            return;
+        }
+
+        if (now - _lastKeepFramedAt < KeepFramedMinimumInterval)
+        {
+            return;
+        }
+
+        string? key = TryBuildKeepFramedKey();
+        if (key is null ||
+            string.Equals(key, _lastKeepFramedKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        _lastKeepFramedKey = key;
+        _lastKeepFramedAt = now;
+        RefitFramedCamera();
+    }
+
+    /// <summary>
+    /// Identifies the posed scene so an unchanged pose costs nothing. Null
+    /// means there is nothing worth framing yet.
+    /// </summary>
+    private string? TryBuildKeepFramedKey()
+    {
+        if (ActiveWorkspaceMode is null)
+        {
+            return null;
+        }
+
+        return string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{ActiveWorkspaceMode}|{_activeAnimationId}|{Timeline.CurrentFrame}|{PreviewLayout}|{IsSourceViewportVisible}|{ShowMeshes}|{ShowSkeletonOverlay}");
+    }
+
+    /// <summary>
+    /// The camera half of <see cref="FrameSelection"/>, without the status
+    /// text or the diagnostic - a continuous refit must not narrate itself.
+    /// </summary>
+    private void RefitFramedCamera()
+    {
+        if (FrameComparisonPanes(force: true))
+        {
+            return;
+        }
+
+        bool targetCameraLocked =
+            _viewportCoordinator.HasTargetPreviewCameraOverride;
+        RenderFrameSnapshot targetFrame =
+            TargetViewport.SceneSource.CaptureFrame();
+        RenderFrameSnapshot sourceFrame =
+            SourceViewport.SceneSource.CaptureFrame();
+        ViewportSide side =
+            !targetCameraLocked &&
+            HasFrameableContent(targetFrame)
+                ? ViewportSide.Target
+                : ViewportSide.Source;
+        RenderFrameSnapshot frame =
+            side == ViewportSide.Target
+                ? targetFrame
+                : sourceFrame;
+        if (RenderCameraFraming.TryFrame(frame, out RenderCamera camera))
+        {
+            _viewportCoordinator.UpdateCamera(side, camera);
+        }
     }
 
     /// <summary>
@@ -3722,7 +3896,8 @@ public sealed partial class MainWindowViewModel :
                     await ActivateAnimationAsync(
                         activeAnimation.Id,
                         beginPlayback: false,
-                        persistActivation: false);
+                        persistActivation: false,
+                        switchWorkspace: false);
                 }
                 else
                 {
@@ -3943,17 +4118,26 @@ public sealed partial class MainWindowViewModel :
         long previousIntegratedModelsRevision = _integratedModelsRevision;
         string? previousProjectPath = ProjectPath;
         IsBusy = true;
-        StatusText = $"Opening {Path.GetFileName(path)}…";
+        StatusText =
+            $"Loading project {Path.GetFileName(path)}…";
+        JobViewModel openJob = AddJob(
+            $"Open {Path.GetFileName(path)}",
+            "Read",
+            "Reading the project file");
         try
         {
             _pendingProjectAssets.Clear();
             DlraProject loaded = await Task.Run(
                 () => ProjectSerializer.Load(path));
+            openJob.Progress = 25.0;
+            openJob.Stage = "Restore models";
+            openJob.State = "Preparing the project's models";
             PreparedModelsWorkspaceRestore? preparedModels =
                 await PrepareModelsWorkspaceRestoreAsync(
                     loaded,
                     path,
                     CancellationToken.None);
+            openJob.Progress = 55.0;
             SetProject(
                 loaded,
                 markSaved: true,
@@ -3972,10 +4156,18 @@ public sealed partial class MainWindowViewModel :
                     _project.Assets,
                     _indexedAssetItems))
             {
+                openJob.Progress = 70.0;
+                openJob.Stage = "Activate animation";
+                openJob.State =
+                    $"Restoring {activeAnimation.Name}";
+
+                // SetProject has already restored the workspace saved with the
+                // project; activating the stored animation must not override it.
                 await ActivateAnimationAsync(
                     activeAnimation.Id,
                     beginPlayback: false,
-                    persistActivation: false);
+                    persistActivation: false,
+                    switchWorkspace: false);
                 if (_sourceAnimation is null)
                 {
                     throw new InvalidOperationException(
@@ -3988,8 +4180,14 @@ public sealed partial class MainWindowViewModel :
                 // available. If the document also has a saved retail target,
                 // LoadAssetCatalogAsync completes the exact target restore as
                 // soon as its fingerprint is available.
+                openJob.Progress = 70.0;
+                openJob.Stage = "Restore source";
+                openJob.State = "Loading the saved animation source";
                 await LoadActiveSourceAsync(path);
             }
+
+            openJob.Progress = 100.0;
+            openJob.Complete("Opened");
             if (activeAnimation is null || _sourceAnimation is not null)
             {
                 StatusText = $"Opened DL1 project {loaded.Name}";
@@ -4037,6 +4235,8 @@ public sealed partial class MainWindowViewModel :
         }
         finally
         {
+            openJob.Complete(
+                openJob.IsFinished ? openJob.State : "Failed");
             IsBusy = false;
         }
     }
@@ -7235,12 +7435,10 @@ public sealed partial class MainWindowViewModel :
             UnauthorizedAccessException)
         {
             job.Complete("Failed");
-            StatusText = "Animation script add failed";
-            AddDiagnostic(
-                "Error",
+            ReportOperationFailure(
                 "Animation library",
                 "Retail type-322 script was not added",
-                exception.Message);
+                exception);
         }
         finally
         {
@@ -8658,6 +8856,7 @@ public sealed partial class MainWindowViewModel :
             FrameCount = source.FrameCount,
             RootMotionMode = variant.RootMotionMode,
             RootBoneName = variant.RootBoneName,
+            AccumulatorBoneName = variant.AccumulatorBoneName,
             PreviewMotionAccumulationEnabled =
                 variant.PreviewMotionAccumulationEnabled,
             BoneMappings = variant.BoneMappings,
@@ -8749,7 +8948,8 @@ public sealed partial class MainWindowViewModel :
     private async Task ActivateAnimationAsync(
         Guid animationId,
         bool beginPlayback,
-        bool persistActivation = true)
+        bool persistActivation = true,
+        bool switchWorkspace = true)
     {
         AnimationRuntimeSnapshot previous =
             CaptureAnimationRuntimeSnapshot();
@@ -8758,7 +8958,8 @@ public sealed partial class MainWindowViewModel :
             await ActivateAnimationCoreAsync(
                 animationId,
                 beginPlayback,
-                persistActivation);
+                persistActivation,
+                switchWorkspace);
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -8784,7 +8985,8 @@ public sealed partial class MainWindowViewModel :
     private async Task ActivateAnimationCoreAsync(
         Guid animationId,
         bool beginPlayback,
-        bool persistActivation)
+        bool persistActivation,
+        bool switchWorkspace = true)
     {
         ProjectEmbeddedAnimationStackIdentity? embeddedStack = null;
         ProjectAnimation? animation = _project.Animations.FirstOrDefault(
@@ -9296,7 +9498,8 @@ public sealed partial class MainWindowViewModel :
                 prepared,
                 preparedProject,
                 beginPlayback,
-                persistActivation);
+                persistActivation,
+                switchWorkspace);
             job.Progress = 100.0;
             job.Complete("Complete");
             ClearAnimationOperationFailure();
@@ -9360,12 +9563,30 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        CommitAnimationRowName(selected);
+    }
+
+    /// <summary>
+    /// Moves a row's edited name into the project. The row view model is the
+    /// only place a typed name lives until this runs, so every rename route -
+    /// the Rename button and the in-place editor alike - has to come through
+    /// here. Anything else is discarded by the next library refresh.
+    /// </summary>
+    private bool CommitAnimationRowName(AnimationLibraryItemViewModel item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        string name = item.Name.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
         int index = -1;
         for (int candidateIndex = 0;
              candidateIndex < _project.Animations.Length;
              candidateIndex++)
         {
-            if (_project.Animations[candidateIndex].Id == selected.Id)
+            if (_project.Animations[candidateIndex].Id == item.Id)
             {
                 index = candidateIndex;
                 break;
@@ -9379,7 +9600,7 @@ public sealed partial class MainWindowViewModel :
                  candidateIndex++)
             {
                 if (_project.AnimationVariants[candidateIndex].Id ==
-                    selected.Id)
+                    item.Id)
                 {
                     variantIndex = candidateIndex;
                     break;
@@ -9388,32 +9609,41 @@ public sealed partial class MainWindowViewModel :
 
             if (variantIndex < 0 || string.Equals(
                     _project.AnimationVariants[variantIndex].Name,
-                    selected.Name,
+                    name,
                     StringComparison.Ordinal))
             {
-                return;
+                return false;
             }
 
-            CommitProject(_project with
-            {
-                AnimationVariants = _project.AnimationVariants.SetItem(
-                    variantIndex,
-                    _project.AnimationVariants[variantIndex] with
-                    {
-                        Name = selected.Name.Trim(),
-                    }),
-            });
-            StatusText =
-                $"Renamed animation to {selected.Name.Trim()}";
-            return;
+            ProjectAnimationVariant renamedVariant =
+                _project.AnimationVariants[variantIndex];
+            string? followingOutput = DeriveFollowingOutputName(
+                renamedVariant.OutputAnm2Name,
+                renamedVariant.Name,
+                _project.AnimationSources
+                    .FirstOrDefault(source =>
+                        source.Id == renamedVariant.SourceId)?.Name,
+                name);
+            CommitProject(WithUpdatedAnimationRow(
+                renamedVariant.Id,
+                current => current with
+                {
+                    Name = name,
+                    OutputAnm2Name = followingOutput ?? current.OutputAnm2Name,
+                },
+                current => current with { Name = name }));
+            StatusText = followingOutput is null
+                ? $"Renamed animation to {name}"
+                : $"Renamed animation to {name}; output ANM2 is now {followingOutput}";
+            return true;
         }
 
         if (string.Equals(
                 _project.Animations[index].Name,
-                selected.Name,
+                name,
                 StringComparison.Ordinal))
         {
-            return;
+            return false;
         }
 
         CommitProject(_project with
@@ -9422,10 +9652,11 @@ public sealed partial class MainWindowViewModel :
                 index,
                 _project.Animations[index] with
                 {
-                    Name = selected.Name.Trim(),
+                    Name = name,
                 }),
         });
-        StatusText = $"Renamed animation to {selected.Name.Trim()}";
+        StatusText = $"Renamed animation to {name}";
+        return true;
     }
 
     private void DuplicateSelectedAnimation()
@@ -10367,21 +10598,54 @@ public sealed partial class MainWindowViewModel :
              !row.IsReviewed) ||
          RequiredTargetBindReviews.Any(static row => !row.IsReviewed));
 
-    private bool CanExportAnimation()
+    private bool CanExportAnimation() =>
+        DescribeAnimationExportBlock() is null;
+
+    /// <summary>
+    /// Explains why the active animation cannot be exported, or null when it
+    /// can.
+    /// </summary>
+    /// <remarks>
+    /// Every branch here used to collapse into a bare <c>false</c>, which left
+    /// callers reporting "failed" with nothing an author could act on. The
+    /// reason is produced once and reused by both the command's CanExecute and
+    /// the export pipeline's error message.
+    /// </remarks>
+    private string? DescribeAnimationExportBlock()
     {
-        if (IsBusy ||
-            _sourceAnimation is not { } source ||
-            _targetRig is not { } target ||
-            GetActiveAnimation() is null)
+        if (IsBusy)
         {
-            return false;
+            return "another operation is still running";
         }
 
-        if (!TryValidateDl1DescriptorInventory(target, out _) ||
-            source.Rig.Id.StartsWith("custom:", StringComparison.Ordinal) &&
-            !TryValidateDl1DescriptorInventory(source.Rig, out _))
+        if (_sourceAnimation is not { } source)
         {
-            return false;
+            return "no source animation is loaded";
+        }
+
+        if (_targetRig is not { } target)
+        {
+            return "no target rig is loaded";
+        }
+
+        if (GetActiveAnimation() is null)
+        {
+            return "no animation is active";
+        }
+
+        if (!TryValidateDl1DescriptorInventory(
+                target,
+                out string targetDiagnostic))
+        {
+            return $"the target rig's DL1 descriptor inventory is invalid: {targetDiagnostic}";
+        }
+
+        if (source.Rig.Id.StartsWith("custom:", StringComparison.Ordinal) &&
+            !TryValidateDl1DescriptorInventory(
+                source.Rig,
+                out string sourceDiagnostic))
+        {
+            return $"the custom source rig's DL1 descriptor inventory is invalid: {sourceDiagnostic}";
         }
 
         if (HasDirectRigContract(
@@ -10389,12 +10653,35 @@ public sealed partial class MainWindowViewModel :
                 target,
                 _activeDirectRigBinding))
         {
-            return ActiveTargetBindingStatus == TargetBindingStatus.Direct;
+            return ActiveTargetBindingStatus == TargetBindingStatus.Direct
+                ? null
+                : $"the direct rig contract is not bound (binding state is {ActiveTargetBindingStatus})";
         }
 
-        return TryAnalyzeActiveMapping(
-                out RetargetMappingReviewReport? review) &&
-            review is { IsReady: true };
+        if (!TryAnalyzeActiveMapping(
+                out RetargetMappingReviewReport? review))
+        {
+            return "the retarget mapping could not be analyzed";
+        }
+
+        if (review is not { IsReady: true })
+        {
+            string blockers = review is null
+                ? string.Empty
+                : string.Join(
+                    "; ",
+                    review.Diagnostics
+                        .Where(static diagnostic =>
+                            diagnostic.Severity ==
+                            CompatibilityDiagnosticSeverity.Error)
+                        .Select(static diagnostic => diagnostic.Message)
+                        .Take(5));
+            return blockers.Length == 0
+                ? "the retarget mapping is not reviewed and ready"
+                : $"the retarget mapping is not ready: {blockers}";
+        }
+
+        return null;
     }
 
     private static bool TryValidateDl1DescriptorInventory(
@@ -11545,19 +11832,121 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        string? accumulatorBoneName = animation.AccumulatorBoneName;
+        if (mode == Dl1RootMotionMode.MotionAccumulator)
+        {
+            // Without a resolvable accumulator this mode used to silently
+            // flatten the clip, so nominate one up front rather than let the
+            // export discover it.
+            if (!TryResolveAccumulatorBoneName(
+                    animation,
+                    out accumulatorBoneName))
+            {
+                // Refused: leave the policy alone and put the combo box back.
+                _synchronizingProjectBindings = true;
+                try
+                {
+                    SelectedRootMotionMode = animation.RootMotionMode;
+                }
+                finally
+                {
+                    _synchronizingProjectBindings = false;
+                }
+
+                return;
+            }
+        }
+
         CommitProject(WithUpdatedActiveAnimation(
             _project,
             animation with
             {
                 RootMotionMode = mode,
+                AccumulatorBoneName = accumulatorBoneName,
+
+                // Accumulator policy and preview accumulation are different
+                // mechanisms - one writes the accumulator track on export, the
+                // other applies the source clip's auxiliary track to the
+                // preview - but an author choosing the policy wants to see the
+                // result, so turn the preview on with it.
+                PreviewMotionAccumulationEnabled =
+                    mode == Dl1RootMotionMode.MotionAccumulator ||
+                    animation.PreviewMotionAccumulationEnabled,
             },
             animationIndex));
+        OnPropertyChanged(nameof(PreviewMotionAccumulationEnabled));
         AddDiagnostic(
             "Info",
             "Root motion",
             $"Root policy changed to {mode}",
-            "Preview and export use the same authored root/helper policy.");
+            accumulatorBoneName is null
+                ? "Preview and export use the same authored root/helper policy."
+                : $"Preview and export use the same authored root/helper policy. Accumulated travel is written to '{accumulatorBoneName}'.");
         RefreshAnimationPreview();
+    }
+
+    /// <summary>
+    /// Resolves the bone that will receive accumulated motion, asking the
+    /// author when the rig does not advertise one.
+    /// </summary>
+    /// <returns>
+    /// False when the author declined, in which case the policy must not
+    /// change - accepting it would flatten the animation on export.
+    /// </returns>
+    private bool TryResolveAccumulatorBoneName(
+        ProjectAnimation animation,
+        out string? accumulatorBoneName)
+    {
+        accumulatorBoneName = animation.AccumulatorBoneName;
+        if (_targetRig is not { } targetRig)
+        {
+            return true;
+        }
+
+        if (accumulatorBoneName is not null &&
+            targetRig.GetBoneIndex(accumulatorBoneName) >= 0)
+        {
+            return true;
+        }
+
+        // A rig carries an accumulator only when it owns a node whose name
+        // hashes to 0xCCC3CDDF, which in practice means it is called
+        // "offsethelper". Most retargeting targets have no such node.
+        BoneDefinition? descriptorBone = targetRig.Bones.FirstOrDefault(
+            static bone => bone.DescriptorHash ==
+                Dl1RootMotionPolicy.MotionAccumulatorDescriptor);
+        if (descriptorBone is not null)
+        {
+            accumulatorBoneName = null;
+            return true;
+        }
+
+        ImmutableArray<string> candidates =
+        [
+            .. targetRig.Bones
+                .Where(bone => bone.Index != targetRig.GetBoneIndex(
+                    animation.RootBoneName ?? string.Empty))
+                .OrderByDescending(static bone => bone.ParentIndex < 0)
+                .ThenBy(static bone => bone.Name, StringComparer.OrdinalIgnoreCase)
+                .Select(static bone => bone.Name),
+        ];
+        string? chosen = _fileDialogs.SelectMotionAccumulatorBone(
+            targetRig.Id,
+            candidates);
+        if (string.IsNullOrWhiteSpace(chosen))
+        {
+            StatusText =
+                "Root policy unchanged; MotionAccumulator needs an accumulator bone";
+            AddDiagnostic(
+                "Warning",
+                "Root motion",
+                "MotionAccumulator was not applied",
+                $"Target rig '{targetRig.Id}' has no 0xCCC3CDDF accumulator track and no bone was chosen. Applying the policy would have discarded this animation's travel and heading.");
+            return false;
+        }
+
+        accumulatorBoneName = chosen;
+        return true;
     }
 
     private void UpdateRootBoneName(string? rootBoneName)
@@ -12896,11 +13285,18 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    /// <param name="switchWorkspace">
+    /// Whether activating may move the editor to the Playback (or Retarget)
+    /// workspace. Batch callers that activate a variant only to sample it -
+    /// export preparation and project restore - pass false so the author's
+    /// current workspace is left alone.
+    /// </param>
     private void CommitPreparedAnimationTransition(
         PreparedAnimationTransition prepared,
         DlraProject preparedProject,
         bool beginPlayback,
-        bool persistProject)
+        bool persistProject,
+        bool switchWorkspace = true)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(preparedProject);
@@ -12996,11 +13392,14 @@ public sealed partial class MainWindowViewModel :
         _editorSessionCoordinator.Reset(
             prepared.Animation.Id,
             frame: 0);
-        SetWorkspace(
-            prepared.BindingStatus == TargetBindingStatus.NeedsReview
-                ? EditorWorkspaceMode.RetargetEdit
-                : EditorWorkspaceMode.Animate,
-            preserveLegacyCutscene: false);
+        if (switchWorkspace)
+        {
+            SetWorkspace(
+                prepared.BindingStatus == TargetBindingStatus.NeedsReview
+                    ? EditorWorkspaceMode.RetargetEdit
+                    : EditorWorkspaceMode.Animate,
+                preserveLegacyCutscene: false);
+        }
         Timeline.CurrentFrame = 0;
         Timeline.IsPlaying = beginPlayback &&
             prepared.BindingStatus is
@@ -13443,6 +13842,7 @@ public sealed partial class MainWindowViewModel :
                 animation.MimicMappingFingerprint,
             RootMotionMode = animation.RootMotionMode,
             RootBoneName = animation.RootBoneName,
+            AccumulatorBoneName = animation.AccumulatorBoneName,
             PreviewMotionAccumulationEnabled =
                 animation.PreviewMotionAccumulationEnabled,
             BoneMappings = animation.BoneMappings,
@@ -14065,7 +14465,11 @@ public sealed partial class MainWindowViewModel :
                 animation.Name,
                 bindingStatus,
                 showVariantGroupHeader:
-                    previousGroupId != group.Key));
+                    previousGroupId != group.Key,
+                rootMotionMode: animation.RootMotionMode,
+                rootBoneName: animation.RootBoneName,
+                rootBoneCandidates: RootBoneCandidatesForSignature(
+                    animation.TargetRigSignature)));
             previousGroupId = group.Key;
         }
 
@@ -14242,11 +14646,44 @@ public sealed partial class MainWindowViewModel :
                     effectiveScripts: FormatEffectiveAnimationLibraryImports(
                         library),
                     outputName: variant.OutputAnm2Name ?? "Unassigned",
-                    includeInExport: variant.IncludeInPackage));
+                    includeInExport: variant.IncludeInPackage,
+                    rootMotionMode: variant.RootMotionMode,
+                    rootBoneName: variant.RootBoneName,
+                    rootBoneCandidates: RootBoneCandidatesFor(variant)));
                 first = false;
             }
         }
     }
+
+    /// <summary>
+    /// Root-bone choices for one row, or an empty list when that row's
+    /// skeleton is not the one currently loaded.
+    /// </summary>
+    /// <remarks>
+    /// RootBoneCandidates describes the active target rig. Offering it to every
+    /// row let an author pick a bone that does not exist on that row's
+    /// skeleton, which saved cleanly and only failed later at export. A row on
+    /// a different rig therefore shows its stored value and nothing to choose
+    /// from until it is activated.
+    /// </remarks>
+    private IReadOnlyList<string> RootBoneCandidatesFor(
+        ProjectAnimationVariant variant) =>
+        RootBoneCandidatesForSignature(variant.TargetRigSignature);
+
+    private IReadOnlyList<string> RootBoneCandidatesForSignature(
+        string? targetRigSignature) =>
+        IsActiveTargetRigSignature(targetRigSignature)
+            ? [.. RootBoneCandidates]
+            : [];
+
+    private bool IsActiveTargetRigSignature(string? targetRigSignature) =>
+        _targetRig is not null &&
+        !string.IsNullOrWhiteSpace(targetRigSignature) &&
+        GetActiveAnimation() is { } active &&
+        string.Equals(
+            active.TargetRigSignature,
+            targetRigSignature,
+            StringComparison.OrdinalIgnoreCase);
 
     private ProjectAnimationLibrary? ResolveAnimationLibrary(Guid? id) =>
         id is { } libraryId
@@ -14311,16 +14748,233 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         PropertyChangedEventArgs args)
     {
-        if (args.PropertyName !=
-                nameof(AnimationLibraryItemViewModel.IncludeInPackage) ||
-            sender is not AnimationLibraryItemViewModel
-            {
-                IsSourceOnly: false,
-            } item)
+        if (sender is not AnimationLibraryItemViewModel item ||
+            _suppressAnimationRowCommit)
         {
             return;
         }
 
+        // Committing rebuilds AnimationLibrary, which discards the very row
+        // raising this event, so the guard has to span the whole commit.
+        _suppressAnimationRowCommit = true;
+        try
+        {
+            if (args.PropertyName ==
+                nameof(AnimationLibraryItemViewModel.Name))
+            {
+                CommitAnimationRowName(item);
+                return;
+            }
+
+            if (args.PropertyName ==
+                    nameof(AnimationLibraryItemViewModel.IncludeInPackage) &&
+                !item.IsSourceOnly)
+            {
+                CommitAnimationRowIncludeInPackage(item);
+                return;
+            }
+
+            if (args.PropertyName ==
+                nameof(AnimationLibraryItemViewModel.RootMotionMode))
+            {
+                CommitAnimationRowRootMotionMode(item);
+                return;
+            }
+
+            if (args.PropertyName ==
+                nameof(AnimationLibraryItemViewModel.RootBoneName))
+            {
+                CommitAnimationRowRootBoneName(item);
+            }
+        }
+        finally
+        {
+            _suppressAnimationRowCommit = false;
+        }
+    }
+
+    /// <summary>
+    /// Applies a row edit to the durable variant and, when one exists, to the
+    /// compatibility animation row that mirrors it.
+    /// </summary>
+    /// <remarks>
+    /// Every commit runs SynchronizeSchema2FromCompatibilityAnimations, and
+    /// UpdateSchema2Variant copies Name, RootMotionMode, RootBoneName and the
+    /// accumulator fields from the compatibility row back onto the variant. So
+    /// editing only the variant is silently reverted for any animation that
+    /// owns a compatibility row - in practice the active one. Writing both
+    /// keeps the two representations agreeing whichever way the sync runs.
+    /// </remarks>
+    private DlraProject WithUpdatedAnimationRow(
+        Guid rowId,
+        Func<ProjectAnimationVariant, ProjectAnimationVariant> updateVariant,
+        Func<ProjectAnimation, ProjectAnimation> updateAnimation)
+    {
+        DlraProject project = _project;
+        int variantIndex = FindAnimationVariantIndex(rowId);
+        if (variantIndex >= 0)
+        {
+            project = project with
+            {
+                AnimationVariants = project.AnimationVariants.SetItem(
+                    variantIndex,
+                    updateVariant(project.AnimationVariants[variantIndex])),
+            };
+        }
+
+        for (int index = 0; index < project.Animations.Length; index++)
+        {
+            if (project.Animations[index].Id != rowId)
+            {
+                continue;
+            }
+
+            project = project with
+            {
+                Animations = project.Animations.SetItem(
+                    index,
+                    updateAnimation(project.Animations[index])),
+            };
+            break;
+        }
+
+        return project;
+    }
+
+    /// <summary>
+    /// Commits a row's root policy without activating it.
+    /// </summary>
+    /// <remarks>
+    /// The toolbar equivalents act on the active animation only, so comparing
+    /// or changing several animations meant activating each one in turn. These
+    /// edit the named variant in place.
+    /// </remarks>
+    private void CommitAnimationRowRootMotionMode(
+        AnimationLibraryItemViewModel item)
+    {
+        int index = FindAnimationVariantIndex(item.Id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        ProjectAnimationVariant variant = _project.AnimationVariants[index];
+        if (variant.RootMotionMode == item.RootMotionMode)
+        {
+            return;
+        }
+
+        if (!IsActiveTargetRigSignature(variant.TargetRigSignature))
+        {
+            RejectExportRowEdit(
+                "Root policy",
+                $"'{variant.Name}' targets a different skeleton from the active animation, so its root policy cannot be validated here. Activate that row first.",
+                () => item.RevertRootMotionMode(variant.RootMotionMode));
+            return;
+        }
+
+        string? accumulatorBoneName = variant.AccumulatorBoneName;
+        if (item.RootMotionMode == Dl1RootMotionMode.MotionAccumulator &&
+            !TryResolveAccumulatorBoneName(
+                ProjectAnimationVariantAsAnimation(variant),
+                out accumulatorBoneName))
+        {
+            item.RevertRootMotionMode(variant.RootMotionMode);
+            return;
+        }
+
+        Dl1RootMotionMode mode = item.RootMotionMode;
+        bool previewAccumulation =
+            mode == Dl1RootMotionMode.MotionAccumulator ||
+            variant.PreviewMotionAccumulationEnabled;
+        DlraProject updated = WithUpdatedAnimationRow(
+            item.Id,
+            current => current with
+            {
+                RootMotionMode = mode,
+                AccumulatorBoneName = accumulatorBoneName,
+                PreviewMotionAccumulationEnabled = previewAccumulation,
+            },
+            current => current with
+            {
+                RootMotionMode = mode,
+                AccumulatorBoneName = accumulatorBoneName,
+                PreviewMotionAccumulationEnabled = previewAccumulation,
+            });
+        if (TryCommitExportRowProject(
+                updated,
+                "Root policy",
+                () => item.RevertRootMotionMode(variant.RootMotionMode)))
+        {
+            StatusText =
+                $"{variant.Name} ({item.TargetModel}) root policy set to {mode}";
+            OnPropertyChanged(nameof(PreviewMotionAccumulationEnabled));
+            RefreshProjectBindings();
+        }
+    }
+
+    private void CommitAnimationRowRootBoneName(
+        AnimationLibraryItemViewModel item)
+    {
+        int index = FindAnimationVariantIndex(item.Id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        ProjectAnimationVariant variant = _project.AnimationVariants[index];
+        if (string.Equals(
+                variant.RootBoneName,
+                item.RootBoneName,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (!IsActiveTargetRigSignature(variant.TargetRigSignature))
+        {
+            RejectExportRowEdit(
+                "Root bone",
+                $"'{variant.Name}' targets a different skeleton from the active animation, so its root bone cannot be validated here. Activate that row first.",
+                () => item.RevertRootBoneName(variant.RootBoneName));
+            return;
+        }
+
+        string? rootBoneName = item.RootBoneName;
+        DlraProject updated = WithUpdatedAnimationRow(
+            item.Id,
+            current => current with { RootBoneName = rootBoneName },
+            current => current with { RootBoneName = rootBoneName });
+        if (TryCommitExportRowProject(
+                updated,
+                "Root bone",
+                () => item.RevertRootBoneName(variant.RootBoneName)))
+        {
+            StatusText =
+                $"{variant.Name} ({item.TargetModel}) root bone set to {rootBoneName}";
+            RefreshProjectBindings();
+        }
+    }
+
+    /// <summary>
+    /// Minimal projection so the accumulator prompt can read a variant's
+    /// current root settings without the variant being active.
+    /// </summary>
+    private static ProjectAnimation ProjectAnimationVariantAsAnimation(
+        ProjectAnimationVariant variant) =>
+        new()
+        {
+            Id = variant.Id,
+            Name = variant.Name,
+            SourceAssetId = variant.SourceId,
+            RootMotionMode = variant.RootMotionMode,
+            RootBoneName = variant.RootBoneName,
+            AccumulatorBoneName = variant.AccumulatorBoneName,
+        };
+
+    private void CommitAnimationRowIncludeInPackage(
+        AnimationLibraryItemViewModel item)
+    {
         int index = -1;
         for (int candidate = 0;
              candidate < _project.AnimationVariants.Length;
@@ -14444,6 +15098,20 @@ public sealed partial class MainWindowViewModel :
             .ToDictionary(static model => model.Id);
         Dictionary<Guid, ProjectAnimationSource> sources =
             _project.AnimationSources.ToDictionary(static source => source.Id);
+
+        // A combined RPack keys type-320 resources by name alone, so two rows
+        // sharing an output name cannot both be packaged. Finding that at
+        // export time meant the reason only appeared after a failed run.
+        HashSet<string> duplicateOutputStems = _project.AnimationVariants
+            .Select(static variant => Path.GetFileNameWithoutExtension(
+                variant.OutputAnm2Name ?? string.Empty))
+            .Where(static stem => !string.IsNullOrWhiteSpace(stem))
+            .GroupBy(static stem => stem, StringComparer.OrdinalIgnoreCase)
+            .Where(static group => group.Count() > 1)
+            .Select(static group => group.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        HasDuplicateExportOutputNames = duplicateOutputStems.Count > 0;
+
         foreach (IGrouping<Guid, ProjectAnimationVariant> group in
                  _project.AnimationVariants
                      .GroupBy(static variant => variant.TargetModelId)
@@ -14530,11 +15198,17 @@ public sealed partial class MainWindowViewModel :
                     hasFacialSource,
                     directFacial,
                     variant.MorphBindings);
+                bool outputNameIsUnique = !duplicateOutputStems.Contains(
+                    Path.GetFileNameWithoutExtension(
+                        variant.OutputAnm2Name ?? string.Empty));
                 bool ready = sourceReady &&
                     descriptorReady &&
                     boneReady &&
-                    faceReady;
-                string readiness = !sourceReady
+                    faceReady &&
+                    outputNameIsUnique;
+                string readiness = !outputNameIsUnique
+                    ? $"Output ANM2 '{variant.OutputAnm2Name}' is used by another row; give each one its own name"
+                    : !sourceReady
                     ? "Source fingerprint or stack identity requires rebind"
                     : model is null
                         ? "Target model missing"
@@ -14592,7 +15266,9 @@ public sealed partial class MainWindowViewModel :
                             : "Direct — owning model"
                         : boneReady
                             ? "Reviewed retarget"
-                            : "Draft retarget");
+                            : "Draft retarget",
+                    scriptMode: DescribeAnimationLibraryMode(library),
+                    animationLibraryId: library?.Id);
                 exportRow.PropertyChanged +=
                     OnExportVariantSelectionChanged;
                 variants.Add(exportRow);
@@ -14605,6 +15281,7 @@ public sealed partial class MainWindowViewModel :
                 variants));
         }
 
+        RefreshAnimationScriptLibraries();
         RefreshActiveExportReadiness();
         OnPropertyChanged(nameof(ExportSelectionSummary));
         ApplyExportSelectionCommand.NotifyCanExecuteChanged();
@@ -14616,16 +15293,1039 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         PropertyChangedEventArgs args)
     {
-        if (args.PropertyName !=
-            nameof(ExportVariantSelectionViewModel.IsSelected))
+        if (sender is not ExportVariantSelectionViewModel row)
         {
             return;
         }
 
-        OnPropertyChanged(nameof(ExportSelectionSummary));
-        ExportCheckedPortableCommand.NotifyCanExecuteChanged();
-        DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
-        DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
+        if (args.PropertyName ==
+            nameof(ExportVariantSelectionViewModel.IsSelected))
+        {
+            OnPropertyChanged(nameof(ExportSelectionSummary));
+            ExportCheckedPortableCommand.NotifyCanExecuteChanged();
+            DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
+            DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
+            return;
+        }
+
+        if (_suppressExportRowCommit)
+        {
+            return;
+        }
+
+        // A commit rebuilds ExportVariants, discarding the row raising this
+        // event, so the guard spans the whole commit exactly as it does for
+        // the animation library rows.
+        _suppressExportRowCommit = true;
+        try
+        {
+            switch (args.PropertyName)
+            {
+                case nameof(ExportVariantSelectionViewModel.Name):
+                    CommitExportRowName(row);
+                    break;
+                case nameof(ExportVariantSelectionViewModel.OutputName):
+                    CommitExportRowOutputName(row);
+                    break;
+                case nameof(ExportVariantSelectionViewModel.PrimaryScript):
+                    CommitExportRowPrimaryScript(row);
+                    break;
+                default:
+                    break;
+            }
+        }
+        finally
+        {
+            _suppressExportRowCommit = false;
+        }
+    }
+
+    /// <summary>
+    /// Stock animation scripts offered as the base a project script appends
+    /// to. The names are exact retail data read out of the shipped animscript
+    /// source tree; which one belongs to a given model is not, so the
+    /// preselection is only ever a suggestion.
+    /// </summary>
+    public ObservableCollection<string> TargetAnimationScriptOptions { get; } =
+        [];
+
+    public ExportVariantSelectionViewModel? SelectedExportVariant
+    {
+        get => _selectedExportVariant;
+        set
+        {
+            if (!SetProperty(ref _selectedExportVariant, value))
+            {
+                return;
+            }
+
+            RefreshAnimationScriptTargetPanel();
+        }
+    }
+
+    public string? SelectedTargetAnimationScript
+    {
+        get => _selectedTargetAnimationScript;
+        set
+        {
+            if (!SetProperty(ref _selectedTargetAnimationScript, value))
+            {
+                return;
+            }
+
+            _dlcOverrideScriptName = BuildDlcOverrideName(value);
+            OnPropertyChanged(nameof(DlcOverrideScriptName));
+            OnPropertyChanged(nameof(AnimationScriptTargetSummary));
+            ApplyAnimationScriptTargetCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    /// <summary>
+    /// When set, the project script is named as a DLC append of the selected
+    /// stock script. The append leaves the retail script untouched; clearing
+    /// this keeps whatever name the script already has.
+    /// </summary>
+    public bool IsDlcOverrideEnabled
+    {
+        get => _isDlcOverrideEnabled;
+        set
+        {
+            if (!SetProperty(ref _isDlcOverrideEnabled, value))
+            {
+                return;
+            }
+
+            _dlcOverrideScriptName =
+                BuildDlcOverrideName(_selectedTargetAnimationScript);
+            OnPropertyChanged(nameof(DlcOverrideScriptName));
+            OnPropertyChanged(nameof(AnimationScriptTargetSummary));
+            ApplyAnimationScriptTargetCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    public string DlcOverrideScriptName
+    {
+        get => _dlcOverrideScriptName;
+        set
+        {
+            if (SetProperty(
+                    ref _dlcOverrideScriptName,
+                    value ?? string.Empty))
+            {
+                OnPropertyChanged(nameof(AnimationScriptTargetSummary));
+                ApplyAnimationScriptTargetCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    /// <summary>
+    /// Explains what applying the panel will produce, reusing the wording the
+    /// structured library editor already uses for the DLC convention.
+    /// </summary>
+    public string AnimationScriptTargetSummary
+    {
+        get
+        {
+            if (TargetAnimationScriptOptions.Count == 0)
+            {
+                return "No Dying Light installation is indexed, so the stock animation scripts are unavailable. Type the script name directly in the Primary SCR column.";
+            }
+
+            if (SelectedExportVariant is null)
+            {
+                return "Select a row to choose the stock animation script it appends to.";
+            }
+
+            if (string.IsNullOrWhiteSpace(_selectedTargetAnimationScript))
+            {
+                return "Choose the stock animation script this animation appends to.";
+            }
+
+            if (!IsDlcOverrideEnabled)
+            {
+                return $"The project script keeps its own name and does not append to {_selectedTargetAnimationScript}.";
+            }
+
+            string name = _dlcOverrideScriptName.Trim();
+            if (!ProjectAnimationLibrary.TryGetDlcNumber(
+                    name,
+                    out int dlcNumber))
+            {
+                return "Invalid DLC suffix. Use <base>_dlc<NN>, for example anims_man_all_dlc60.";
+            }
+
+            string range = dlcNumber < 60
+                ? $" dlc{dlcNumber.ToString(CultureInfo.InvariantCulture)} is below the conventional 60+ range."
+                : string.Empty;
+            return $"Renames the project script to {name}, a DLC append alongside stock {_selectedTargetAnimationScript}.{range}";
+        }
+    }
+
+    private void RefreshAnimationScriptTargetPanel()
+    {
+        EnsureRetailAnimationScriptOptions();
+        ProjectAnimationLibrary? library = ResolveAnimationLibrary(
+            SelectedExportVariant?.AnimationLibraryId);
+        string? target = library is null
+            ? null
+            : ResolveDlcBaseName(library.ResourceName);
+        target ??= SuggestTargetAnimationScript(SelectedExportVariant);
+        _selectedTargetAnimationScript = target;
+        _isDlcOverrideEnabled = library is null ||
+            ProjectAnimationLibrary.TryGetDlcNumber(
+                library.ResourceName,
+                out _);
+        _dlcOverrideScriptName = BuildDlcOverrideName(target);
+        OnPropertyChanged(nameof(SelectedTargetAnimationScript));
+        OnPropertyChanged(nameof(IsDlcOverrideEnabled));
+        OnPropertyChanged(nameof(DlcOverrideScriptName));
+        OnPropertyChanged(nameof(AnimationScriptTargetSummary));
+        ApplyAnimationScriptTargetCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Proposes a stock script from the target model's classified rig family.
+    /// This is a heuristic: retail ships no artifact binding a model to a
+    /// script, so the author always confirms it.
+    /// </summary>
+    private string? SuggestTargetAnimationScript(
+        ExportVariantSelectionViewModel? row)
+    {
+        if (row is null || _retailAnimationScripts is null)
+        {
+            return null;
+        }
+
+        Dl1AnimationScriptSuggestion? suggestion =
+            Dl1AnimationScriptFamilyDefaults.SuggestFromModelName(
+                row.TargetModel);
+        return suggestion is not null &&
+            _retailAnimationScripts.Contains(suggestion.ResourceName)
+            ? suggestion.ResourceName
+            : null;
+    }
+
+    private static string? ResolveDlcBaseName(string resourceName)
+    {
+        if (!ProjectAnimationLibrary.TryGetDlcNumber(resourceName, out _))
+        {
+            return null;
+        }
+
+        int marker = resourceName.LastIndexOf(
+            "_dlc",
+            StringComparison.OrdinalIgnoreCase);
+        return marker > 0 ? resourceName[..marker] : null;
+    }
+
+    private string BuildDlcOverrideName(string? target)
+    {
+        if (!_isDlcOverrideEnabled || string.IsNullOrWhiteSpace(target))
+        {
+            return string.Empty;
+        }
+
+        return $"{target.Trim()}_dlc{AllocateDlcNumber(target.Trim()).ToString(CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// Reuses the number already in use for this base when one exists, so
+    /// reselecting the same target does not silently renumber a script; new
+    /// bases start at the conventional 60.
+    /// </summary>
+    private int AllocateDlcNumber(string target)
+    {
+        Guid? current = SelectedExportVariant?.AnimationLibraryId;
+        HashSet<int> used = [];
+        foreach (ProjectAnimationLibrary library in _project.AnimationLibraries)
+        {
+            if (ResolveDlcBaseName(library.ResourceName) is not { } baseName ||
+                !string.Equals(
+                    baseName,
+                    target,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !ProjectAnimationLibrary.TryGetDlcNumber(
+                    library.ResourceName,
+                    out int number))
+            {
+                continue;
+            }
+
+            if (library.Id == current)
+            {
+                return number;
+            }
+
+            used.Add(number);
+        }
+
+        int candidate = 60;
+        while (used.Contains(candidate) && candidate < 1000)
+        {
+            candidate++;
+        }
+
+        return candidate;
+    }
+
+    private void EnsureRetailAnimationScriptOptions()
+    {
+        if (_retailAnimationScriptsAttempted)
+        {
+            return;
+        }
+
+        _retailAnimationScriptsAttempted = true;
+        Dl1InstallLocation? install = _assetWorkspace.Install ??
+            SteamInstallDiscovery.Discover()
+                .FirstOrDefault(static candidate => candidate.IsValid);
+        if (install is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _retailAnimationScripts =
+                Dl1RetailAnimationScriptIndex.Build(install.InstallPath);
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+            InvalidDataException or
+            UnauthorizedAccessException or
+            DirectoryNotFoundException)
+        {
+            AddDiagnostic(
+                "Warning",
+                "Export",
+                "Stock animation scripts were not indexed",
+                exception.Message);
+            return;
+        }
+
+        TargetAnimationScriptOptions.Clear();
+        foreach (Dl1RetailAnimationScript script in
+                 Dl1AnimationScriptFamilyDefaults.OrderForPicker(
+                     _retailAnimationScripts))
+        {
+            TargetAnimationScriptOptions.Add(script.ResourceName);
+        }
+    }
+
+    private bool CanApplyAnimationScriptTarget() =>
+        !IsBusy &&
+        SelectedExportVariant?.AnimationLibraryId is not null &&
+        IsDlcOverrideEnabled &&
+        ProjectAnimationLibrary.TryGetDlcNumber(
+            _dlcOverrideScriptName.Trim(),
+            out _);
+
+    private void ApplyAnimationScriptTarget()
+    {
+        if (!CanApplyAnimationScriptTarget() ||
+            SelectedExportVariant is not { } row)
+        {
+            return;
+        }
+
+        _suppressExportRowCommit = true;
+        try
+        {
+            row.PrimaryScript = _dlcOverrideScriptName.Trim();
+        }
+        finally
+        {
+            _suppressExportRowCommit = false;
+        }
+
+        CommitExportRowPrimaryScript(row);
+    }
+
+    /// <summary>
+    /// Animation scripts that can be edited as raw source.
+    /// </summary>
+    public ObservableCollection<AnimationScriptEditorItemViewModel>
+        AnimationScriptLibraries { get; } = [];
+
+    public AnimationScriptEditorItemViewModel? SelectedScriptLibrary
+    {
+        get => _selectedScriptLibrary;
+        set
+        {
+            if (SetProperty(ref _selectedScriptLibrary, value))
+            {
+                LoadAnimationScriptText();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The selected script's source. Editing it switches the library to
+    /// authored source; reverting clears it back to generated.
+    /// </summary>
+    public string AnimationScriptText
+    {
+        get => _animationScriptText;
+        set
+        {
+            if (!SetProperty(
+                    ref _animationScriptText,
+                    value ?? string.Empty) ||
+                _suppressAnimationScriptTextChange)
+            {
+                return;
+            }
+
+            OnPropertyChanged(nameof(AnimationScriptStateSummary));
+            CommitAnimationScriptTextCommand.NotifyCanExecuteChanged();
+            RevertAnimationScriptTextCommand.NotifyCanExecuteChanged();
+        }
+    }
+
+    public string AnimationScriptStateSummary
+    {
+        get
+        {
+            if (SelectedScriptLibrary is not { } selected)
+            {
+                return AnimationScriptLibraries.Count == 0
+                    ? "This project has no animation scripts yet. Assign an animation to a script first."
+                    : "Select an animation script to edit its source.";
+            }
+
+            if (!selected.IsAuthored)
+            {
+                return $"{selected.ResourceName}.scr is generated from the sequence inventory. Editing and saving switches it to authored source, which you own from then on.";
+            }
+
+            bool hasEvents;
+            try
+            {
+                hasEvents = AnimationScriptSourceParser.ContainsEventBlocks(
+                    _animationScriptText);
+            }
+            catch (InvalidDataException exception)
+            {
+                return $"{selected.ResourceName}.scr is authored, but does not parse: {exception.Message}";
+            }
+
+            return hasEvents
+                ? $"{selected.ResourceName}.scr is authored and declares event blocks. The loose .scr keeps them for Developer Tools and the official compiler; an RPack export cannot carry them and will say so."
+                : $"{selected.ResourceName}.scr is authored. Revert to generated to hand it back to the sequence inventory.";
+        }
+    }
+
+    private void RefreshAnimationScriptLibraries()
+    {
+        Guid? selectedId = SelectedScriptLibrary?.Id;
+        AnimationScriptLibraries.Clear();
+        foreach (ProjectAnimationLibrary library in _project.AnimationLibraries
+                     .OrderBy(
+                         static library => library.ResourceName,
+                         StringComparer.OrdinalIgnoreCase))
+        {
+            AnimationScriptLibraries.Add(
+                new AnimationScriptEditorItemViewModel(
+                    library.Id,
+                    library.ResourceName,
+                    library.DisplayName,
+                    library.AuthoredScriptText is not null));
+        }
+
+        _selectedScriptLibrary = AnimationScriptLibraries.FirstOrDefault(
+                item => item.Id == selectedId) ??
+            AnimationScriptLibraries.FirstOrDefault();
+        OnPropertyChanged(nameof(SelectedScriptLibrary));
+        LoadAnimationScriptText();
+    }
+
+    private void LoadAnimationScriptText()
+    {
+        string text = string.Empty;
+        if (SelectedScriptLibrary is { } selected &&
+            ResolveAnimationLibrary(selected.Id) is { } library)
+        {
+            text = library.AuthoredScriptText ??
+                BuildGeneratedAnimationScriptText(library);
+        }
+
+        _suppressAnimationScriptTextChange = true;
+        try
+        {
+            AnimationScriptText = text;
+        }
+        finally
+        {
+            _suppressAnimationScriptTextChange = false;
+        }
+
+        OnPropertyChanged(nameof(AnimationScriptStateSummary));
+        CommitAnimationScriptTextCommand.NotifyCanExecuteChanged();
+        RevertAnimationScriptTextCommand.NotifyCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Renders what the generator would emit for a library, so an author
+    /// starts from the real script rather than a blank page.
+    /// </summary>
+    private string BuildGeneratedAnimationScriptText(
+        ProjectAnimationLibrary library)
+    {
+        Dictionary<Guid, ProjectAnimationLibrary> libraries =
+            _project.AnimationLibraries.ToDictionary(
+                static candidate => candidate.Id);
+        List<AnimationScrSequence> sequences = [];
+        foreach (ProjectAnimationVariant variant in _project.AnimationVariants
+                     .Where(variant =>
+                         variant.OwningAnimationLibraryId == library.Id)
+                     .OrderBy(
+                         static variant => variant.Name,
+                         StringComparer.OrdinalIgnoreCase))
+        {
+            ProjectAnimationSource? source = _project.AnimationSources
+                .FirstOrDefault(candidate => candidate.Id == variant.SourceId);
+            if (source is null ||
+                string.IsNullOrWhiteSpace(variant.OutputAnm2Name))
+            {
+                continue;
+            }
+
+            sequences.Add(new AnimationScrSequence(
+                Dl1SourceModelWriter.SanitizeName(variant.Name, 63),
+                variant.OutputAnm2Name,
+                0.0f,
+                Math.Max(0L, source.FrameCount - 1),
+                (float)source.FrameRate.FramesPerSecond));
+        }
+
+        return BuildLooseProjectAnimationScript(
+            library,
+            libraries,
+            sequences);
+    }
+
+    private bool CanCommitAnimationScriptText() =>
+        !IsBusy &&
+        SelectedScriptLibrary is not null &&
+        !string.IsNullOrWhiteSpace(_animationScriptText);
+
+    private void CommitAnimationScriptText()
+    {
+        if (!CanCommitAnimationScriptText() ||
+            SelectedScriptLibrary is not { } selected)
+        {
+            return;
+        }
+
+        int index = FindAnimationLibraryIndex(selected.Id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        string text = _animationScriptText;
+        try
+        {
+            // Parse before storing so a broken edit is caught here rather
+            // than at deployment, where it would abort a staged commit.
+            _ = AnimationScriptSourceParser.ParseSeqTracks(text);
+        }
+        catch (InvalidDataException exception)
+        {
+            StatusText = "Animation script was not saved";
+            AddDiagnostic(
+                "Error",
+                "Export",
+                "Authored animation script rejected",
+                exception.Message);
+            return;
+        }
+
+        DlraProject updated = _project with
+        {
+            AnimationLibraries = _project.AnimationLibraries.SetItem(
+                index,
+                _project.AnimationLibraries[index] with
+                {
+                    AuthoredScriptText = text,
+                }),
+        };
+        try
+        {
+            updated.Validate();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException)
+        {
+            StatusText = "Animation script was not saved";
+            AddDiagnostic(
+                "Error",
+                "Export",
+                "Authored animation script rejected",
+                exception.Message);
+            return;
+        }
+
+        CommitProject(updated);
+        StatusText = $"Saved authored {selected.ResourceName}.scr";
+    }
+
+    private bool CanRevertAnimationScriptText() =>
+        !IsBusy &&
+        SelectedScriptLibrary is { IsAuthored: true };
+
+    private void RevertAnimationScriptText()
+    {
+        if (!CanRevertAnimationScriptText() ||
+            SelectedScriptLibrary is not { } selected)
+        {
+            return;
+        }
+
+        int index = FindAnimationLibraryIndex(selected.Id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        CommitProject(_project with
+        {
+            AnimationLibraries = _project.AnimationLibraries.SetItem(
+                index,
+                _project.AnimationLibraries[index] with
+                {
+                    AuthoredScriptText = null,
+                }),
+        });
+        StatusText =
+            $"{selected.ResourceName}.scr is generated from the sequence inventory again";
+    }
+
+    private int FindAnimationLibraryIndex(Guid libraryId)
+    {
+        for (int candidate = 0;
+             candidate < _project.AnimationLibraries.Length;
+             candidate++)
+        {
+            if (_project.AnimationLibraries[candidate].Id == libraryId)
+            {
+                return candidate;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// True when two animations would be packaged under the same type-320
+    /// name, which no single RPack can hold.
+    /// </summary>
+    public bool HasDuplicateExportOutputNames
+    {
+        get => _hasDuplicateExportOutputNames;
+        private set
+        {
+            if (SetProperty(ref _hasDuplicateExportOutputNames, value))
+            {
+                ResolveDuplicateExportOutputNamesCommand
+                    .NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    private bool CanResolveDuplicateExportOutputNames() =>
+        !IsBusy && HasDuplicateExportOutputNames;
+
+    /// <summary>
+    /// Gives every colliding row its own output name, qualified by its target
+    /// model.
+    /// </summary>
+    /// <remarks>
+    /// Export refuses to rename an assigned identity behind the author's back,
+    /// and rightly so. This is the explicit version of that: the author asks
+    /// for it, the first row of each clash keeps its name, and every other row
+    /// gains its target model - the usual reason the names collided.
+    /// </remarks>
+    private void ResolveDuplicateExportOutputNames()
+    {
+        if (!CanResolveDuplicateExportOutputNames())
+        {
+            return;
+        }
+
+        HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
+        ImmutableArray<ProjectAnimationVariant>.Builder variants =
+            _project.AnimationVariants.ToBuilder();
+        Dictionary<Guid, string> modelNames = _project.Models.ToDictionary(
+            static model => model.Id,
+            static model => model.Name);
+        var renamed = new List<string>();
+        for (int index = 0; index < variants.Count; index++)
+        {
+            ProjectAnimationVariant variant = variants[index];
+            string current = variant.OutputAnm2Name ?? string.Empty;
+            string stem = Path.GetFileNameWithoutExtension(current);
+            if (stem.Length == 0 || used.Add(stem))
+            {
+                continue;
+            }
+
+            string qualifier = modelNames.GetValueOrDefault(
+                variant.TargetModelId,
+                variant.Id.ToString("N")[..8]);
+            string candidate = Dl1SourceModelWriter.SanitizeName(
+                $"{stem}_{qualifier}",
+                63);
+            int ordinal = 2;
+            while (!used.Add(candidate))
+            {
+                candidate = Dl1SourceModelWriter.SanitizeName(
+                    $"{stem}_{qualifier}_{ordinal++}",
+                    63);
+            }
+
+            variants[index] = variant with
+            {
+                OutputAnm2Name = candidate + ".anm2",
+            };
+            renamed.Add($"{variant.Name} → {candidate}.anm2");
+        }
+
+        if (renamed.Count == 0)
+        {
+            return;
+        }
+
+        DlraProject updated = _project with
+        {
+            AnimationVariants = variants.ToImmutable(),
+        };
+        try
+        {
+            updated.Validate();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException)
+        {
+            ReportOperationFailure(
+                "Export",
+                "Duplicate output names were not resolved",
+                exception);
+            return;
+        }
+
+        CommitProject(updated);
+        StatusText =
+            $"Renamed {renamed.Count:N0} duplicate output name(s)";
+        AddDiagnostic(
+            "Info",
+            "Export",
+            "Duplicate output ANM2 names resolved",
+            string.Join("\n", renamed));
+    }
+
+    /// <summary>
+    /// Produces the output name a rename should adopt, or null when the
+    /// author has deliberately chosen one.
+    /// </summary>
+    /// <remarks>
+    /// The Output ANM2 column is what the exported type-320 resource is
+    /// called, and it is allocated once from whatever the clip was named on
+    /// import - for a Mixamo FBX, "mixamo_com". Renaming the animation used to
+    /// leave that behind, so two rows retargeted from one source kept the same
+    /// output name and the pack refused them both.
+    ///
+    /// A name is treated as derived, and therefore safe to update, only when
+    /// it still matches the animation's previous name or the source take it
+    /// came from. Anything else was typed by the author and is left alone.
+    /// </remarks>
+    internal static string? DeriveFollowingOutputName(
+        string? currentOutputName,
+        string previousAnimationName,
+        string? sourceName,
+        string newAnimationName)
+    {
+        string stem = Path.GetFileNameWithoutExtension(
+            currentOutputName ?? string.Empty);
+        if (stem.Length == 0)
+        {
+            return null;
+        }
+
+        bool derived =
+            IsSanitizedFormOf(stem, previousAnimationName) ||
+            IsSanitizedFormOf(stem, sourceName);
+        if (!derived)
+        {
+            return null;
+        }
+
+        string candidate = Dl1SourceModelWriter.SanitizeName(
+                newAnimationName,
+                63)
+            .ToLowerInvariant();
+        return candidate.Length == 0 ||
+            string.Equals(candidate, stem, StringComparison.Ordinal)
+            ? null
+            : candidate + ".anm2";
+    }
+
+    private static bool IsSanitizedFormOf(string stem, string? candidate) =>
+        !string.IsNullOrWhiteSpace(candidate) &&
+        string.Equals(
+            stem,
+            Dl1SourceModelWriter.SanitizeName(candidate, 63),
+            StringComparison.OrdinalIgnoreCase);
+
+    private void CommitExportRowName(ExportVariantSelectionViewModel row)
+    {
+        int index = FindAnimationVariantIndex(row.AnimationId);
+        if (index < 0)
+        {
+            return;
+        }
+
+        ProjectAnimationVariant variant = _project.AnimationVariants[index];
+        string name = row.Name.Trim();
+        if (string.Equals(name, variant.Name, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (name.Length == 0)
+        {
+            RejectExportRowEdit(
+                "Animation name",
+                "An animation name cannot be empty.",
+                () => row.RevertName(variant.Name));
+            return;
+        }
+
+        string? followingOutput = DeriveFollowingOutputName(
+            variant.OutputAnm2Name,
+            variant.Name,
+            _project.AnimationSources
+                .FirstOrDefault(source => source.Id == variant.SourceId)?.Name,
+            name);
+
+        // Name is one of the fields the compatibility row copies back, so it
+        // has to be written in both places or the active animation reverts.
+        DlraProject updated = WithUpdatedAnimationRow(
+            row.AnimationId,
+            current => current with
+            {
+                Name = name,
+                OutputAnm2Name = followingOutput ?? current.OutputAnm2Name,
+            },
+            current => current with { Name = name });
+        if (TryCommitExportRowProject(
+                updated,
+                "Animation name",
+                () => row.RevertName(variant.Name)))
+        {
+            StatusText = followingOutput is null
+                ? $"Renamed animation to {name}"
+                : $"Renamed animation to {name}; output ANM2 is now {followingOutput}";
+        }
+    }
+
+    private void CommitExportRowOutputName(
+        ExportVariantSelectionViewModel row)
+    {
+        int index = FindAnimationVariantIndex(row.AnimationId);
+        if (index < 0)
+        {
+            return;
+        }
+
+        ProjectAnimationVariant variant = _project.AnimationVariants[index];
+        string previous = variant.OutputAnm2Name ?? string.Empty;
+        string outputName = row.OutputName.Trim();
+        if (string.Equals(outputName, previous, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // Clearing the cell hands the name back to the output normalizer,
+        // which allocates the default. That is friendlier than rejecting an
+        // empty value the author almost certainly meant as "reset".
+        DlraProject updated = _project with
+        {
+            AnimationVariants = _project.AnimationVariants.SetItem(
+                index,
+                variant with
+                {
+                    OutputAnm2Name = outputName.Length == 0
+                        ? null
+                        : outputName,
+                }),
+        };
+        if (!TryCommitExportRowProject(
+                updated,
+                "Output ANM2 name",
+                () => row.RevertOutputName(previous)))
+        {
+            return;
+        }
+
+        StatusText = outputName.Length == 0
+            ? "Output ANM2 name regenerated from the animation name"
+            : $"Output ANM2 set to {outputName}";
+    }
+
+    private void CommitExportRowPrimaryScript(
+        ExportVariantSelectionViewModel row)
+    {
+        if (row.AnimationLibraryId is not { } libraryId)
+        {
+            RejectExportRowEdit(
+                "Primary SCR",
+                "Assign this animation to an animation script before renaming it.",
+                () => row.RevertPrimaryScript(row.PrimaryScript));
+            return;
+        }
+
+        int index = -1;
+        for (int candidate = 0;
+             candidate < _project.AnimationLibraries.Length;
+             candidate++)
+        {
+            if (_project.AnimationLibraries[candidate].Id == libraryId)
+            {
+                index = candidate;
+                break;
+            }
+        }
+
+        if (index < 0)
+        {
+            return;
+        }
+
+        ProjectAnimationLibrary library = _project.AnimationLibraries[index];
+        string resourceName = row.PrimaryScript.Trim();
+        if (string.Equals(
+                resourceName,
+                library.ResourceName,
+                StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        // The SCR name belongs to the library, not the row, so this renames
+        // the script for every variant assigned to it. Say so before doing it.
+        int affected = _project.AnimationVariants.Count(variant =>
+            variant.OwningAnimationLibraryId == libraryId);
+        if (affected > 1 && !_fileDialogs.ConfirmAnimationScriptRename(
+                library.ResourceName,
+                resourceName,
+                affected))
+        {
+            row.RevertPrimaryScript(library.ResourceName);
+            return;
+        }
+
+        DlraProject updated = _project with
+        {
+            AnimationLibraries = _project.AnimationLibraries.SetItem(
+                index,
+                library with { ResourceName = resourceName }),
+        };
+        if (!TryCommitExportRowProject(
+                updated,
+                "Primary SCR",
+                () => row.RevertPrimaryScript(library.ResourceName)))
+        {
+            return;
+        }
+
+        StatusText = affected > 1
+            ? $"Renamed animation script to {resourceName} for {affected} animations"
+            : $"Renamed animation script to {resourceName}";
+    }
+
+    /// <summary>
+    /// Validates and commits an inline export edit. The project record's own
+    /// Validate is the authority, so a rejected edit reverts the cell and is
+    /// reported rather than being written and failing later at export time.
+    /// </summary>
+    private bool TryCommitExportRowProject(
+        DlraProject updated,
+        string field,
+        Action revert)
+    {
+        try
+        {
+            updated.Validate();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException)
+        {
+            RejectExportRowEdit(field, exception.Message, revert);
+            return false;
+        }
+
+        CommitProject(updated);
+        return true;
+    }
+
+    private void RejectExportRowEdit(
+        string field,
+        string message,
+        Action revert)
+    {
+        revert();
+        StatusText = $"{field} was not changed";
+        AddDiagnostic("Error", "Export", $"{field} rejected", message);
+    }
+
+    private int FindAnimationVariantIndex(Guid variantId)
+    {
+        for (int candidate = 0;
+             candidate < _project.AnimationVariants.Length;
+             candidate++)
+        {
+            if (_project.AnimationVariants[candidate].Id == variantId)
+            {
+                return candidate;
+            }
+        }
+
+        return -1;
+    }
+
+    /// <summary>
+    /// Describes how a script registers, so the export table can answer
+    /// "is this a DLC append or does it replace stock sequences?" at a glance.
+    /// </summary>
+    internal static string DescribeAnimationLibraryMode(
+        ProjectAnimationLibrary? library)
+    {
+        if (library is null)
+        {
+            return "Unassigned";
+        }
+
+        string mode = library.Mode ==
+            ProjectAnimationLibraryMode.ExistingScriptExtension
+            ? $"Extends retail {library.ExistingScriptIdentity?.ResourceName ?? library.ResourceName}"
+            : "Custom additive";
+        string dlc = ProjectAnimationLibrary.TryGetDlcNumber(
+            library.ResourceName,
+            out int dlcNumber)
+            ? $" · dlc{dlcNumber.ToString(CultureInfo.InvariantCulture)}"
+            : string.Empty;
+        string collision = library.CollisionPolicy ==
+            ProjectAnimationSequenceCollisionPolicy.ReplaceExisting
+            ? " · replace"
+            : " · add-new";
+        return mode + dlc + collision;
     }
 
     private void RefreshActiveExportReadiness()
@@ -14909,6 +16609,7 @@ public sealed partial class MainWindowViewModel :
                 {
                     BuiltProjectAnimationPack pack =
                         BuildProjectAnimationPack(prepared);
+                    ReportAuthoredEventBlocksNotInRpack(pack);
                     foreach ((string name, string script) in
                              pack.LooseScripts)
                     {
@@ -15040,23 +16741,16 @@ public sealed partial class MainWindowViewModel :
             job.Complete("Canceled; project retained");
             StatusText = "Developer Tools export canceled";
         }
-        catch (Exception exception) when (
-            exception is ArgumentException or
-            InvalidDataException or
-            InvalidOperationException or
-            IOException or
-            UnauthorizedAccessException or
-            OverflowException or
-            TimeoutException or
-            Win32Exception)
+        // Report every failure type. Anything outside a filter
+        // escaped the catch, faulting the command and leaving the
+        // operator with no message at all.
+        catch (Exception exception)
         {
             job.Complete("Failed or rolled back");
-            StatusText = "Developer Tools export failed";
-            AddDiagnostic(
-                "Error",
+            ReportOperationFailure(
                 "Export",
                 "Developer Tools selection was not committed",
-                exception.Message);
+                exception);
         }
         finally
         {
@@ -15157,14 +16851,32 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        string? parentDirectory =
-            _fileDialogs.ShowSelectExportDirectoryDialog(
-                ProjectPath is null
-                    ? null
-                    : Path.GetDirectoryName(ProjectPath));
-        if (string.IsNullOrWhiteSpace(parentDirectory))
+        // An animation RPack is one self-contained file, so it gets a save
+        // dialog and lands exactly where the author points it. The other modes
+        // emit several files and still publish into a folder the exporter owns.
+        string? destinationFile = null;
+        string? parentDirectory = null;
+        if (mode == StandaloneExportMode.AnimationRpack)
         {
-            return;
+            destinationFile = _fileDialogs.ShowSaveAnimationRpackDialog(
+                NormalizeAnimationRpackFileName(AnimationRpackFileName),
+                ProjectPath);
+            if (string.IsNullOrWhiteSpace(destinationFile))
+            {
+                return;
+            }
+        }
+        else
+        {
+            parentDirectory =
+                _fileDialogs.ShowSelectExportDirectoryDialog(
+                    ProjectPath is null
+                        ? null
+                        : Path.GetDirectoryName(ProjectPath));
+            if (string.IsNullOrWhiteSpace(parentDirectory))
+            {
+                return;
+            }
         }
 
         bool compileCharacters =
@@ -15196,6 +16908,7 @@ public sealed partial class MainWindowViewModel :
             {
                 BuiltProjectAnimationPack pack =
                     BuildProjectAnimationPack(prepared);
+                ReportAuthoredEventBlocksNotInRpack(pack);
                 artifacts = await CreateStandaloneAnimationPackArtifactsAsync(
                     pack,
                     stagingRoot,
@@ -15215,43 +16928,73 @@ public sealed partial class MainWindowViewModel :
 
             job.Stage = "Atomic output replacement";
             job.Progress = 88.0;
-            string outputDirectory = await PublishStandaloneExportAsync(
-                parentDirectory,
-                GetStandaloneExportDirectorySuffix(mode),
-                artifacts,
-                job.CancellationToken);
+            string outputSummary;
+            string written;
+            if (destinationFile is not null)
+            {
+                StandaloneExportArtifact pack = artifacts.Single();
+                await PublishSingleFileExportAsync(
+                    destinationFile,
+                    pack.Payload,
+                    job.CancellationToken);
+                outputSummary = destinationFile;
+                written = "  " + destinationFile;
+            }
+            else
+            {
+                string outputDirectory = await PublishStandaloneExportAsync(
+                    parentDirectory!,
+                    GetStandaloneExportDirectorySuffix(mode),
+                    artifacts,
+                    job.CancellationToken);
+                outputSummary = outputDirectory;
+
+                // Name the artifacts, not just the folder. These modes own a
+                // generated subdirectory rather than writing into the picked
+                // folder, so reporting only the chosen folder sent people
+                // looking in the wrong place.
+                written = string.Join(
+                    "\n",
+                    artifacts
+                        .OrderBy(
+                            static artifact => artifact.RelativePath,
+                            StringComparer.OrdinalIgnoreCase)
+                        .Take(12)
+                        .Select(artifact => "  " + Path.Combine(
+                            outputDirectory,
+                            artifact.RelativePath.Replace(
+                                '/',
+                                Path.DirectorySeparatorChar))));
+            }
+
             job.Progress = 100.0;
             job.Complete("Complete");
-            StatusText = $"Exported {label}";
+            StatusText = $"Exported {label} to {outputSummary}";
             AddDiagnostic(
                 "Info",
                 "Export",
                 $"Selected {label} exported",
-                $"Output: {outputDirectory}\n" +
-                $"Artifacts: {artifacts.Length:N0}. Previous owned output was replaced transactionally. Offline validation is not live-game proof.");
+                $"Output: {outputSummary}\n" +
+                $"Files ({artifacts.Length:N0}):\n{written}\n" +
+                (destinationFile is not null
+                    ? "The pack carries its animations and its compiled type-322 scripts. Offline validation is not live-game proof."
+                    : "This directory is owned by the exporter and is replaced transactionally on the next export. Offline validation is not live-game proof."));
         }
         catch (OperationCanceledException)
         {
             job.Complete("Canceled; previous output retained");
             StatusText = $"{label} export canceled";
         }
-        catch (Exception exception) when (
-            exception is ArgumentException or
-            InvalidDataException or
-            InvalidOperationException or
-            IOException or
-            UnauthorizedAccessException or
-            OverflowException or
-            TimeoutException or
-            Win32Exception)
+        // Report every failure type. Anything outside a filter
+        // escaped the catch, faulting the command and leaving the
+        // operator with no message at all.
+        catch (Exception exception)
         {
             job.Complete("Failed; previous output retained");
-            StatusText = $"{label} export failed";
-            AddDiagnostic(
-                "Error",
+            ReportOperationFailure(
                 "Export",
                 $"Selected {label} was not published",
-                exception.Message);
+                exception);
         }
         finally
         {
@@ -15297,6 +17040,7 @@ public sealed partial class MainWindowViewModel :
                     job.CancellationToken);
             BuiltProjectAnimationPack animationPack =
                 BuildProjectAnimationPack(prepared);
+            ReportAuthoredEventBlocksNotInRpack(animationPack);
             ImmutableArray<StandaloneExportArtifact> artifacts =
                 CreateStandaloneFullProjectArtifacts(
                     prepared,
@@ -15326,23 +17070,16 @@ public sealed partial class MainWindowViewModel :
             job.Complete("Canceled; previous output retained");
             StatusText = "Full project export canceled";
         }
-        catch (Exception exception) when (
-            exception is ArgumentException or
-            InvalidDataException or
-            InvalidOperationException or
-            IOException or
-            UnauthorizedAccessException or
-            OverflowException or
-            TimeoutException or
-            Win32Exception)
+        // Report every failure type. Anything outside a filter
+        // escaped the catch, faulting the command and leaving the
+        // operator with no message at all.
+        catch (Exception exception)
         {
             job.Complete("Failed; previous output retained");
-            StatusText = "Full project export failed";
-            AddDiagnostic(
-                "Error",
+            ReportOperationFailure(
                 "Export",
                 "Full project was not published",
-                exception.Message);
+                exception);
         }
         finally
         {
@@ -15680,24 +17417,32 @@ public sealed partial class MainWindowViewModel :
         return CreateStandaloneAnimationPackArtifacts(
             pack,
             fileName,
-            rpack);
+            rpack,
+            includeLooseScripts: false);
     }
 
     private static ImmutableArray<StandaloneExportArtifact>
         CreateStandaloneAnimationPackArtifacts(
             BuiltProjectAnimationPack pack,
             string fileName,
-            byte[]? rpackOverride = null) =>
+            byte[]? rpackOverride = null,
+            bool includeLooseScripts = true) =>
         [
             new StandaloneExportArtifact(
                 fileName,
                 rpackOverride ?? pack.Rpack),
-            .. pack.LooseScripts
-                .OrderBy(static pair => pair.Key,
-                    StringComparer.OrdinalIgnoreCase)
-                .Select(static pair => new StandaloneExportArtifact(
-                    $"source/animscripts/{pair.Key}.scr",
-                    new UTF8Encoding(false).GetBytes(pair.Value))),
+            // The pack already carries every animation script as a compiled
+            // type-322 resource, so a loose .scr beside it is dead weight the
+            // engine never reads. Only the source-shaped exports - full project
+            // and Developer Tools - want the text.
+            .. includeLooseScripts
+                ? pack.LooseScripts
+                    .OrderBy(static pair => pair.Key,
+                        StringComparer.OrdinalIgnoreCase)
+                    .Select(static pair => new StandaloneExportArtifact(
+                        $"source/animscripts/{pair.Key}.scr",
+                        new UTF8Encoding(false).GetBytes(pair.Value)))
+                : [],
         ];
 
     private ImmutableArray<StandaloneExportArtifact>
@@ -15815,6 +17560,71 @@ public sealed partial class MainWindowViewModel :
         return artifacts.MoveToImmutable();
     }
 
+    /// <summary>
+    /// Reports authored event blocks that an RPack export cannot carry.
+    /// </summary>
+    /// <remarks>
+    /// The loose <c>.scr</c> keeps the events verbatim and the Developer Tools
+    /// and official-compiler paths honour them. The compiled type-322 resource
+    /// inside the RPack does not: <c>AnimationScrCodec</c> always writes an
+    /// event count of zero, and event rows stay undecoded per
+    /// <c>docs/DL1_ANIMATION_SCR_EVENT_PARITY.md</c>. Exporting anyway is the
+    /// chosen behaviour, so the difference is stated rather than hidden.
+    /// </remarks>
+    private void ReportAuthoredEventBlocksNotInRpack(
+        BuiltProjectAnimationPack pack)
+    {
+        if (pack.EventOnlyScripts.IsEmpty)
+        {
+            return;
+        }
+
+        string names = string.Join(", ", pack.EventOnlyScripts);
+        AddDiagnostic(
+            "Warning",
+            "Export",
+            "Authored events are not in the RPack",
+            $"{names} declare SeqTrack event blocks. The compiled type-322 resource inside this RPack carries an event count of zero, and the pack contains no loose .scr source, so those events are not in this output at all. Deploy through Developer Tools, which stages the authored .scr for Techland's compiler, if the events have to reach the game.");
+        StatusText =
+            $"Exported with events in the loose .scr only ({names})";
+    }
+
+    /// <summary>
+    /// Checks that authored loose source really declares every sequence the
+    /// compiled script carries.
+    /// </summary>
+    private static void ValidateAuthoredLooseScript(
+        string resourceName,
+        string authoredScript,
+        ImmutableArray<AnimationScrSequence> effective)
+    {
+        ImmutableArray<AnimationScriptSeqTrack> authored;
+        try
+        {
+            authored = AnimationScriptSourceParser.ParseSeqTracks(
+                authoredScript);
+        }
+        catch (InvalidDataException exception)
+        {
+            throw new InvalidDataException(
+                $"Authored animation script '{resourceName}' does not parse: {exception.Message}",
+                exception);
+        }
+
+        foreach (AnimationScrSequence sequence in effective)
+        {
+            int matches = authored.Count(track => string.Equals(
+                track.Name,
+                sequence.Name,
+                StringComparison.OrdinalIgnoreCase));
+            if (matches != 1)
+            {
+                throw new InvalidDataException(
+                    $"Authored animation script '{resourceName}' declares {matches} SeqTrack rows named '{sequence.Name}'; exactly one is required so the loose source and the compiled script agree.");
+            }
+        }
+    }
+
     private BuiltProjectAnimationPack BuildProjectAnimationPack(
         ImmutableArray<PreparedCheckedExportModel> prepared) =>
         BuildProjectAnimationPack(
@@ -15893,9 +17703,14 @@ public sealed partial class MainWindowViewModel :
                     localSequences.Add(libraryId, rows);
                 }
 
-                string sequenceName = Dl1SourceModelWriter.SanitizeName(
-                    source.Name,
-                    63);
+                // The compiled type-322 record stores a name and timing, no
+                // animation reference, so the engine resolves a sequence to its
+                // type-320 animation BY NAME. Deriving this from the source take
+                // instead produced scripts whose rows named "mixamo_com" while
+                // the packaged animations were "Thriller" - the editor then
+                // listed nothing at all. The Developer Tools deployer already
+                // requires the two to match; this path now agrees with it.
+                string sequenceName = resource.Name;
                 if (rows.Any(row => string.Equals(
                         row.Name,
                         sequenceName,
@@ -15966,27 +17781,75 @@ public sealed partial class MainWindowViewModel :
             Rp6lAnimationScript>(StringComparer.OrdinalIgnoreCase);
         var looseScripts = ImmutableDictionary.CreateBuilder<string, string>(
             StringComparer.OrdinalIgnoreCase);
+        HashSet<string> eventOnlyScripts =
+            new(StringComparer.OrdinalIgnoreCase);
         var compiled = new Dictionary<
             Guid,
             ImmutableArray<AnimationScrSequence>>();
         var visiting = new HashSet<Guid>();
+        var effectiveByLibrary = new Dictionary<
+            string,
+            ImmutableArray<AnimationScrSequence>>(
+            StringComparer.OrdinalIgnoreCase);
         foreach (Guid libraryId in selectedLibraryIds.Order())
         {
             ImmutableArray<AnimationScrSequence> effective =
                 ResolveEffectiveSequences(libraryId);
             ProjectAnimationLibrary library = libraries[libraryId];
+            effectiveByLibrary[library.ResourceName] = effective;
             AnimationScrSections sections = AnimationScrCodec.Build(effective);
             scripts.Add(
                 library.ResourceName,
                 new Rp6lAnimationScript(
                     sections.RecordsAndNames,
                     sections.IndexAndNames));
-            looseScripts.Add(
-                library.ResourceName,
-                BuildLooseProjectAnimationScript(
+            string looseScript;
+            if (library.AuthoredScriptText is { } authoredScript)
+            {
+                // A full-project export ships this text beside the compiled
+                // script. If it omits or renames a selected sequence the two
+                // definitions disagree, so hold it to the same inventory rule
+                // the Developer Tools staging path applies.
+                ValidateAuthoredLooseScript(
+                    library.ResourceName,
+                    authoredScript,
+                    effective);
+                looseScript = authoredScript;
+            }
+            else
+            {
+                looseScript = BuildLooseProjectAnimationScript(
                     library,
                     libraries,
-                    localSequences.GetValueOrDefault(libraryId) ?? []));
+                    localSequences.GetValueOrDefault(libraryId) ?? []);
+            }
+            looseScripts.Add(library.ResourceName, looseScript);
+            if (library.AuthoredScriptText is not null &&
+                AnimationScriptSourceParser.ContainsEventBlocks(looseScript))
+            {
+                // The binary section above came from AnimationScrCodec.Build,
+                // which always writes an event count of zero. The events exist
+                // only in the loose text.
+                eventOnlyScripts.Add(library.ResourceName);
+            }
+        }
+
+        // A compiled type-322 record carries a name and timing but no
+        // animation reference, so the engine resolves a sequence to its
+        // type-320 animation purely by name. When those two drifted apart the
+        // pack built and shipped happily and the editor simply listed nothing.
+        // Prove they agree before anyone can install it.
+        foreach ((string scriptName, ImmutableArray<AnimationScrSequence> rows)
+                 in effectiveByLibrary)
+        {
+            foreach (AnimationScrSequence row in rows)
+            {
+                if (!animations.ContainsKey(row.Name))
+                {
+                    throw new InvalidOperationException(
+                        $"Animation script '{scriptName}' declares sequence '{row.Name}', but the pack contains no type-320 animation with that name. The game resolves sequences by name, so this pack would list no animations.");
+                }
+            }
         }
 
         byte[] rpack = Rp6lAnimationLibraryCodec.Build(
@@ -15996,7 +17859,8 @@ public sealed partial class MainWindowViewModel :
             rpack,
             animations.ToImmutable(),
             scripts.ToImmutable(),
-            looseScripts.ToImmutable());
+            looseScripts.ToImmutable(),
+            [.. eventOnlyScripts.Order(StringComparer.OrdinalIgnoreCase)]);
 
         bool CanReachLibrary(Guid rootLibraryId, Guid targetLibraryId)
         {
@@ -16218,6 +18082,55 @@ public sealed partial class MainWindowViewModel :
         }
 
         return fileName;
+    }
+
+    /// <summary>
+    /// Writes one exported file to the exact path the author chose, replacing
+    /// any existing file atomically.
+    /// </summary>
+    /// <remarks>
+    /// Single-file outputs do not get the owned-directory treatment: there is
+    /// nothing to sweep, and claiming ownership of the author's folder would
+    /// put unrelated files at risk. The temp file sits beside the destination
+    /// so the final move stays on one volume.
+    /// </remarks>
+    private static async Task PublishSingleFileExportAsync(
+        string destinationPath,
+        byte[] payload,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        ArgumentNullException.ThrowIfNull(payload);
+        string full = Path.GetFullPath(destinationPath);
+        string directory = Path.GetDirectoryName(full)
+            ?? throw new InvalidDataException(
+                $"'{destinationPath}' has no containing directory.");
+        Directory.CreateDirectory(directory);
+        string temporary = Path.Combine(
+            directory,
+            $".{Path.GetFileName(full)}.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllBytesAsync(
+                temporary,
+                payload,
+                cancellationToken).ConfigureAwait(false);
+            File.Move(temporary, full, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(temporary))
+            {
+                try
+                {
+                    File.Delete(temporary);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
     }
 
     private async Task<string> PublishStandaloneExportAsync(
@@ -16491,7 +18404,9 @@ public sealed partial class MainWindowViewModel :
                     .OrderBy(static group => group.Key)
                     .ToArray();
 
-            var usedResourceNames = new HashSet<string>(
+            // Maps a claimed type-320 identity to the row that claimed it, so
+            // a collision can name both sides instead of only the loser.
+            var usedResourceNames = new Dictionary<string, string>(
                 StringComparer.OrdinalIgnoreCase);
             for (var modelIndex = 0;
                  modelIndex < modelGroups.Length;
@@ -16549,14 +18464,23 @@ public sealed partial class MainWindowViewModel :
                     await ActivateAnimationAsync(
                         variant.Id,
                         beginPlayback: false,
-                        persistActivation: false);
+                        persistActivation: false,
+                        switchWorkspace: false);
+
+                    // Readiness has to be captured before the busy flag is
+                    // re-asserted: DescribeAnimationExportBlock reports "still
+                    // running" while IsBusy, so checking afterwards rejected
+                    // every variant no matter how ready it was.
+                    string? blocked = _activeAnimationId != variant.Id
+                        ? "activating it did not make it the active animation"
+                        : GetActiveAnimation()?.Id != variant.Id
+                            ? "the active animation does not match the checked variant"
+                            : DescribeAnimationExportBlock();
                     IsBusy = true;
-                    if (_activeAnimationId != variant.Id ||
-                        GetActiveAnimation()?.Id != variant.Id ||
-                        !CanExportAnimation())
+                    if (blocked is not null)
                     {
                         throw new InvalidOperationException(
-                            $"Checked variant '{variant.Name}' could not enter an authoritative export-ready runtime state.");
+                            $"Checked variant '{variant.Name}' is not export-ready: {blocked}.");
                     }
 
                     bool hasFacialSource =
@@ -16601,6 +18525,7 @@ public sealed partial class MainWindowViewModel :
                         string resourceName = AllocateCheckedResourceName(
                             variant.OutputAnm2Name,
                             variant.Name,
+                            model.Name,
                             Dl1PortableAnimationRole.Body,
                             usedResourceNames);
                         resources.Add(new Dl1PortableAnimationResource
@@ -16624,6 +18549,7 @@ public sealed partial class MainWindowViewModel :
                         string resourceName = AllocateCheckedResourceName(
                             variant.OutputAnm2Name,
                             variant.Name,
+                            model.Name,
                             Dl1PortableAnimationRole.Facial,
                             usedResourceNames);
                         resources.Add(new Dl1PortableAnimationResource
@@ -16930,7 +18856,8 @@ public sealed partial class MainWindowViewModel :
                 CreatePreparedTargetVariantLibrary(
                     model.AnimationLibraryName,
                     model.Animations,
-                    variants);
+                    variants,
+                    ResolveAuthoredScriptText(model.AnimationLibraryName));
             return new Dl1DeveloperToolsDeploymentRequest
             {
                 Model = WithAnimationLibraryBuildSettings(
@@ -16976,11 +18903,29 @@ public sealed partial class MainWindowViewModel :
         };
     }
 
+    /// <summary>
+    /// Builds the prepared library a Developer Tools deployment stages.
+    /// </summary>
+    /// <param name="authoredScriptText">
+    /// Hand-authored loose source for this script, or null to generate it from
+    /// the sequence inventory. Authored text is staged verbatim so its event
+    /// blocks survive into the deployed <c>.scr</c>; the staging check then
+    /// verifies it still declares every packaged animation.
+    /// </param>
+    private string? ResolveAuthoredScriptText(string animationLibraryName) =>
+        _project.AnimationLibraries.FirstOrDefault(library =>
+                string.Equals(
+                    library.ResourceName,
+                    animationLibraryName,
+                    StringComparison.OrdinalIgnoreCase))
+            ?.AuthoredScriptText;
+
     internal static PreparedCustomModelAnimationLibrary
         CreatePreparedTargetVariantLibrary(
             string animationLibraryName,
             ImmutableArray<Dl1PortableAnimationResource> resources,
-            IReadOnlyDictionary<Guid, ProjectAnimationVariant> variants)
+            IReadOnlyDictionary<Guid, ProjectAnimationVariant> variants,
+            string? authoredScriptText = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(
             animationLibraryName);
@@ -17042,9 +18987,12 @@ public sealed partial class MainWindowViewModel :
             libraryName,
             animations.MoveToImmutable(),
             sequenceRows,
-            CustomModelAnimationLibraryExporter
+            authoredScriptText ?? CustomModelAnimationLibraryExporter
                 .BuildLooseAnimationScript(sequenceRows),
-            []);
+            [])
+        {
+            IsAuthoredScript = authoredScriptText is not null,
+        };
     }
 
     private ImmutableArray<Dl1DeveloperToolsDeploymentRequest>
@@ -17150,8 +19098,9 @@ public sealed partial class MainWindowViewModel :
     private static string AllocateCheckedResourceName(
         string? outputAnm2Name,
         string variantName,
+        string targetModelName,
         Dl1PortableAnimationRole role,
-        HashSet<string> usedNames)
+        Dictionary<string, string> usedNames)
     {
         if (string.IsNullOrWhiteSpace(outputAnm2Name) ||
             !string.Equals(
@@ -17172,7 +19121,12 @@ public sealed partial class MainWindowViewModel :
         string suffix = role == Dl1PortableAnimationRole.Facial
             ? "_mimic"
             : string.Empty;
-        string candidate = configuredStem + suffix;
+        // The type-322 name table is lowercase-only - AnimationScrCodec.Build
+        // lowercases every sequence name it writes - so a mixed-case type-320
+        // identity can never be referenced by the script that is supposed to
+        // play it. Normalising here keeps both sides of that lookup identical,
+        // which is what the known-good hand-built packs do.
+        string candidate = (configuredStem + suffix).ToLowerInvariant();
         string normalized = Dl1SourceModelWriter.SanitizeName(
             candidate,
             63);
@@ -17185,12 +19139,22 @@ public sealed partial class MainWindowViewModel :
                 $"Checked variant '{variantName}' output '{candidate}' is not an exact DL1 resource identity. Rename it in Assign SCR; export never silently rewrites assigned identities.");
         }
 
-        if (!usedNames.Add(candidate))
+        string claimant = $"'{variantName}' targeting {targetModelName}";
+        if (usedNames.TryGetValue(candidate, out string? existing))
         {
+            // An animation RPack keys type-320 resources by name alone - there
+            // is no per-character or per-script namespace inside the pack - so
+            // the second entry would overwrite the first. Naming both rows is
+            // the difference between an actionable message and a riddle.
             throw new InvalidOperationException(
-                $"Selected type-320 animation identity '{candidate}' is duplicated. Assign a different stable target-specific ANM2 name; export never silently renames it.");
+                $"Two checked rows would both be packaged as type-320 animation '{candidate}': " +
+                $"{existing} and {claimant}. One combined RPack cannot hold two animations with the " +
+                "same name, so the second would overwrite the first. Give each row its own Output ANM2 " +
+                $"name - for example '{configuredStem}_{Dl1SourceModelWriter.SanitizeName(targetModelName, 24)}.anm2'. " +
+                "Export never silently renames an assigned identity.");
         }
 
+        usedNames.Add(candidate, claimant);
         return candidate;
     }
 
@@ -18217,7 +20181,8 @@ public sealed partial class MainWindowViewModel :
                     "The project contains an unknown DL1 root-motion mode."),
             },
             animation.RootBoneName,
-            directRigBinding: _activeDirectRigBinding);
+            directRigBinding: _activeDirectRigBinding,
+            accumulatorBoneName: animation.AccumulatorBoneName);
         var cacheKey = new RootMotionTrailCacheKey(
             _activeAnimationId,
             source,
@@ -18863,7 +20828,8 @@ public sealed partial class MainWindowViewModel :
                 await ActivateAnimationAsync(
                     activeAnimation!.Id,
                     beginPlayback: false,
-                    persistActivation: false);
+                    persistActivation: false,
+                    switchWorkspace: false);
             }
             else
             {
@@ -22054,16 +24020,56 @@ public sealed partial class MainWindowViewModel :
         string state)
     {
         JobViewModel job = new(name, stage, state);
+        job.PropertyChanged += OnJobPropertyChanged;
         Jobs.Insert(0, job);
         while (Jobs.Count > 24)
         {
             JobViewModel oldest = Jobs[^1];
             Jobs.RemoveAt(Jobs.Count - 1);
+            oldest.PropertyChanged -= OnJobPropertyChanged;
             oldest.Dispose();
         }
 
+        RefreshActiveJob();
         return job;
     }
+
+    private void OnJobPropertyChanged(
+        object? sender,
+        PropertyChangedEventArgs args)
+    {
+        if (args.PropertyName == nameof(JobViewModel.IsFinished))
+        {
+            RefreshActiveJob();
+        }
+    }
+
+    /// <summary>
+    /// The job the progress indicator is currently showing, or null when
+    /// nothing is running.
+    /// </summary>
+    /// <remarks>
+    /// Newest-first, so a nested job (an activation started by an export, say)
+    /// is what the operator sees while it runs, and the outer job takes the
+    /// indicator back afterwards.
+    /// </remarks>
+    public JobViewModel? ActiveJob
+    {
+        get => _activeJob;
+        private set
+        {
+            if (SetProperty(ref _activeJob, value))
+            {
+                OnPropertyChanged(nameof(HasActiveJob));
+            }
+        }
+    }
+
+    public bool HasActiveJob => ActiveJob is not null;
+
+    private void RefreshActiveJob() =>
+        ActiveJob = Jobs.FirstOrDefault(
+            static job => !job.IsFinished);
 
     private void OnBoneTransformApplied(
         object? sender,
@@ -23574,7 +25580,8 @@ public sealed partial class MainWindowViewModel :
                     "The project contains an unknown DL1 root-motion mode."),
             },
             animation.RootBoneName,
-            directRigBinding: _activeDirectRigBinding);
+            directRigBinding: _activeDirectRigBinding,
+            accumulatorBoneName: animation.AccumulatorBoneName);
         ImmutableArray<MorphChannelBinding> morphBindings =
             HasSameRigContract(source.Rig, target) &&
             !HasSavedFacialSource(animation)
@@ -26209,6 +28216,143 @@ public sealed partial class MainWindowViewModel :
         {
             Diagnostics.RemoveAt(Diagnostics.Count - 1);
         }
+
+        // The drawer is in-memory only and is capped at 500 entries, so a
+        // failure that is not written here leaves nothing behind once the app
+        // closes - which is exactly when someone wants to know what happened.
+        if (_structuredLogger is not { } logger ||
+            severity is not ("Error" or "Warning"))
+        {
+            return;
+        }
+
+        try
+        {
+            logger.Write(
+                severity == "Error"
+                    ? AppLogLevel.Error
+                    : AppLogLevel.Warning,
+                "diagnostic",
+                message,
+                new Dictionary<string, string>
+                {
+                    ["area"] = area,
+                    ["detail"] = detail ?? string.Empty,
+                });
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+            ObjectDisposedException or
+            UnauthorizedAccessException)
+        {
+            // Logging must never take down the operation being reported.
+        }
+    }
+
+    /// <summary>
+    /// Reports a failed operation everywhere it can be seen: the status bar
+    /// carries the reason rather than a bare "failed", the diagnostics drawer
+    /// carries the full exception chain, and the session log keeps a durable
+    /// copy.
+    /// </summary>
+    /// <summary>
+    /// Copies the whole diagnostics log. Filing a report meant retyping what
+    /// the drawer already knew.
+    /// </summary>
+    private void CopyDiagnostics()
+    {
+        string text = string.Join(
+            Environment.NewLine,
+            Diagnostics.Select(static entry =>
+                $"[{entry.Timestamp:u}] {entry.Severity} {entry.Area}: {entry.Message}" +
+                (string.IsNullOrWhiteSpace(entry.Detail)
+                    ? string.Empty
+                    : Environment.NewLine + "    " + entry.Detail)));
+        try
+        {
+            System.Windows.Clipboard.SetText(text);
+            StatusText =
+                $"Copied {Diagnostics.Count:N0} diagnostic entr(ies)";
+        }
+        catch (Exception exception) when (
+            exception is System.Runtime.InteropServices.COMException or
+            InvalidOperationException)
+        {
+            // The clipboard can be locked by another process; that is not
+            // worth failing an operation over.
+            StatusText = "Diagnostics could not be copied to the clipboard";
+        }
+    }
+
+    private void ReportOperationFailure(
+        string area,
+        string title,
+        Exception exception)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(area);
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentNullException.ThrowIfNull(exception);
+        StatusText = $"{title}: {SummarizeException(exception)}";
+        AddDiagnostic("Error", area, title, DescribeException(exception));
+    }
+
+    /// <summary>
+    /// One line naming the actual reason, for the status bar.
+    /// </summary>
+    internal static string SummarizeException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        Exception deepest = exception;
+        while (deepest.InnerException is { } inner)
+        {
+            deepest = inner;
+        }
+
+        string message = string.IsNullOrWhiteSpace(deepest.Message)
+            ? deepest.GetType().Name
+            : deepest.Message.Trim();
+        int newline = message.IndexOfAny(['\r', '\n']);
+        if (newline >= 0)
+        {
+            message = message[..newline].TrimEnd();
+        }
+
+        const int maximum = 240;
+        return message.Length <= maximum
+            ? message
+            : message[..maximum] + "\u2026";
+    }
+
+    /// <summary>
+    /// The whole exception chain plus the stack, for the diagnostics drawer
+    /// and the log. An operator filing a report needs the type and the origin,
+    /// not only the outermost sentence.
+    /// </summary>
+    internal static string DescribeException(Exception exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        var builder = new StringBuilder();
+        int depth = 0;
+        for (Exception? current = exception;
+             current is not null && depth < 8;
+             current = current.InnerException, depth++)
+        {
+            if (depth > 0)
+            {
+                builder.Append("\ncaused by ");
+            }
+
+            builder.Append(current.GetType().Name)
+                .Append(": ")
+                .Append(current.Message);
+        }
+
+        if (exception.StackTrace is { Length: > 0 } stack)
+        {
+            builder.Append("\n\n").Append(stack);
+        }
+
+        return builder.ToString();
     }
 
     private static string Humanize(string text)

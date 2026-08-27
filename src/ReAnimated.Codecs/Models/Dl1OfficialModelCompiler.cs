@@ -2126,13 +2126,8 @@ public static class Dl1OfficialModelCompiler
                 "The model compiler animation library must exactly match its ASCR alias identity.");
         }
 
-        string expectedScript = CustomModelAnimationLibraryExporter.BuildLooseAnimationScript(
-            library.Sequences);
-        if (!string.Equals(library.LooseScriptText, expectedScript, StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                "The model compiler animation SCR differs from its prepared sequence inventory.");
-        }
+        CustomModelAnimationLibraryExporter.ValidateLooseScriptCoversInventory(
+            library);
 
         string animationDirectory = Path.Combine(
             projectDirectory,

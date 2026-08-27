@@ -183,9 +183,38 @@ public interface IProjectFileDialogService
 
     bool ConfirmRetailMeshFbxExport(string assetName) => false;
 
+    /// <summary>
+    /// Confirms renaming a type-322 animation script that more than one
+    /// animation is assigned to. The name lives on the library, so the rename
+    /// is not local to the row the author edited.
+    /// </summary>
+    bool ConfirmAnimationScriptRename(
+        string currentResourceName,
+        string proposedResourceName,
+        int affectedAnimationCount) => false;
+
     string? ShowSelectExportDirectoryDialog(string? initialPath) => null;
 
     string? ShowOpenAnimationRpackDialog(string? initialPath) => null;
+
+    /// <summary>
+    /// Asks which bone should receive accumulated travel and heading, for a
+    /// target rig that carries no 0xCCC3CDDF accumulator track of its own.
+    /// Returning null refuses the policy rather than flattening the animation.
+    /// </summary>
+    string? SelectMotionAccumulatorBone(
+        string targetRigId,
+        System.Collections.Immutable.ImmutableArray<string> candidateBoneNames)
+        => null;
+
+    /// <summary>
+    /// Picks the destination file for an animation RPack. The pack is a single
+    /// self-contained file - it already carries its compiled type-322 scripts -
+    /// so the author chooses the exact path rather than a parent folder.
+    /// </summary>
+    string? ShowSaveAnimationRpackDialog(
+        string suggestedName,
+        string? initialPath) => null;
 
     string? ShowSelectAdditionalRpackRootDialog(string? initialPath) => null;
 
@@ -368,6 +397,24 @@ public sealed class WindowsProjectFileDialogService :
 
         return dialog.ShowDialog() == true
             ? dialog.Selection
+            : null;
+    }
+
+    public string? SelectMotionAccumulatorBone(
+        string targetRigId,
+        System.Collections.Immutable.ImmutableArray<string> candidateBoneNames)
+    {
+        var dialog = new MotionAccumulatorSelectionDialog(
+            targetRigId,
+            candidateBoneNames);
+        Window? accumulatorOwner = Application.Current?.MainWindow;
+        if (accumulatorOwner is { IsVisible: true })
+        {
+            dialog.Owner = accumulatorOwner;
+        }
+
+        return dialog.ShowDialog() == true
+            ? dialog.ChosenBoneName
             : null;
     }
 
@@ -608,6 +655,18 @@ public sealed class WindowsProjectFileDialogService :
             System.Windows.MessageBoxResult.Yes;
     }
 
+    public bool ConfirmAnimationScriptRename(
+        string currentResourceName,
+        string proposedResourceName,
+        int affectedAnimationCount) =>
+        System.Windows.MessageBox.Show(
+            $"'{currentResourceName}' is the animation script for {affectedAnimationCount} animations in this project.\n\nRenaming it to '{proposedResourceName}' changes the type-322 resource for all of them, not just the row you edited.\n\nContinue?",
+            "Rename animation script",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning,
+            System.Windows.MessageBoxResult.No) ==
+        System.Windows.MessageBoxResult.Yes;
+
     public bool ConfirmRetailMeshFbxExport(string assetName) =>
         System.Windows.MessageBox.Show(
             $"This creates one self-contained FBX containing decoded Dying Light 1 retail mesh data for '{assetName}'. Decoded base-color textures are embedded in the FBX. Skinned meshes retain their complete bind skeleton and vertex weights.\n\nKeep this local. Do not upload, publish, bundle, or redistribute it. Only the decoded base-color material is exported; DL1 shader techniques and other map types are not reproduced.\n\nContinue?",
@@ -617,12 +676,37 @@ public sealed class WindowsProjectFileDialogService :
             System.Windows.MessageBoxResult.No) ==
         System.Windows.MessageBoxResult.Yes;
 
+    public string? ShowSaveAnimationRpackDialog(
+        string suggestedName,
+        string? initialPath)
+    {
+        SaveFileDialog dialog = new()
+        {
+            AddExtension = true,
+            CheckPathExists = true,
+            DefaultExt = ".rpack",
+            FileName = MakeSafeFileName(
+                Path.GetFileNameWithoutExtension(suggestedName)) + ".rpack",
+            Filter = "Dying Light animation RPack (*.rpack)|*.rpack",
+            OverwritePrompt = true,
+            Title = "Save animation RPack",
+        };
+        ApplyInitialPath(dialog, initialPath);
+        return dialog.ShowDialog() == true
+            ? dialog.FileName
+            : null;
+    }
+
     public string? ShowSelectExportDirectoryDialog(string? initialPath)
     {
         OpenFolderDialog dialog = new()
         {
             Multiselect = false,
-            Title = "Select DL1 ANM2 export folder",
+            // The exporter writes into a generated subfolder that it owns and
+            // replaces on the next export, so this picks the parent, never the
+            // final file. Saying so stops people hunting for output in the
+            // folder they chose.
+            Title = "Select the parent folder for the export (a named subfolder is created)",
         };
         string? initialDirectory = Directory.Exists(initialPath)
             ? initialPath

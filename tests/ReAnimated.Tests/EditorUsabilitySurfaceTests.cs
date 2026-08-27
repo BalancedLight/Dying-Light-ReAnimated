@@ -124,16 +124,10 @@ public sealed class EditorUsabilitySurfaceTests
             "Fidelity",
             (string?)fidelityTab.Attribute("Header"));
 
+        // Fidelity details moved off the toolbar into the Help menu; what
+        // matters is that the command is still reachable from the chrome.
         Assert.Contains(
-            document.Descendants(
-                Presentation + "TextBlock"),
-            static element =>
-                string.Equals(
-                    (string?)element.Attribute("Text"),
-                    "Fidelity:",
-                    StringComparison.Ordinal));
-        Assert.Contains(
-            document.Descendants(Presentation + "Button"),
+            document.Descendants(Presentation + "MenuItem"),
             static element => string.Equals(
                 (string?)element.Attribute("Command"),
                 "{Binding ShowFidelityDetailsCommand}",
@@ -204,9 +198,16 @@ public sealed class EditorUsabilitySurfaceTests
             "Preview now",
             "Use as Source",
             "Use as Target",
-            "Edit bones",
             "Accept pending proposal & play",
         ];
+        // Edit bones is now a Viewport menu item rather than a toolbar button.
+        Assert.Contains(
+            document.Descendants(Presentation + "MenuItem"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding OpenBoneEditorCommand}",
+                StringComparison.Ordinal));
+
         foreach (string label in labels)
         {
             Assert.Contains(
@@ -227,45 +228,35 @@ public sealed class EditorUsabilitySurfaceTests
                 "{Binding HasPendingMappingProposal, Converter={StaticResource BooleanToVisibilityConverter}}",
                 (string?)element.Attribute("Visibility")));
 
-        Assert.Contains(
-            document.Descendants(Presentation + "ToggleButton"),
-            static element => string.Equals(
-                (string?)element.Attribute("Content"),
-                "Retarget / Edit",
-                StringComparison.Ordinal) &&
-                string.Equals(
-                    (string?)element.Attribute("IsChecked"),
-                    "{Binding IsRetargetWorkspace, Mode=OneWay}",
-                    StringComparison.Ordinal));
+        // The workspace switcher is now Window > Workspace. It is still the
+        // only global switcher, so it must carry every mode, in order, with
+        // each item reflecting the workspace it selects.
         XElement[] workflowTabs = document
-            .Descendants(Presentation + "ToggleButton")
+            .Descendants(Presentation + "MenuItem")
             .Where(static element => string.Equals(
                 (string?)element.Attribute("Command"),
                 "{Binding SelectWorkspaceCommand}",
                 StringComparison.Ordinal))
             .ToArray();
         Assert.Equal(
-            ["Models", "Animations", "Playback", "Retarget / Edit", "Export"],
-            workflowTabs
-                .Select(static element =>
-                    (string?)element.Attribute("Content") ?? string.Empty)
-                .ToArray());
-        Assert.Equal(
             ["Models", "Animations", "Playback", "Retarget/Edit", "Export"],
             workflowTabs
                 .Select(static element =>
                     (string?)element.Attribute("CommandParameter") ?? string.Empty)
                 .ToArray());
+        Assert.Contains(
+            workflowTabs,
+            static element => string.Equals(
+                (string?)element.Attribute("IsChecked"),
+                "{Binding IsRetargetWorkspace, Mode=OneWay}",
+                StringComparison.Ordinal));
         Assert.All(
             workflowTabs,
             static element => Assert.Null(element.Attribute("IsEnabled")));
 
-        string[] visibleRigControls =
-        [
-            "Helpers",
-            "Camera helpers",
-            "Prop helpers",
-        ];
+        // These moved to the Viewport menu, which already carried duplicates
+        // of them before the toolbar was trimmed.
+        string[] visibleRigControls = [];
         foreach (string label in visibleRigControls)
         {
             Assert.Contains(
@@ -461,16 +452,18 @@ public sealed class EditorUsabilitySurfaceTests
                 "src",
                 "ReAnimated.App",
                 "MainWindow.xaml"));
+        // The workspace switcher lives in Window > Workspace now; the menu is
+        // the only global switcher, so it has to keep carrying every mode.
         Assert.Contains(
-            shellDocument.Descendants(Presentation + "ToggleButton"),
+            shellDocument.Descendants(Presentation + "MenuItem"),
             static element =>
-                string.Equals(
-                    (string?)element.Attribute("Content"),
-                    "Models",
-                    StringComparison.Ordinal) &&
                 string.Equals(
                     (string?)element.Attribute("CommandParameter"),
                     "Models",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("Command"),
+                    "{Binding SelectWorkspaceCommand}",
                     StringComparison.Ordinal));
 
         XDocument workspace = XDocument.Load(

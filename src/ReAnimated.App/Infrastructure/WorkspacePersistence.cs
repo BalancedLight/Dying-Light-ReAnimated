@@ -23,9 +23,10 @@ public sealed record WorkspaceSnapshot(
     bool IsProjectDirty = false,
     bool? MeshesVisible = null,
     bool? SkeletonOverlayVisible = null,
-    ImmutableArray<PendingProjectAssetReceipt> PendingAssets = default)
+    ImmutableArray<PendingProjectAssetReceipt> PendingAssets = default,
+    bool? KeepFramed = null)
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public const int LegacySchemaVersion = 1;
 }
@@ -87,10 +88,13 @@ public sealed class JsonWorkspaceStateStore
         string json = File.ReadAllText(FilePath);
         WorkspaceSnapshot? snapshot =
             JsonSerializer.Deserialize<WorkspaceSnapshot>(json, SerializerOptions);
+        // Every schema from the legacy one up to the current is readable:
+        // each field added since has been optional. Rejecting the immediately
+        // previous version silently discarded a recoverable session and then
+        // let the next autosave overwrite it.
         if (snapshot is null ||
-            snapshot.SchemaVersion is not (
-                WorkspaceSnapshot.LegacySchemaVersion or
-                WorkspaceSnapshot.CurrentSchemaVersion))
+            snapshot.SchemaVersion < WorkspaceSnapshot.LegacySchemaVersion ||
+            snapshot.SchemaVersion > WorkspaceSnapshot.CurrentSchemaVersion)
         {
             return null;
         }

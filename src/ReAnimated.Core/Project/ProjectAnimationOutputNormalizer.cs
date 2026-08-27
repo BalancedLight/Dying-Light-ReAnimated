@@ -85,40 +85,35 @@ public static class ProjectAnimationOutputNormalizer
             }
         }
 
-        var usedOutputNamesByLibrary = variants
+        // Uniqueness is project-wide, not per library. An animation RPack
+        // keys its type-320 resources by name alone, with no per-character or
+        // per-script namespace, so two libraries that each allocate
+        // "mixamo_com.anm2" produce a pack whose second entry would overwrite
+        // the first. Scoping this per library handed out names the exporter
+        // then had to reject.
+        HashSet<string> usedOutputNames = variants
             .Where(static variant =>
-                variant.OwningAnimationLibraryId is not null &&
                 !string.IsNullOrWhiteSpace(variant.OutputAnm2Name))
-            .GroupBy(static variant =>
-                variant.OwningAnimationLibraryId!.Value)
-            .ToDictionary(
-                static group => group.Key,
-                static group => group
-                    .Select(static variant => variant.OutputAnm2Name!)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase));
+            .Select(static variant => variant.OutputAnm2Name!)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        Dictionary<Guid, string> modelNames = project.Models.ToDictionary(
+            static model => model.Id,
+            static model => model.Name);
         foreach (int variantIndex in Enumerable.Range(0, variants.Count)
                      .OrderBy(index => variants[index].Id))
         {
             ProjectAnimationVariant variant = variants[variantIndex];
-            if (variant.OwningAnimationLibraryId is not { } libraryId ||
+            if (variant.OwningAnimationLibraryId is null ||
                 !string.IsNullOrWhiteSpace(variant.OutputAnm2Name))
             {
                 continue;
-            }
-
-            if (!usedOutputNamesByLibrary.TryGetValue(
-                    libraryId,
-                    out HashSet<string>? usedOutputNames))
-            {
-                usedOutputNames = new HashSet<string>(
-                    StringComparer.OrdinalIgnoreCase);
-                usedOutputNamesByLibrary.Add(libraryId, usedOutputNames);
             }
 
             variants[variantIndex] = variant with
             {
                 OutputAnm2Name = AllocateOutputName(
                     variant,
+                    modelNames.GetValueOrDefault(variant.TargetModelId),
                     usedOutputNames),
             };
         }
@@ -187,8 +182,18 @@ public static class ProjectAnimationOutputNormalizer
         return libraryId;
     }
 
+    /// <summary>
+    /// Allocates a project-unique <c>.anm2</c> identity for a variant.
+    /// </summary>
+    /// <remarks>
+    /// The target model is folded in before any opaque GUID suffix, because
+    /// the usual reason two variants collide is that one source was retargeted
+    /// onto several characters. "Thriller_zombie_man_a.anm2" tells the author
+    /// which row it belongs to; "Thriller_3f9a1c02.anm2" does not.
+    /// </remarks>
     private static string AllocateOutputName(
         ProjectAnimationVariant variant,
+        string? targetModelName,
         HashSet<string> usedNames)
     {
         string stem = SanitizeIdentity(variant.Name, 63);
@@ -201,6 +206,21 @@ public static class ProjectAnimationOutputNormalizer
         if (usedNames.Add(output))
         {
             return output;
+        }
+
+        if (!string.IsNullOrWhiteSpace(targetModelName))
+        {
+            string qualified = SanitizeIdentity(
+                $"{stem}_{targetModelName}",
+                63);
+            if (!string.IsNullOrWhiteSpace(qualified))
+            {
+                output = qualified + ".anm2";
+                if (usedNames.Add(output))
+                {
+                    return output;
+                }
+            }
         }
 
         string suffix = variant.Id.ToString("N")[..8];

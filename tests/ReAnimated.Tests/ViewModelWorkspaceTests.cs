@@ -502,6 +502,480 @@ public sealed class ViewModelWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task EditingAnimationRowNameCommitsWithoutTheRenameCommand()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string projectPath = Path.Combine(
+            _temporaryDirectory,
+            "row-rename.dlraproj");
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid targetAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid targetModelId = Guid.NewGuid();
+        Guid variantId = Guid.NewGuid();
+        string targetSignature = new('c', 64);
+        DlraProject project = DlraProject.Create("Row rename") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = sourceAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "inputs/row-rename.fbx",
+                    ContentSha256 = new string('1', 64),
+                },
+                new ProjectAssetReference
+                {
+                    Id = targetAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "models/target.dlrmodel",
+                    ContentSha256 = new string('2', 64),
+                },
+            ],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = targetModelId,
+                    AssetId = targetAssetId,
+                    Name = "Target",
+                    RigSignature = targetSignature,
+                },
+            ],
+            AnimationSources =
+            [
+                new ProjectAnimationSource
+                {
+                    Id = sourceId,
+                    Name = "Original take",
+                    SourceAssetId = sourceAssetId,
+                    RequiresSourceRebind = true,
+                    MigrationNote = "Original FBX stack identity is unavailable.",
+                    FrameCount = 2,
+                },
+            ],
+            AnimationVariants =
+            [
+                new ProjectAnimationVariant
+                {
+                    Id = variantId,
+                    SourceId = sourceId,
+                    Name = "Original take",
+                    TargetModelId = targetModelId,
+                    TargetRigId = "target",
+                    TargetRigSignature = targetSignature,
+                    BindingMode = ProjectAnimationBindingMode.Retarget,
+                },
+            ],
+        };
+        ProjectSerializer.SaveAtomic(project, projectPath);
+
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "row-rename-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "row-rename-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(projectPath),
+            assets);
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        AnimationLibraryItemViewModel row = Assert.Single(
+            viewModel.AnimationLibrary,
+            item => !item.IsSourceOnly);
+
+        row.Name = "Renamed take";
+
+        ProjectAnimationVariant committed = Assert.Single(
+            viewModel.CurrentProject.AnimationVariants,
+            variant => variant.Id == variantId);
+        Assert.Equal("Renamed take", committed.Name);
+        Assert.True(viewModel.IsDirty);
+    }
+
+    [Fact]
+    public async Task EditingAnimationRowNameSurvivesTheLibraryRebuildItTriggers()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string projectPath = Path.Combine(
+            _temporaryDirectory,
+            "row-rename-rebuild.dlraproj");
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid targetAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid targetModelId = Guid.NewGuid();
+        Guid variantId = Guid.NewGuid();
+        string targetSignature = new('d', 64);
+        DlraProject project = DlraProject.Create("Row rename rebuild") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = sourceAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "inputs/row-rename-rebuild.fbx",
+                    ContentSha256 = new string('3', 64),
+                },
+                new ProjectAssetReference
+                {
+                    Id = targetAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "models/target.dlrmodel",
+                    ContentSha256 = new string('4', 64),
+                },
+            ],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = targetModelId,
+                    AssetId = targetAssetId,
+                    Name = "Target",
+                    RigSignature = targetSignature,
+                },
+            ],
+            AnimationSources =
+            [
+                new ProjectAnimationSource
+                {
+                    Id = sourceId,
+                    Name = "Original take",
+                    SourceAssetId = sourceAssetId,
+                    RequiresSourceRebind = true,
+                    MigrationNote = "Original FBX stack identity is unavailable.",
+                    FrameCount = 2,
+                },
+            ],
+            AnimationVariants =
+            [
+                new ProjectAnimationVariant
+                {
+                    Id = variantId,
+                    SourceId = sourceId,
+                    Name = "Original take",
+                    TargetModelId = targetModelId,
+                    TargetRigId = "target",
+                    TargetRigSignature = targetSignature,
+                    BindingMode = ProjectAnimationBindingMode.Retarget,
+                },
+            ],
+        };
+        ProjectSerializer.SaveAtomic(project, projectPath);
+
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(
+                _temporaryDirectory,
+                "row-rename-rebuild-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "row-rename-rebuild-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(projectPath),
+            assets);
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        AnimationLibraryItemViewModel row = Assert.Single(
+            viewModel.AnimationLibrary,
+            item => !item.IsSourceOnly);
+        row.Name = "First rename";
+
+        // The commit rebuilds AnimationLibrary, so the second edit has to go
+        // through the freshly attached row rather than the discarded one.
+        AnimationLibraryItemViewModel rebuilt = Assert.Single(
+            viewModel.AnimationLibrary,
+            item => !item.IsSourceOnly);
+        rebuilt.Name = "Second rename";
+
+        ProjectAnimationVariant committed = Assert.Single(
+            viewModel.CurrentProject.AnimationVariants,
+            variant => variant.Id == variantId);
+        Assert.Equal("Second rename", committed.Name);
+    }
+
+    [Fact]
+    public async Task KeepFramedIsOffByDefaultAndRoundTripsThroughTheSnapshot()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "keep-framed-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "keep-framed-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(
+                Path.Combine(_temporaryDirectory, "keep-framed.dlraproj")),
+            assets);
+
+        Assert.False(viewModel.KeepFramed);
+
+        viewModel.KeepFramed = true;
+
+        WorkspaceSnapshot snapshot = viewModel.CreateSnapshot();
+        Assert.True(snapshot.KeepFramed);
+        Assert.Equal(
+            WorkspaceSnapshot.CurrentSchemaVersion,
+            snapshot.SchemaVersion);
+    }
+
+    [Fact]
+    public async Task KeepFramedTickIsInertWhenTheSceneHasNotChanged()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "keep-framed-tick.sqlite3"),
+            Path.Combine(_temporaryDirectory, "keep-framed-tick-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(
+                Path.Combine(
+                    _temporaryDirectory,
+                    "keep-framed-tick.dlraproj")),
+            assets);
+
+        viewModel.KeepFramed = true;
+        RenderCamera before =
+            viewModel.TargetViewport.SceneSource.CaptureFrame().Camera;
+
+        // TryFrame walks every vertex, so an unchanged scene must not refit -
+        // this is what keeps the compositor tick affordable.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        for (int tick = 0; tick < 120; tick++)
+        {
+            viewModel.TickPlayback(now.AddMilliseconds(tick * 100.0));
+        }
+
+        Assert.Equal(
+            before,
+            viewModel.TargetViewport.SceneSource.CaptureFrame().Camera);
+    }
+
+    [Fact]
+    public async Task DisablingKeepFramedLeavesTheCameraWhereItIs()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "keep-framed-off.sqlite3"),
+            Path.Combine(_temporaryDirectory, "keep-framed-off-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(
+                Path.Combine(
+                    _temporaryDirectory,
+                    "keep-framed-off.dlraproj")),
+            assets);
+
+        viewModel.KeepFramed = true;
+        viewModel.KeepFramed = false;
+        RenderCamera parked =
+            viewModel.TargetViewport.SceneSource.CaptureFrame().Camera;
+
+        viewModel.TickPlayback(DateTimeOffset.UtcNow.AddSeconds(5.0));
+
+        Assert.False(viewModel.KeepFramed);
+        Assert.Equal(
+            parked,
+            viewModel.TargetViewport.SceneSource.CaptureFrame().Camera);
+    }
+
+    [Fact]
+    public async Task EditingExportRowOutputNameCommitsAndRejectsInvalidNames()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string projectPath = Path.Combine(
+            _temporaryDirectory,
+            "export-edit.dlraproj");
+        Guid variantId = Guid.NewGuid();
+        DlraProject project = CreateExportEditProject(variantId, 'e');
+        ProjectSerializer.SaveAtomic(project, projectPath);
+
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "export-edit.sqlite3"),
+            Path.Combine(_temporaryDirectory, "export-edit-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(projectPath),
+            assets);
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        ExportVariantSelectionViewModel row = Assert.Single(
+            viewModel.ExportVariants);
+
+        row.OutputName = "renamed_take.anm2";
+
+        Assert.Equal(
+            "renamed_take.anm2",
+            Assert.Single(
+                viewModel.CurrentProject.AnimationVariants,
+                variant => variant.Id == variantId).OutputAnm2Name);
+
+        // A name the project schema forbids must revert rather than be
+        // written and fail later at export.
+        ExportVariantSelectionViewModel current = Assert.Single(
+            viewModel.ExportVariants);
+        current.OutputName = "no_extension";
+
+        Assert.Equal(
+            "renamed_take.anm2",
+            Assert.Single(
+                viewModel.CurrentProject.AnimationVariants,
+                variant => variant.Id == variantId).OutputAnm2Name);
+        Assert.Equal(
+            "renamed_take.anm2",
+            Assert.Single(viewModel.ExportVariants).OutputName);
+        Assert.Contains(
+            "was not changed",
+            viewModel.StatusText,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ExportRowReportsHowItsScriptRegisters()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string projectPath = Path.Combine(
+            _temporaryDirectory,
+            "export-mode.dlraproj");
+        Guid variantId = Guid.NewGuid();
+        DlraProject project = CreateExportEditProject(variantId, 'f');
+        ProjectSerializer.SaveAtomic(project, projectPath);
+
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "export-mode.sqlite3"),
+            Path.Combine(_temporaryDirectory, "export-mode-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            CreateStore(),
+            new TestProjectFileDialogs(projectPath),
+            assets);
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        ExportVariantSelectionViewModel row = Assert.Single(
+            viewModel.ExportVariants);
+
+        Assert.Contains(
+            "Custom additive",
+            row.ScriptMode,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "add-new",
+            row.ScriptMode,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "dlc",
+            row.ScriptMode,
+            StringComparison.OrdinalIgnoreCase);
+
+        // Renaming the script to the DLC append convention has to show up as
+        // a DLC append, which is the whole point of the column.
+        row.PrimaryScript = "anims_man_all_dlc60";
+
+        Assert.Contains(
+            "dlc60",
+            Assert.Single(viewModel.ExportVariants).ScriptMode,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ScriptModeNamesTheRetailScriptAnExtensionReplaces()
+    {
+        var library = new ProjectAnimationLibrary
+        {
+            Id = Guid.NewGuid(),
+            ResourceName = "anims_man_all_dlc60",
+            DisplayName = "Append",
+            CollisionPolicy =
+                ProjectAnimationSequenceCollisionPolicy.ReplaceExisting,
+        };
+
+        string mode =
+            MainWindowViewModel.DescribeAnimationLibraryMode(library);
+
+        Assert.Equal(
+            "Custom additive \u00b7 dlc60 \u00b7 replace",
+            mode);
+        Assert.Equal(
+            "Unassigned",
+            MainWindowViewModel.DescribeAnimationLibraryMode(null));
+    }
+
+    private static DlraProject CreateExportEditProject(
+        Guid variantId,
+        char fingerprintSeed)
+    {
+        Guid sourceAssetId = Guid.NewGuid();
+        Guid targetAssetId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid targetModelId = Guid.NewGuid();
+        Guid libraryId = Guid.NewGuid();
+        string targetSignature = new(fingerprintSeed, 64);
+        return DlraProject.Create("Export edit") with
+        {
+            Assets =
+            [
+                new ProjectAssetReference
+                {
+                    Id = sourceAssetId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "inputs/export-edit.fbx",
+                    ContentSha256 = new string('1', 64),
+                },
+                new ProjectAssetReference
+                {
+                    Id = targetAssetId,
+                    Kind = ProjectAssetKind.CustomModelSource,
+                    RelativePath = "models/target.dlrmodel",
+                    ContentSha256 = new string('2', 64),
+                },
+            ],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = targetModelId,
+                    AssetId = targetAssetId,
+                    Name = "zombie_man_a",
+                    RigSignature = targetSignature,
+                    RootAnimationLibraryId = libraryId,
+                },
+            ],
+            AnimationLibraries =
+            [
+                new ProjectAnimationLibrary
+                {
+                    Id = libraryId,
+                    ResourceName = "zombie_man_a_animations",
+                    DisplayName = "zombie_man_a animations",
+                },
+            ],
+            AnimationSources =
+            [
+                new ProjectAnimationSource
+                {
+                    Id = sourceId,
+                    Name = "Thriller",
+                    SourceAssetId = sourceAssetId,
+                    RequiresSourceRebind = true,
+                    MigrationNote = "Original FBX stack identity is unavailable.",
+                    FrameCount = 2,
+                },
+            ],
+            AnimationVariants =
+            [
+                new ProjectAnimationVariant
+                {
+                    Id = variantId,
+                    SourceId = sourceId,
+                    Name = "Thriller",
+                    TargetModelId = targetModelId,
+                    TargetRigId = "target",
+                    TargetRigSignature = targetSignature,
+                    BindingMode = ProjectAnimationBindingMode.Retarget,
+                    OwningAnimationLibraryId = libraryId,
+                    OutputAnm2Name = "thriller.anm2",
+                },
+            ],
+        };
+    }
+
+    [Fact]
     public async Task RetailFloatBindMatricesRemainSkinnableAfterEditorRefresh()
     {
         Directory.CreateDirectory(_temporaryDirectory);

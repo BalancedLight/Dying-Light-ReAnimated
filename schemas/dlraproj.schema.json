@@ -239,6 +239,12 @@
             "reject",
             "replaceExisting"
           ]
+        },
+        "authoredScriptText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4194304,
+          "description": "Hand-authored loose .scr source. Absent means the source is generated from the sequence inventory. Event blocks here reach the loose script only; the compiled type-322 resource always carries an event count of zero."
         }
       },
       "allOf": [
@@ -856,6 +862,15 @@
         },
         "includeInPackage": {
           "type": "boolean"
+        },
+        "accumulatorBoneName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Bone that receives accumulated travel and heading under motionAccumulator root policy. Absent means the rig's own 0xCCC3CDDF track is used."
         }
       },
       "allOf": [
@@ -1396,6 +1411,15 @@
           "items": {
             "$ref": "#/$defs/attachment"
           }
+        },
+        "accumulatorBoneName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Bone that receives accumulated travel and heading under motionAccumulator root policy. Absent means the rig's own 0xCCC3CDDF track is used."
         }
       },
       "allOf": [

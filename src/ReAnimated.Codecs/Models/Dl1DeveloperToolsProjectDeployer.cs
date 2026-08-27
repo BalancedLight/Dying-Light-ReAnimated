@@ -1767,17 +1767,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             }
         }
 
-        string expectedScript =
-            CustomModelAnimationLibraryExporter.BuildLooseAnimationScript(
-                library.Sequences);
-        if (!string.Equals(
-                library.LooseScriptText,
-                expectedScript,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidDataException(
-                "The prepared target-variant animation library loose SCR differs from its validated sequence inventory.");
-        }
+        CustomModelAnimationLibraryExporter.ValidateLooseScriptCoversInventory(
+            library);
 
         // This also proves that the selected payload/name inventory can be
         // represented by the production RP6L animation-library writer before
@@ -1891,12 +1882,22 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 $"data/characters/animations/animscripts/{request.AnimationLibraryName}.scr",
                 StringComparison.OrdinalIgnoreCase)).StagedPath!;
         string actualScript = File.ReadAllText(scrArtifactPath);
-        string expectedScript = CustomModelAnimationLibraryExporter.BuildLooseAnimationScript(library.Sequences);
-        if (!string.Equals(actualScript, expectedScript, StringComparison.Ordinal))
+
+        // Two separate guarantees: the staged file is byte-for-byte the script
+        // that was prepared, and that script really covers the packaged
+        // animations. Authored source cannot satisfy the second by
+        // regeneration, so the validator checks its SeqTrack inventory instead.
+        if (!string.Equals(
+                actualScript,
+                library.LooseScriptText,
+                StringComparison.Ordinal))
         {
             throw new InvalidDataException(
-                "The staged loose SCR sequence inventory differs from the prepared ANM2 timing inventory.");
+                "The staged loose SCR differs from the prepared animation script.");
         }
+
+        CustomModelAnimationLibraryExporter.ValidateLooseScriptCoversInventory(
+            library);
     }
 
     private static async Task ValidatePortableRpackAsync(

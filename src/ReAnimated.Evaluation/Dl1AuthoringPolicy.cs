@@ -204,7 +204,8 @@ public sealed class Dl1AuthoringPolicy
         AnimationRootMode rootMode,
         string? targetRootBoneName = null,
         Vector3D? worldUpAxis = null,
-        DirectRigBinding? directRigBinding = null)
+        DirectRigBinding? directRigBinding = null,
+        string? accumulatorBoneName = null)
     {
         ArgumentNullException.ThrowIfNull(sourceRig);
         ArgumentNullException.ThrowIfNull(targetRig);
@@ -233,12 +234,22 @@ public sealed class Dl1AuthoringPolicy
         int targetRootBoneIndex = ResolveTargetRoot(
             targetRig,
             targetRootBoneName);
-        int? accumulatorBoneIndex = ResolveMotionAccumulator(targetRig);
+        // An override only means anything under the accumulator policy. Honouring
+        // a stale one under Recorded/InPlace/Bip01 made an unrelated mode fail on
+        // a changed rig, and let those modes hold or reset a track the author
+        // never intended them to touch.
+        bool accumulatorIsAuthored =
+            rootMode == AnimationRootMode.MotionAccumulator &&
+            !string.IsNullOrWhiteSpace(accumulatorBoneName);
+        int? accumulatorBoneIndex = accumulatorIsAuthored
+            ? ResolveAuthoredMotionAccumulator(targetRig, accumulatorBoneName!)
+            : ResolveMotionAccumulator(targetRig);
         ValidateMotionAccumulator(
             targetRig,
             targetRootBoneIndex,
             accumulatorBoneIndex,
-            rootMode);
+            rootMode,
+            accumulatorIsAuthored);
 
         ImmutableDictionary<int, BoneMapEntry> entriesByTarget =
             retargetMap?.Entries.ToImmutableDictionary(
@@ -413,7 +424,8 @@ public sealed class Dl1AuthoringPolicy
             targetRig,
             RootMotion.TargetRootBoneIndex,
             RootMotion.MotionAccumulatorBoneIndex,
-            RootMotion.Mode);
+            RootMotion.Mode,
+            accumulatorIsAuthored: false);
     }
 
     private static int ResolveTargetRoot(
@@ -460,6 +472,29 @@ public sealed class Dl1AuthoringPolicy
             _ => throw new InvalidOperationException(
                 $"Rig '{rig.Id}' has multiple root tracks; select the DL1 skeletal root explicitly."),
         };
+    }
+
+    /// <summary>
+    /// Resolves an accumulator the author named explicitly.
+    /// </summary>
+    /// <remarks>
+    /// The 0xCCC3CDDF descriptor is a hash of the bone name "offsethelper", so
+    /// a rig only advertises an accumulator if it happens to carry a node with
+    /// that name. Authors retargeting onto custom rigs need to nominate their
+    /// own, which is what this override is for.
+    /// </remarks>
+    private static int ResolveAuthoredMotionAccumulator(
+        RigDefinition rig,
+        string accumulatorBoneName)
+    {
+        int index = rig.GetBoneIndex(accumulatorBoneName);
+        if (index < 0)
+        {
+            throw new InvalidOperationException(
+                $"The chosen motion-accumulator bone '{accumulatorBoneName}' is not present in target rig '{rig.Id}'.");
+        }
+
+        return index;
     }
 
     private static int? ResolveMotionAccumulator(RigDefinition rig)
@@ -597,23 +632,55 @@ public sealed class Dl1AuthoringPolicy
         RigDefinition rig,
         int rootBoneIndex,
         int? accumulatorBoneIndex,
-        AnimationRootMode rootMode)
+        AnimationRootMode rootMode,
+        bool accumulatorIsAuthored)
     {
         if (!accumulatorBoneIndex.HasValue)
         {
+            // Requesting the accumulator policy with nowhere to write the
+            // motion used to be tolerated, and ApplyMotionAccumulator then
+            // stripped the travel off the root and dropped it - the clip went
+            // in-place with no error at all. Refuse instead.
+            if (rootMode == AnimationRootMode.MotionAccumulator)
+            {
+                throw new InvalidOperationException(
+                    $"Target rig '{rig.Id}' has no motion-accumulator track, so MotionAccumulator root policy would discard this animation's travel and heading. Choose an accumulator bone for the animation, or pick a different root policy.");
+            }
+
             // DL1 samples 0xCCC3CDDF through the animation accumulator stage;
             // compact retail mesh skeletons are not required to own that row.
             return;
         }
 
         BoneDefinition accumulator = rig.Bones[accumulatorBoneIndex.Value];
-        if (accumulator.Index == rootBoneIndex ||
-            accumulator.ParentIndex >= 0 ||
-            accumulator.Kind != BoneKind.Helper ||
-            !accumulator.RequiredForExport)
+        if (accumulator.Index == rootBoneIndex)
         {
             throw new InvalidOperationException(
-                "DL1 descriptor 0xCCC3CDDF must be a distinct, root-level, required helper track.");
+                "The DL1 skeletal root and motion accumulator must be distinct tracks.");
+        }
+
+        // An author-chosen accumulator may carry any descriptor - that is the
+        // point of the override - but it still has to be a track the exporter
+        // can actually write:
+        //
+        //   * root-level, because ApplyMotionAccumulator writes world planar
+        //     displacement and heading as this bone's LOCAL transform, which
+        //     only equals world for a parentless track. A parented bone would
+        //     be corrupted rather than carry the motion.
+        //   * descriptor-bearing and required, because ANM2 serialization
+        //     addresses tracks by descriptor and skips bones without one. A
+        //     descriptorless accumulator would be dropped after the root
+        //     travel had already been removed - silently flattening the clip,
+        //     which is the failure this override exists to prevent.
+        if (accumulator.ParentIndex >= 0 ||
+            accumulator.Kind != BoneKind.Helper ||
+            !accumulator.RequiredForExport ||
+            accumulator.DescriptorHash is null)
+        {
+            throw new InvalidOperationException(
+                accumulatorIsAuthored
+                    ? $"'{accumulator.Name}' cannot receive accumulated motion: an accumulator must be a root-level, required helper track with a DL1 descriptor. Imported root-level helpers qualify; child and deform bones do not."
+                    : "DL1 descriptor 0xCCC3CDDF must be a distinct, root-level, required helper track.");
         }
     }
 }

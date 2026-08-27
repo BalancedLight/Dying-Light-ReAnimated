@@ -714,6 +714,7 @@ public static class ProjectSerializer
                 FrameCount = source.FrameCount,
                 RootMotionMode = variant.RootMotionMode,
                 RootBoneName = variant.RootBoneName,
+                AccumulatorBoneName = variant.AccumulatorBoneName,
                 PreviewMotionAccumulationEnabled =
                     variant.PreviewMotionAccumulationEnabled,
                 BoneMappings = variant.BoneMappings,
@@ -896,6 +897,7 @@ public static class ProjectSerializer
             MimicMappingFingerprint = animation.MimicMappingFingerprint,
             RootMotionMode = animation.RootMotionMode,
             RootBoneName = animation.RootBoneName,
+            AccumulatorBoneName = animation.AccumulatorBoneName,
             PreviewMotionAccumulationEnabled =
                 animation.PreviewMotionAccumulationEnabled,
             BoneMappings = animation.BoneMappings,

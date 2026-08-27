@@ -819,14 +819,26 @@ public sealed class Dl1AuthoringPolicyTests
                     descriptorHash: 0x11111111,
                     semanticRole: "root.skeletal"),
             ]);
+        // The 0xCCC3CDDF row stays auxiliary: a rig without one is fine for
+        // every policy that does not need it.
         Dl1AuthoringPolicy noAccumulatorPolicy =
             Dl1AuthoringPolicy.Create(
                 noAccumulator,
                 noAccumulator,
                 null,
-                AnimationRootMode.MotionAccumulator);
+                AnimationRootMode.Recorded);
         Assert.Null(
             noAccumulatorPolicy.RootMotion.MotionAccumulatorBoneIndex);
+
+        // Asking for the accumulator policy without one is now refused. It
+        // used to be accepted, and ApplyMotionAccumulator then stripped the
+        // travel off the root and discarded it, flattening the clip silently.
+        Assert.Throws<InvalidOperationException>(() =>
+            Dl1AuthoringPolicy.Create(
+                noAccumulator,
+                noAccumulator,
+                null,
+                AnimationRootMode.MotionAccumulator));
 
         var missingHelperDescriptor = new RigDefinition(
             "missing-helper",

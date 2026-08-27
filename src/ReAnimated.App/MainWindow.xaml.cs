@@ -244,6 +244,7 @@ public partial class MainWindow : Window
 
             Pane(EditorDockWorkflow.Animations, "animations.actions", "Animation actions", Detach(AnimationsActionsPane), 300, 80),
             Pane(EditorDockWorkflow.Animations, "animations.preview", "Source preview", Detach(AnimationsSourcePreviewPane), 320, 220, _viewModel.SourceViewport),
+            Pane(EditorDockWorkflow.Animations, "animations.timeline", "Source timeline", Detach(AnimationsSourceTimelinePane), 340, 170, _viewModel.Timeline),
             Pane(EditorDockWorkflow.Animations, "animations.details", "Animation details", Detach(AnimationsDetailsPane), 240, 180),
             Pane(EditorDockWorkflow.Animations, "animations.browser", "Base-game animations", Detach(RetailAnimationBrowserPane), 260, 220),
             Pane(EditorDockWorkflow.Animations, "animations.library", "Animation library", Detach(AnimationsLibraryPane), 360, 220),
@@ -536,6 +537,39 @@ public partial class MainWindow : Window
         args.Handled = true;
         await _viewModel.PlaySelectedExplorerAnimationCommand
             .ExecuteAsync(null);
+    }
+
+    /// <summary>
+    /// Selects the row under the pointer before its context menu opens.
+    /// </summary>
+    /// <remarks>
+    /// Without this, right-clicking an unselected row runs every command
+    /// against whatever was selected before - which for Remove is destructive.
+    /// </remarks>
+    private void OnListBoxPreviewMouseRightButtonDown(
+        object sender,
+        MouseButtonEventArgs args) =>
+        OnAssetExplorerPreviewMouseRightButtonDown(sender, args);
+
+    /// <summary>
+    /// The DataGrid equivalent; the ListBox handler cannot serve it because
+    /// the container type differs.
+    /// </summary>
+    private void OnDataGridPreviewMouseRightButtonDown(
+        object sender,
+        MouseButtonEventArgs args)
+    {
+        if (sender is not DataGrid grid ||
+            ItemsControl.ContainerFromElement(
+                grid,
+                args.OriginalSource as DependencyObject) is not
+            DataGridRow row)
+        {
+            return;
+        }
+
+        grid.SelectedItem = row.Item;
+        row.Focus();
     }
 
     private void OnAssetExplorerPreviewMouseRightButtonDown(

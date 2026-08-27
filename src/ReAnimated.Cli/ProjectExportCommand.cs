@@ -528,7 +528,8 @@ internal static class ProjectExportCommand
             mapping,
             rootMode,
             animation.RootBoneName,
-            directRigBinding: directBinding);
+            directRigBinding: directBinding,
+            accumulatorBoneName: animation.AccumulatorBoneName);
         var evaluation = new EvaluationRequest(
             sourceRig,
             targetRig,
@@ -1713,6 +1714,7 @@ internal static class ProjectExportCommand
             FrameCount = source.FrameCount,
             RootMotionMode = variant.RootMotionMode,
             RootBoneName = variant.RootBoneName,
+            AccumulatorBoneName = variant.AccumulatorBoneName,
             PreviewMotionAccumulationEnabled =
                 variant.PreviewMotionAccumulationEnabled,
             BoneMappings = variant.BoneMappings,

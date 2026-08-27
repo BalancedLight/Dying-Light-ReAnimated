@@ -232,6 +232,14 @@ internal sealed class WpfStartupSmoke
             window,
             "AnimationsSourcePreviewPane",
             viewModel.SourceViewport);
+
+        // The Animations source preview had no transport at all; this pane is
+        // the only way to play, step or scrub it from that workspace, so its
+        // presence is checked rather than assumed.
+        ValidatePaneDataContext(
+            window,
+            "AnimationsSourceTimelinePane",
+            viewModel.Timeline);
         ValidatePaneDataContext(
             window,
             "PlaybackContextPane",

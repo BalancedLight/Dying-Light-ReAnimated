@@ -239,7 +239,7 @@ public sealed partial class Dl1RetailMeshClassificationService
             List<Dl1ClassificationEvidence> evidence)
     {
         Dl1RigFamily hintedFamily =
-            GetFamilyNameHint(resourceName);
+            HintFamilyFromName(resourceName);
         if (hintedFamily == Dl1RigFamily.Unknown)
         {
             evidence.Add(new Dl1ClassificationEvidence(
@@ -295,6 +295,25 @@ public sealed partial class Dl1RetailMeshClassificationService
             confidence,
             $"Decoded skin plus the root, pelvis, head, and {limbAnchorCount} bilateral limb anchors corroborate the {hintedFamily} name hint."));
         return (hintedFamily, confidence);
+    }
+
+    /// <summary>
+    /// The FPP/TPP hint read from a resource name alone, without recording
+    /// classification evidence. Same caveat as
+    /// <see cref="HintFamilyFromName"/>: it is a suggestion.
+    /// </summary>
+    public static Dl1MeshPerspective HintPerspectiveFromName(
+        string resourceName)
+    {
+        ArgumentNullException.ThrowIfNull(resourceName);
+        HashSet<string> tokens = Tokenize(resourceName);
+        bool fpp = tokens.Contains("fpp");
+        bool tpp = tokens.Contains("tpp");
+        return fpp == tpp
+            ? Dl1MeshPerspective.Unknown
+            : fpp
+                ? Dl1MeshPerspective.FirstPerson
+                : Dl1MeshPerspective.ThirdPerson;
     }
 
     private static (
@@ -436,7 +455,13 @@ public sealed partial class Dl1RetailMeshClassificationService
         return (Dl1RetailSourceScope.Unknown, null);
     }
 
-    private static Dl1RigFamily GetFamilyNameHint(string resourceName)
+    /// <summary>
+    /// The bounded family hint read from a resource name alone. This is a
+    /// hint, never a classification: <see cref="Classify"/> only promotes it
+    /// once decoded rig evidence corroborates it. Callers that surface it
+    /// directly must present it as a suggestion.
+    /// </summary>
+    public static Dl1RigFamily HintFamilyFromName(string resourceName)
     {
         string normalized = NormalizeResourceName(resourceName);
         HashSet<string> tokens = Tokenize(normalized);

@@ -111,8 +111,49 @@ The former live Python probe and fixture-update command are no longer part of th
 
 - Event rows are opaque. Event names, arguments, frame semantics, ordering
   rules, and runtime dispatch are not decoded.
-- Building new event rows and appending into event/auxiliary scripts remain
-  unsupported and fail closed.
+- Building new **binary** event rows and appending into event/auxiliary
+  scripts remain unsupported and fail closed. `AnimationScrCodec.Build` still
+  writes an event count of zero for every record it emits, and that is
+  unchanged by authored source (below).
+
+## Authored loose source is a text-path-only feature
+
+`ProjectAnimationLibrary.AuthoredScriptText` lets an author hand-write the
+loose `.scr` source instead of generating it from the sequence inventory. This
+does not weaken anything above:
+
+- Authored text reaches only the loose `.scr` written for the Developer Tools
+  and official-compiler paths, where Techland's compiler consumes the same
+  source grammar the stock tree ships.
+- It never reaches the compiled type-322 resource. An RPack built from an
+  authored library with event blocks still carries an event count of zero, and
+  the exporter raises an explicit warning naming the affected scripts rather
+  than letting the difference pass silently.
+- `AnimationScriptSourceParser` reads the source grammar structurally:
+  `!include` directives, `SeqTrack` rows, and whether a row is followed by a
+  brace block. It does not interpret event contents, so no claim is made about
+  what an `Event` row means.
+- Because authored text cannot match the generator byte for byte, the staging
+  checks verify that its `SeqTrack` rows still cover every packaged animation
+  (name, ANM2 name, and any literal timing). Generated libraries keep the
+  original byte-for-byte comparison.
+
+### Measured source-grammar evidence
+
+The parser was measured against the stock 1.55 animscript source tree, which
+ships as plain text inside the retail `.pak` archives under
+`data/characters/animations/animscripts/`:
+
+| Measure | Value |
+| --- | --- |
+| Animation scripts | 204 (`Data0.pak` 191, `DataDLC49_0.pak` 13) |
+| `SeqTrack` rows | 11,699 |
+| Rows with exactly seven arguments | 11,699 |
+| Rows whose argument list spans a newline | 0 |
+| Rows passing a named constant instead of a literal | 7 (`m_fpp_hitreactions.scr`, `CROWD_BUMP_BLENDIN_TIME`) |
+
+Numeric fields therefore accept either a literal or a named constant from a
+`.def` include; a token that is neither is rejected rather than dropped.
 - The second section's action payload is preserved but not semantically
   decoded by this gate.
 - The installed control is exact to the fingerprinted Windows 1.55 build and

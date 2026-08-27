@@ -230,6 +230,23 @@ public sealed record ProjectAnimationLibrary
     public ProjectAnimationSequenceCollisionPolicy CollisionPolicy
     { get; init; } = ProjectAnimationSequenceCollisionPolicy.Reject;
 
+    /// <summary>
+    /// Hand-authored loose <c>.scr</c> source. Null means the source is
+    /// generated from the sequence inventory, which is the default and the
+    /// only behaviour before this field existed.
+    /// </summary>
+    /// <remarks>
+    /// Authored text reaches the loose <c>.scr</c> that the Developer Tools
+    /// and official-compiler paths consume, so it can carry the event blocks
+    /// stock scripts use. It does not reach the compiled type-322 resource in
+    /// an RPack: <c>AnimationScrCodec</c> always writes an event count of
+    /// zero, per <c>docs/DL1_ANIMATION_SCR_EVENT_PARITY.md</c>. Callers that
+    /// build an RPack from an authored library with event blocks must say so.
+    /// </remarks>
+    public string? AuthoredScriptText { get; init; }
+
+    public const int MaximumAuthoredScriptLength = 4 * 1024 * 1024;
+
     internal void Validate(string parameterName)
     {
         if (Id == Guid.Empty)
@@ -237,6 +254,23 @@ public sealed record ProjectAnimationLibrary
             throw new ArgumentException(
                 "Animation-library identifiers cannot be empty.",
                 parameterName);
+        }
+
+        if (AuthoredScriptText is { } authored)
+        {
+            if (authored.Length > MaximumAuthoredScriptLength)
+            {
+                throw new ArgumentException(
+                    "An authored animation script exceeds the supported size.",
+                    parameterName);
+            }
+
+            if (string.IsNullOrWhiteSpace(authored))
+            {
+                throw new ArgumentException(
+                    "An authored animation script cannot be blank; clear it to return to generated source.",
+                    parameterName);
+            }
         }
 
         ValidateAnimationResourceName(ResourceName, parameterName);
@@ -906,6 +940,17 @@ public sealed record ProjectAnimationVariant
 
     public string? RootBoneName { get; init; }
 
+    /// <summary>
+    /// Bone that receives accumulated travel and heading under
+    /// <see cref="Dl1RootMotionMode.MotionAccumulator"/>.
+    /// </summary>
+    /// <remarks>
+    /// Null means "use the rig's own 0xCCC3CDDF track", which only exists when
+    /// the rig carries a node named <c>offsethelper</c>. Rigs retargeted onto
+    /// from elsewhere usually do not, so the author nominates one here.
+    /// </remarks>
+    public string? AccumulatorBoneName { get; init; }
+
     public bool PreviewMotionAccumulationEnabled { get; init; }
 
     public ImmutableArray<ProjectBoneMapping> BoneMappings { get; init; } = [];
@@ -1109,6 +1154,7 @@ public sealed record ProjectAnimationVariant
             FrameCount = source.FrameCount,
             RootMotionMode = RootMotionMode,
             RootBoneName = RootBoneName,
+            AccumulatorBoneName = AccumulatorBoneName,
             PreviewMotionAccumulationEnabled =
                 PreviewMotionAccumulationEnabled,
             BoneMappings = BoneMappings,
@@ -1770,6 +1816,17 @@ public sealed record ProjectAnimation
     public string? RootBoneName { get; init; }
 
     /// <summary>
+    /// Bone that receives accumulated travel and heading under
+    /// <see cref="Dl1RootMotionMode.MotionAccumulator"/>.
+    /// </summary>
+    /// <remarks>
+    /// Null means "use the rig's own 0xCCC3CDDF track", which only exists when
+    /// the rig carries a node named <c>offsethelper</c>. Rigs retargeted onto
+    /// from elsewhere usually do not, so the author nominates one here.
+    /// </remarks>
+    public string? AccumulatorBoneName { get; init; }
+
+    /// <summary>
     /// Preview-only actor/world accumulation. This is deliberately separate
     /// from the exportable root policy above.
     /// </summary>
@@ -1991,6 +2048,13 @@ public sealed record ProjectAnimation
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(
                 RootBoneName,
+                parameterName);
+        }
+
+        if (AccumulatorBoneName is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(
+                AccumulatorBoneName,
                 parameterName);
         }
 

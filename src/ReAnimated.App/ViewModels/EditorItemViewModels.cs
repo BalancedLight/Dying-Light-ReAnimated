@@ -271,6 +271,8 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
 {
     private string _name;
     private bool _includeInPackage;
+    private Dl1RootMotionMode _rootMotionMode;
+    private string? _rootBoneName;
 
     public AnimationLibraryItemViewModel(
         Guid id,
@@ -294,7 +296,10 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
         string? primaryScript = null,
         string? effectiveScripts = null,
         string? outputName = null,
-        bool includeInExport = true)
+        bool includeInExport = true,
+        Dl1RootMotionMode rootMotionMode = Dl1RootMotionMode.Recorded,
+        string? rootBoneName = null,
+        IReadOnlyList<string>? rootBoneCandidates = null)
     {
         if (id == Guid.Empty)
         {
@@ -331,6 +336,10 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
             ? _name
             : outputName.Trim();
         _includeInPackage = includeInExport;
+        _rootMotionMode = rootMotionMode;
+        _rootBoneName = rootBoneName;
+        RootMotionModes = Enum.GetValues<Dl1RootMotionMode>();
+        RootBoneCandidates = rootBoneCandidates ?? [];
     }
 
     public Guid Id { get; }
@@ -344,6 +353,35 @@ public sealed class AnimationLibraryItemViewModel : ObservableObject
                 ? "Untitled animation"
                 : value.Trim());
     }
+
+    /// <summary>
+    /// Root policy for this animation. Every variant carries its own, so one
+    /// clip can accumulate motion while another holds Bip01.
+    /// </summary>
+    public Dl1RootMotionMode RootMotionMode
+    {
+        get => _rootMotionMode;
+        set => SetProperty(ref _rootMotionMode, value);
+    }
+
+    public string? RootBoneName
+    {
+        get => _rootBoneName;
+        set => SetProperty(ref _rootBoneName, value);
+    }
+
+    public IReadOnlyList<Dl1RootMotionMode> RootMotionModes { get; } = [];
+
+    public IReadOnlyList<string> RootBoneCandidates { get; } = [];
+
+    /// <summary>
+    /// Restores a rejected inline edit without re-entering the commit path.
+    /// </summary>
+    internal void RevertRootMotionMode(Dl1RootMotionMode mode) =>
+        SetProperty(ref _rootMotionMode, mode, nameof(RootMotionMode));
+
+    internal void RevertRootBoneName(string? rootBoneName) =>
+        SetProperty(ref _rootBoneName, rootBoneName, nameof(RootBoneName));
 
     public string Source { get; }
 
@@ -442,6 +480,9 @@ public sealed class ProjectModelItemViewModel
 public sealed class ExportVariantSelectionViewModel : ObservableObject
 {
     private bool _isSelected;
+    private string _name;
+    private string _outputName;
+    private string _primaryScript;
 
     public ExportVariantSelectionViewModel(
         Guid animationId,
@@ -454,26 +495,42 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
         string? primaryScript = null,
         string? effectiveScripts = null,
         string? outputName = null,
-        string? bindingState = null)
+        string? bindingState = null,
+        string? scriptMode = null,
+        Guid? animationLibraryId = null)
     {
         AnimationId = animationId;
-        Name = name ?? string.Empty;
+        _name = name ?? string.Empty;
         Readiness = readiness ?? string.Empty;
         IsEnabled = isEnabled;
         _isSelected = isEnabled && isSelected;
         OriginModel = originModel ?? string.Empty;
         TargetModel = targetModel ?? string.Empty;
-        PrimaryScript = primaryScript ?? string.Empty;
+        _primaryScript = primaryScript ?? string.Empty;
         EffectiveScripts = effectiveScripts ?? string.Empty;
-        OutputName = string.IsNullOrWhiteSpace(outputName)
-            ? Name
+        _outputName = string.IsNullOrWhiteSpace(outputName)
+            ? _name
             : outputName.Trim();
         BindingState = bindingState ?? string.Empty;
+        ScriptMode = scriptMode ?? string.Empty;
+        AnimationLibraryId = animationLibraryId;
     }
 
     public Guid AnimationId { get; }
 
-    public string Name { get; }
+    /// <summary>
+    /// Owning type-322 library, or null when the variant is unassigned. The
+    /// SCR name is a property of that library, so editing it renames the
+    /// script for every variant sharing it.
+    /// </summary>
+    public Guid? AnimationLibraryId { get; }
+
+    /// <summary>Variant name; also the SCR sequence name.</summary>
+    public string Name
+    {
+        get => _name;
+        set => SetProperty(ref _name, value ?? string.Empty);
+    }
 
     public string Readiness { get; }
 
@@ -481,13 +538,30 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
 
     public string TargetModel { get; }
 
-    public string PrimaryScript { get; }
+    /// <summary>Resource name of the owning type-322 animation script.</summary>
+    public string PrimaryScript
+    {
+        get => _primaryScript;
+        set => SetProperty(ref _primaryScript, value ?? string.Empty);
+    }
 
     public string EffectiveScripts { get; }
 
-    public string OutputName { get; }
+    public string OutputName
+    {
+        get => _outputName;
+        set => SetProperty(ref _outputName, value ?? string.Empty);
+    }
 
     public string BindingState { get; }
+
+    /// <summary>
+    /// How the owning script registers: custom additive or an extension of a
+    /// fingerprinted retail script, with its DLC append number and collision
+    /// policy. Without this the panel cannot say whether an export layers a
+    /// DLC append or replaces stock sequences.
+    /// </summary>
+    public string ScriptMode { get; }
 
     public bool IsEnabled { get; }
 
@@ -496,6 +570,21 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
         get => _isSelected;
         set => SetProperty(ref _isSelected, IsEnabled && value);
     }
+
+    /// <summary>
+    /// Restores a rejected inline edit without re-entering the commit path.
+    /// </summary>
+    internal void RevertName(string name) =>
+        SetProperty(ref _name, name ?? string.Empty, nameof(Name));
+
+    internal void RevertOutputName(string outputName) =>
+        SetProperty(ref _outputName, outputName ?? string.Empty, nameof(OutputName));
+
+    internal void RevertPrimaryScript(string primaryScript) =>
+        SetProperty(
+            ref _primaryScript,
+            primaryScript ?? string.Empty,
+            nameof(PrimaryScript));
 }
 
 public sealed class ExportModelSelectionViewModel : ObservableObject
@@ -539,6 +628,20 @@ public sealed class ExportModelSelectionViewModel : ObservableObject
             }
         }
     }
+}
+
+/// <summary>
+/// One animation script offered to the raw source editor.
+/// </summary>
+public sealed record AnimationScriptEditorItemViewModel(
+    Guid Id,
+    string ResourceName,
+    string DisplayName,
+    bool IsAuthored)
+{
+    public string Label => IsAuthored
+        ? $"{ResourceName}.scr (authored)"
+        : $"{ResourceName}.scr (generated)";
 }
 
 public sealed record ExportReadinessItemViewModel(
@@ -2934,6 +3037,7 @@ public sealed class JobViewModel : ObservableObject, IDisposable
     private string _stage;
     private string _state;
     private CancellationTokenSource? _cancellationSource;
+    private bool _isFinished;
     private bool _disposed;
 
     public JobViewModel(
@@ -2980,9 +3084,24 @@ public sealed class JobViewModel : ObservableObject, IDisposable
         set => SetProperty(ref _state, value);
     }
 
+    /// <summary>
+    /// True once the job has finished, however it finished.
+    /// </summary>
+    /// <remarks>
+    /// Completion used to be expressible only as free-text <see cref="State"/>,
+    /// so nothing could ask "is this still running?". A progress indicator has
+    /// to know that to dismiss itself.
+    /// </remarks>
+    public bool IsFinished
+    {
+        get => _isFinished;
+        private set => SetProperty(ref _isFinished, value);
+    }
+
     public void Complete(string state)
     {
         State = state;
+        IsFinished = true;
         CancellationTokenSource? source =
             Interlocked.Exchange(ref _cancellationSource, null);
         source?.Dispose();
@@ -2992,6 +3111,7 @@ public sealed class JobViewModel : ObservableObject, IDisposable
 
     public void Dispose()
     {
+        IsFinished = true;
         if (_disposed)
         {
             return;

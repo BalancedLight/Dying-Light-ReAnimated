@@ -64,6 +64,13 @@
             <MenuItem Header="_Viewport">
                 <MenuItem Command="{Binding ResetCameraCommand}" Header="_Reset camera" />
                 <MenuItem Command="{Binding FrameSelectionCommand}" Header="_Frame scene" />
+                <MenuItem Header="_Keep framed"
+                          IsCheckable="True"
+                          IsChecked="{Binding KeepFramed}"
+                          ToolTip="Keep refitting the camera to the animated subject. Orbiting still works because framing preserves the view direction; panning and dollying are overridden by the next refit." />
+                <MenuItem Command="{Binding OpenBoneEditorCommand}"
+                          Header="_Edit bones"
+                          ToolTip="Open Retarget/Edit, select the Skeleton tree and Inspector, and choose the first editable deform bone." />
                 <MenuItem Header="_Link cameras" IsCheckable="True" IsChecked="{Binding IsViewportsLinked}" />
                 <Separator />
                 <MenuItem Header="Show _mesh surfaces"
@@ -101,6 +108,34 @@
                           ToolTip="Samples the authoritative exportable pipeline on a cancellable worker; preview-only procedural motion is excluded." />
             </MenuItem>
             <MenuItem Header="_Window">
+                <MenuItem Header="_Workspace">
+                    <MenuItem Command="{Binding SelectWorkspaceCommand}"
+                              CommandParameter="Models"
+                              Header="_Models"
+                              IsChecked="{Binding IsModelsWorkspace, Mode=OneWay}"
+                              ToolTip="Browse base-game models, preview without changing variants, and import project-owned custom FBX models." />
+                    <MenuItem Command="{Binding SelectWorkspaceCommand}"
+                              CommandParameter="Animations"
+                              Header="_Animations"
+                              IsChecked="{Binding IsAnimationsWorkspace, Mode=OneWay}"
+                              ToolTip="Choose immutable sources and create model-specific target variants." />
+                    <MenuItem Command="{Binding SelectWorkspaceCommand}"
+                              CommandParameter="Playback"
+                              Header="_Playback"
+                              IsChecked="{Binding IsPlaybackWorkspace, Mode=OneWay}"
+                              ToolTip="Play the active target variant; draft mappings preview visibly but cannot export." />
+                    <MenuItem Command="{Binding SelectWorkspaceCommand}"
+                              CommandParameter="Retarget/Edit"
+                              Header="_Retarget / Edit"
+                              IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}" />
+                    <MenuItem Command="{Binding SelectWorkspaceCommand}"
+                              CommandParameter="Export"
+                              Header="_Export"
+                              IsChecked="{Binding IsExportWorkspace, Mode=OneWay}" />
+                </MenuItem>
+                <Separator />
+                <MenuItem Command="{Binding ToggleDiagnosticsDrawerCommand}"
+                          Header="_Jobs / diagnostics" />
                 <MenuItem x:Name="DockPanesMenu"
                           Header="_Panes"
                           SubmenuOpened="OnDockPanesMenuOpened" />
@@ -108,7 +143,8 @@
                           Click="OnResetDockLayoutClick" />
             </MenuItem>
             <MenuItem Header="_Help">
-                <MenuItem Header="DL1 fidelity status" />
+                <MenuItem Command="{Binding ShowFidelityDetailsCommand}"
+                          Header="DL1 _fidelity status" />
             </MenuItem>
         </Menu>
 
@@ -144,6 +180,53 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
+            <!-- Running-job indicator. The Jobs drawer is hidden outside the
+                 animation workspaces, so exports and project loads used to run
+                 with no visible feedback at all. This spans every row and sits
+                 above WorkflowDockManager (ZIndex 500). It is deliberately not
+                 a modal: only the card itself is hit-testable, so the rest of
+                 the window stays usable while work runs. -->
+            <Border x:Name="ActiveJobIndicator"
+                    Grid.RowSpan="4"
+                    Panel.ZIndex="600"
+                    Width="360"
+                    Padding="14"
+                    Margin="0,0,0,24"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Bottom"
+                    Background="{StaticResource PanelRaisedBrush}"
+                    BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="4"
+                    Visibility="{Binding HasActiveJob, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <StackPanel>
+                    <TextBlock FontSize="14"
+                               FontWeight="SemiBold"
+                               Foreground="{StaticResource TextBrush}"
+                               Text="{Binding ActiveJob.Name}"
+                               TextTrimming="CharacterEllipsis" />
+                    <TextBlock Margin="0,3,0,0"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="{Binding ActiveJob.Stage}"
+                               TextTrimming="CharacterEllipsis" />
+                    <ProgressBar Height="10"
+                                 Margin="0,8,0,0"
+                                 Maximum="100"
+                                 Value="{Binding ActiveJob.Progress, Mode=OneWay}" />
+                    <DockPanel Margin="0,8,0,0">
+                        <Button DockPanel.Dock="Right"
+                                Margin="8,0,0,0"
+                                Command="{Binding ActiveJob.CancelCommand}"
+                                Content="Cancel" />
+                        <TextBlock VerticalAlignment="Center"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="{Binding ActiveJob.State}"
+                                   TextTrimming="CharacterEllipsis"
+                                   TextWrapping="NoWrap" />
+                    </DockPanel>
+                </StackPanel>
+            </Border>
+
             <Border Grid.Row="0"
                     MinHeight="46"
                     Padding="5,3"
@@ -158,15 +241,7 @@
                     </Grid.RowDefinitions>
                     <WrapPanel Grid.Row="0"
                                VerticalAlignment="Center">
-                    <StackPanel Orientation="Horizontal" Margin="5,0">
-                        <Button Command="{Binding NewWorkspaceCommand}" Content="New" />
-                        <Button Command="{Binding OpenWorkspaceCommand}" Content="Open" />
-                        <Button Command="{Binding SaveWorkspaceCommand}" Content="Save" />
-                        <Separator Margin="4,6" />
-                        <Button Command="{Binding UndoCommand}" Content="Undo" />
-                        <Button Command="{Binding RedoCommand}" Content="Redo" />
-                    </StackPanel>
-                    <StackPanel Orientation="Horizontal" Margin="8,2">
+                    <StackPanel Orientation="Horizontal" Margin="5,2">
                         <TextBlock Margin="0,0,5,0"
                                    VerticalAlignment="Center"
                                    Foreground="{StaticResource MutedTextBrush}"
@@ -232,51 +307,7 @@
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,2"
                                 Visibility="{Binding IsAnimationWorkspaceSurfaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
-                        <ToggleButton Content="Linked cameras"
-                                      IsChecked="{Binding IsViewportsLinked}"
-                                      Visibility="{Binding IsLinkedCameraControlVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
-                        <Button Command="{Binding FrameSelectionCommand}" Content="Frame" />
-                        <ToggleButton Content="Show mesh"
-                                      IsChecked="{Binding ShowMeshes}"
-                                      ToolTip="Show or hide every actor and attachment mesh without discarding the decoded scene." />
-                        <ToggleButton Content="Show bones"
-                                      IsChecked="{Binding ShowSkeletonOverlay}"
-                                      ToolTip="Show or hide the complete skeleton overlay while retaining the individual bone/helper filters." />
-                        <Button Command="{Binding OpenBoneEditorCommand}"
-                                Content="Edit bones"
-                                ToolTip="Open Retarget/Edit, select the Skeleton tree and Inspector, and choose the first editable deform bone." />
-                        <ToggleButton Content="Helpers"
-                                      IsChecked="{Binding ShowHelpers}"
-                                      ToolTip="Show ordinary DL1 helpers in yellow. Select a helper in the Skeleton tab to highlight it." />
-                        <ToggleButton Content="Camera helpers"
-                                      IsChecked="{Binding ShowCameraHelpers}"
-                                      ToolTip="Show EyeCamera and RefCamera helpers in orange." />
-                        <ToggleButton Content="Prop helpers"
-                                      IsChecked="{Binding ShowPropHelpers}"
-                                      ToolTip="Show PropHolder and other prop or pivot helpers in gold." />
-                        <Button Command="{Binding ToggleDiagnosticsDrawerCommand}"
-                                Content="Jobs / diagnostics" />
                     </StackPanel>
-                    <Button Margin="10,2"
-                            Padding="9,4"
-                            Command="{Binding ShowFidelityDetailsCommand}"
-                            Visibility="{Binding IsAnimationWorkspaceSurfaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}"
-                            ToolTip="Open the Fidelity drawer with the exact preview tier, installed-build state, and renderer feature limits.">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock FontSize="10"
-                                       FontWeight="SemiBold"
-                                       Text="Fidelity:" />
-                            <TextBlock Margin="5,0,0,0"
-                                       FontSize="10"
-                                       Foreground="{StaticResource WarningBrush}"
-                                       Text="{Binding SelectedPreviewMode}" />
-                            <TextBlock Margin="5,0,0,0"
-                                       FontSize="10"
-                                       Foreground="{StaticResource MutedTextBrush}"
-                                       Text="· open details" />
-                        </StackPanel>
-                    </Button>
                     </WrapPanel>
                     <StackPanel Grid.Row="1"
                                 HorizontalAlignment="Center"
@@ -552,6 +583,14 @@
                             </Grid.ColumnDefinitions>
                             <views:ViewportPane x:Name="AnimationsSourcePreviewPane"
                                                 DataContext="{Binding SourceViewport}" />
+
+                            <!-- Registered as its own dock pane, the way
+                                 Playback registers playback.timeline. Nesting
+                                 it around the viewport does not work: the dock
+                                 controller detaches the viewport by name and
+                                 would leave the transport behind. -->
+                            <views:TimelinePanel x:Name="AnimationsSourceTimelinePane"
+                                                 DataContext="{Binding Timeline}" />
                             <GridSplitter Grid.Column="1"
                                           Width="6"
                                           HorizontalAlignment="Stretch"
@@ -803,7 +842,23 @@
                                       SelectedItem="{Binding SelectedAnimationLibraryItem}"
                                       SelectionMode="Single"
                                       VirtualizingPanel.IsVirtualizing="True"
-                                      VirtualizingPanel.VirtualizationMode="Recycling">
+                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                    PreviewMouseRightButtonDown="OnDataGridPreviewMouseRightButtonDown"
+                                    Tag="{Binding}">
+                                    <DataGrid.ContextMenu>
+                                        <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                            <MenuItem Command="{Binding OpenSelectedAnimationCommand}" Header="_Open" />
+                                            <MenuItem Command="{Binding ActivateSelectedAnimationCommand}" Header="_Activate" />
+                                            <Separator />
+                                            <MenuItem Command="{Binding AddAnimationTargetsCommand}" Header="Add _target to selected clip..." />
+                                            <MenuItem Command="{Binding RenameSelectedAnimationCommand}" Header="_Rename" />
+                                            <MenuItem Command="{Binding DuplicateSelectedAnimationCommand}" Header="_Duplicate" />
+                                            <MenuItem Command="{Binding RebindSelectedAnimationSourceCommand}" Header="Re_bind source" />
+                                            <Separator />
+                                            <MenuItem Command="{Binding RevealSelectedAnimationSourceCommand}" Header="Re_veal source" />
+                                            <MenuItem Command="{Binding RemoveSelectedAnimationCommand}" Header="Re_move" />
+                                        </ContextMenu>
+                                    </DataGrid.ContextMenu>
                                 <DataGrid.Columns>
                                     <DataGridTemplateColumn Width="230" MinWidth="160" Header="Animation">
                                         <DataGridTemplateColumn.CellTemplate>
@@ -842,6 +897,28 @@
                                     <DataGridTextColumn Width="150" MinWidth="110" Binding="{Binding BindingState}" Header="Binding" IsReadOnly="True" />
                                     <DataGridTextColumn Width="110" Binding="{Binding Cadence}" Header="Timing" IsReadOnly="True" />
                                     <DataGridTextColumn Width="105" Binding="{Binding Roles}" Header="Roles" IsReadOnly="True" />
+                                    <DataGridTemplateColumn Width="128" Header="Root policy">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox BorderThickness="0"
+                                                          Background="Transparent"
+                                                          ItemsSource="{Binding RootMotionModes}"
+                                                          SelectedItem="{Binding RootMotionMode, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                          ToolTip="Saved on this animation. Recorded keeps decoded tracks, InPlace removes travel, Bip01 transfers locomotion to the skeletal root, and MotionAccumulator writes travel and heading to a separate accumulator track." />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
+                                    <DataGridTemplateColumn Width="118" Header="Root bone">
+                                        <DataGridTemplateColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <ComboBox BorderThickness="0"
+                                                          Background="Transparent"
+                                                          ItemsSource="{Binding RootBoneCandidates}"
+                                                          SelectedItem="{Binding RootBoneName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                          ToolTip="Saved on this animation and shared by preview and export." />
+                                            </DataTemplate>
+                                        </DataGridTemplateColumn.CellTemplate>
+                                    </DataGridTemplateColumn>
                                     <DataGridTextColumn Width="170" MinWidth="120" Binding="{Binding PrimaryScript}" Header="Primary SCR" IsReadOnly="True" />
                                     <DataGridTextColumn Width="220" MinWidth="140" Binding="{Binding EffectiveScripts}" Header="Imported SCRs" IsReadOnly="True" />
                                     <DataGridCheckBoxColumn Width="72" Binding="{Binding IncludeInPackage}" Header="Export" />
@@ -981,6 +1058,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
                                 <DockPanel Margin="0,0,0,8">
                                     <Button DockPanel.Dock="Right"
@@ -1053,8 +1131,22 @@
                                               FrozenColumnCount="2"
                                               HorizontalScrollBarVisibility="Auto"
                                               ItemsSource="{Binding ExportVariants}"
+                                              SelectedItem="{Binding SelectedExportVariant}"
+                                              SelectionMode="Single"
                                               VirtualizingPanel.IsVirtualizing="True"
-                                              VirtualizingPanel.VirtualizationMode="Recycling">
+                                              VirtualizingPanel.VirtualizationMode="Recycling"
+                                              PreviewMouseRightButtonDown="OnDataGridPreviewMouseRightButtonDown"
+                                              Tag="{Binding}">
+                                        <DataGrid.ContextMenu>
+                                            <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                                <MenuItem Command="{Binding ApplyAnimationScriptTargetCommand}" Header="_Apply to SCR" />
+                                                <MenuItem Command="{Binding ApplyExportSelectionCommand}" Header="_Save selection" />
+                                                <Separator />
+                                                <MenuItem Command="{Binding ExportAnimationRPackCommand}" Header="Export animation _RPack..." />
+                                                <MenuItem Command="{Binding ExportAnm2FilesCommand}" Header="Export A_NM2 files..." />
+                                                <MenuItem Command="{Binding ExportFullProjectCommand}" Header="Export _full project..." />
+                                            </ContextMenu>
+                                        </DataGrid.ContextMenu>
                                         <DataGrid.RowStyle>
                                             <Style TargetType="{x:Type DataGridRow}"
                                                    BasedOn="{StaticResource {x:Type DataGridRow}}">
@@ -1075,25 +1167,65 @@
                                                              without this the reason never reaches the pointer
                                                              and the control reads as simply broken. -->
                                                         <CheckBox HorizontalAlignment="Center"
-                                                                  IsChecked="{Binding IsSelected}"
+                                                                  IsChecked="{Binding IsSelected, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                                   IsEnabled="{Binding IsEnabled}"
                                                                   ToolTip="{Binding Readiness}"
                                                                   ToolTipService.ShowOnDisabled="True" />
                                                     </DataTemplate>
                                                 </DataGridTemplateColumn.CellTemplate>
                                             </DataGridTemplateColumn>
-                                            <DataGridTextColumn Width="220" MinWidth="150" Binding="{Binding Name}" Header="Animation" IsReadOnly="True" />
+                                            <!-- Animation, Primary SCR and Output ANM2 are edited in
+                                                 place. A rejected value reverts and is reported in
+                                                 diagnostics rather than being written and failing
+                                                 later at export. -->
+                                            <DataGridTextColumn Width="220" MinWidth="150" Binding="{Binding Name, UpdateSourceTrigger=LostFocus}" Header="Animation" />
                                             <DataGridTextColumn Width="190" MinWidth="130" Binding="{Binding OriginModel}" Header="Origin model / rig" IsReadOnly="True" />
                                             <DataGridTextColumn Width="190" MinWidth="130" Binding="{Binding TargetModel}" Header="Target model" IsReadOnly="True" />
                                             <DataGridTextColumn Width="160" MinWidth="110" Binding="{Binding BindingState}" Header="Binding" IsReadOnly="True" />
-                                            <DataGridTextColumn Width="175" MinWidth="120" Binding="{Binding PrimaryScript}" Header="Primary SCR" IsReadOnly="True" />
+                                            <DataGridTextColumn Width="175" MinWidth="120" Binding="{Binding PrimaryScript, UpdateSourceTrigger=LostFocus}" Header="Primary SCR" />
+                                            <DataGridTextColumn Width="185" MinWidth="130" Binding="{Binding ScriptMode}" Header="SCR mode" IsReadOnly="True" />
                                             <DataGridTextColumn Width="220" MinWidth="140" Binding="{Binding EffectiveScripts}" Header="Imported SCRs" IsReadOnly="True" />
-                                            <DataGridTextColumn Width="180" MinWidth="120" Binding="{Binding OutputName}" Header="Output ANM2" IsReadOnly="True" />
+                                            <DataGridTextColumn Width="180" MinWidth="120" Binding="{Binding OutputName, UpdateSourceTrigger=LostFocus}" Header="Output ANM2" />
                                             <DataGridTextColumn Width="2*" MinWidth="240" Binding="{Binding Readiness}" Header="Readiness / blocked reason" IsReadOnly="True" />
                                         </DataGrid.Columns>
                                     </DataGrid>
                                 </Border>
-                                <DockPanel Grid.Row="3" Margin="0,8,0,0">
+                                <Border Grid.Row="3"
+                                        Margin="0,8,0,0"
+                                        Style="{StaticResource PaneBorderStyle}">
+                                    <StackPanel Margin="8">
+                                        <TextBlock FontWeight="SemiBold"
+                                                   Text="Animation script for the selected row" />
+                                        <WrapPanel Margin="0,6,0,0">
+                                            <TextBlock VerticalAlignment="Center"
+                                                       Margin="0,0,6,0"
+                                                       Text="Base game script" />
+                                            <ComboBox Width="230"
+                                                      IsEditable="False"
+                                                      ItemsSource="{Binding TargetAnimationScriptOptions}"
+                                                      SelectedItem="{Binding SelectedTargetAnimationScript}"
+                                                      ToolTip="Stock animation scripts read from the shipped animscript source tree. Which script animates a given model is not recorded in retail data, so the preselection is a suggestion." />
+                                            <CheckBox VerticalAlignment="Center"
+                                                      Margin="14,0,6,0"
+                                                      Content="DLC override"
+                                                      IsChecked="{Binding IsDlcOverrideEnabled}"
+                                                      ToolTip="Name the project script as a DLC append of the selected stock script. The retail script is left untouched." />
+                                            <TextBox Width="230"
+                                                     VerticalAlignment="Center"
+                                                     MaxLength="128"
+                                                     IsEnabled="{Binding IsDlcOverrideEnabled}"
+                                                     Text="{Binding DlcOverrideScriptName, UpdateSourceTrigger=PropertyChanged}" />
+                                            <Button Margin="10,0,0,0"
+                                                    Command="{Binding ApplyAnimationScriptTargetCommand}"
+                                                    Content="Apply to SCR" />
+                                        </WrapPanel>
+                                        <TextBlock Margin="0,6,0,0"
+                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                   Text="{Binding AnimationScriptTargetSummary}"
+                                                   TextWrapping="Wrap" />
+                                    </StackPanel>
+                                </Border>
+                                <DockPanel Grid.Row="4" Margin="0,8,0,0">
                                     <TextBlock VerticalAlignment="Center"
                                                Margin="5,0,12,0"
                                                Foreground="{StaticResource AccentBrush}"
@@ -1105,6 +1237,63 @@
                                         <Button Command="{Binding ExportFullProjectCommand}" Content="Export full project..." />
                                     </WrapPanel>
                                 </DockPanel>
+                            </Grid>
+                        </TabItem>
+
+                        <TabItem x:Name="ExportAnimationScriptTab" Header="Animation script">
+                            <Grid Margin="12">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                                <TextBlock FontSize="17"
+                                           FontWeight="SemiBold"
+                                           Text="Edit animation script source" />
+                                <TextBlock Grid.Row="1"
+                                           Margin="0,3,0,8"
+                                           Foreground="{StaticResource MutedTextBrush}"
+                                           Text="SeqTrack rows and their event blocks, in the same loose .scr grammar the base game ships. Saving switches the script from generated to authored source. Events reach the Developer Tools and official-compiler outputs; an RPack export cannot carry them and says so."
+                                           TextWrapping="Wrap" />
+                                <DockPanel Grid.Row="2" Margin="0,0,0,8">
+                                    <WrapPanel DockPanel.Dock="Right">
+                                        <Button Command="{Binding CommitAnimationScriptTextCommand}"
+                                                Content="Save script" />
+                                        <Button Command="{Binding RevertAnimationScriptTextCommand}"
+                                                Content="Revert to generated" />
+                                    </WrapPanel>
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock VerticalAlignment="Center"
+                                                   Margin="0,0,6,0"
+                                                   Text="Script" />
+                                        <ComboBox Width="320"
+                                                  DisplayMemberPath="Label"
+                                                  ItemsSource="{Binding AnimationScriptLibraries}"
+                                                  SelectedItem="{Binding SelectedScriptLibrary}" />
+                                    </StackPanel>
+                                </DockPanel>
+                                <Border Grid.Row="3" Style="{StaticResource PaneBorderStyle}">
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="*" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <TextBox AcceptsReturn="True"
+                                                 AcceptsTab="True"
+                                                 FontFamily="Consolas, Courier New, monospace"
+                                                 HorizontalScrollBarVisibility="Auto"
+                                                 VerticalScrollBarVisibility="Auto"
+                                                 SpellCheck.IsEnabled="False"
+                                                 Text="{Binding AnimationScriptText, UpdateSourceTrigger=PropertyChanged}"
+                                                 TextWrapping="NoWrap" />
+                                        <TextBlock Grid.Row="1"
+                                                   Margin="6"
+                                                   Foreground="{StaticResource AccentBrush}"
+                                                   Text="{Binding AnimationScriptStateSummary}"
+                                                   TextWrapping="Wrap" />
+                                    </Grid>
+                                </Border>
                             </Grid>
                         </TabItem>
 
@@ -1538,7 +1727,24 @@
                                          Grid.Row="2"
                                          ItemsSource="{Binding AnimationLibrary}"
                                          MouseDoubleClick="OnAnimationLibraryDoubleClick"
-                                         SelectedItem="{Binding SelectedAnimationLibraryItem}">
+                                         PreviewMouseRightButtonDown="OnListBoxPreviewMouseRightButtonDown"
+                                         SelectedItem="{Binding SelectedAnimationLibraryItem}"
+                                         Tag="{Binding}">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                            <MenuItem Command="{Binding OpenSelectedAnimationCommand}" Header="_Open" />
+                                            <MenuItem Command="{Binding ActivateSelectedAnimationCommand}" Header="_Activate" />
+                                            <Separator />
+                                            <MenuItem Command="{Binding AddAnimationTargetsCommand}" Header="Add _target to selected clip..." />
+                                            <MenuItem Command="{Binding RenameSelectedAnimationCommand}" Header="_Rename" />
+                                            <MenuItem Command="{Binding DuplicateSelectedAnimationCommand}" Header="_Duplicate" />
+                                            <MenuItem Command="{Binding RebindSelectedAnimationSourceCommand}" Header="Re_bind source" />
+                                            <MenuItem Command="{Binding AttachSelectedAnimationAsFacialCommand}" Header="Attach as _facial" />
+                                            <Separator />
+                                            <MenuItem Command="{Binding RevealSelectedAnimationSourceCommand}" Header="Re_veal source" />
+                                            <MenuItem Command="{Binding RemoveSelectedAnimationCommand}" Header="Re_move" />
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Border Margin="2,3"
@@ -1567,10 +1773,14 @@
                                                                    Foreground="{StaticResource AccentBrush}"
                                                                    Text="{Binding VariantGroupLabel, StringFormat=Clip: {0}}" />
                                                     </Border>
+                                                    <!-- LostFocus, not PropertyChanged: each commit
+                                                         rebuilds the whole library list, so a
+                                                         per-keystroke trigger would destroy the row
+                                                         mid-edit. Enter commits explicitly. -->
                                                     <TextBox FontWeight="SemiBold"
                                                              MaxLength="128"
                                                              IsReadOnly="{Binding IsSourceOnly}"
-                                                             Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" />
+                                                             Text="{Binding Name, UpdateSourceTrigger=LostFocus}" />
                                                     <TextBlock Margin="0,3,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding Source, StringFormat=Source: {0}}" TextWrapping="Wrap" />
                                                     <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding SourceModel, StringFormat=Source model: {0}}" TextWrapping="Wrap" />
                                                     <TextBlock FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="{Binding TargetModel, StringFormat=Target: {0}}" TextWrapping="Wrap" />
@@ -3063,7 +3273,23 @@
                                   MouseDoubleClick="OnAnimationLibraryDoubleClick"
                                   SelectedItem="{Binding SelectedAnimationLibraryItem}"
                                   VirtualizingPanel.IsVirtualizing="True"
-                                  VirtualizingPanel.VirtualizationMode="Recycling">
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
+                                  PreviewMouseRightButtonDown="OnDataGridPreviewMouseRightButtonDown"
+                                  Tag="{Binding}">
+                                  <DataGrid.ContextMenu>
+                                      <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                          <MenuItem Command="{Binding OpenSelectedAnimationCommand}" Header="_Open" />
+                                          <MenuItem Command="{Binding ActivateSelectedAnimationCommand}" Header="_Activate" />
+                                          <Separator />
+                                          <MenuItem Command="{Binding AddAnimationTargetsCommand}" Header="Add _target to selected clip..." />
+                                          <MenuItem Command="{Binding RenameSelectedAnimationCommand}" Header="_Rename" />
+                                          <MenuItem Command="{Binding DuplicateSelectedAnimationCommand}" Header="_Duplicate" />
+                                          <MenuItem Command="{Binding RebindSelectedAnimationSourceCommand}" Header="Re_bind source" />
+                                          <Separator />
+                                          <MenuItem Command="{Binding RevealSelectedAnimationSourceCommand}" Header="Re_veal source" />
+                                          <MenuItem Command="{Binding RemoveSelectedAnimationCommand}" Header="Re_move" />
+                                      </ContextMenu>
+                                  </DataGrid.ContextMenu>
                             <DataGrid.Columns>
                                 <DataGridTextColumn Width="220" MinWidth="140" Binding="{Binding Name}" Header="Animation" />
                                 <DataGridTextColumn Width="180" MinWidth="120" Binding="{Binding OriginModel}" Header="Origin" IsReadOnly="True" />
@@ -3151,7 +3377,14 @@
                     </TabItem>
 
                     <TabItem x:Name="DiagnosticsTab" Header="Diagnostics">
-                        <ListBox Margin="5" ItemsSource="{Binding Diagnostics}">
+                        <ListBox Margin="5" ItemsSource="{Binding Diagnostics}"
+                            Tag="{Binding}">
+                            <ListBox.ContextMenu>
+                                <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                    <MenuItem Command="{Binding CopyDiagnosticsCommand}" Header="_Copy all" />
+                                    <MenuItem Command="{Binding ClearDiagnosticsCommand}" Header="C_lear" />
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <Grid Margin="3,4">

@@ -59,6 +59,14 @@ public sealed record PreparedCustomModelAnimationLibrary(
     string LooseScriptText,
     ImmutableArray<string> Warnings)
 {
+    /// <summary>
+    /// True when <see cref="LooseScriptText"/> was hand-authored rather than
+    /// generated. Authored text cannot match the generator byte for byte, so
+    /// the staging checks verify the sequence inventory it declares instead of
+    /// comparing it against a regenerated script.
+    /// </summary>
+    public bool IsAuthoredScript { get; init; }
+
     public byte[] BuildPortableRpack()
     {
         AnimationScrSections sections = AnimationScrCodec.Build(Sequences);
@@ -83,6 +91,98 @@ public sealed record PreparedCustomModelAnimationLibrary(
 /// </summary>
 public static class CustomModelAnimationLibraryExporter
 {
+    /// <summary>
+    /// Verifies that a prepared library's loose script really covers its
+    /// sequence inventory.
+    /// </summary>
+    /// <remarks>
+    /// A generated script is checked by regenerating it and comparing bytes.
+    /// An authored one cannot be, so every declared sequence is matched
+    /// against a SeqTrack row instead. Skipping the check entirely would let a
+    /// hand edit silently drop a sequence and ship a deployment whose script
+    /// does not mention an animation it packaged.
+    /// </remarks>
+    public static void ValidateLooseScriptCoversInventory(
+        PreparedCustomModelAnimationLibrary library)
+    {
+        ArgumentNullException.ThrowIfNull(library);
+        if (!library.IsAuthoredScript)
+        {
+            string expected = BuildLooseAnimationScript(library.Sequences);
+            if (!string.Equals(
+                    library.LooseScriptText,
+                    expected,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "The animation SCR differs from its prepared sequence inventory.");
+            }
+
+            return;
+        }
+
+        ImmutableArray<AnimationScriptSeqTrack> authored =
+            AnimationScriptSourceParser.ParseSeqTracks(library.LooseScriptText);
+        foreach (AnimationScrSequence sequence in library.Sequences)
+        {
+            AnimationScriptSeqTrack[] matches =
+            [
+                .. authored.Where(track => string.Equals(
+                    track.Name,
+                    sequence.Name,
+                    StringComparison.OrdinalIgnoreCase)),
+            ];
+            if (matches.Length != 1)
+            {
+                throw new InvalidDataException(
+                    $"The authored animation SCR declares {matches.Length} SeqTrack rows named '{sequence.Name}'; exactly one is required.");
+            }
+
+            AnimationScriptSeqTrack track = matches[0];
+            if (!string.Equals(
+                    track.Anm2Name,
+                    sequence.Anm2Name,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"The authored SeqTrack '{sequence.Name}' names '{track.Anm2Name}' instead of '{sequence.Anm2Name}'.");
+            }
+
+            // A symbolic field comes from a .def include this tool does not
+            // resolve, so it is accepted as authored intent; a literal that
+            // disagrees with the packaged animation is a real mismatch.
+            EnsureTimingMatches(
+                sequence.Name,
+                "start frame",
+                track.StartFrame,
+                sequence.StartFrame);
+            EnsureTimingMatches(
+                sequence.Name,
+                "end frame",
+                track.EndFrame,
+                sequence.EndFrame);
+            EnsureTimingMatches(
+                sequence.Name,
+                "frame rate",
+                track.FramesPerSecond,
+                sequence.FramesPerSecond);
+        }
+    }
+
+    private static void EnsureTimingMatches(
+        string sequenceName,
+        string description,
+        AnimationScriptValue authored,
+        float expected)
+    {
+        if (authored.Number is { } value &&
+            Math.Abs(value - expected) > 0.001f)
+        {
+            throw new InvalidDataException(
+                $"The authored SeqTrack '{sequenceName}' declares a {description} of {authored.Text} instead of {expected.ToString(System.Globalization.CultureInfo.InvariantCulture)}.");
+        }
+    }
+
     private static readonly string[] ManifestLimitations =
     [
         "Generated auxiliary 0xCCC3CDDF tracks remain blocked until their writer passes the installed DL1 validation corpus.",
