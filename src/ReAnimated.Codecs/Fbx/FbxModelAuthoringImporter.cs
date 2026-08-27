@@ -32,6 +32,13 @@ public sealed record FbxModelAuthoringImportOptions
     public int MaximumSampledTransformKeysPerStack { get; init; } = 8_000_000;
 
     public bool DecodeAnimationClips { get; init; } = true;
+
+    /// <summary>
+    /// Skips every blend shape while retaining the mesh, materials, and rig.
+    /// This is an explicit recovery path for models whose morph data cannot be
+    /// represented by DL1; callers must obtain user approval before enabling it.
+    /// </summary>
+    public bool IgnoreMorphChannels { get; init; }
 }
 
 public readonly record struct FbxModelVertex(
@@ -178,6 +185,15 @@ public static class FbxModelAuthoringImporter
                 cancellationToken);
 
         var diagnostics = ImmutableArray.CreateBuilder<CustomModelImportDiagnostic>();
+        if (options.IgnoreMorphChannels)
+        {
+            diagnostics.Add(new CustomModelImportDiagnostic
+            {
+                Code = "model_morph_channels_skipped",
+                Severity = CustomModelImportSeverity.Warning,
+                Message = "All FBX blend shapes were skipped at the user's request. The mesh, materials, and rig were imported, but facial/morph animation is unavailable.",
+            });
+        }
         int projectedBindCount = bones.Count(static bone =>
             !bone.ExactLocalBindMatrix.NearlyEquals(bone.LocalBindTransform.ToMatrix(), 1e-7));
         if (projectedBindCount > 0)
@@ -1116,22 +1132,24 @@ public static class FbxModelAuthoringImporter
                 : TransformMatrix.Identity;
             TransformMatrix rawBake = rawMeshGlobal * geometric;
             TransformMatrix rawNormalTransform = rawBake.InvertedAffine();
-            ImmutableArray<FbxGeometryMorphDraft> geometryMorphs = ReadGeometryMorphs(
-                scene,
-                objects,
-                geometryObjectId,
-                geometryName,
-                controlPoints.Count,
-                rawBake,
-                metersPerUnit,
-                basis,
-                options,
-                morphChannels,
-                morphNames,
-                morphDescriptors,
-                ref affectedMorphControlPointCount,
-                ref decodedMorphDeltaBytes,
-                cancellationToken);
+            ImmutableArray<FbxGeometryMorphDraft> geometryMorphs = options.IgnoreMorphChannels
+                ? []
+                : ReadGeometryMorphs(
+                    scene,
+                    objects,
+                    geometryObjectId,
+                    geometryName,
+                    controlPoints.Count,
+                    rawBake,
+                    metersPerUnit,
+                    basis,
+                    options,
+                    morphChannels,
+                    morphNames,
+                    morphDescriptors,
+                    ref affectedMorphControlPointCount,
+                    ref decodedMorphDeltaBytes,
+                    cancellationToken);
             var transformedControlPoints = ImmutableArray.CreateBuilder<Vector3D>(controlPoints.Count);
             foreach (Vector3D controlPoint in controlPoints)
             {

@@ -400,7 +400,17 @@
                                            TextWrapping="Wrap" />
                                 <ListBox Grid.Row="2"
                                          ItemsSource="{Binding ProjectModelLibrary}"
-                                         SelectedItem="{Binding SelectedProjectModel}">
+                                         PreviewMouseRightButtonDown="OnListBoxPreviewMouseRightButtonDown"
+                                         SelectedItem="{Binding SelectedProjectModel}"
+                                         Tag="{Binding}">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu DataContext="{Binding PlacementTarget.Tag, RelativeSource={RelativeSource Self}}">
+                                            <MenuItem Command="{Binding EditSelectedProjectModelCommand}" Header="_Edit selected..." />
+                                            <MenuItem Command="{Binding UseSelectedProjectModelAsSourceCommand}" Header="Use as _source" />
+                                            <Separator />
+                                            <MenuItem Command="{Binding RemoveSelectedProjectModelCommand}" Header="_Remove from project" />
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <StackPanel Margin="3,5">
@@ -422,6 +432,9 @@
                                         <Button Command="{Binding EditSelectedProjectModelCommand}"
                                                 Content="Edit selected..."
                                                 ToolTip="Open the selected project-owned custom model for editing. Retail references remain preview-only." />
+                                        <Button Command="{Binding RemoveSelectedProjectModelCommand}"
+                                                Content="Remove selected"
+                                                ToolTip="Remove the selected model from this project, with any animation targets that point at it. Custom models and base-game references alike; nothing on disk is deleted." />
                                     </WrapPanel>
                                     <TextBlock Margin="0,5,0,0" FontSize="10" Foreground="{StaticResource MutedTextBrush}" Text="Imported custom models and checked embedded stacks enter the project immediately, including before the first Save." TextWrapping="Wrap" />
                                 </StackPanel>

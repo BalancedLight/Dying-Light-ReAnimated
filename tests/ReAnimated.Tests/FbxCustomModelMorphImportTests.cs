@@ -107,6 +107,30 @@ public sealed class FbxCustomModelMorphImportTests
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "CustomModelMorph")]
+    public void ImportsMeshWhenUserExplicitlySkipsInvalidMorphChannels()
+    {
+        byte[] fbx = CreateMorphFbx(["generic_smile", "generic_smile"]);
+
+        FbxModelAuthoringImportResult imported = FbxModelAuthoringImporter.Import(
+            fbx,
+            "generic-invalid-morphs.fbx",
+            new FbxModelAuthoringImportOptions
+            {
+                RigMode = CustomModelRigMode.StaticProp,
+                IgnoreMorphChannels = true,
+            });
+
+        Assert.Empty(imported.Package.Document.MorphChannels);
+        Assert.Empty(Assert.Single(imported.Surfaces).MorphTargets);
+        CustomModelImportDiagnostic diagnostic = Assert.Single(
+            imported.Package.Document.Diagnostics,
+            static diagnostic => diagnostic.Code == "model_morph_channels_skipped");
+        Assert.Equal(CustomModelImportSeverity.Warning, diagnostic.Severity);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CustomModelMorph")]
     public void ReimportPreviewSeparatesStableRigFromChangedMorphContract()
     {
         byte[] originalBytes = CreateMorphFbx(["generic_smile"]);

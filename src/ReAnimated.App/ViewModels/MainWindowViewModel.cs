@@ -843,6 +843,9 @@ public sealed partial class MainWindowViewModel :
         EditSelectedProjectModelCommand = new AsyncRelayCommand(
             EditSelectedProjectModelAsync,
             CanEditSelectedProjectModel);
+        RemoveSelectedProjectModelCommand = new RelayCommand(
+            RemoveSelectedProjectModel,
+            CanRemoveSelectedProjectModel);
         OpenRetailModelBrowserCommand = new RelayCommand(
             OpenRetailModelBrowser);
         ToggleDiagnosticsDrawerCommand = new RelayCommand(
@@ -1217,6 +1220,7 @@ public sealed partial class MainWindowViewModel :
 
             UseSelectedProjectModelAsSourceCommand.NotifyCanExecuteChanged();
             EditSelectedProjectModelCommand.NotifyCanExecuteChanged();
+            RemoveSelectedProjectModelCommand.NotifyCanExecuteChanged();
             if (value is null || previousId == value.ModelId)
             {
                 return;
@@ -1313,6 +1317,8 @@ public sealed partial class MainWindowViewModel :
     public AsyncRelayCommand UseSelectedAssetAsSourceCommand { get; }
 
     public AsyncRelayCommand UseSelectedProjectModelAsSourceCommand { get; }
+
+    public RelayCommand RemoveSelectedProjectModelCommand { get; }
 
     public AsyncRelayCommand UseSelectedAssetAsTargetCommand { get; }
 
@@ -9890,6 +9896,254 @@ public sealed partial class MainWindowViewModel :
         RefreshAnimationPreview();
         StatusText = $"Removed {selected.Name}";
     }
+
+    private bool CanRemoveSelectedProjectModel() =>
+        !IsBusy &&
+        SelectedProjectModel is not null &&
+        _project.Models.Any(model =>
+            model.Id == SelectedProjectModel.ModelId);
+
+    /// <summary>
+    /// Removes a model from the project, along with everything that exists
+    /// only to serve it.
+    /// </summary>
+    /// <remarks>
+    /// An animation target variant is defined by the model it retargets onto,
+    /// so it cannot outlive that model - but the immutable source it was made
+    /// from is shared and is kept. The model's own animation script and asset
+    /// reference are removed only when nothing else still points at them.
+    /// Both custom models and base-game references are handled the same way;
+    /// nothing on disk or in the retail catalog is touched.
+    /// </remarks>
+    private void RemoveSelectedProjectModel()
+    {
+        if (!CanRemoveSelectedProjectModel() ||
+            SelectedProjectModel is not { } selected)
+        {
+            return;
+        }
+
+        ProjectModelEntry? model = _project.Models.FirstOrDefault(
+            candidate => candidate.Id == selected.ModelId);
+        if (model is null)
+        {
+            return;
+        }
+
+        ImmutableArray<ProjectAnimationVariant> doomedVariants =
+        [
+            .. _project.AnimationVariants.Where(variant =>
+                variant.TargetModelId == model.Id),
+        ];
+        HashSet<Guid> doomedVariantIds =
+            [.. doomedVariants.Select(static variant => variant.Id)];
+
+        // A target can be assigned to a different script from the model's
+        // root script. Remove each library made orphaned by this model, but
+        // retain anything a surviving model, target, or script import needs.
+        HashSet<Guid> candidateLibraryIds =
+        [
+            .. doomedVariants
+                .Where(static variant =>
+                    variant.OwningAnimationLibraryId is not null)
+                .Select(static variant =>
+                    variant.OwningAnimationLibraryId!.Value),
+        ];
+        if (model.RootAnimationLibraryId is { } rootLibraryId)
+        {
+            candidateLibraryIds.Add(rootLibraryId);
+        }
+
+        Dictionary<Guid, ProjectAnimationLibrary> librariesById = _project
+            .AnimationLibraries.ToDictionary(static library => library.Id);
+        var requiredLibraryIds = new HashSet<Guid>();
+        foreach (ProjectModelEntry survivingModel in _project.Models.Where(
+                     candidate => candidate.Id != model.Id))
+        {
+            if (survivingModel.RootAnimationLibraryId is { } libraryId)
+            {
+                requiredLibraryIds.Add(libraryId);
+            }
+        }
+
+        foreach (ProjectAnimationVariant survivingVariant in _project
+                     .AnimationVariants.Where(variant =>
+                         !doomedVariantIds.Contains(variant.Id)))
+        {
+            if (survivingVariant.OwningAnimationLibraryId is { } libraryId)
+            {
+                requiredLibraryIds.Add(libraryId);
+            }
+        }
+
+        // Imports point from the importing script to the script it requires.
+        // Start with every library that cannot be removed directly, then walk
+        // its dependency closure through any candidates.
+        foreach (ProjectAnimationLibrary library in _project.AnimationLibraries
+                     .Where(library => !candidateLibraryIds.Contains(library.Id)))
+        {
+            foreach (ProjectAnimationLibraryImport import in library.Imports)
+            {
+                if (import.Kind ==
+                        ProjectAnimationLibraryImportKind.ProjectLibrary &&
+                    import.ProjectLibraryId is { } importedLibraryId)
+                {
+                    requiredLibraryIds.Add(importedLibraryId);
+                }
+            }
+        }
+
+        var pendingRequiredLibraries = new Queue<Guid>(requiredLibraryIds
+            .Where(candidateLibraryIds.Contains));
+        while (pendingRequiredLibraries.TryDequeue(out Guid libraryId) &&
+               librariesById.TryGetValue(libraryId, out ProjectAnimationLibrary? library))
+        {
+            foreach (ProjectAnimationLibraryImport import in library.Imports)
+            {
+                if (import.Kind !=
+                        ProjectAnimationLibraryImportKind.ProjectLibrary ||
+                    import.ProjectLibraryId is not { } importedLibraryId ||
+                    !requiredLibraryIds.Add(importedLibraryId) ||
+                    !candidateLibraryIds.Contains(importedLibraryId))
+                {
+                    continue;
+                }
+
+                pendingRequiredLibraries.Enqueue(importedLibraryId);
+            }
+        }
+
+        HashSet<Guid> doomedLibraryIds =
+        [.. candidateLibraryIds.Where(id => !requiredLibraryIds.Contains(id))];
+
+        if (!_fileDialogs.ConfirmProjectModelRemoval(
+                model.Name,
+                doomedVariants.Length,
+                doomedLibraryIds.Count))
+        {
+            return;
+        }
+
+        DlraProject updated = _project with
+        {
+            Models = [.. _project.Models.Where(
+                candidate => candidate.Id != model.Id)],
+            AnimationVariants = [.. _project.AnimationVariants.Where(
+                variant => !doomedVariantIds.Contains(variant.Id))],
+            Animations = [.. _project.Animations.Where(
+                animation => !doomedVariantIds.Contains(animation.Id))],
+            AnimationLibraries = doomedLibraryIds.Count > 0
+                ? [.. _project.AnimationLibraries.Where(
+                    library => !doomedLibraryIds.Contains(library.Id))]
+                : _project.AnimationLibraries,
+        };
+
+        // Anything still naming what just went is now dangling and would fail
+        // validation, so clear it here rather than let the commit throw.
+        updated = updated with
+        {
+            Assets = IsProjectAssetStillReferenced(updated, model.AssetId)
+                ? updated.Assets
+                : [.. updated.Assets.Where(
+                    asset => asset.Id != model.AssetId)],
+            ExportSelection = new ProjectExportSelection
+            {
+                ModelIds = [.. updated.ExportSelection.ModelIds.Where(
+                    id => id != model.Id)],
+                AnimationVariantIds =
+                [
+                    .. updated.ExportSelection.AnimationVariantIds.Where(
+                        id => !doomedVariantIds.Contains(id)),
+                ],
+            },
+            ActiveAnimationId =
+                updated.ActiveAnimationId is { } activeId &&
+                doomedVariantIds.Contains(activeId)
+                    ? null
+                    : updated.ActiveAnimationId,
+            Workflow = updated.Workflow with
+            {
+                SelectedModelId =
+                    updated.Workflow.SelectedModelId == model.Id
+                        ? null
+                        : updated.Workflow.SelectedModelId,
+                SelectedAnimationVariantId =
+                    updated.Workflow.SelectedAnimationVariantId is { } selectedVariantId &&
+                    doomedVariantIds.Contains(selectedVariantId)
+                        ? null
+                        : updated.Workflow.SelectedAnimationVariantId,
+            },
+            ModelsWorkspace =
+                updated.ModelsWorkspace is { } workspace &&
+                workspace.PackageAssetId == model.AssetId
+                    ? null
+                    : updated.ModelsWorkspace,
+        };
+
+        if (_activeAnimationId is { } active &&
+            doomedVariantIds.Contains(active))
+        {
+            _activeAnimationId = null;
+            _sourceAnimation = null;
+            _sourceBaseMeshes = [];
+            _synchronizedAnimation = null;
+            _activeRetargetMap = null;
+            Timeline.IsPlaying = false;
+        }
+
+        try
+        {
+            updated.Validate();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            InvalidDataException or
+            InvalidOperationException or
+            ProjectFormatException)
+        {
+            ReportOperationFailure(
+                "Models",
+                $"'{model.Name}' was not removed",
+                exception);
+            return;
+        }
+
+        CommitProject(updated);
+        RefreshAnimationPreview();
+        StatusText = doomedVariants.Length > 0
+            ? $"Removed {model.Name} and {doomedVariants.Length:N0} animation target(s)"
+            : $"Removed {model.Name}";
+    }
+
+    private static bool IsProjectAssetStillReferenced(
+        DlraProject project,
+        Guid assetId) =>
+        project.Models.Any(model => model.AssetId == assetId) ||
+        project.AnimationSources.Any(source =>
+            source.SourceAssetId == assetId ||
+            source.MimicAssetId == assetId ||
+            source.FacialSourceAssetId == assetId ||
+            BindingReferencesProjectAsset(source.SourceBinding, assetId) ||
+            BindingReferencesProjectAsset(
+                source.FacialAnimationSourceBinding,
+                assetId)) ||
+        project.Animations.Any(animation =>
+            animation.SourceAssetId == assetId ||
+            animation.MimicAssetId == assetId ||
+            animation.FacialSourceAssetId == assetId ||
+            animation.TargetAssetId == assetId ||
+            BindingReferencesProjectAsset(animation.SourceBinding, assetId) ||
+            BindingReferencesProjectAsset(
+                animation.FacialAnimationSourceBinding,
+                assetId)) ||
+        project.ModelsWorkspace?.PackageAssetId == assetId;
+
+    private static bool BindingReferencesProjectAsset(
+        ProjectAnimationSourceBinding? binding,
+        Guid assetId) =>
+        binding is { } resolved &&
+        (resolved.AssetId == assetId ||
+         resolved.RetailSourceModelAssetId == assetId);
 
     private void RevealSelectedAnimationSource()
     {

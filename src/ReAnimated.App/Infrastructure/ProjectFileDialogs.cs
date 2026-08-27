@@ -184,6 +184,15 @@ public interface IProjectFileDialogService
     bool ConfirmRetailMeshFbxExport(string assetName) => false;
 
     /// <summary>
+    /// Confirms removing a model from the project, counting what goes with it.
+    /// Animation targets belong to the model, so they cannot outlive it.
+    /// </summary>
+    bool ConfirmProjectModelRemoval(
+        string modelName,
+        int animationTargetCount,
+        int orphanedAnimationScriptCount) => false;
+
+    /// <summary>
     /// Confirms renaming a type-322 animation script that more than one
     /// animation is assigned to. The name lives on the library, so the rename
     /// is not local to the row the author edited.
@@ -235,6 +244,14 @@ public interface IProjectFileDialogService
         string replacementFileName,
         bool boneAndHelperMappingsBecomeStale,
         bool facialMappingsBecomeStale) => false;
+
+    /// <summary>
+    /// Allows a model whose blend shapes are not valid for DL1 to be imported
+    /// as geometry, materials, and a rig only.
+    /// </summary>
+    bool ConfirmCustomModelImportWithoutMorphs(
+        string fileName,
+        string morphFailure) => false;
 
     string? ShowSelectCustomModelOutputDirectory(string? initialPath) => null;
 
@@ -667,6 +684,36 @@ public sealed class WindowsProjectFileDialogService :
             System.Windows.MessageBoxResult.No) ==
         System.Windows.MessageBoxResult.Yes;
 
+    public bool ConfirmProjectModelRemoval(
+        string modelName,
+        int animationTargetCount,
+        int orphanedAnimationScriptCount)
+    {
+        string targets = animationTargetCount > 0
+            ? $"\n\n{animationTargetCount:N0} animation target(s) point at this model and will be removed with it. The immutable animation sources they were made from are kept."
+            : string.Empty;
+        string scripts = orphanedAnimationScriptCount switch
+        {
+            <= 0 => string.Empty,
+            1 => "\n\nOne animation script is no longer used by anything else and will be removed too.",
+            _ => $"\n\n{orphanedAnimationScriptCount:N0} animation scripts are no longer used by anything else and will be removed too.",
+        };
+        string detail =
+            $"Remove '{modelName}' from this project?" +
+            targets +
+            scripts +
+            "\n\nNothing on disk is deleted; this only changes the project.";
+        return System.Windows.MessageBox.Show(
+            detail,
+            "Remove project model",
+            System.Windows.MessageBoxButton.YesNo,
+            animationTargetCount > 0
+                ? System.Windows.MessageBoxImage.Warning
+                : System.Windows.MessageBoxImage.Question,
+            System.Windows.MessageBoxResult.No) ==
+            System.Windows.MessageBoxResult.Yes;
+    }
+
     public bool ConfirmRetailMeshFbxExport(string assetName) =>
         System.Windows.MessageBox.Show(
             $"This creates one self-contained FBX containing decoded Dying Light 1 retail mesh data for '{assetName}'. Decoded base-color textures are embedded in the FBX. Skinned meshes retain their complete bind skeleton and vertex weights.\n\nKeep this local. Do not upload, publish, bundle, or redistribute it. Only the decoded base-color material is exported; DL1 shader techniques and other map types are not reproduced.\n\nContinue?",
@@ -862,6 +909,22 @@ public sealed class WindowsProjectFileDialogService :
             boneAndHelperMappingsBecomeStale || facialMappingsBecomeStale
                 ? MessageBoxImage.Warning
                 : MessageBoxImage.Question,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+    }
+
+    public bool ConfirmCustomModelImportWithoutMorphs(
+        string fileName,
+        string morphFailure)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fileName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(morphFailure);
+        return MessageBox.Show(
+            $"'{fileName}' contains blend shapes that cannot be represented by DL1.\n\n" +
+            $"{morphFailure}\n\n" +
+            "Import the mesh, materials, and rig anyway? All blend shapes will be skipped, so facial and morph animation will be unavailable.",
+            "Blend shapes will be skipped",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
             MessageBoxResult.No) == MessageBoxResult.Yes;
     }
 

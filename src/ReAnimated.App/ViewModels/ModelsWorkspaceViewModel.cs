@@ -827,22 +827,69 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             FbxModelAuthoringImportResult imported;
             if (_model is null)
             {
-                imported = await FbxModelAuthoringImporter.ImportFileAsync(
-                    path,
-                    options,
-                    token);
+                try
+                {
+                    imported = await FbxModelAuthoringImporter.ImportFileAsync(
+                        path,
+                        options,
+                        token);
+                }
+                catch (InvalidDataException exception) when (
+                    IsRecoverableMorphImportFailure(exception))
+                {
+                    EnsureCurrent(generation, token);
+                    if (!_fileDialogs.ConfirmCustomModelImportWithoutMorphs(
+                            Path.GetFileName(path),
+                            exception.Message))
+                    {
+                        BuildStatus = "Custom-model import canceled; invalid blend shapes were not discarded";
+                        _setStatus(BuildStatus);
+                        return;
+                    }
+
+                    imported = await FbxModelAuthoringImporter.ImportFileAsync(
+                        path,
+                        options with { IgnoreMorphChannels = true },
+                        token);
+                }
             }
             else
             {
                 byte[] replacementBytes = await File.ReadAllBytesAsync(path, token);
-                CustomModelReimportPreview preview = await Task.Run(
-                    () => FbxModelAuthoringImporter.PreviewReimport(
-                        _model.Package,
-                        replacementBytes,
-                        Path.GetFileName(path),
-                        options,
-                        token),
-                    token);
+                CustomModelReimportPreview preview;
+                try
+                {
+                    preview = await Task.Run(
+                        () => FbxModelAuthoringImporter.PreviewReimport(
+                            _model.Package,
+                            replacementBytes,
+                            Path.GetFileName(path),
+                            options,
+                            token),
+                        token);
+                }
+                catch (InvalidDataException exception) when (
+                    IsRecoverableMorphImportFailure(exception))
+                {
+                    EnsureCurrent(generation, token);
+                    if (!_fileDialogs.ConfirmCustomModelImportWithoutMorphs(
+                            Path.GetFileName(path),
+                            exception.Message))
+                    {
+                        BuildStatus = "Custom-model reimport canceled; invalid blend shapes were not discarded";
+                        _setStatus(BuildStatus);
+                        return;
+                    }
+
+                    preview = await Task.Run(
+                        () => FbxModelAuthoringImporter.PreviewReimport(
+                            _model.Package,
+                            replacementBytes,
+                            Path.GetFileName(path),
+                            options with { IgnoreMorphChannels = true },
+                            token),
+                        token);
+                }
                 EnsureCurrent(generation, token);
                 if (!_fileDialogs.ConfirmCustomModelReimport(
                         Path.GetFileName(path),
@@ -888,6 +935,16 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         {
             EndOperation(generation);
         }
+    }
+
+    private static bool IsRecoverableMorphImportFailure(
+        InvalidDataException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        string message = exception.Message;
+        return message.Contains("BlendShape", StringComparison.OrdinalIgnoreCase) ||
+            message.Contains("morph", StringComparison.OrdinalIgnoreCase) ||
+            message.StartsWith("Shape '", StringComparison.Ordinal);
     }
 
     private async Task ImportFbxAsync()
