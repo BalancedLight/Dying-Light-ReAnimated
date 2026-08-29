@@ -552,41 +552,52 @@
                             <RowDefinition Height="*" MinHeight="230" />
                         </Grid.RowDefinitions>
 
-                        <DockPanel x:Name="AnimationsActionsPane"
-                                   Margin="0,0,0,7">
-                            <WrapPanel DockPanel.Dock="Right">
-                                <ToggleButton Content="Base-game animations"
-                                              IsChecked="{Binding IsRetailAnimationBrowserVisible}"
-                                              ToolTip="Search the indexed retail type-320 catalog and add a base-game clip to this project." />
-                                <Button Command="{Binding ImportAnimationCommand}"
-                                        Content="Import animation..." />
-                                <Button Command="{Binding AddAnimationTargetsCommand}"
-                                        Content="Add target to selected clip..."
-                                        ToolTip="Create target variants only for the selected immutable animation source." />
-                                <Button Command="{Binding AssignAnimationLibraryCommand}"
-                                        Content="Assign SCR..." />
-                                <Button Command="{Binding ActivateSelectedAnimationCommand}"
-                                        Content="Play" />
-                                <Button Command="{Binding SelectWorkspaceCommand}"
-                                        CommandParameter="Retarget/Edit"
-                                        Content="Retarget / edit" />
-                                <Button Command="{Binding RenameSelectedAnimationCommand}"
-                                        Content="Rename" />
-                                <Button Command="{Binding DuplicateSelectedAnimationCommand}"
-                                        Content="Duplicate" />
-                                <Button Command="{Binding RemoveSelectedAnimationCommand}"
-                                        Content="Remove" />
-                            </WrapPanel>
-                            <StackPanel>
-                                <TextBlock FontSize="17"
-                                           FontWeight="SemiBold"
-                                           Text="Animation library" />
-                                <TextBlock Margin="0,2,12,0"
-                                           Foreground="{StaticResource MutedTextBrush}"
-                                           Text="Sources stay immutable. Assign one or more project models, then review only the variants whose rigs actually differ."
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-                        </DockPanel>
+                        <StackPanel>
+                            <DockPanel x:Name="AnimationsActionsPane"
+                                       Margin="0,0,0,7">
+                                <WrapPanel DockPanel.Dock="Right">
+                                    <ToggleButton Content="Base-game animations"
+                                                  IsChecked="{Binding IsRetailAnimationBrowserVisible}"
+                                                  ToolTip="Search the indexed retail type-320 catalog and add a base-game clip to this project." />
+                                    <Button Command="{Binding ImportAnimationCommand}"
+                                            Content="Import animation..." />
+                                    <Button Command="{Binding AddAnimationTargetsCommand}"
+                                            Content="Add target to selected clip..."
+                                            ToolTip="Create target variants only for the selected immutable animation source." />
+                                    <Button Command="{Binding AssignAnimationLibraryCommand}"
+                                            Content="Assign SCR..." />
+                                    <Button Command="{Binding ActivateSelectedAnimationCommand}"
+                                            Content="Play" />
+                                    <Button Command="{Binding SelectWorkspaceCommand}"
+                                            CommandParameter="Retarget/Edit"
+                                            Content="Retarget / edit" />
+                                    <Button Command="{Binding RenameSelectedAnimationCommand}"
+                                            Content="Rename" />
+                                    <Button Command="{Binding DuplicateSelectedAnimationCommand}"
+                                            Content="Duplicate" />
+                                    <Button Command="{Binding RemoveSelectedAnimationCommand}"
+                                            Content="Remove" />
+                                </WrapPanel>
+                                <StackPanel>
+                                    <TextBlock FontSize="17"
+                                               FontWeight="SemiBold"
+                                               Text="Animation library" />
+                                    <TextBlock Margin="0,2,12,0"
+                                               Foreground="{StaticResource MutedTextBrush}"
+                                               Text="Sources stay immutable. Assign one or more project models, then review only the variants whose rigs actually differ."
+                                               TextWrapping="Wrap" />
+                                </StackPanel>
+                            </DockPanel>
+
+                            <!-- Importing a raw ANM2 from this surface asks
+                                 for a source model. Without the prompt here
+                                 the request was only visible on the base-game
+                                 browser, so the import stalled with no way to
+                                 answer it. -->
+                            <ContentControl Content="{Binding}"
+                                            ContentTemplate="{StaticResource SourceModelPickerTemplate}"
+                                            Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        </StackPanel>
 
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions>
@@ -722,33 +733,9 @@
                                          source model or a conflicting SCR
                                          timing is a dead end. -->
                                     <StackPanel Grid.Row="3">
-                                        <Border Margin="0,0,0,5"
-                                                Padding="6"
-                                                Background="#25344A"
-                                                BorderBrush="{StaticResource AccentBrush}"
-                                                BorderThickness="1"
-                                                CornerRadius="3"
-                                                Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}">
-                                            <StackPanel>
-                                                <TextBlock Foreground="{StaticResource TextBrush}"
-                                                           Text="{Binding ExplorerSourceModelPickerPrompt}"
-                                                           TextWrapping="Wrap" />
-                                                <ComboBox Margin="0,5,0,4"
-                                                          DisplayMemberPath="Name"
-                                                          ItemsSource="{Binding ProjectModelLibrary}"
-                                                          SelectedItem="{Binding SelectedProjectModel}"
-                                                          ToolTip="Bind the clip to a rigged model already in this project." />
-                                                <WrapPanel>
-                                                    <Button Command="{Binding UseSelectedProjectModelAsSourceCommand}"
-                                                            Content="Use project model as source" />
-                                                    <Button Command="{Binding SelectWorkspaceCommand}"
-                                                            CommandParameter="Models"
-                                                            Content="Find base-game model..." />
-                                                    <Button Command="{Binding CancelExplorerSourceModelPickerCommand}"
-                                                            Content="Cancel" />
-                                                </WrapPanel>
-                                            </StackPanel>
-                                        </Border>
+                                        <ContentControl Content="{Binding}"
+                                                        ContentTemplate="{StaticResource SourceModelPickerTemplate}"
+                                                        Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                         <Border Margin="0,0,0,5"
                                                 Padding="6"
                                                 Background="{StaticResource PanelRaisedBrush}"

@@ -651,6 +651,39 @@
             <Setter Property="CornerRadius" Value="3" />
         </Style>
 
+        <!-- The source-model prompt is shared so every surface that can
+             start a binding can also finish it. Hosting it in only one place
+             is what made a raw ANM2 import a dead end: the import button
+             lives on the Animations surface, the prompt did not. -->
+        <DataTemplate x:Key="SourceModelPickerTemplate">
+            <Border Margin="0,0,0,5"
+                    Padding="6"
+                    Background="#25344A"
+                    BorderBrush="{StaticResource AccentBrush}"
+                    BorderThickness="1"
+                    CornerRadius="3">
+                <StackPanel>
+                    <TextBlock Foreground="{StaticResource TextBrush}"
+                               Text="{Binding ExplorerSourceModelPickerPrompt}"
+                               TextWrapping="Wrap" />
+                    <ComboBox Margin="0,5,0,4"
+                              DisplayMemberPath="Name"
+                              ItemsSource="{Binding ProjectModelLibrary}"
+                              SelectedItem="{Binding SelectedProjectModel}"
+                              ToolTip="Bind the clip to a rigged model already in this project." />
+                    <WrapPanel>
+                        <Button Command="{Binding UseSelectedProjectModelAsSourceCommand}"
+                                Content="Use project model as source" />
+                        <Button Command="{Binding SelectWorkspaceCommand}"
+                                CommandParameter="Models"
+                                Content="Find base-game model..." />
+                        <Button Command="{Binding CancelExplorerSourceModelPickerCommand}"
+                                Content="Cancel" />
+                    </WrapPanel>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+
         <Style x:Key="PanelTitleStyle" TargetType="{x:Type TextBlock}">
             <Setter Property="FontSize" Value="13" />
             <Setter Property="FontWeight" Value="SemiBold" />
