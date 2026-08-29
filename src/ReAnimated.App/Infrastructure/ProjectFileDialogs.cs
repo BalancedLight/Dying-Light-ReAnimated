@@ -3,6 +3,7 @@ using System.IO;
 using System.Windows;
 using Microsoft.Win32;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Codecs.Models;
 
 namespace ReAnimated.App.Infrastructure;
 
@@ -316,10 +317,19 @@ public sealed class WindowsProjectFileDialogService :
         "Autodesk FBX (*.fbx)|*.fbx";
     private const string CustomModelFilter =
         "DL ReAnimated model (*.dlrmodel)|*.dlrmodel|All files (*.*)|*.*";
-    private const string CustomModelTextureFilter =
-        "Texture images (*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.dds;*.tga)|*.png;*.jpg;*.jpeg;*.bmp;*.tif;*.tiff;*.dds;*.tga|All files (*.*)|*.*";
+    internal static string CustomModelTextureFilter { get; } =
+        BuildCustomModelTextureFilter();
     private const string RpackFilter =
         "Dying Light RPack (*.rpack)|*.rpack|All files (*.*)|*.*";
+
+    private static string BuildCustomModelTextureFilter()
+    {
+        string patterns = string.Join(
+            ';',
+            CustomModelTextureDecoder.SupportedExtensions.Select(
+                static extension => $"*{extension}"));
+        return $"Texture images ({patterns})|{patterns}|All files (*.*)|*.*";
+    }
 
     public string? ShowOpenProjectDialog(string? initialPath)
     {

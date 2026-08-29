@@ -11,7 +11,110 @@ public sealed record ImportedProjectSource(
 
 public static class ProjectSourceImporter
 {
+    /// <summary>
+    /// Atomic writes here and in <see cref="PendingProjectAssetStore"/> stage
+    /// through a sibling <c>*.tmp</c> file that is removed in their own
+    /// <c>finally</c>. A hard kill skips that, so leftovers accumulate beside
+    /// real project sources until something sweeps them.
+    /// </summary>
+    public static readonly TimeSpan StaleTemporaryFileAge = TimeSpan.FromHours(24);
+
     private const long MaximumSourceBytes = 2L * 1024 * 1024 * 1024;
+    private const int MaximumSweptTemporaryFiles = 4096;
+
+    /// <summary>
+    /// Best-effort removal of abandoned atomic-write scratch files. Never
+    /// throws: a leftover that cannot be deleted right now (still locked by a
+    /// concurrent write, or read-only) must not fail an open or a save.
+    /// </summary>
+    public static int SweepStaleTemporaryFiles(
+        string directory,
+        TimeSpan? olderThan = null)
+    {
+        if (string.IsNullOrWhiteSpace(directory) ||
+            !Directory.Exists(directory))
+        {
+            return 0;
+        }
+
+        TimeSpan threshold = olderThan ?? StaleTemporaryFileAge;
+        DateTime cutoffUtc = DateTime.UtcNow - threshold;
+        int removed = 0;
+        try
+        {
+            int examined = 0;
+            foreach (string path in Directory.EnumerateFiles(
+                         directory,
+                         "*.tmp",
+                         SearchOption.TopDirectoryOnly))
+            {
+                if (++examined > MaximumSweptTemporaryFiles)
+                {
+                    break;
+                }
+
+                try
+                {
+                    FileInfo info = new(path);
+                    if (!info.Exists ||
+                        info.Attributes.HasFlag(FileAttributes.ReparsePoint) ||
+                        info.LastWriteTimeUtc > cutoffUtc)
+                    {
+                        continue;
+                    }
+
+                    File.Delete(path);
+                    removed++;
+                }
+                catch (Exception exception) when (
+                    exception is IOException or
+                    UnauthorizedAccessException or
+                    ArgumentException)
+                {
+                    // A live write owns this scratch file, or the filesystem
+                    // refused the delete. Leave it and keep sweeping.
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+            UnauthorizedAccessException or
+            DirectoryNotFoundException)
+        {
+            return removed;
+        }
+
+        return removed;
+    }
+
+    /// <summary>
+    /// Sweeps abandoned scratch files from a project's <c>Sources</c> folder.
+    /// </summary>
+    public static int SweepStaleProjectSourceTemporaryFiles(string projectPath)
+    {
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            return 0;
+        }
+
+        try
+        {
+            string? projectDirectory = Path.GetDirectoryName(
+                Path.GetFullPath(projectPath));
+            return string.IsNullOrWhiteSpace(projectDirectory)
+                ? 0
+                : SweepStaleTemporaryFiles(
+                    Path.Combine(projectDirectory, "Sources"));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            IOException or
+            UnauthorizedAccessException or
+            NotSupportedException)
+        {
+            return 0;
+        }
+    }
 
     public static async Task<ImportedProjectSource> ImportAsync(
         string sourcePath,

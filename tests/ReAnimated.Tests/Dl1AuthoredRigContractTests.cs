@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
+using ReAnimated.Codecs.Anm2;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
@@ -12,6 +13,44 @@ namespace ReAnimated.Tests;
 public sealed class Dl1AuthoredRigContractTests
 {
     private static readonly int[] DepthFirstSourceOrder = [0, 1, 3, 2];
+
+    [Fact]
+    public void SmallAuthoredLocalShearIsProjectedAndReportedWithBoneIdentity()
+    {
+        TransformMatrix sheared = new(
+            1.0, 1e-6, 0.0, 0.0,
+            0.0, 1.0, 0.0, 0.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0);
+        var contract = new Dl1AuthoredRigContract(
+            "residual-test",
+            new string('a', 64),
+            [
+                new Dl1AuthoredRigNode
+                {
+                    PhysicalIndex = 0,
+                    SourceBoneIndex = 0,
+                    Name = "CC_Base_BoneRoot",
+                    ParentPhysicalIndex = -1,
+                    Kind = BoneKind.Root,
+                    IsDeform = true,
+                    LocalBindMatrix = sheared,
+                    GlobalBindMatrix = sheared,
+                    InverseGlobalReferenceMatrix = sheared.InvertedAffine(),
+                    Bounds = new Dl1AuthoredBoneBounds(
+                        Vector3D.Zero,
+                        new Vector3D(0.01, 0.01, 0.01)),
+                    DescriptorHash = Dl1NameHash.Compute("CC_Base_BoneRoot"),
+                },
+            ]);
+
+        Dl1AuthoredRigDecompositionDiagnostic diagnostic =
+            Assert.Single(contract.DecompositionDiagnostics);
+        Assert.Equal("CC_Base_BoneRoot", diagnostic.BoneName);
+        Assert.Equal(0, diagnostic.PhysicalIndex);
+        Assert.InRange(diagnostic.OrthogonalityResidual, 9e-7, 1.1e-6);
+        Assert.Equal(1, contract.CreateRigDefinition().BoneCount);
+    }
 
     [Fact]
     [Trait("ValidationTier", "Focused")]

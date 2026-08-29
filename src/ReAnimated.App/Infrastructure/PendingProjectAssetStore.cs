@@ -43,6 +43,13 @@ public sealed class PendingProjectAssetStore
         _root = Path.Combine(recoveryDirectory, "StagedAssets");
     }
 
+    /// <summary>
+    /// Sweeps abandoned atomic-write scratch files from the recovery staging
+    /// directory. Best-effort; never throws.
+    /// </summary>
+    public int SweepStaleTemporaryFiles() =>
+        ProjectSourceImporter.SweepStaleTemporaryFiles(_root);
+
     public async Task<PendingProjectAssetReceipt> StageAsync(
         Guid assetId,
         string relativePath,
@@ -124,9 +131,16 @@ public sealed class PendingProjectAssetStore
         return path;
     }
 
+    /// <summary>
+    /// Copies a staged asset to its project-relative path. Set
+    /// <paramref name="replaceExisting"/> when the caller already owns that
+    /// path and is deliberately replacing its bytes; otherwise foreign bytes
+    /// at the destination are refused so an unrelated file is never clobbered.
+    /// </summary>
     public async Task<string> MaterializeAsync(
         PendingProjectAssetReceipt receipt,
         string projectPath,
+        bool replaceExisting = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
@@ -150,24 +164,35 @@ public sealed class PendingProjectAssetStore
         }
 
         Directory.CreateDirectory(directory);
-        if (File.Exists(destination))
+        bool destinationExists = File.Exists(destination);
+        if (destinationExists)
         {
             string existing = await ProjectSourceImporter.ComputeSha256Async(
                 destination,
                 cancellationToken).ConfigureAwait(false);
-            if (!string.Equals(
+            if (string.Equals(
                     existing,
                     receipt.ContentSha256,
                     StringComparison.OrdinalIgnoreCase))
             {
-                throw new IOException(
-                    $"The portable asset path '{relativePath}' already contains different bytes.");
+                // The exact bytes are already published. Rewriting them would
+                // only risk a torn file for no observable change.
+                return destination;
             }
 
-            return destination;
+            if (!replaceExisting)
+            {
+                throw new IOException(
+                    $"The portable asset path '{relativePath}' already contains different bytes. " +
+                    $"Destination '{destination}' holds {existing}; the staged asset is {receipt.ContentSha256}.");
+            }
         }
 
-        await CopyAtomicAsync(source, destination, cancellationToken)
+        await CopyAtomicAsync(
+                source,
+                destination,
+                overwrite: destinationExists,
+                cancellationToken)
             .ConfigureAwait(false);
         return destination;
     }
@@ -317,6 +342,7 @@ public sealed class PendingProjectAssetStore
     private static async Task CopyAtomicAsync(
         string source,
         string destination,
+        bool overwrite,
         CancellationToken cancellationToken)
     {
         string temporary = $"{destination}.{Guid.NewGuid():N}.tmp";
@@ -345,7 +371,7 @@ public sealed class PendingProjectAssetStore
                     .ConfigureAwait(false);
                 output.Flush(flushToDisk: true);
             }
-            File.Move(temporary, destination, overwrite: false);
+            File.Move(temporary, destination, overwrite);
         }
         finally
         {

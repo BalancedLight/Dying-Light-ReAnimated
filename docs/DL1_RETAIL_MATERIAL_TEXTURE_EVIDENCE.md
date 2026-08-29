@@ -117,6 +117,12 @@ unresolved. The `armored_torso.mat` row resolves all six texture identities:
 5. `armored_torso_skin_msk`
 6. `armored_torso_spc`
 
+The `_msk` resource name is retail evidence for the mask-map naming convention.
+The custom-model writer emits that map through a `standard`-template
+`<msk_0_tex>` element; the element name itself has not been independently
+decoded from a stock source template and remains an explicit authoring
+assumption rather than live-game proof.
+
 The chosen base color is the actual `armored_torso_clr` type-8480 resource:
 2048 by 2048, 12 mips, DXT1/BC1, with a 2,097,152-byte base mip. The WPF
 adapter passes the same bounded data and retail identity to the renderer.

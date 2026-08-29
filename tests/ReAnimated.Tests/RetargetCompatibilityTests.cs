@@ -719,6 +719,18 @@ public sealed class RetargetCompatibilityTests
         "CC_Base_L_Mid2",
         "finger.left.middle.2")]
     [InlineData(
+        "mixamorig:LeftHandMiddle1",
+        "finger.left.middle.1")]
+    [InlineData(
+        "lowerarm_l",
+        "arm.left.lower")]
+    [InlineData(
+        "CC_Base_BoneRoot",
+        "body.root")]
+    [InlineData(
+        "CC_Base_Hip",
+        "body.pelvis")]
+    [InlineData(
         "spine_01",
         "body.spine.0")]
     [InlineData(
@@ -748,6 +760,12 @@ public sealed class RetargetCompatibilityTests
                 "CC_Base_L_UpperarmTwist01"));
         Assert.Null(
             HumanoidBoneSemanticClassifier.Classify(
+                "CC_Base_L_ThighTwist01"));
+        Assert.Null(
+            HumanoidBoneSemanticClassifier.Classify(
+                "CC_Base_L_CalfTwist02"));
+        Assert.Null(
+            HumanoidBoneSemanticClassifier.Classify(
                 "mixamorig:HeadTop_End"));
         RigDefinition source = CreateRig(
             "source",
@@ -765,6 +783,86 @@ public sealed class RetargetCompatibilityTests
         Assert.DoesNotContain(
             map.Entries,
             static entry => entry.TargetBoneIndex == 1);
+    }
+
+    [Fact]
+    public void CcAccuRigUnweightedAnatomicalDriversMapButTwistsAndPelvisStayAtBind()
+    {
+        RigDefinition source = CreateRig(
+            "mixamo",
+            ("Armature", -1, true),
+            ("mixamorig:Hips", 0, true),
+            ("mixamorig:Spine", 1, true),
+            ("mixamorig:LeftShoulder", 2, true),
+            ("mixamorig:LeftArm", 3, true),
+            ("mixamorig:LeftForeArm", 4, true),
+            ("mixamorig:LeftHand", 5, true),
+            ("mixamorig:LeftHandMiddle1", 6, true),
+            ("mixamorig:LeftHandMiddle2", 7, true),
+            ("mixamorig:LeftUpLeg", 1, true),
+            ("mixamorig:LeftLeg", 9, true),
+            ("mixamorig:LeftFoot", 10, true));
+        RigDefinition target = CreateRig(
+            "cc",
+            ("CC_Base_BoneRoot", -1, true, BoneKind.Root),
+            ("CC_Base_Hip", 0, true, BoneKind.Helper),
+            ("CC_Base_Pelvis", 1, true, BoneKind.Helper),
+            ("CC_Base_Waist", 2, true, BoneKind.Deform),
+            ("CC_Base_L_Clavicle", 3, true, BoneKind.Deform),
+            ("CC_Base_L_Upperarm", 4, true, BoneKind.Helper),
+            ("CC_Base_L_UpperarmTwist01", 5, true, BoneKind.Deform),
+            ("CC_Base_L_Forearm", 5, true, BoneKind.Helper),
+            ("CC_Base_L_ForearmTwist01", 7, true, BoneKind.Deform),
+            ("CC_Base_L_Hand", 7, true, BoneKind.Deform),
+            ("CC_Base_L_Mid1", 9, true, BoneKind.Deform),
+            ("CC_Base_L_Mid2", 10, true, BoneKind.Deform),
+            ("CC_Base_L_Thigh", 2, true, BoneKind.Helper),
+            ("CC_Base_L_ThighTwist01", 12, true, BoneKind.Deform),
+            ("CC_Base_L_Calf", 12, true, BoneKind.Helper),
+            ("CC_Base_L_CalfTwist01", 14, true, BoneKind.Deform),
+            ("CC_Base_L_Foot", 14, true, BoneKind.Deform));
+
+        RetargetMap map = RetargetMapBuilder.CreateSuggested(source, target);
+        Dictionary<string, BoneMapEntry> byTarget = map.Entries.ToDictionary(
+            entry => target.Bones[entry.TargetBoneIndex].Name,
+            StringComparer.Ordinal);
+
+        Assert.Equal("mixamorig:Hips", source.Bones[byTarget["CC_Base_Hip"].SourceBoneIndex].Name);
+        Assert.Equal("mixamorig:LeftUpLeg", source.Bones[byTarget["CC_Base_L_Thigh"].SourceBoneIndex].Name);
+        Assert.Equal("mixamorig:LeftLeg", source.Bones[byTarget["CC_Base_L_Calf"].SourceBoneIndex].Name);
+        Assert.Equal("mixamorig:LeftArm", source.Bones[byTarget["CC_Base_L_Upperarm"].SourceBoneIndex].Name);
+        Assert.Equal("mixamorig:LeftForeArm", source.Bones[byTarget["CC_Base_L_Forearm"].SourceBoneIndex].Name);
+        Assert.Equal(BoneMappingMethod.Semantic, byTarget["CC_Base_L_Mid1"].Method);
+        Assert.Equal(RetargetMappingKind.Bone, byTarget["CC_Base_L_Upperarm"].MappingKind);
+        Assert.DoesNotContain(map.Entries, entry => target.Bones[entry.TargetBoneIndex].Name.Contains("Twist", StringComparison.Ordinal));
+        Assert.DoesNotContain(map.Entries, entry => target.Bones[entry.TargetBoneIndex].Name == "CC_Base_Pelvis");
+        Assert.Equal(0.90, byTarget["CC_Base_Hip"].Confidence, 10);
+        // Pelvis has no Mixamo counterpart, so the thigh honestly lacks parent-chain agreement.
+        Assert.Equal(0.82, byTarget["CC_Base_L_Thigh"].Confidence, 10);
+    }
+
+    [Fact]
+    public void RetargetRigRoleIndexCollapsesAncestorChainsButRejectsSiblings()
+    {
+        RigDefinition chain = CreateRig(
+            "chain",
+            ("CC_Base_BoneRoot", -1, true, BoneKind.Root),
+            ("CC_Base_Hip", 0, true, BoneKind.Helper),
+            ("CC_Base_Pelvis", 1, true, BoneKind.Helper),
+            ("CC_Base_L_ThighTwist01", 2, true, BoneKind.Deform));
+        var chainIndex = new RetargetRigRoleIndex(chain);
+        Assert.True(chainIndex.TryGetUniqueBodyRoleTarget("body.pelvis", out int owner));
+        Assert.Equal(1, owner);
+
+        RigDefinition siblings = CreateRig(
+            "siblings",
+            ("root", -1, true, BoneKind.Root),
+            ("hip", 0, true, BoneKind.Helper),
+            ("pelvis", 0, true, BoneKind.Helper),
+            ("left_thigh", 1, true, BoneKind.Deform),
+            ("right_thigh", 2, true, BoneKind.Deform));
+        var siblingIndex = new RetargetRigRoleIndex(siblings);
+        Assert.False(siblingIndex.TryGetUniqueBodyRoleTarget("body.pelvis", out _));
     }
 
     [Fact]
@@ -1524,9 +1622,19 @@ public sealed class RetargetCompatibilityTests
 
     private static RigDefinition CreateRig(
         string id,
-        params (string Name, int Parent, bool Required)[] rows)
-    {
-        return new RigDefinition(
+        params (string Name, int Parent, bool Required)[] rows) =>
+        CreateRig(
+            id,
+            rows.Select((row, index) => (
+                row.Name,
+                row.Parent,
+                row.Required,
+                index == 0 ? BoneKind.Root : BoneKind.Deform)).ToArray());
+
+    private static RigDefinition CreateRig(
+        string id,
+        params (string Name, int Parent, bool Required, BoneKind Kind)[] rows) =>
+        new(
             id,
             id,
             rows.Select(
@@ -1541,9 +1649,8 @@ public sealed class RetargetCompatibilityTests
                                 Vector3D.UnitY,
                                 QuaternionD.Identity,
                                 Vector3D.One),
-                        index == 0 ? BoneKind.Root : BoneKind.Deform,
+                        row.Kind,
                         row.Required)));
-    }
 
     private static TransformTRS OffsetBind() =>
         new(

@@ -234,6 +234,7 @@ public static class Dl1SourceModelWriter
             hashes,
             [
                 ".skn and .msh_obj require the matching official Techland compiler.",
+                .. prepared.MaterialNotes,
             ]);
     }
 
@@ -420,6 +421,7 @@ public static class Dl1SourceModelWriter
         return new PreparedSourceModel(
             materials.MaterialReferences,
             materials.Files,
+            materials.Notes,
             [surfaceName],
             nodeArray,
             boneNames.ToImmutable(),
@@ -1138,6 +1140,7 @@ public static class Dl1SourceModelWriter
     private sealed record PreparedSourceModel(
         ImmutableArray<string> MaterialNames,
         ImmutableDictionary<string, byte[]> MaterialFiles,
+        ImmutableArray<string> MaterialNotes,
         ImmutableArray<string> SurfaceNames,
         ImmutableArray<SourceNode> Nodes,
         ImmutableArray<string> BoneNames,

@@ -30,9 +30,17 @@ public static class RetargetSuggestionScorer
 
         Dictionary<int, BoneMapEntry> byTarget = proposal.Entries
             .ToDictionary(static entry => entry.TargetBoneIndex);
+        var sourceRoleIndex = new RetargetRigRoleIndex(source);
+        var targetRoleIndex = new RetargetRigRoleIndex(target);
         ImmutableArray<BoneMapEntry> scored = proposal.Entries
             .OrderBy(static entry => entry.TargetBoneIndex)
-            .Select(entry => ScoreEntry(source, target, entry, byTarget))
+            .Select(entry => ScoreEntry(
+                source,
+                target,
+                entry,
+                byTarget,
+                sourceRoleIndex,
+                targetRoleIndex))
             .ToImmutableArray();
         return new RetargetMap(
             proposal.SourceRigId,
@@ -165,7 +173,9 @@ public static class RetargetSuggestionScorer
         RigDefinition source,
         RigDefinition target,
         BoneMapEntry entry,
-        IReadOnlyDictionary<int, BoneMapEntry> byTarget)
+        IReadOnlyDictionary<int, BoneMapEntry> byTarget,
+        RetargetRigRoleIndex sourceRoleIndex,
+        RetargetRigRoleIndex targetRoleIndex)
     {
         BoneDefinition sourceBone = source.Bones[entry.SourceBoneIndex];
         BoneDefinition targetBone = target.Bones[entry.TargetBoneIndex];
@@ -250,11 +260,13 @@ public static class RetargetSuggestionScorer
                 }
                 else
                 {
-                    string? role = SemanticRole(targetBone);
+                    string? role = targetRoleIndex.GetRole(targetBone.Index);
                     evidence.Add(new(
                         MappingEvidenceKind.InferredHumanoidRole,
                         $"Humanoid classifier inferred role '{role ?? "unknown"}'."));
-                    bool side = HasSideAgreement(sourceBone, targetBone);
+                    bool side = HasSideAgreement(
+                        sourceRoleIndex.GetRole(sourceBone.Index),
+                        targetRoleIndex.GetRole(targetBone.Index));
                     bool parent = HasMappedParentAgreement(source, target, entry, byTarget);
                     bool policy = IsSupportedAutomaticPolicy(entry);
                     if (side)
@@ -379,11 +391,9 @@ public static class RetargetSuggestionScorer
     }
 
     private static bool HasSideAgreement(
-        BoneDefinition source,
-        BoneDefinition target)
+        string? sourceRole,
+        string? targetRole)
     {
-        string? sourceRole = SemanticRole(source);
-        string? targetRole = SemanticRole(target);
         string? sourceSide = Side(sourceRole);
         string? targetSide = Side(targetRole);
         return sourceSide is null
@@ -480,11 +490,7 @@ public static class RetargetSuggestionScorer
                 StringComparison.Ordinal)) == 1;
     }
 
-    private static string? SemanticRole(BoneDefinition bone) =>
-        HumanoidBoneSemanticClassifier.Classify(
-            bone.SemanticRole ?? bone.Name)?.Role;
-
-    private static string? Side(string? role)
+     private static string? Side(string? role)
     {
         if (role is null)
         {

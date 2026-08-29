@@ -58,7 +58,7 @@ public static class HumanoidBoneSemanticClassifier
 
         string normalized = value.Normalize(NormalizationForm.FormKC).Trim();
         string canonicalCandidate = normalized.ToLowerInvariant();
-        if (CanonicalRoles.Contains(canonicalCandidate))
+        if (IsCanonicalRole(canonicalCandidate))
         {
             return Match(canonicalCandidate, "declared canonical role", 1.0);
         }
@@ -76,13 +76,13 @@ public static class HumanoidBoneSemanticClassifier
             !isCharacterCreator &&
             localName.Contains("spine_", StringComparison.OrdinalIgnoreCase);
 
+        compact = StripKnownRigPrefix(compact);
         if (compact is "root" or "armature" or "rootbone" or
-            "rlboneroot" or "bip01")
+            "boneroot" or "bip01")
         {
             return Match("body.root", localName);
         }
 
-        compact = StripKnownRigPrefix(compact);
         if (compact is "hips" or "hip" or "pelvis")
         {
             return Match("body.pelvis", localName);
@@ -104,37 +104,50 @@ public static class HumanoidBoneSemanticClassifier
             return null;
         }
 
-        (string? side, string sidedBase) = ExtractSide(compact);
-        if (side is null || sidedBase.Length == 0)
+        foreach ((string side, string sidedBase) in ExtractSides(compact))
         {
-            return null;
+            string? sidedRole = sidedBase switch
+            {
+                "clavicle" or "shoulder" or "collarbone" => $"arm.{side}.clavicle",
+                "upperarm" or "uparm" or "arm" => $"arm.{side}.upper",
+                "forearm" or "lowerarm" or "lowarm" => $"arm.{side}.lower",
+                "hand" or "wrist" => $"hand.{side}",
+                "thigh" or "upleg" or "upperleg" => $"leg.{side}.upper",
+                "calf" or "lowerleg" or "lowleg" or "shin" => $"leg.{side}.lower",
+                "leg" when isMixamo => $"leg.{side}.lower",
+                "foot" or "ankle" => $"foot.{side}",
+                "toe" or "toebase" or "ball" => $"toe.{side}",
+                _ => ClassifyFinger(sidedBase, side),
+            };
+            if (sidedRole is not null)
+            {
+                return Match(sidedRole, localName);
+            }
         }
 
-        string? sidedRole = sidedBase switch
+        return null;
+    }
+
+    public static bool IsCanonicalRole(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
         {
-            "clavicle" or "shoulder" or "collarbone" =>
-                $"arm.{side}.clavicle",
-            "upperarm" or "uparm" or "arm" =>
-                $"arm.{side}.upper",
-            "forearm" or "lowerarm" or "lowarm" =>
-                $"arm.{side}.lower",
-            "hand" or "wrist" =>
-                $"hand.{side}",
-            "thigh" or "upleg" or "upperleg" =>
-                $"leg.{side}.upper",
-            "calf" or "lowerleg" or "lowleg" or "shin" =>
-                $"leg.{side}.lower",
-            "leg" when isMixamo =>
-                $"leg.{side}.lower",
-            "foot" or "ankle" =>
-                $"foot.{side}",
-            "toe" or "toebase" or "ball" =>
-                $"toe.{side}",
-            _ => ClassifyFinger(sidedBase, side),
-        };
-        return sidedRole is null
-            ? null
-            : Match(sidedRole, localName);
+            return false;
+        }
+
+        string role = value.Trim().ToLowerInvariant();
+        if (CanonicalRoles.Contains(role))
+        {
+            return true;
+        }
+
+        string[] parts = role.Split('.');
+        return parts.Length == 4 &&
+               parts[0] == "finger" &&
+               parts[1] is "left" or "right" &&
+               parts[2] is "thumb" or "index" or "middle" or "ring" or "little" &&
+               int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out int segment) &&
+               segment is >= 1 and <= 4;
     }
 
     private static HumanoidBoneSemanticMatch? ClassifyAxial(
@@ -223,8 +236,8 @@ public static class HumanoidBoneSemanticClassifier
         [
             ("thumb", "thumb"),
             ("index", "index"),
-            ("mid", "middle"),
             ("middle", "middle"),
+            ("mid", "middle"),
             ("ring", "ring"),
             ("pinky", "little"),
             ("little", "little"),
@@ -246,7 +259,7 @@ public static class HumanoidBoneSemanticClassifier
                     out int segment) ||
                 segment is < 1 or > 4)
             {
-                return null;
+                continue;
             }
 
             return $"finger.{side}.{role}.{segment}";
@@ -281,45 +294,37 @@ public static class HumanoidBoneSemanticClassifier
         return $"finger.{side}.{familyRole}.{dl1Segment}";
     }
 
-    private static (string? Side, string Base) ExtractSide(string value)
+    private static IEnumerable<(string Side, string Base)> ExtractSides(string value)
     {
         if (value.StartsWith("left", StringComparison.Ordinal))
         {
-            return ("left", value[4..]);
+            yield return ("left", value[4..]);
         }
 
         if (value.StartsWith("right", StringComparison.Ordinal))
         {
-            return ("right", value[5..]);
+            yield return ("right", value[5..]);
         }
 
         if (value.EndsWith("left", StringComparison.Ordinal))
         {
-            return ("left", value[..^4]);
+            yield return ("left", value[..^4]);
         }
 
         if (value.EndsWith("right", StringComparison.Ordinal))
         {
-            return ("right", value[..^5]);
+            yield return ("right", value[..^5]);
         }
 
-        if (value.Length > 1 &&
-            value[0] is 'l' or 'r')
+        if (value.Length > 1 && value[^1] is 'l' or 'r')
         {
-            return (
-                value[0] == 'l' ? "left" : "right",
-                value[1..]);
+            yield return (value[^1] == 'l' ? "left" : "right", value[..^1]);
         }
 
-        if (value.Length > 1 &&
-            value[^1] is 'l' or 'r')
+        if (value.Length > 1 && value[0] is 'l' or 'r')
         {
-            return (
-                value[^1] == 'l' ? "left" : "right",
-                value[..^1]);
+            yield return (value[0] == 'l' ? "left" : "right", value[1..]);
         }
-
-        return (null, value);
     }
 
     private static bool ContainsExcludedModifier(string value) =>

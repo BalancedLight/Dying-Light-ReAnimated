@@ -256,6 +256,8 @@ public static class RetargetMapBuilder
         var entries = ImmutableArray.CreateBuilder<BoneMapEntry>();
         HashSet<int> mappedSources = [];
         HashSet<int> mappedTargets = [];
+        var sourceRoleIndex = new RetargetRigRoleIndex(source);
+        var targetRoleIndex = new RetargetRigRoleIndex(target);
 
         AddUniqueMatches(
             source,
@@ -266,15 +268,20 @@ public static class RetargetMapBuilder
             static bone => bone.DescriptorHash?.ToString(
                 "X8",
                 System.Globalization.CultureInfo.InvariantCulture),
+            static bone => bone.DescriptorHash?.ToString(
+                "X8",
+                System.Globalization.CultureInfo.InvariantCulture),
             BoneMappingMethod.DescriptorHash,
-            1.0);
+            1.0,
+            targetRoleIndex);
 
         AddNameMatches(
             source,
             target,
             entries,
             mappedSources,
-            mappedTargets);
+            mappedTargets,
+            targetRoleIndex);
 
         AddUniqueMatches(
             source,
@@ -285,8 +292,12 @@ public static class RetargetMapBuilder
             static bone => string.IsNullOrWhiteSpace(bone.SemanticRole)
                 ? null
                 : bone.SemanticRole.Trim().ToUpperInvariant(),
+            static bone => string.IsNullOrWhiteSpace(bone.SemanticRole)
+                ? null
+                : bone.SemanticRole.Trim().ToUpperInvariant(),
             BoneMappingMethod.Semantic,
-            0.9);
+            0.9,
+            targetRoleIndex);
 
         AddUniqueMatches(
             source,
@@ -294,33 +305,36 @@ public static class RetargetMapBuilder
             entries,
             mappedSources,
             mappedTargets,
-            static bone =>
-                HumanoidBoneSemanticClassifier
-                    .Classify(
-                        bone.SemanticRole ??
-                        bone.Name)
-                    ?.Role,
+            bone => sourceRoleIndex.GetRole(bone.Index),
+            bone => targetRoleIndex.GetRole(bone.Index),
             BoneMappingMethod.Semantic,
-            0.82);
+            0.82,
+            targetRoleIndex,
+            collapseSameRoleChains: true);
 
         AddDistributedFingerMatches(
             source,
             target,
             entries,
-            mappedTargets);
+            mappedTargets,
+            sourceRoleIndex,
+            targetRoleIndex);
 
         AddStructuralMatches(
             source,
             target,
             entries,
             mappedSources,
-            mappedTargets);
+            mappedTargets,
+            targetRoleIndex);
 
         AddHelperMatches(
             source,
             target,
             entries,
-            mappedTargets);
+            mappedTargets,
+            sourceRoleIndex,
+            targetRoleIndex);
 
         RetargetMap proposal = new(
             source.Id,
@@ -340,14 +354,14 @@ public static class RetargetMapBuilder
         RigDefinition source,
         RigDefinition target,
         ImmutableArray<BoneMapEntry>.Builder entries,
-        HashSet<int> mappedTargets)
+        HashSet<int> mappedTargets,
+        RetargetRigRoleIndex sourceRoleIndex,
+        RetargetRigRoleIndex targetRoleIndex)
     {
         var sourceFingerRows = source.Bones
             .Select(bone => (
                 Bone: bone,
-                Role: HumanoidBoneSemanticClassifier.Classify(
-                    bone.SemanticRole ??
-                    bone.Name)?.Role))
+                Role: sourceRoleIndex.GetRole(bone.Index)))
             .Where(static row =>
                 row.Role?.StartsWith(
                     "finger.",
@@ -379,15 +393,12 @@ public static class RetargetMapBuilder
             int Segment)>();
         foreach (BoneDefinition targetBone in target.Bones)
         {
-            if (IsHelperTarget(targetBone))
+            if (!targetRoleIndex.IsBodyEligibleTarget(targetBone.Index))
             {
                 continue;
             }
 
-            string? targetRole =
-                HumanoidBoneSemanticClassifier.Classify(
-                    targetBone.SemanticRole ??
-                    targetBone.Name)?.Role;
+            string? targetRole = targetRoleIndex.GetRole(targetBone.Index);
             if (!TryParseFingerRole(
                     targetRole,
                     out string side,
@@ -512,6 +523,7 @@ public static class RetargetMapBuilder
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
+        var targetRoleIndex = new RetargetRigRoleIndex(target);
 
         Dictionary<string, int[]> sourceByName = source.Bones
             .GroupBy(
@@ -556,15 +568,15 @@ public static class RetargetMapBuilder
                     targetBone.Index,
                     exact ? BoneMappingMethod.ExactName : BoneMappingMethod.NormalizedName,
                     exact ? 1.0 : 0.95,
-                    mappingKind: IsHelperTarget(targetBone)
-                        ? RetargetMappingKind.HelperOverride
-                        : RetargetMappingKind.Bone,
-                    transferPolicy: IsHelperTarget(targetBone)
-                        ? RetargetTransferPolicy.RestRelative
-                        : RetargetTransferPolicy.GlobalBindBasis,
-                    componentPolicy: IsHelperTarget(targetBone)
-                        ? GetDefaultHelperComponentPolicy(targetBone.Name)
-                        : RetargetComponentPolicy.FullTransform));
+                    mappingKind: targetRoleIndex.IsBodyEligibleTarget(targetBone.Index)
+                        ? RetargetMappingKind.Bone
+                        : RetargetMappingKind.HelperOverride,
+                    transferPolicy: targetRoleIndex.IsBodyEligibleTarget(targetBone.Index)
+                        ? RetargetTransferPolicy.GlobalBindBasis
+                        : RetargetTransferPolicy.RestRelative,
+                    componentPolicy: targetRoleIndex.IsBodyEligibleTarget(targetBone.Index)
+                        ? RetargetComponentPolicy.FullTransform
+                        : GetDefaultHelperComponentPolicy(targetBone.Name)));
         }
 
         RetargetMap proposal = new(
@@ -664,7 +676,8 @@ public static class RetargetMapBuilder
         RigDefinition target,
         ImmutableArray<BoneMapEntry>.Builder entries,
         HashSet<int> mappedSources,
-        HashSet<int> mappedTargets)
+        HashSet<int> mappedTargets,
+        RetargetRigRoleIndex targetRoleIndex)
     {
         var sourcesByName = source.Bones
             .GroupBy(
@@ -678,7 +691,7 @@ public static class RetargetMapBuilder
         foreach (BoneDefinition targetBone in target.Bones)
         {
             if (mappedTargets.Contains(targetBone.Index) ||
-                IsHelperTarget(targetBone))
+                !targetRoleIndex.IsBodyEligibleTarget(targetBone.Index))
             {
                 continue;
             }
@@ -721,43 +734,54 @@ public static class RetargetMapBuilder
         ImmutableArray<BoneMapEntry>.Builder entries,
         HashSet<int> mappedSources,
         HashSet<int> mappedTargets,
-        Func<BoneDefinition, string?> keySelector,
+        Func<BoneDefinition, string?> sourceKeySelector,
+        Func<BoneDefinition, string?> targetKeySelector,
         BoneMappingMethod method,
-        double confidence)
+        double confidence,
+        RetargetRigRoleIndex targetRoleIndex,
+        bool collapseSameRoleChains = false)
     {
         Dictionary<string, int[]> sourcesByKey = source.Bones
-            .Select(bone => (Bone: bone, Key: keySelector(bone)))
+            .Select(bone => (Bone: bone, Key: sourceKeySelector(bone)))
             .Where(static row => row.Key is not null)
-            .GroupBy(
-                static row => row.Key!,
-                StringComparer.Ordinal)
+            .GroupBy(static row => row.Key!, StringComparer.Ordinal)
             .ToDictionary(
                 static group => group.Key,
-                static group => group
-                    .Select(static row => row.Bone.Index)
-                    .ToArray(),
+                static group => group.Select(static row => row.Bone.Index).ToArray(),
                 StringComparer.Ordinal);
-        Dictionary<string, int> targetKeyCounts = target.Bones
-            .Select(bone => keySelector(bone))
-            .Where(static key => key is not null)
-            .GroupBy(static key => key!, StringComparer.Ordinal)
-            .ToDictionary(
-                static group => group.Key,
-                static group => group.Count(),
-                StringComparer.Ordinal);
+        var targetRows = target.Bones
+            .Where(bone => targetRoleIndex.IsBodyEligibleTarget(bone.Index))
+            .Select(bone => (Bone: bone, Key: targetKeySelector(bone)))
+            .Where(static row => row.Key is not null)
+            .ToArray();
+        var targetKeyOwner = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var group in targetRows.GroupBy(
+                     static row => row.Key!,
+                     StringComparer.Ordinal))
+        {
+            if (group.Count() == 1)
+            {
+                targetKeyOwner[group.Key] = group.Single().Bone.Index;
+            }
+            else if (collapseSameRoleChains &&
+                     targetRoleIndex.TryGetUniqueBodyRoleTarget(group.Key, out int owner))
+            {
+                targetKeyOwner[group.Key] = owner;
+            }
+        }
 
         foreach (BoneDefinition targetBone in target.Bones)
         {
             if (mappedTargets.Contains(targetBone.Index) ||
-                IsHelperTarget(targetBone))
+                !targetRoleIndex.IsBodyEligibleTarget(targetBone.Index))
             {
                 continue;
             }
 
-            string? key = keySelector(targetBone);
+            string? key = targetKeySelector(targetBone);
             if (key is null ||
-                !targetKeyCounts.TryGetValue(key, out int targetCount) ||
-                targetCount != 1 ||
+                !targetKeyOwner.TryGetValue(key, out int owner) ||
+                owner != targetBone.Index ||
                 !sourcesByKey.TryGetValue(key, out int[]? candidates))
             {
                 continue;
@@ -772,12 +796,11 @@ public static class RetargetMapBuilder
             }
 
             int sourceIndex = available[0];
-            entries.Add(
-                new BoneMapEntry(
-                    sourceIndex,
-                    targetBone.Index,
-                    method,
-                    confidence));
+            entries.Add(new BoneMapEntry(
+                sourceIndex,
+                targetBone.Index,
+                method,
+                confidence));
             mappedSources.Add(sourceIndex);
             mappedTargets.Add(targetBone.Index);
         }
@@ -788,7 +811,8 @@ public static class RetargetMapBuilder
         RigDefinition target,
         ImmutableArray<BoneMapEntry>.Builder entries,
         HashSet<int> mappedSources,
-        HashSet<int> mappedTargets)
+        HashSet<int> mappedTargets,
+        RetargetRigRoleIndex targetRoleIndex)
     {
         int[] sourceDepths = ComputeDepths(source);
         int[] targetDepths = ComputeDepths(target);
@@ -802,7 +826,7 @@ public static class RetargetMapBuilder
             foreach (BoneDefinition targetBone in target.Bones)
             {
                 if (mappedTargets.Contains(targetBone.Index) ||
-                    IsHelperTarget(targetBone))
+                    !targetRoleIndex.IsBodyEligibleTarget(targetBone.Index))
                 {
                     continue;
                 }
@@ -846,7 +870,9 @@ public static class RetargetMapBuilder
         RigDefinition source,
         RigDefinition target,
         ImmutableArray<BoneMapEntry>.Builder entries,
-        HashSet<int> mappedTargets)
+        HashSet<int> mappedTargets,
+        RetargetRigRoleIndex sourceRoleIndex,
+        RetargetRigRoleIndex targetRoleIndex)
     {
         Dictionary<string, int[]> sourcesByName = source.Bones
             .GroupBy(
@@ -869,7 +895,7 @@ public static class RetargetMapBuilder
 
         foreach (BoneDefinition targetBone in target.Bones)
         {
-            if (!IsHelperTarget(targetBone) ||
+            if (!targetRoleIndex.IsHelperOnlyTarget(targetBone.Index) ||
                 mappedTargets.Contains(targetBone.Index))
             {
                 continue;
@@ -909,6 +935,7 @@ public static class RetargetMapBuilder
             {
                 sourceIndex = FindSuggestedHelperSource(
                     source,
+                    sourceRoleIndex,
                     targetKey);
             }
 
@@ -933,6 +960,7 @@ public static class RetargetMapBuilder
 
     private static int FindSuggestedHelperSource(
         RigDefinition source,
+        RetargetRigRoleIndex sourceRoleIndex,
         string normalizedTargetName)
     {
         string[] suggestions = normalizedTargetName switch
@@ -980,16 +1008,11 @@ public static class RetargetMapBuilder
                 continue;
             }
 
-            int[] semanticCandidates = source.Bones
-                .Where(bone =>
-                    HumanoidBoneSemanticClassifier.Classify(
-                        bone.SemanticRole ??
-                        bone.Name)?.Role == semantic.Role)
-                .Select(static bone => bone.Index)
-                .ToArray();
-            if (semanticCandidates.Length == 1)
+            if (sourceRoleIndex.TryGetUniqueRoleBone(
+                    semantic.Role,
+                    out int semanticCandidate))
             {
-                return semanticCandidates[0];
+                return semanticCandidate;
             }
         }
 

@@ -1,8 +1,6 @@
 using System.Collections.Immutable;
 using System.IO;
 using System.Numerics;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
@@ -241,6 +239,12 @@ public static class CustomModelPreviewAdapter
                 authoredRig = imported.Rig is null
                     ? null
                     : Dl1CustomModelRigPreparer.Prepare(imported);
+                if (authoredRig is not null)
+                {
+                    diagnostics.AddRange(authoredRig.Diagnostics.Select(
+                        static diagnostic => diagnostic.Message));
+                }
+
                 preparedMeshes = CreateMeshes(
                     imported,
                     authoredRig,
@@ -443,128 +447,55 @@ public static class CustomModelPreviewAdapter
             return null;
         }
 
-        try
+        if (CustomModelTextureDecoder.TryReadLegacyDdsPassthrough(
+                payload.AsSpan(),
+                binding.DisplayName,
+                out CustomModelLegacyDdsInfo legacy,
+                out _))
         {
-            if (binding.MediaType.Equals("image/vnd-ms.dds", StringComparison.OrdinalIgnoreCase) ||
-                payload.AsSpan().StartsWith("DDS "u8))
+            (TextureRenderFormat format, int blockBytes) = legacy.Format switch
             {
-                return DecodeDds(binding, payload.AsSpan());
-            }
-
-            return DecodeBitmap(binding, payload);
+                BCnEncoder.Shared.CompressionFormat.Bc1 => (TextureRenderFormat.Bc1Unorm, 8),
+                BCnEncoder.Shared.CompressionFormat.Bc2 => (TextureRenderFormat.Bc2Unorm, 16),
+                BCnEncoder.Shared.CompressionFormat.Bc3 => (TextureRenderFormat.Bc3Unorm, 16),
+                _ => throw new InvalidDataException("Legacy DDS passthrough reported an unsupported format."),
+            };
+            int rowPitch = checked(Math.Max(1, (legacy.Width + 3) / 4) * blockBytes);
+            return new TextureRenderData(
+                $"custom:{binding.Id:N}",
+                legacy.Width,
+                legacy.Height,
+                format,
+                rowPitch,
+                payload.AsSpan(128, legacy.BaseMipByteCount).ToArray());
         }
-        catch (Exception exception) when (
-            exception is ArgumentException or
-            FileFormatException or
-            InvalidDataException or
-            NotSupportedException or
-            OverflowException)
+
+        if (!CustomModelTextureDecoder.TryDecode(
+                payload.AsSpan(),
+                binding.DisplayName,
+                out CustomModelDecodedTexture? decoded,
+                out string failureReason) ||
+            decoded is null)
         {
             diagnostics.Add(
-                $"Texture '{binding.DisplayName}' could not be decoded for preview ({exception.Message}); its original bytes remain packaged.");
+                $"{failureReason} Its original bytes remain packaged and the mesh uses neutral shading.");
             return null;
         }
-    }
 
-    private static TextureRenderData DecodeBitmap(
-        CustomModelTextureBinding binding,
-        ImmutableArray<byte> payload)
-    {
-        TextureRenderData? decoded = null;
-        Exception? failure = null;
-        Thread thread = new(() =>
+        byte[] bgra = decoded.Rgba8.ToArray();
+        for (int offset = 0; offset < bgra.Length; offset += 4)
         {
-            try
-            {
-                using var stream = new MemoryStream(payload.ToArray(), writable: false);
-                BitmapDecoder decoder = BitmapDecoder.Create(
-                    stream,
-                    BitmapCreateOptions.PreservePixelFormat,
-                    BitmapCacheOption.OnLoad);
-                BitmapSource source = decoder.Frames[0];
-                var converted = new FormatConvertedBitmap(
-                    source,
-                    PixelFormats.Bgra32,
-                    null,
-                    0.0);
-                int rowPitch = checked(converted.PixelWidth * 4);
-                byte[] pixels = new byte[checked(rowPitch * converted.PixelHeight)];
-                converted.CopyPixels(pixels, rowPitch, 0);
-                decoded = new TextureRenderData(
-                    $"custom:{binding.Id:N}",
-                    converted.PixelWidth,
-                    converted.PixelHeight,
-                    TextureRenderFormat.Bgra8Unorm,
-                    rowPitch,
-                    pixels);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        })
-        {
-            IsBackground = true,
-            Name = "DL ReAnimated custom texture decoder",
-        };
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-        {
-            throw failure;
-        }
-
-        return decoded ?? throw new InvalidDataException(
-            "The image decoder produced no bitmap.");
-    }
-
-    private static TextureRenderData DecodeDds(
-        CustomModelTextureBinding binding,
-        ReadOnlySpan<byte> payload)
-    {
-        if (payload.Length < 128 ||
-            !payload[..4].SequenceEqual("DDS "u8) ||
-            ReadUInt32(payload, 4) != 124 ||
-            ReadUInt32(payload, 76) != 32)
-        {
-            throw new InvalidDataException("DDS header is invalid or truncated.");
-        }
-
-        int height = checked((int)ReadUInt32(payload, 12));
-        int width = checked((int)ReadUInt32(payload, 16));
-        uint fourCc = ReadUInt32(payload, 84);
-        (TextureRenderFormat format, int blockBytes) = fourCc switch
-        {
-            0x3154_5844 => (TextureRenderFormat.Bc1Unorm, 8),  // DXT1
-            0x3354_5844 => (TextureRenderFormat.Bc2Unorm, 16), // DXT3
-            0x3554_5844 => (TextureRenderFormat.Bc3Unorm, 16), // DXT5
-            _ => throw new NotSupportedException(
-                $"DDS FourCC 0x{fourCc:X8} is not a supported BC1/BC2/BC3 authoring preview."),
-        };
-        if (width <= 0 || height <= 0 || width > 32_768 || height > 32_768)
-        {
-            throw new InvalidDataException("DDS dimensions are outside the bounded preview contract.");
-        }
-
-        int rowPitch = checked(Math.Max(1, (width + 3) / 4) * blockBytes);
-        int byteCount = checked(rowPitch * Math.Max(1, (height + 3) / 4));
-        if (payload.Length < 128 + byteCount)
-        {
-            throw new InvalidDataException("DDS base mip is truncated.");
+            (bgra[offset], bgra[offset + 2]) = (bgra[offset + 2], bgra[offset]);
         }
 
         return new TextureRenderData(
             $"custom:{binding.Id:N}",
-            width,
-            height,
-            format,
-            rowPitch,
-            payload.Slice(128, byteCount).ToArray());
+            decoded.Width,
+            decoded.Height,
+            TextureRenderFormat.Bgra8Unorm,
+            checked(decoded.Width * 4),
+            bgra);
     }
-
-    private static uint ReadUInt32(ReadOnlySpan<byte> payload, int offset) =>
-        System.Buffers.Binary.BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(offset, 4));
 
     private sealed record PreparedMeshSet(
         ImmutableArray<MeshRenderData> Meshes,

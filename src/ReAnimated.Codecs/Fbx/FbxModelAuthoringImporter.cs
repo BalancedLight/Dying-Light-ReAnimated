@@ -19,6 +19,10 @@ public sealed record FbxModelAuthoringImportOptions
 
     public int MaximumMaterials { get; init; } = 65_536;
 
+    public long MaximumTextureBytes { get; init; } = 256L * 1024 * 1024;
+
+    public string? ExternalTextureSearchRoot { get; init; }
+
     public int MaximumExpandedVertices { get; init; } = 20_000_000;
 
     public int MaximumMorphChannels { get; init; } = 4_096;
@@ -120,6 +124,8 @@ public static class FbxModelAuthoringImporter
     private const int MaximumVerticesPerDraw = 65_535;
     private const string SharedBaseColorAtlasDiagnosticCode =
         "model_shared_embedded_base_color_atlas_inferred";
+    private const string ExternalTextureDiagnosticCode =
+        "model_external_texture_not_embedded";
 
     public static async Task<FbxModelAuthoringImportResult> ImportFileAsync(
         string path,
@@ -134,7 +140,12 @@ public static class FbxModelAuthoringImporter
         }
 
         byte[] bytes = await File.ReadAllBytesAsync(fullPath, cancellationToken).ConfigureAwait(false);
-        return Import(bytes, Path.GetFileName(fullPath), options, cancellationToken);
+        FbxModelAuthoringImportOptions fileOptions =
+            (options ?? new FbxModelAuthoringImportOptions()) with
+            {
+                ExternalTextureSearchRoot = Path.GetDirectoryName(fullPath),
+            };
+        return Import(bytes, Path.GetFileName(fullPath), fileOptions, cancellationToken);
     }
 
     public static FbxModelAuthoringImportResult Import(
@@ -218,7 +229,17 @@ public static class FbxModelAuthoringImporter
         (ImmutableArray<CustomModelMaterial> materials,
          ImmutableDictionary<long, Guid> materialIds,
          ImmutableDictionary<string, ImmutableArray<byte>> texturePayloads) =
-            ReadMaterials(scene, objects, options.MaximumMaterials, diagnostics, cancellationToken);
+            ReadMaterials(
+                scene,
+                objects,
+                originalFileName,
+                options,
+                diagnostics,
+                cancellationToken);
+        RefreshTextureBindingDiagnostics(
+            materials,
+            texturePayloads,
+            diagnostics);
 
         ImmutableArray<CustomModelMeshPart> meshParts;
         ImmutableArray<FbxModelSurface> surfaces;
@@ -290,6 +311,7 @@ public static class FbxModelAuthoringImporter
             AxisSystem = ReadAxisSystem(scene),
             RigSignature = rigSignature,
             MorphSignature = morphSignature,
+            IgnoreMorphChannels = options.IgnoreMorphChannels,
             Bones = bones,
             MorphChannels = morphChannels,
             Meshes = meshParts,
@@ -325,12 +347,19 @@ public static class FbxModelAuthoringImporter
     {
         ArgumentNullException.ThrowIfNull(package);
         package.Document.Validate();
+        bool ignoreMorphChannels = package.Document.IgnoreMorphChannels ||
+            package.Document.Diagnostics.Any(static diagnostic =>
+                string.Equals(
+                    diagnostic.Code,
+                    "model_morph_channels_skipped",
+                    StringComparison.Ordinal));
         FbxModelAuthoringImportResult decoded = Import(
             package.SourceFbx.AsSpan(),
             package.Document.Source.OriginalFileName,
             new FbxModelAuthoringImportOptions
             {
                 RigMode = package.Document.RigMode,
+                IgnoreMorphChannels = ignoreMorphChannels,
             },
             cancellationToken);
 
@@ -351,7 +380,8 @@ public static class FbxModelAuthoringImporter
         var savedMaterials = package.Document.Materials.ToBuilder();
         var normalizedDiagnostics = decoded.Package.Document.Diagnostics
             .Where(static diagnostic =>
-                diagnostic.Code != SharedBaseColorAtlasDiagnosticCode)
+                diagnostic.Code != SharedBaseColorAtlasDiagnosticCode &&
+                diagnostic.Code != ExternalTextureDiagnosticCode)
             .ToImmutableArray()
             .ToBuilder();
         if (package.Document.Diagnostics.Any(static diagnostic =>
@@ -364,6 +394,10 @@ public static class FbxModelAuthoringImporter
         {
             InferSingleEmbeddedBaseColorAtlas(savedMaterials, normalizedDiagnostics);
         }
+        normalizedDiagnostics.AddRange(BuildTextureBindingDiagnostics(
+            savedMaterials,
+            package.TexturePayloads,
+            package.Document.Diagnostics));
         CustomModelDocument document = decoded.Package.Document with
         {
             ModelId = package.Document.ModelId,
@@ -414,6 +448,8 @@ public static class FbxModelAuthoringImporter
             (options ?? new FbxModelAuthoringImportOptions()) with
             {
                 RigMode = existing.Document.RigMode,
+                IgnoreMorphChannels = options?.IgnoreMorphChannels ??
+                    existing.Document.IgnoreMorphChannels,
             };
         FbxModelAuthoringImportResult replacement = Import(
             replacementFbx,
@@ -702,7 +738,8 @@ public static class FbxModelAuthoringImporter
         ReadMaterials(
             FbxSemanticScene scene,
             ImmutableDictionary<long, FbxNode> objects,
-            int maximumMaterials,
+            string originalFileName,
+            FbxModelAuthoringImportOptions options,
             ImmutableArray<CustomModelImportDiagnostic>.Builder diagnostics,
             CancellationToken cancellationToken)
     {
@@ -711,10 +748,10 @@ public static class FbxModelAuthoringImporter
             .Select(static pair => pair.Key)
             .Order()
             .ToArray();
-        if (materialObjectIds.Length > maximumMaterials)
+        if (materialObjectIds.Length > options.MaximumMaterials)
         {
             throw new InvalidDataException(
-                $"FBX contains {materialObjectIds.Length:N0} materials; the configured limit is {maximumMaterials:N0}.");
+                $"FBX contains {materialObjectIds.Length:N0} materials; the configured limit is {options.MaximumMaterials:N0}.");
         }
 
         var materials = ImmutableArray.CreateBuilder<CustomModelMaterial>();
@@ -742,7 +779,18 @@ public static class FbxModelAuthoringImporter
                 string textureName = ReadObjectName(textureNode, $"Texture {textureConnection.ChildId}");
                 CustomModelTextureSemantic semantic = ClassifyTextureSemantic(
                     textureConnection.PropertyName,
-                    textureName);
+                    textureName,
+                    out string? inferredToken);
+                if (inferredToken is not null)
+                {
+                    diagnostics.Add(new CustomModelImportDiagnostic
+                    {
+                        Code = "model_texture_semantic_inferred_from_name",
+                        Severity = CustomModelImportSeverity.Information,
+                        Subject = materialName,
+                        Message = $"Texture '{textureName}' was classified as {semantic} from the whole token '{inferredToken}'.",
+                    });
+                }
                 if (texturesBySemantic.ContainsKey(semantic))
                 {
                     diagnostics.Add(new CustomModelImportDiagnostic
@@ -757,6 +805,31 @@ public static class FbxModelAuthoringImporter
 
                 (ImmutableArray<byte> content, string? originalReference) =
                     ReadTexturePayload(scene, objects, textureConnection.ChildId, textureNode);
+                bool embeddedInFbx = !content.IsDefaultOrEmpty;
+                ImmutableArray<string> probedPaths = [];
+                string? resolvedPath = null;
+                if (!embeddedInFbx &&
+                    options.ExternalTextureSearchRoot is not null &&
+                    originalReference is not null)
+                {
+                    (content, resolvedPath, probedPaths) = ResolveExternalTexture(
+                        options.ExternalTextureSearchRoot,
+                        originalFileName,
+                        originalReference,
+                        options.MaximumTextureBytes,
+                        cancellationToken);
+                    if (resolvedPath is not null)
+                    {
+                        diagnostics.Add(new CustomModelImportDiagnostic
+                        {
+                            Code = "model_external_texture_resolved",
+                            Severity = CustomModelImportSeverity.Information,
+                            Subject = materialName,
+                            Message = $"Texture '{textureName}' was embedded from '{resolvedPath}'.",
+                        });
+                    }
+                }
+
                 bool embedded = !content.IsDefaultOrEmpty;
                 string extension = DetectTextureExtension(content, originalReference);
                 string mediaType = TextureMediaType(extension);
@@ -781,7 +854,10 @@ public static class FbxModelAuthoringImporter
                         Subject = materialName,
                         Message = originalReference is null
                             ? $"Texture '{textureName}' has no embedded bytes or portable file reference; select a {semantic} texture in the Models workspace."
-                            : $"Texture '{textureName}' references '{originalReference}' and was not embedded; select or embed the source texture before build.",
+                            : $"Texture '{textureName}' references '{originalReference}' and was not embedded. " +
+                              (probedPaths.IsEmpty
+                                  ? "The reference was rooted, unsafe, or unsupported."
+                                  : $"Probed: {string.Join("; ", probedPaths)}."),
                     });
                 }
 
@@ -789,7 +865,7 @@ public static class FbxModelAuthoringImporter
                 {
                     Id = CreateStableObjectGuid("texture", textureConnection.ChildId, $"{materialObjectId}:{semantic}"),
                     Semantic = semantic,
-                    SourceKind = embedded
+                    SourceKind = embeddedInFbx
                         ? CustomModelTextureSourceKind.EmbeddedFbx
                         : CustomModelTextureSourceKind.ExternalFbx,
                     DisplayName = textureName,
@@ -899,6 +975,62 @@ public static class FbxModelAuthoringImporter
         }
     }
 
+    private static void RefreshTextureBindingDiagnostics(
+        IEnumerable<CustomModelMaterial> materials,
+        IReadOnlyDictionary<string, ImmutableArray<byte>> payloads,
+        ImmutableArray<CustomModelImportDiagnostic>.Builder diagnostics)
+    {
+        ImmutableArray<CustomModelImportDiagnostic> existing = diagnostics.ToImmutable();
+        ImmutableArray<CustomModelImportDiagnostic> retained = existing
+            .Where(static diagnostic => diagnostic.Code != ExternalTextureDiagnosticCode)
+            .ToImmutableArray();
+        diagnostics.Clear();
+        diagnostics.AddRange(retained);
+        diagnostics.AddRange(BuildTextureBindingDiagnostics(
+            materials,
+            payloads,
+            existing));
+    }
+
+    internal static ImmutableArray<CustomModelImportDiagnostic>
+        BuildTextureBindingDiagnostics(
+            IEnumerable<CustomModelMaterial> materials,
+            IReadOnlyDictionary<string, ImmutableArray<byte>> payloads,
+            IEnumerable<CustomModelImportDiagnostic>? existingDiagnostics = null)
+    {
+        CustomModelImportDiagnostic[] existing =
+            existingDiagnostics?
+                .Where(static diagnostic =>
+                    diagnostic.Code == ExternalTextureDiagnosticCode)
+                .ToArray() ?? [];
+        var result = ImmutableArray.CreateBuilder<CustomModelImportDiagnostic>();
+        foreach (CustomModelMaterial material in materials)
+        {
+            foreach (CustomModelTextureBinding binding in material.Textures)
+            {
+                bool hasPayload = binding.PackageEntryPath is { } entryPath &&
+                    payloads.TryGetValue(entryPath, out ImmutableArray<byte> payload) &&
+                    !payload.IsDefaultOrEmpty;
+                if (hasPayload)
+                {
+                    continue;
+                }
+
+                CustomModelImportDiagnostic? prior = existing.FirstOrDefault(diagnostic =>
+                    string.Equals(diagnostic.Subject, material.Name, StringComparison.Ordinal));
+                result.Add(prior ?? new CustomModelImportDiagnostic
+                {
+                    Code = ExternalTextureDiagnosticCode,
+                    Severity = CustomModelImportSeverity.Warning,
+                    Subject = material.Name,
+                    Message = $"Texture '{binding.DisplayName}' has no packaged bytes; select or embed its {binding.Semantic} image before build.",
+                });
+            }
+        }
+
+        return result.ToImmutable();
+    }
+
     private static (ImmutableArray<byte> Content, string? OriginalReference) ReadTexturePayload(
         FbxSemanticScene scene,
         ImmutableDictionary<long, FbxNode> objects,
@@ -944,31 +1076,211 @@ public static class FbxModelAuthoringImporter
         };
     }
 
-    private static CustomModelTextureSemantic ClassifyTextureSemantic(string propertyName, string textureName)
+    internal static CustomModelTextureSemantic ClassifyTextureSemantic(
+        string propertyName,
+        string textureName,
+        out string? inferredToken)
     {
-        string value = $"{propertyName} {textureName}";
-        if (value.Contains("normal", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("bump", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("_nrm", StringComparison.OrdinalIgnoreCase))
+        inferredToken = null;
+        string property = propertyName.Trim();
+        if (property.Equals("DiffuseColor", StringComparison.OrdinalIgnoreCase) ||
+            property.Equals("Maya|baseColor", StringComparison.OrdinalIgnoreCase))
+        {
+            return CustomModelTextureSemantic.BaseColor;
+        }
+
+        if (property.Equals("NormalMap", StringComparison.OrdinalIgnoreCase) ||
+            property.Equals("Bump", StringComparison.OrdinalIgnoreCase))
         {
             return CustomModelTextureSemantic.Normal;
         }
 
-        if (value.Contains("spec", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("rough", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("metal", StringComparison.OrdinalIgnoreCase))
+        if (property.Equals("SpecularColor", StringComparison.OrdinalIgnoreCase) ||
+            property.Equals("ShininessExponent", StringComparison.OrdinalIgnoreCase) ||
+            property.Equals("ReflectionFactor", StringComparison.OrdinalIgnoreCase))
         {
             return CustomModelTextureSemantic.Specular;
         }
 
-        if (value.Contains("mask", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("alpha", StringComparison.OrdinalIgnoreCase) ||
-            value.Contains("opacity", StringComparison.OrdinalIgnoreCase))
+        if (property.Equals("TransparentColor", StringComparison.OrdinalIgnoreCase) ||
+            property.Equals("TransparencyFactor", StringComparison.OrdinalIgnoreCase) ||
+            property.Equals("Opacity", StringComparison.OrdinalIgnoreCase))
         {
             return CustomModelTextureSemantic.Mask;
         }
 
+        foreach (string token in TextureNameTokens(textureName))
+        {
+            CustomModelTextureSemantic? semantic = token switch
+            {
+                "normal" or "nrm" or "bump" => CustomModelTextureSemantic.Normal,
+                "spec" or "specular" or "rough" or "roughness" or
+                    "metal" or "metallic" => CustomModelTextureSemantic.Specular,
+                "mask" or "alpha" or "opacity" => CustomModelTextureSemantic.Mask,
+                "diffuse" or "albedo" or "basecolor" => CustomModelTextureSemantic.BaseColor,
+                _ => null,
+            };
+            if (semantic is not null)
+            {
+                inferredToken = token;
+                return semantic.Value;
+            }
+        }
+
         return CustomModelTextureSemantic.BaseColor;
+    }
+
+    private static IEnumerable<string> TextureNameTokens(string value)
+    {
+        var token = new StringBuilder();
+        char previous = '\0';
+        foreach (char character in value.Normalize(NormalizationForm.FormKC))
+        {
+            if (char.IsLetterOrDigit(character))
+            {
+                if (token.Length > 0 && char.IsUpper(character) && char.IsLower(previous))
+                {
+                    yield return token.ToString().ToLowerInvariant();
+                    token.Clear();
+                }
+
+                token.Append(character);
+            }
+            else if (token.Length > 0)
+            {
+                string result = token.ToString().ToLowerInvariant();
+                token.Clear();
+                if (result != "tok")
+                {
+                    yield return result;
+                }
+            }
+
+            previous = character;
+        }
+
+        if (token.Length > 0)
+        {
+            string result = token.ToString().ToLowerInvariant();
+            if (result != "tok")
+            {
+                yield return result;
+            }
+        }
+    }
+
+    internal static (
+        ImmutableArray<byte> Content,
+        string? ResolvedPath,
+        ImmutableArray<string> ProbedPaths)
+        ResolveExternalTexture(
+            string searchRoot,
+            string originalFileName,
+            string reference,
+            long maximumTextureBytes,
+            CancellationToken cancellationToken)
+    {
+        string root = Path.GetFullPath(searchRoot);
+        if (Path.IsPathRooted(reference) || DirectoryHasReparsePoint(root, root))
+        {
+            return ([], null, []);
+        }
+
+        string normalizedReference = reference.Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+        string basename = Path.GetFileName(normalizedReference);
+        string extension = Path.GetExtension(basename).ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(basename) ||
+            !CustomModelTextureDecoder.SupportedExtensions.Contains(
+                extension,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            return ([], null, []);
+        }
+
+        string fbxStem = Path.GetFileNameWithoutExtension(originalFileName);
+        string[] rawCandidates =
+        [
+            Path.Combine(root, basename),
+            Path.Combine(root, $"{fbxStem}.fbm", basename),
+            Path.Combine(root, "textures", basename),
+            Path.Combine(root, normalizedReference),
+        ];
+        string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar)
+            ? root
+            : root + Path.DirectorySeparatorChar;
+        var probed = ImmutableArray.CreateBuilder<string>();
+        foreach (string rawCandidate in rawCandidates.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string candidate;
+            try
+            {
+                candidate = Path.GetFullPath(rawCandidate);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (!candidate.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+                DirectoryHasReparsePoint(root, candidate))
+            {
+                continue;
+            }
+
+            probed.Add(candidate);
+            if (!File.Exists(candidate))
+            {
+                continue;
+            }
+
+            var info = new FileInfo(candidate);
+            if (info.Length <= 0 || info.Length > maximumTextureBytes)
+            {
+                continue;
+            }
+
+            byte[] bytes = File.ReadAllBytes(candidate);
+            if (bytes.LongLength != info.Length || bytes.LongLength > maximumTextureBytes)
+            {
+                continue;
+            }
+
+            return (bytes.ToImmutableArray(), candidate, probed.ToImmutable());
+        }
+
+        return ([], null, probed.ToImmutable());
+    }
+
+    private static bool DirectoryHasReparsePoint(string root, string candidate)
+    {
+        string current = Path.GetFullPath(root);
+        string relative = Path.GetRelativePath(current, Path.GetFullPath(candidate));
+        if (relative == ".")
+        {
+            return new DirectoryInfo(current).Attributes.HasFlag(FileAttributes.ReparsePoint);
+        }
+
+        foreach (string part in relative.Split(
+                     Path.DirectorySeparatorChar,
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            current = Path.Combine(current, part);
+            if (!File.Exists(current) && !Directory.Exists(current))
+            {
+                continue;
+            }
+
+            FileAttributes attributes = File.GetAttributes(current);
+            if (attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     internal static string DetectTextureExtension(ImmutableArray<byte> content, string? reference)

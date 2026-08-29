@@ -277,6 +277,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         CustomModelTextureSemantic.BaseColor,
         CustomModelTextureSemantic.Normal,
         CustomModelTextureSemantic.Specular,
+        CustomModelTextureSemantic.Mask,
     ];
 
     public IReadOnlyList<CustomModelNormalMapConvention> NormalMapConventions { get; } =
@@ -1102,8 +1103,19 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             }
 
             byte[] bytes = File.ReadAllBytes(path);
-            string hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             string extension = NormalizeTextureExtension(path);
+            if (!CustomModelTextureDecoder.TryDecode(
+                    bytes,
+                    Path.GetFileName(path),
+                    out _,
+                    out string failureReason))
+            {
+                BuildStatus = $"Texture selection failed: {failureReason}";
+                _setStatus(BuildStatus);
+                return;
+            }
+
+            string hash = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             string entryPath = $"textures/user/{hash}{extension}";
             CustomModelMaterial material = SelectedMaterial.Contract;
             CustomModelTextureBinding binding = new()
@@ -2227,6 +2239,39 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 Diagnostics.Add(new CustomModelDiagnosticItemViewModel(diagnostic));
             }
 
+            if (imported.Rig is not null)
+            {
+                try
+                {
+                    Dl1PreparedAuthoredRig prepared =
+                        Dl1CustomModelRigPreparer.Prepare(imported);
+                    foreach (Dl1AuthoredRigDecompositionDiagnostic diagnostic in
+                             prepared.Diagnostics)
+                    {
+                        Diagnostics.Add(new CustomModelDiagnosticItemViewModel(
+                            new CustomModelImportDiagnostic
+                            {
+                                Code = diagnostic.Code,
+                                Severity = CustomModelImportSeverity.Warning,
+                                Subject = diagnostic.BoneName,
+                                Message = diagnostic.Message,
+                            }));
+                    }
+                }
+                catch (Exception exception) when (
+                    exception is ArgumentException or InvalidDataException or
+                    InvalidOperationException or OverflowException)
+                {
+                    Diagnostics.Add(new CustomModelDiagnosticItemViewModel(
+                        new CustomModelImportDiagnostic
+                        {
+                            Code = "model_dl1_rig_preparation_failed",
+                            Severity = CustomModelImportSeverity.Error,
+                            Message = exception.Message,
+                        }));
+                }
+            }
+
             SelectedBone ??= Bones.FirstOrDefault();
             SelectedMaterial = Materials.FirstOrDefault();
             SelectedAnimation = Animations.FirstOrDefault(static clip => clip.DecodedClip is not null);
@@ -2295,7 +2340,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         Materials.Clear();
         foreach (CustomModelMaterial material in _model.Package.Document.Materials)
         {
-            Materials.Add(new CustomModelMaterialItemViewModel(material));
+            Materials.Add(new CustomModelMaterialItemViewModel(
+                material,
+                _model.Package.TexturePayloads));
         }
     }
 
@@ -2952,9 +2999,15 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     private static string NormalizeTextureExtension(string path)
     {
         string extension = Path.GetExtension(path).ToLowerInvariant();
-        return extension is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".tif" or ".tiff" or ".dds" or ".tga"
-            ? extension
-            : ".bin";
+        if (!CustomModelTextureDecoder.SupportedExtensions.Contains(
+                extension,
+                StringComparer.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"Texture extension '{extension}' is not supported.");
+        }
+
+        return extension;
     }
 
     private static string TextureMediaType(string extension) => extension switch
@@ -2962,7 +3015,6 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         ".png" => "image/png",
         ".jpg" or ".jpeg" => "image/jpeg",
         ".bmp" => "image/bmp",
-        ".tif" or ".tiff" => "image/tiff",
         ".dds" => "image/vnd-ms.dds",
         ".tga" => "image/x-tga",
         _ => "application/octet-stream",
@@ -3101,14 +3153,57 @@ public sealed record CustomModelBoneItemViewModel(
     public bool IsAuthored => AuthoredHelperId is not null;
 }
 
-public sealed record CustomModelMaterialItemViewModel(CustomModelMaterial Contract)
+public sealed class CustomModelMaterialItemViewModel
 {
+    private static readonly Dictionary<string, (bool Success, string Verdict)>
+        DecodeVerdicts = new(StringComparer.OrdinalIgnoreCase);
+    private readonly IReadOnlyDictionary<string, ImmutableArray<byte>> _payloads;
+
+    public CustomModelMaterialItemViewModel(
+        CustomModelMaterial contract,
+        IReadOnlyDictionary<string, ImmutableArray<byte>> payloads)
+    {
+        Contract = contract;
+        _payloads = payloads;
+    }
+
+    public CustomModelMaterial Contract { get; }
+
     public string Name => Contract.Name;
+
     public string BaseColor => Contract.Textures.FirstOrDefault(
         static texture => texture.Semantic == CustomModelTextureSemantic.BaseColor)?.DisplayName ?? "No base color";
+
     public string TextureSummary => Contract.Textures.IsEmpty
         ? "No textures"
-        : string.Join(", ", Contract.Textures.Select(static texture => $"{texture.Semantic}: {texture.DisplayName}"));
+        : string.Join(Environment.NewLine, Contract.Textures.Select(TextureStatus));
+
+    private string TextureStatus(CustomModelTextureBinding texture)
+    {
+        if (texture.PackageEntryPath is not { } entryPath ||
+            !_payloads.TryGetValue(entryPath, out ImmutableArray<byte> payload) ||
+            payload.IsDefaultOrEmpty)
+        {
+            return $"{texture.Semantic}: {texture.DisplayName} ? {texture.SourceKind}, no bytes";
+        }
+
+        if (!DecodeVerdicts.TryGetValue(texture.ContentSha256, out var verdict))
+        {
+            bool success = CustomModelTextureDecoder.TryDecode(
+                payload.AsSpan(),
+                texture.DisplayName,
+                out CustomModelDecodedTexture? decoded,
+                out string failureReason);
+            verdict = success && decoded is not null
+                ? (true, $"{decoded.MediaType}, preview OK")
+                : (false, $"preview failed: {failureReason}");
+            DecodeVerdicts[texture.ContentSha256] = verdict;
+        }
+
+        double kibibytes = Math.Max(0.1, payload.Length / 1024.0);
+        return $"{texture.Semantic}: {texture.DisplayName} ? {texture.SourceKind}, " +
+            $"{kibibytes:N1} KB, {verdict.Verdict}";
+    }
 }
 
 public sealed record CustomModelDiagnosticItemViewModel(CustomModelImportDiagnostic Contract)

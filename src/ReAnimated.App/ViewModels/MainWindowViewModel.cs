@@ -4133,6 +4133,7 @@ public sealed partial class MainWindowViewModel :
         try
         {
             _pendingProjectAssets.Clear();
+            SweepStaleProjectTemporaryFiles(path);
             DlraProject loaded = await Task.Run(
                 () => ProjectSerializer.Load(path));
             openJob.Progress = 25.0;
@@ -5289,11 +5290,28 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    /// <summary>
+    /// Atomic writes stage through sibling <c>*.tmp</c> files that only a
+    /// clean shutdown removes. Sweep abandoned ones so they never accumulate
+    /// beside real project sources.
+    /// </summary>
+    private void SweepStaleProjectTemporaryFiles(string? projectPath)
+    {
+        if (!string.IsNullOrWhiteSpace(projectPath))
+        {
+            _ = ProjectSourceImporter.SweepStaleProjectSourceTemporaryFiles(
+                projectPath);
+        }
+
+        _ = _pendingProjectAssetStore.SweepStaleTemporaryFiles();
+    }
+
     private async Task MaterializePendingProjectAssetsAsync(
         DlraProject project,
         string projectPath,
         CancellationToken cancellationToken)
     {
+        SweepStaleProjectTemporaryFiles(projectPath);
         HashSet<Guid> referenced = project.Assets
             .Select(static asset => asset.Id)
             .ToHashSet();
@@ -5318,9 +5336,13 @@ public sealed partial class MainWindowViewModel :
                     "A recovery staging receipt disagrees with its project asset identity.");
             }
 
+            // The receipt was just verified against the project's own asset
+            // identity, so these bytes are the authoritative ones. Publishing
+            // them over a divergent file is the point of a restore.
             _ = await _pendingProjectAssetStore.MaterializeAsync(
                 receipt,
                 projectPath,
+                replaceExisting: true,
                 cancellationToken);
         }
     }
@@ -5482,13 +5504,19 @@ public sealed partial class MainWindowViewModel :
             !IsAssetReferencedAsImmutableAnimationInput(project, previousAsset.Id);
         Guid packageAssetId = exactAsset?.Id ??
             (previousAssetMayBeReplaced ? previousAsset!.Id : Guid.NewGuid());
+        // A reused path is a deliberate in-place replacement of bytes this
+        // project already owns; only a freshly minted path must refuse to
+        // overwrite whatever happens to sit there.
+        bool replacesOwnedAssetPath =
+            exactAsset is not null || previousAssetMayBeReplaced;
         string relativePath = exactAsset?.RelativePath ??
             (previousAssetMayBeReplaced
                 ? previousAsset!.RelativePath
                 : CreatePendingCustomModelRelativePath(
                     project,
                     payload,
-                    sha256));
+                    sha256,
+                    materializeProjectPath));
         PendingProjectAssetReceipt staged =
             await _pendingProjectAssetStore.StageAsync(
                 packageAssetId,
@@ -5501,6 +5529,7 @@ public sealed partial class MainWindowViewModel :
             _ = await _pendingProjectAssetStore.MaterializeAsync(
                 staged,
                 materializeProjectPath,
+                replacesOwnedAssetPath,
                 cancellationToken);
         }
 
@@ -5611,25 +5640,61 @@ public sealed partial class MainWindowViewModel :
         return updated;
     }
 
-    private static string CreatePendingCustomModelRelativePath(
+    internal static string CreatePendingCustomModelRelativePath(
         DlraProject project,
         ModelsWorkspacePersistencePayload payload,
-        string sha256)
+        string sha256,
+        string? projectPath)
     {
         string stem = Dl1SourceModelWriter.SanitizeName(
             Path.GetFileNameWithoutExtension(payload.SuggestedFileName),
             40);
         string candidate =
             $"Sources/{stem}-{payload.ModelId:N}.dlrmodel";
-        if (project.Assets.All(asset => !string.Equals(
-                asset.RelativePath,
-                candidate,
-                StringComparison.OrdinalIgnoreCase)))
+        bool claimedByAsset = project.Assets.Any(asset => string.Equals(
+            asset.RelativePath,
+            candidate,
+            StringComparison.OrdinalIgnoreCase));
+        if (!claimedByAsset &&
+            !ProjectRelativePathExistsOnDisk(projectPath, candidate))
         {
             return candidate;
         }
 
         return $"Sources/{stem}-{sha256[..12]}.dlrmodel";
+    }
+
+    /// <summary>
+    /// Removing a project model drops its asset record but leaves the file in
+    /// <c>Sources</c>. A candidate path is only free when nothing claims it and
+    /// nothing already occupies it.
+    /// </summary>
+    private static bool ProjectRelativePathExistsOnDisk(
+        string? projectPath,
+        string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            return false;
+        }
+
+        try
+        {
+            string? projectDirectory = Path.GetDirectoryName(
+                Path.GetFullPath(projectPath));
+            return !string.IsNullOrWhiteSpace(projectDirectory) &&
+                File.Exists(Path.Combine(
+                    projectDirectory,
+                    relativePath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            IOException or
+            UnauthorizedAccessException or
+            NotSupportedException)
+        {
+            return false;
+        }
     }
 
     internal static DlraProject ReconcileEmbeddedCustomModelStacks(

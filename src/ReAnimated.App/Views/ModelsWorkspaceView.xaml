@@ -105,9 +105,20 @@
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
                             CornerRadius="3">
-                        <TextBlock Foreground="{StaticResource TextBrush}"
-                                   Text="{Binding BuildStatus}"
-                                   TextWrapping="Wrap" />
+                        <DockPanel LastChildFill="True">
+                            <Border DockPanel.Dock="Right"
+                                    Margin="8,0,0,0"
+                                    Padding="6,2"
+                                    Background="#33445B"
+                                    CornerRadius="8">
+                                <TextBlock FontSize="10"
+                                           Foreground="{StaticResource TextBrush}"
+                                           Text="{Binding Diagnostics.Count, StringFormat={}{0} diagnostics}" />
+                            </Border>
+                            <TextBlock Foreground="{StaticResource TextBrush}"
+                                       Text="{Binding BuildStatus}"
+                                       TextWrapping="Wrap" />
+                        </DockPanel>
                     </Border>
                 </StackPanel>
             </ScrollViewer>
@@ -223,7 +234,7 @@
                         </Grid.RowDefinitions>
                         <TextBlock Margin="2,0,2,6"
                                    Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Embedded FBX textures are used automatically. Override base color, normal, or specular independently. Normal maps are repacked to DL1's alpha/green convention during build."
+                                   Text="Embedded FBX textures are used automatically. Override base color, normal, specular, or mask independently. Normal maps are repacked to DL1's alpha/green convention during build."
                                    TextWrapping="Wrap" />
                         <ListBox Grid.Row="1"
                                  ItemsSource="{Binding Materials}"
@@ -255,6 +266,45 @@
                                     Command="{Binding SelectTextureCommand}"
                                     Content="Choose texture..." />
                         </StackPanel>
+                    </Grid>
+                </TabItem>
+
+                <TabItem x:Name="AuthoringDiagnosticsTab"
+                         Header="{Binding Diagnostics.Count, StringFormat=Diagnostics ({0})}">
+                    <Grid Margin="7">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Margin="2,0,2,6"
+                                   Foreground="{StaticResource MutedTextBrush}"
+                                   Text="Import, texture, DL1-output, and repair diagnostics. Warnings remain visible until their underlying binding or build condition is resolved."
+                                   TextWrapping="Wrap" />
+                        <DataGrid Grid.Row="1"
+                                  AutoGenerateColumns="False"
+                                  CanUserAddRows="False"
+                                  IsReadOnly="True"
+                                  ItemsSource="{Binding Diagnostics}">
+                            <DataGrid.RowStyle>
+                                <Style TargetType="DataGridRow">
+                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding Severity}" Value="Error">
+                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </DataGrid.RowStyle>
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Width="72" Binding="{Binding Severity}" Header="Severity" />
+                                <DataGridTextColumn Width="150" Binding="{Binding Code}" Header="Code" />
+                                <DataGridTextColumn Width="120" Binding="{Binding Subject}" Header="Subject" />
+                                <DataGridTextColumn Width="*" Binding="{Binding Message}" Header="Message" />
+                            </DataGrid.Columns>
+                        </DataGrid>
                     </Grid>
                 </TabItem>
 

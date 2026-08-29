@@ -3613,4 +3613,82 @@ public sealed class ViewModelWorkspaceTests : IDisposable
             string? initialPath) =>
             additionalRpackRoot;
     }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public void PendingCustomModelPathSkipsCandidatesWithStaleFilesOnDisk()
+    {
+        string root = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Guid modelId = Guid.NewGuid();
+            string projectPath = Path.Combine(root, "project.dlraproj");
+            var payload = new ModelsWorkspacePersistencePayload(
+                modelId,
+                "qiqinew.dlrmodel",
+                [],
+                null,
+                new string('d', 64),
+                null,
+                null,
+                null,
+                new string('e', 64),
+                null,
+                null,
+                0,
+                null,
+                [],
+                null,
+                ProjectCustomModelPreviewMode.Dl1Output,
+                true,
+                true,
+                true,
+                true,
+                true);
+            var project = new DlraProject();
+            string sha256 = new string('a', 64);
+            string preferred = $"Sources/qiqinew-{modelId:N}.dlrmodel";
+
+            // Nothing claims the identity path and nothing occupies it.
+            Assert.Equal(
+                preferred,
+                MainWindowViewModel.CreatePendingCustomModelRelativePath(
+                    project,
+                    payload,
+                    sha256,
+                    projectPath));
+
+            // Removing a model drops its asset record but leaves the file
+            // behind; the identity path is no longer free.
+            string stale = Path.Combine(
+                root,
+                "Sources",
+                $"qiqinew-{modelId:N}.dlrmodel");
+            Directory.CreateDirectory(Path.GetDirectoryName(stale)!);
+            File.WriteAllText(stale, "bytes from a removed model");
+
+            Assert.Equal(
+                $"Sources/qiqinew-{sha256[..12]}.dlrmodel",
+                MainWindowViewModel.CreatePendingCustomModelRelativePath(
+                    project,
+                    payload,
+                    sha256,
+                    projectPath));
+
+            // An untitled project has no directory to probe and keeps the
+            // identity path.
+            Assert.Equal(
+                preferred,
+                MainWindowViewModel.CreatePendingCustomModelRelativePath(
+                    project,
+                    payload,
+                    sha256,
+                    null));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(root);
+        }
+    }
 }

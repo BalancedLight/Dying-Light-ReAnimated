@@ -37,6 +37,9 @@ public sealed class Dl1PreparedAuthoredRig
 
     public ImmutableArray<Dl1PreparedSkinSurface> Surfaces { get; }
 
+    public ImmutableArray<Dl1AuthoredRigDecompositionDiagnostic> Diagnostics =>
+        Contract.DecompositionDiagnostics;
+
     /// <summary>
     /// Expresses a sampled source pose in the emitted Chrome bind frames.
     /// The global bind-basis conversion guarantees that the source bind maps
@@ -63,31 +66,49 @@ public sealed class Dl1PreparedAuthoredRig
                 ? targetGlobal
                 : targetGlobals[node.ParentPhysicalIndex].InvertedAffine() * targetGlobal;
             targetGlobals.Add(targetGlobal);
-            targetLocals.Add(ProjectAffineToTrs(targetLocal));
+            targetLocals.Add(ProjectAffineToTrs(
+                targetLocal,
+                node.Name,
+                node.PhysicalIndex));
         }
 
         return new SkeletonPose(PreviewRig, targetLocals.MoveToImmutable());
     }
 
-    private static TransformTRS ProjectAffineToTrs(TransformMatrix matrix)
+    private static TransformTRS ProjectAffineToTrs(
+        TransformMatrix matrix,
+        string boneName,
+        int physicalIndex)
     {
         try
         {
             return matrix.Decompose(1e-7);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException exception)
         {
-            TransformMatrix rotation = Dl1CustomModelRigPreparer.OrthonormalizeRotation(matrix);
-            double scaleX = new Vector3D(matrix.M11, matrix.M21, matrix.M31).Length;
-            double scaleY = new Vector3D(matrix.M12, matrix.M22, matrix.M32).Length;
-            double scaleZ = new Vector3D(matrix.M13, matrix.M23, matrix.M33).Length;
-            return new TransformTRS(
-                matrix.Translation,
-                QuaternionD.FromRotationMatrix(rotation),
-                new Vector3D(
-                    Math.Max(scaleX, 1e-8),
-                    Math.Max(scaleY, 1e-8),
-                    Math.Max(scaleZ, 1e-8)));
+            try
+            {
+                TransformMatrix rotation =
+                    Dl1CustomModelRigPreparer.OrthonormalizeRotation(matrix);
+                double scaleX = new Vector3D(matrix.M11, matrix.M21, matrix.M31).Length;
+                double scaleY = new Vector3D(matrix.M12, matrix.M22, matrix.M32).Length;
+                double scaleZ = new Vector3D(matrix.M13, matrix.M23, matrix.M33).Length;
+                return new TransformTRS(
+                    matrix.Translation,
+                    QuaternionD.FromRotationMatrix(rotation),
+                    new Vector3D(
+                        Math.Max(scaleX, 1e-8),
+                        Math.Max(scaleY, 1e-8),
+                        Math.Max(scaleZ, 1e-8)));
+            }
+            catch (Exception repairException) when (
+                repairException is InvalidOperationException or InvalidDataException)
+            {
+                throw new InvalidDataException(
+                    $"Authored-rig bone '{boneName}' at physical index {physicalIndex} " +
+                    $"could not be rebased to TRS: {exception.Message}",
+                    repairException);
+            }
         }
     }
 }

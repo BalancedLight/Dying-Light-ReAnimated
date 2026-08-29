@@ -35,6 +35,7 @@
     "axisSystem": { "$ref": "#/$defs/axisSystem" },
     "rigSignature": { "$ref": "#/$defs/sha256" },
     "morphSignature": { "$ref": "#/$defs/sha256" },
+    "ignoreMorphChannels": { "type": "boolean" },
     "bones": {
       "type": "array",
       "items": { "$ref": "#/$defs/bone" }

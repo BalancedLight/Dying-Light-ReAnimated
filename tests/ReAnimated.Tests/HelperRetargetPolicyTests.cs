@@ -1306,6 +1306,39 @@ public sealed class HelperRetargetPolicyTests
         Assert.Equal("EyeCamera", cameraWarning.TargetBoneName);
     }
 
+    [Fact]
+    public void RetailDl1HelperNamesAreNeverBodyEligible()
+    {
+        string[] helperNames =
+        [
+            "lforetwist", "luparmtwist", "lthightwist", "headend",
+            "lnormal", "lhandholder", "propsholder1", "flashlight",
+            "eyes", "lfinger01extra",
+        ];
+        BoneDefinition root = new(
+            0,
+            "bip01",
+            -1,
+            TransformTRS.Identity,
+            BoneKind.Root);
+        RigDefinition rig = Rig(
+            "retail-helpers",
+            helperNames.Select((name, index) => new BoneDefinition(
+                index + 1,
+                name,
+                0,
+                TransformTRS.Identity,
+                BoneKind.Helper,
+                requiredForExport: false)).Prepend(root).ToArray());
+        var index = new RetargetRigRoleIndex(rig);
+
+        for (int boneIndex = 1; boneIndex < rig.BoneCount; boneIndex++)
+        {
+            Assert.False(index.IsBodyEligibleTarget(boneIndex));
+            Assert.True(index.IsHelperOnlyTarget(boneIndex));
+        }
+    }
+
     private static BoneMapEntry Entry(
         int sourceBoneIndex,
         int targetBoneIndex,

@@ -121,11 +121,27 @@ public sealed class FbxCustomModelMorphImportTests
             });
 
         Assert.Empty(imported.Package.Document.MorphChannels);
+        Assert.True(imported.Package.Document.IgnoreMorphChannels);
         Assert.Empty(Assert.Single(imported.Surfaces).MorphTargets);
         CustomModelImportDiagnostic diagnostic = Assert.Single(
             imported.Package.Document.Diagnostics,
             static diagnostic => diagnostic.Code == "model_morph_channels_skipped");
         Assert.Equal(CustomModelImportSeverity.Warning, diagnostic.Severity);
+
+        FbxModelAuthoringImportResult reopened =
+            FbxModelAuthoringImporter.ImportPackage(imported.Package);
+        Assert.True(reopened.Package.Document.IgnoreMorphChannels);
+        Assert.Empty(reopened.Package.Document.MorphChannels);
+        Assert.Empty(Assert.Single(reopened.Surfaces).MorphTargets);
+
+        CustomModelPackage legacyPackage = new(
+            imported.Package.Document with { IgnoreMorphChannels = false },
+            imported.Package.SourceFbx,
+            imported.Package.TexturePayloads);
+        FbxModelAuthoringImportResult reopenedLegacy =
+            FbxModelAuthoringImporter.ImportPackage(legacyPackage);
+        Assert.True(reopenedLegacy.Package.Document.IgnoreMorphChannels);
+        Assert.Empty(reopenedLegacy.Package.Document.MorphChannels);
     }
 
     [Fact]

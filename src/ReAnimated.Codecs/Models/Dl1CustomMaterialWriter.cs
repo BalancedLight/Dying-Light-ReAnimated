@@ -1,17 +1,15 @@
-using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
-using BCnEncoder.Decoder;
 using BCnEncoder.Encoder;
 using BCnEncoder.Shared;
 using ReAnimated.Core.ModelAuthoring;
-using StbImageSharp;
 
 namespace ReAnimated.Codecs.Models;
 
 internal sealed record Dl1PreparedMaterialSet(
     ImmutableArray<string> MaterialReferences,
-    ImmutableDictionary<string, byte[]> Files);
+    ImmutableDictionary<string, byte[]> Files,
+    ImmutableArray<string> Notes);
 
 /// <summary>
 /// Converts user-owned model-package textures into the source material contract
@@ -20,7 +18,6 @@ internal sealed record Dl1PreparedMaterialSet(
 /// </summary>
 internal static class Dl1CustomMaterialWriter
 {
-    private const int LegacyDdsHeaderLength = 128;
     private const int MaximumTextureDimension = 16_384;
     private const long MaximumTexturePixels = 67_108_864;
 
@@ -38,6 +35,7 @@ internal static class Dl1CustomMaterialWriter
         var references = ImmutableArray.CreateBuilder<string>();
         var files = ImmutableDictionary.CreateBuilder<string, byte[]>(StringComparer.Ordinal);
         var usedStems = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var notes = ImmutableArray.CreateBuilder<string>();
         ImmutableArray<CustomModelMaterial> materials = package.Document.Materials;
         if (materials.IsEmpty)
         {
@@ -71,6 +69,13 @@ internal static class Dl1CustomMaterialWriter
             string diffuseName = $"{stem}.dds";
             string normalName = $"{stem}_nrm.dds";
             string specularName = $"{stem}_shn.dds";
+            string maskName = $"{stem}_msk.dds";
+            if (FindTexture(material, CustomModelTextureSemantic.BaseColor) is null)
+            {
+                notes.Add(
+                    $"Material '{material.Name}' has no BaseColor texture; DL1 output uses an opaque white 4x4 fallback.");
+            }
+
             files.Add(
                 diffuseName,
                 CreateRequiredTexture(
@@ -107,28 +112,45 @@ internal static class Dl1CustomMaterialWriter
                 specularName = string.Empty;
             }
 
+            if (TryCreateTexture(
+                    package,
+                    material,
+                    CustomModelTextureSemantic.Mask,
+                    cancellationToken) is { } maskTexture)
+            {
+                files.Add(maskName, maskTexture);
+            }
+            else
+            {
+                maskName = string.Empty;
+            }
+
             files.Add(
                 $"{stem}.dmt",
                 Utf8WithoutBom.GetBytes(BuildMaterialSource(
                     diffuseName,
                     normalName,
-                    specularName)));
+                    specularName,
+                    maskName)));
         }
 
         return new Dl1PreparedMaterialSet(
             references.ToImmutable(),
-            files.ToImmutable());
+            files.ToImmutable(),
+            notes.ToImmutable());
     }
 
     internal static string BuildMaterialSource(
         string diffuseName,
         string normalName,
-        string specularName) =>
+        string specularName,
+        string maskName = "") =>
         "<MaterialData>\r\n" +
         "<TemplateData>\r\n" +
         "<template>standard</template>\r\n" +
         $"<nrm_0_tex>\"{normalName}\"</nrm_0_tex>\r\n" +
         $"<spc_0_tex>\"{specularName}\"</spc_0_tex>\r\n" +
+        $"<msk_0_tex>\"{maskName}\"</msk_0_tex>\r\n" +
         $"<dif_0_tex>\"{diffuseName}\"</dif_0_tex>\r\n" +
         "</TemplateData>\r\n" +
         "</MaterialData>\r\n";
@@ -176,44 +198,37 @@ internal static class Dl1CustomMaterialWriter
         CustomModelTextureBinding binding,
         CancellationToken cancellationToken)
     {
-        if (binding.PackageEntryPath is { } entryPath &&
-            package.TexturePayloads.TryGetValue(entryPath, out ImmutableArray<byte> payload))
+        if (binding.PackageEntryPath is not { } entryPath ||
+            !package.TexturePayloads.TryGetValue(entryPath, out ImmutableArray<byte> payload))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (payload.AsSpan().StartsWith("DDS "u8))
-            {
-                LegacyDdsInfo dds = ValidateLegacyDds(
-                    payload.AsSpan(),
-                    binding.DisplayName);
-                if (binding.Semantic != CustomModelTextureSemantic.Normal ||
-                    binding.NormalMapConvention == CustomModelNormalMapConvention.Dl1AlphaGreen)
-                {
-                    if (binding.Semantic == CustomModelTextureSemantic.Normal &&
-                        binding.NormalMapConvention == CustomModelNormalMapConvention.Dl1AlphaGreen &&
-                        !dds.HasAlphaChannel)
-                    {
-                        throw new InvalidDataException(
-                            $"Texture '{binding.DisplayName}' uses DXT1 for a DL1 alpha/green normal map. DXT3 or DXT5 data is required to preserve tangent X in the alpha channel.");
-                    }
-
-                    return payload.ToArray();
-                }
-
-                return EncodeDecodedImage(
-                    DecodeDds(
-                        payload.AsSpan(),
-                        binding.DisplayName,
-                        dds,
-                        cancellationToken),
-                    binding,
-                    cancellationToken);
-            }
-
-            return EncodeImage(payload.AsSpan(), binding, cancellationToken);
+            throw new InvalidDataException(
+                $"Texture '{binding.DisplayName}' is declared by the model but has no package payload.");
         }
 
-        throw new InvalidDataException(
-            $"Texture '{binding.DisplayName}' is declared by the model but has no package payload.");
+        cancellationToken.ThrowIfCancellationRequested();
+        if (CustomModelTextureDecoder.IsLegacyDdsPassthroughEncoding(payload.AsSpan()))
+        {
+            CustomModelLegacyDdsInfo dds =
+                CustomModelTextureDecoder.ReadLegacyDdsPassthrough(
+                    payload.AsSpan(),
+                    binding.DisplayName);
+            if (binding.Semantic != CustomModelTextureSemantic.Normal ||
+                binding.NormalMapConvention == CustomModelNormalMapConvention.Dl1AlphaGreen)
+            {
+                if (binding.Semantic == CustomModelTextureSemantic.Normal &&
+                    binding.NormalMapConvention == CustomModelNormalMapConvention.Dl1AlphaGreen &&
+                    !dds.HasAlphaChannel)
+                {
+                    throw new InvalidDataException(
+                        $"Texture '{binding.DisplayName}' uses DXT1 for a DL1 alpha/green normal map. " +
+                        "DXT3 or DXT5 data is required to preserve tangent X in the alpha channel.");
+                }
+
+                return payload.ToArray();
+            }
+        }
+
+        return EncodeImage(payload.AsSpan(), binding, cancellationToken);
     }
 
     private static byte[] EncodeImage(
@@ -221,23 +236,19 @@ internal static class Dl1CustomMaterialWriter
         CustomModelTextureBinding binding,
         CancellationToken cancellationToken)
     {
-        ImageResult decoded;
-        try
+        if (!CustomModelTextureDecoder.TryDecode(
+                payload,
+                binding.DisplayName,
+                out CustomModelDecodedTexture? decoded,
+                out string failureReason,
+                cancellationToken) ||
+            decoded is null)
         {
-            decoded = ImageResult.FromMemory(
-                payload.ToArray(),
-                ColorComponents.RedGreenBlueAlpha);
-        }
-        catch (Exception exception) when (
-            exception is ArgumentException or InvalidOperationException)
-        {
-            throw new InvalidDataException(
-                $"The {binding.Semantic} texture is not a supported bitmap image.",
-                exception);
+            throw new InvalidDataException(failureReason);
         }
 
         return EncodeDecodedImage(
-            new DecodedTexture(decoded.Width, decoded.Height, decoded.Data),
+            new DecodedTexture(decoded.Width, decoded.Height, decoded.Rgba8),
             binding,
             cancellationToken);
     }
@@ -342,64 +353,6 @@ internal static class Dl1CustomMaterialWriter
     private static byte EncodeSignedUnit(double value) =>
         (byte)Math.Clamp((int)Math.Round((value * 0.5 + 0.5) * 255.0), 0, 255);
 
-    private static DecodedTexture DecodeDds(
-        ReadOnlySpan<byte> payload,
-        string displayName,
-        LegacyDdsInfo dds,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            byte[] baseMip = payload.Slice(
-                LegacyDdsHeaderLength,
-                dds.BaseMipByteCount).ToArray();
-            cancellationToken.ThrowIfCancellationRequested();
-            var decoder = new BcDecoder();
-            var pixels = decoder.DecodeRaw2DAsync(
-                    baseMip,
-                    dds.Width,
-                    dds.Height,
-                    dds.Format,
-                    cancellationToken)
-                .GetAwaiter()
-                .GetResult();
-            cancellationToken.ThrowIfCancellationRequested();
-            int height = pixels.Height;
-            int width = pixels.Width;
-            if (width != dds.Width || height != dds.Height)
-            {
-                throw new InvalidDataException(
-                    $"Texture '{displayName}' decoded to dimensions that do not match its validated DDS header.");
-            }
-
-            var pixelSpan = pixels.Span;
-            byte[] rgba = new byte[checked(width * height * 4)];
-            for (int y = 0; y < height; y++)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                for (int x = 0; x < width; x++)
-                {
-                    ColorRgba32 pixel = pixelSpan.DangerousGetReferenceAt(y, x);
-                    int offset = checked((y * width + x) * 4);
-                    rgba[offset] = pixel.r;
-                    rgba[offset + 1] = pixel.g;
-                    rgba[offset + 2] = pixel.b;
-                    rgba[offset + 3] = pixel.a;
-                }
-            }
-
-            return new DecodedTexture(width, height, rgba);
-        }
-        catch (Exception exception) when (
-            exception is ArgumentException or InvalidDataException or NotSupportedException)
-        {
-            throw new InvalidDataException(
-                $"Texture '{displayName}' could not be decoded for DL1 normal-map repacking.",
-                exception);
-        }
-    }
-
     private static byte[] EncodeRgba(
         ReadOnlySpan<byte> pixels,
         int width,
@@ -424,72 +377,10 @@ internal static class Dl1CustomMaterialWriter
             output);
         cancellationToken.ThrowIfCancellationRequested();
         byte[] encoded = output.ToArray();
-        ValidateLegacyDds(encoded, "generated texture");
+        _ = CustomModelTextureDecoder.ReadLegacyDdsPassthrough(
+            encoded,
+            "generated texture");
         return encoded;
-    }
-
-    private static LegacyDdsInfo ValidateLegacyDds(
-        ReadOnlySpan<byte> bytes,
-        string displayName)
-    {
-        if (bytes.Length < LegacyDdsHeaderLength || !bytes.StartsWith("DDS "u8))
-        {
-            throw new InvalidDataException(
-                $"Texture '{displayName}' is not a complete DDS file.");
-        }
-
-        if (BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(4, 4)) != 124 ||
-            BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(76, 4)) != 32)
-        {
-            throw new InvalidDataException(
-                $"Texture '{displayName}' has an invalid legacy DDS header.");
-        }
-
-        uint heightValue = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(12, 4));
-        uint widthValue = BinaryPrimitives.ReadUInt32LittleEndian(bytes.Slice(16, 4));
-        long pixelCount = (long)widthValue * heightValue;
-        if (widthValue == 0 ||
-            heightValue == 0 ||
-            widthValue > MaximumTextureDimension ||
-            heightValue > MaximumTextureDimension ||
-            pixelCount > MaximumTexturePixels)
-        {
-            throw new InvalidDataException(
-                $"Texture '{displayName}' has DDS dimensions {widthValue:N0}x{heightValue:N0} outside the bounded DL1 authoring contract.");
-        }
-
-        ReadOnlySpan<byte> fourCc = bytes.Slice(84, 4);
-        (CompressionFormat format, int blockBytes, bool hasAlphaChannel) =
-            fourCc switch
-            {
-                _ when fourCc.SequenceEqual("DXT1"u8) =>
-                    (CompressionFormat.Bc1, 8, false),
-                _ when fourCc.SequenceEqual("DXT3"u8) =>
-                    (CompressionFormat.Bc2, 16, true),
-                _ when fourCc.SequenceEqual("DXT5"u8) =>
-                    (CompressionFormat.Bc3, 16, true),
-                _ => throw new InvalidDataException(
-                    $"Texture '{displayName}' uses an unsupported DDS encoding. DL1 model builds require legacy DXT1, DXT3, or DXT5 data."),
-            };
-
-        int width = checked((int)widthValue);
-        int height = checked((int)heightValue);
-        long blockColumns = ((long)width + 3) / 4;
-        long blockRows = ((long)height + 3) / 4;
-        long baseMipByteCount = checked(blockColumns * blockRows * blockBytes);
-        long minimumFileLength = checked(LegacyDdsHeaderLength + baseMipByteCount);
-        if (bytes.Length < minimumFileLength)
-        {
-            throw new InvalidDataException(
-                $"Texture '{displayName}' has a truncated DDS base mip. Its {width:N0}x{height:N0} {Encoding.ASCII.GetString(fourCc)} image requires at least {baseMipByteCount:N0} payload bytes.");
-        }
-
-        return new LegacyDdsInfo(
-            width,
-            height,
-            checked((int)baseMipByteCount),
-            format,
-            hasAlphaChannel);
     }
 
     private static string CreateUniqueStem(string source, HashSet<string> used)
@@ -529,10 +420,4 @@ internal static class Dl1CustomMaterialWriter
 
     private sealed record DecodedTexture(int Width, int Height, byte[] Data);
 
-    private readonly record struct LegacyDdsInfo(
-        int Width,
-        int Height,
-        int BaseMipByteCount,
-        CompressionFormat Format,
-        bool HasAlphaChannel);
 }

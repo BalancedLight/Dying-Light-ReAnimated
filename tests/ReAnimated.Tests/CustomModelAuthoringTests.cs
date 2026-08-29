@@ -189,6 +189,7 @@ public sealed class CustomModelAuthoringTests
                 "<template>standard</template>\r\n" +
                 "<nrm_0_tex>\"\"</nrm_0_tex>\r\n" +
                 "<spc_0_tex>\"\"</spc_0_tex>\r\n" +
+                "<msk_0_tex>\"\"</msk_0_tex>\r\n" +
                 "<dif_0_tex>\"custom_model_Default.dds\"</dif_0_tex>\r\n" +
                 "</TemplateData>\r\n" +
                 "</MaterialData>\r\n",

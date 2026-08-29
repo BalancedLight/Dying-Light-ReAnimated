@@ -681,6 +681,12 @@ public sealed record CustomModelDocument
 
     public string MorphSignature { get; init; } = EmptyMorphSignature;
 
+    /// <summary>
+    /// Records an approved recovery import where the source FBX blend shapes
+    /// were deliberately omitted because they cannot be represented by DL1.
+    /// </summary>
+    public bool IgnoreMorphChannels { get; init; }
+
     public ImmutableArray<CustomModelBone> Bones { get; init; } = [];
 
     public ImmutableArray<CustomModelAuthoredHelper> AuthoredHelpers { get; init; } = [];

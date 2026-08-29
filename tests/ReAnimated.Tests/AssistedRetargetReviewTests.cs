@@ -199,6 +199,49 @@ public sealed class AssistedRetargetReviewTests
                     "deterministic_mapping_identity_mismatch");
     }
 
+    [Fact]
+    public void CcBodyHelperArmClearsAssistedThresholdButParentlessThighDoesNot()
+    {
+        RigDefinition source = Rig(
+            "source",
+            ("Armature", -1, null),
+            ("mixamorig:Hips", 0, null),
+            ("mixamorig:LeftUpLeg", 1, null),
+            ("mixamorig:Spine", 1, null),
+            ("mixamorig:LeftShoulder", 3, null),
+            ("mixamorig:LeftArm", 4, null));
+        RigDefinition target = new(
+            "target",
+            "target",
+            [
+                new BoneDefinition(0, "CC_Base_BoneRoot", -1, TransformTRS.Identity, BoneKind.Root),
+                new BoneDefinition(1, "CC_Base_Hip", 0, TransformTRS.Identity, BoneKind.Helper),
+                new BoneDefinition(2, "CC_Base_Pelvis", 1, TransformTRS.Identity, BoneKind.Helper),
+                new BoneDefinition(3, "CC_Base_L_Thigh", 2, TransformTRS.Identity, BoneKind.Helper),
+                new BoneDefinition(4, "CC_Base_L_ThighTwist01", 3, TransformTRS.Identity, BoneKind.Deform),
+                new BoneDefinition(5, "CC_Base_Waist", 2, TransformTRS.Identity, BoneKind.Deform),
+                new BoneDefinition(6, "CC_Base_L_Clavicle", 5, TransformTRS.Identity, BoneKind.Deform),
+                new BoneDefinition(7, "CC_Base_L_Upperarm", 6, TransformTRS.Identity, BoneKind.Helper),
+                new BoneDefinition(8, "CC_Base_L_UpperarmTwist01", 7, TransformTRS.Identity, BoneKind.Deform),
+            ]);
+
+        RetargetMap reviewed = RetargetSuggestionScorer.ApplyAssistedReview(
+            source,
+            target,
+            RetargetMapBuilder.CreateSuggested(source, target));
+        BoneMapEntry arm = Assert.Single(
+            reviewed.Entries,
+            static row => row.TargetBoneIndex == 7);
+        BoneMapEntry thigh = Assert.Single(
+            reviewed.Entries,
+            static row => row.TargetBoneIndex == 3);
+
+        Assert.Equal(0.90, arm.Confidence, 10);
+        Assert.Equal(MappingReviewOrigin.Assisted, arm.ReviewOrigin);
+        Assert.Equal(0.82, thigh.Confidence, 10);
+        Assert.Equal(MappingReviewOrigin.None, thigh.ReviewOrigin);
+    }
+
     private static RigDefinition Rig(
         string id,
         params (string Name, int Parent, string? Role)[] rows) =>
