@@ -115,6 +115,19 @@ public interface IProjectFileDialogService
 {
     string? ShowOpenProjectDialog(string? initialPath);
 
+    /// <summary>
+    /// Surfaces a failed operation where the operator cannot miss it. A one
+    /// line status-bar update in the corner is not a report: it is dismissed
+    /// by the next status write and the operator never learns why the run
+    /// stopped. Default no-op so headless callers and tests stay silent.
+    /// </summary>
+    void ShowOperationFailure(
+        string title,
+        string summary,
+        string details)
+    {
+    }
+
     string? ShowOpenAnimationDialog(string? initialPath) => null;
 
     ExternalFbxAnimationStackSelection?
@@ -972,6 +985,39 @@ public sealed class WindowsProjectFileDialogService :
         }
 
         return ShowOwnedDialog(dialog) == true ? dialog.FolderName : null;
+    }
+
+    public void ShowOperationFailure(
+        string title,
+        string summary,
+        string details)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        string body = string.IsNullOrWhiteSpace(details)
+            ? summary
+            : summary + Environment.NewLine + Environment.NewLine + details;
+        const int maximum = 4000;
+        if (body.Length > maximum)
+        {
+            body = body[..maximum] + Environment.NewLine +
+                "\u2026 (truncated; the full record is in Diagnostics)";
+        }
+
+        Application? application = Application.Current;
+        if (application?.Dispatcher is not { } dispatcher)
+        {
+            return;
+        }
+
+        // Failures are raised from background export/import work, so the
+        // dialog has to be marshalled. BeginInvoke keeps the worker from
+        // blocking on a modal window.
+        _ = dispatcher.BeginInvoke(() => MessageBox.Show(
+            application.MainWindow,
+            body,
+            title,
+            MessageBoxButton.OK,
+            MessageBoxImage.Error));
     }
 
     public DeveloperToolsDeploymentConflictDecision ResolveDeveloperToolsDeploymentConflict(

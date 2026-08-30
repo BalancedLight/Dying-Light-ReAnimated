@@ -61,6 +61,19 @@ public sealed record Dl1DeveloperToolsDeploymentRequest
     public ImmutableArray<CustomModelAnimationClip> AnimationSelections { get; init; } = [];
 
     /// <summary>
+    /// Deploys the character alone: model source, ASCR redirect and an empty
+    /// loose script, with no ANM2 of its own. Used when the character drives
+    /// an existing base-game bank (a player-model replacement pointing at
+    /// anims_player, for example).
+    /// </summary>
+    /// <remarks>
+    /// An empty <see cref="AnimationSelections"/> keeps its original meaning
+    /// of "every clip the model carries", so the intent has to be stated
+    /// rather than inferred from an empty collection.
+    /// </remarks>
+    public bool DeployWithoutAnimations { get; init; }
+
+    /// <summary>
     /// Optional animation library that has already been sampled through the
     /// editor's authoritative export evaluator. The unified Export workflow
     /// uses this contract for target-specific variants; the Models workspace
@@ -388,10 +401,20 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 OutputDirectory = animationCompilerOutput,
                 Timeout = request.CompilerTimeout,
             };
-            Dl1OfficialAnimationCompilerResult animationCompiler = await (
-                request.AnimationCompilerOverride?.Invoke(animationCompilerRequest, cancellationToken) ??
-                Dl1OfficialModelCompiler.CompileAnimationsAsync(animationCompilerRequest, cancellationToken))
-                .ConfigureAwait(false);
+            // A character-only deployment declares no sequences, so there is
+            // nothing for the animation compiler to build. Record the same
+            // tool identity so the receipt still names what produced this
+            // deployment.
+            Dl1OfficialAnimationCompilerResult animationCompiler =
+                source.Library.Animations.IsDefaultOrEmpty
+                    ? new Dl1OfficialAnimationCompilerResult(
+                        ImmutableDictionary<string, string>.Empty,
+                        modelCompiler.CompilerFingerprint,
+                        "No animation was compiled: this deployment stages the character alone and declares no sequences of its own.")
+                    : await (
+                        request.AnimationCompilerOverride?.Invoke(animationCompilerRequest, cancellationToken) ??
+                        Dl1OfficialModelCompiler.CompileAnimationsAsync(animationCompilerRequest, cancellationToken))
+                        .ConfigureAwait(false);
 
             await EnsureMaterialDatabaseSnapshotIsCurrentAsync(
                 existingMaterialDatabase,
@@ -824,6 +847,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     OutputPath = Path.Combine(jobDirectory, "unused.rpack"),
                     AnimationScriptAlias = validated.AnimationLibraryName,
                     Selections = request.AnimationSelections,
+                    AllowEmptyLibrary = request.DeployWithoutAnimations,
                 },
                 cancellationToken).ConfigureAwait(false);
         ValidatePreparedAnimationLibrary(
@@ -1106,7 +1130,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             validated.ModelResourceName,
             validated.AnimationLibraryName,
             DateTimeOffset.UtcNow,
-            manifestArtifacts);
+            manifestArtifacts,
+            declaresAnimations: !library.Animations.IsDefaultOrEmpty);
         string path = Path.Combine(jobDirectory, "animation-content-manifest.json");
         await File.WriteAllBytesAsync(
             path,
@@ -1161,12 +1186,17 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 CanSkip: false));
         }
 
+        // The scan looks for packs that already own this deployment's
+        // animation identities. A character-only deployment claims none, so
+        // there is nothing to collide with and the scanner is not asked.
         ImmutableArray<Dl1ProjectAnimationRpackConflict> rpackConflicts =
-            await ScanProjectAnimationRpackConflictsAsync(
-                validated.ProjectRoot,
-                validated.AnimationLibraryName,
-                library.Animations.Select(static animation => animation.Name),
-                cancellationToken).ConfigureAwait(false);
+            library.Animations.IsDefaultOrEmpty
+                ? []
+                : await ScanProjectAnimationRpackConflictsAsync(
+                    validated.ProjectRoot,
+                    validated.AnimationLibraryName,
+                    library.Animations.Select(static animation => animation.Name),
+                    cancellationToken).ConfigureAwait(false);
         foreach (Dl1ProjectAnimationRpackConflict conflict in rpackConflicts)
         {
             conflicts.Add(new Dl1DeveloperToolsDeploymentConflict(
@@ -1624,7 +1654,10 @@ public static partial class Dl1DeveloperToolsProjectDeployer
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
-        if (!request.InstallLooseAnm2)
+        // The requirement exists so an alias-mode script never references an
+        // ANM2 that was not deployed. A character-only deployment declares no
+        // sequences at all, so there is nothing for it to guarantee.
+        if (!request.InstallLooseAnm2 && !request.DeployWithoutAnimations)
         {
             throw new InvalidOperationException(
                 "Alias-mode animation scripts require loose ANM2 deployment; InstallLooseAnm2 cannot be disabled.");
@@ -1683,11 +1716,16 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(library);
+
+        // An empty library is legitimate. A character deployed to drive an
+        // existing base-game bank (a player-model replacement using
+        // anims_player, say) still needs its ASCR redirect and a loose script
+        // to exist; it simply declares no sequences of its own.
         if (!string.Equals(
                 library.AnimationScriptName,
                 expectedLibraryName,
                 StringComparison.Ordinal) ||
-            library.Animations.IsDefaultOrEmpty ||
+            library.Animations.IsDefault ||
             library.Animations.Length + 3 > Dl1AnimationContentManifest.MaximumArtifactCount ||
             library.Sequences.Length != library.Animations.Length)
         {

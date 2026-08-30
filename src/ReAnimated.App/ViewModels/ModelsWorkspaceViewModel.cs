@@ -447,9 +447,20 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             {
                 MarkAuthoringChanged();
                 InvalidateDeploymentPreflight();
+                OnPropertyChanged(nameof(AnimationScriptAliasSummary));
             }
         }
     }
+
+    /// <summary>
+    /// States, in the operator's terms, which script the deployed character
+    /// will redirect to and where that file lands.
+    /// </summary>
+    public string AnimationScriptAliasSummary =>
+        string.IsNullOrWhiteSpace(AnimationScriptAlias)
+            ? "No library set. Deploying the character emits an ASCR with no target; set the bank it should drive."
+            : $"The deployed ASCR redirects to '{AnimationScriptAlias.Trim()}.scr' " +
+                $"(data/characters/animations/animscripts/{AnimationScriptAlias.Trim()}.scr).";
 
     public string DeveloperToolsProjectRoot
     {
@@ -2121,6 +2132,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             OnPropertyChanged(nameof(CharacterId));
             OnPropertyChanged(nameof(SurfaceName));
             OnPropertyChanged(nameof(AnimationScriptAlias));
+            OnPropertyChanged(nameof(AnimationScriptAliasSummary));
             OnPropertyChanged(nameof(FlipTextureCoordinateV));
             OnPropertyChanged(nameof(SelectedPreviewMode));
             OnPropertyChanged(nameof(SelectedAnimation));
@@ -2211,6 +2223,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 nameof(CharacterId));
             SurfaceName = imported.Package.Document.BuildSettings.SurfaceName;
             AnimationScriptAlias = imported.Package.Document.BuildSettings.AnimationScriptAlias ?? string.Empty;
+            OnPropertyChanged(nameof(AnimationScriptAliasSummary));
             _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
             OnPropertyChanged(nameof(FlipTextureCoordinateV));
             BuildStatus = buildStatus;

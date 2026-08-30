@@ -319,4 +319,51 @@ public sealed class PendingProjectAssetStoreTests
             RpackTestData.DeleteTemporaryDirectory(root);
         }
     }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task MaterializeNeverSilentlyReplacesAFingerprintedPackage()
+    {
+        // A .dlrmodel is content-fingerprinted: the project records a
+        // ContentSha256 for a path, and every model, variant and rig
+        // signature is validated against those exact bytes. Publishing
+        // different bytes to a recorded path orphans all of them, so the
+        // default must refuse rather than overwrite.
+        string root = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var store = new PendingProjectAssetStore(
+                Path.Combine(root, "recovery.json"));
+            Guid assetId = Guid.NewGuid();
+            const string relativePath = "Sources/aether-model.dlrmodel";
+            string projectPath = Path.Combine(root, "project.dlraproj");
+            string destination = Path.Combine(
+                root,
+                "Sources",
+                "aether-model.dlrmodel");
+
+            byte[] original = "the fingerprinted package bytes"u8.ToArray();
+            PendingProjectAssetReceipt first = await store.StageAsync(
+                assetId,
+                relativePath,
+                original);
+            await store.MaterializeAsync(first, projectPath);
+
+            PendingProjectAssetReceipt edited = await store.StageAsync(
+                assetId,
+                relativePath,
+                "different package bytes for the same path"u8.ToArray());
+
+            await Assert.ThrowsAsync<IOException>(() =>
+                store.MaterializeAsync(edited, projectPath));
+
+            // The recorded bytes are still intact.
+            Assert.Equal(original, await File.ReadAllBytesAsync(destination));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(root);
+        }
+    }
 }

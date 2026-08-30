@@ -331,6 +331,83 @@ public sealed class CustomModelProjectIdentityRepairTests
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public void ModelEntryWithNoRigIdentityAdoptsThePackageContract()
+    {
+        // A rigged package recorded as a static prop with no rig signature is
+        // not ambiguous: there is no competing identity, so the package's own
+        // contract is authoritative. This used to throw and leave the project
+        // permanently unopenable.
+        FbxModelAuthoringImportResult imported =
+            FbxModelAuthoringImporter.Import(
+                BlenderFbxStrictValidationTests.CreateValidModelFixture(),
+                "generic-character.fbx");
+        RigDefinition rig = Assert.IsType<RigDefinition>(imported.Rig);
+        ProjectAssetReference asset = CreatePackageAsset(imported);
+        var model = new ProjectModelEntry
+        {
+            Id = Guid.NewGuid(),
+            AssetId = asset.Id,
+            Name = "aether",
+            RigSignature = null,
+            IsStatic = true,
+            MorphSignature = imported.Package.Document.MorphSignature,
+        };
+        var project = new DlraProject
+        {
+            Assets = [asset],
+            Models = [model],
+        };
+
+        CustomModelProjectIdentityRepairResult result =
+            CustomModelProjectIdentityRepair.Repair(project, asset, imported);
+
+        Assert.True(result.WasRepaired);
+        ProjectModelEntry repaired = Assert.Single(result.Project.Models);
+        Assert.False(repaired.IsStatic);
+        Assert.Equal(RigSignature.Compute(rig), repaired.RigSignature);
+        Assert.Equal(
+            imported.Package.Document.RigSignature,
+            repaired.AuthoringRigContractSignature);
+        Assert.Equal(
+            AnimationSkeletonSignature.Compute(rig),
+            repaired.AnimationSkeletonSignature);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public void AConflictingRigSignatureIsStillRefused()
+    {
+        // The relaxation above must not weaken the real ambiguity check: a
+        // signature that disagrees with both contracts stays unresolvable.
+        FbxModelAuthoringImportResult imported =
+            FbxModelAuthoringImporter.Import(
+                BlenderFbxStrictValidationTests.CreateValidModelFixture(),
+                "generic-character.fbx");
+        ProjectAssetReference asset = CreatePackageAsset(imported);
+        var project = new DlraProject
+        {
+            Assets = [asset],
+            Models =
+            [
+                new ProjectModelEntry
+                {
+                    Id = Guid.NewGuid(),
+                    AssetId = asset.Id,
+                    Name = "aether",
+                    RigSignature = new string('a', 64),
+                    MorphSignature = imported.Package.Document.MorphSignature,
+                },
+            ],
+        };
+
+        Assert.Throws<InvalidDataException>(() =>
+            CustomModelProjectIdentityRepair.Repair(project, asset, imported));
+    }
+
     private static ProjectAssetReference CreatePackageAsset(
         FbxModelAuthoringImportResult imported) => new()
         {

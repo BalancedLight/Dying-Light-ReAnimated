@@ -84,7 +84,13 @@ internal static class CustomModelProjectIdentityRepair
         string runtime = RigSignature.Compute(rig);
         string skeleton = AnimationSkeletonSignature.Compute(rig);
         string authoring = imported.Package.Document.RigSignature;
+        // A model entry that carries no rig signature at all is not
+        // ambiguous: there is no competing identity to choose between, so the
+        // package's own contract is adopted. Only a signature that disagrees
+        // with both the authoring contract and the reconstructed runtime rig
+        // is genuinely unresolvable.
         if (packageModels.Length == 1 &&
+            !string.IsNullOrWhiteSpace(packageModels[0].RigSignature) &&
             !IsKnown(packageModels[0].RigSignature, authoring, runtime))
         {
             throw new InvalidDataException(
@@ -101,6 +107,8 @@ internal static class CustomModelProjectIdentityRepair
                     return model;
                 }
 
+                bool missingIdentity =
+                    string.IsNullOrWhiteSpace(model.RigSignature);
                 bool knownLegacy = string.Equals(
                     model.RigSignature,
                     authoring,
@@ -109,7 +117,7 @@ internal static class CustomModelProjectIdentityRepair
                     model.RigSignature,
                     runtime,
                     StringComparison.OrdinalIgnoreCase);
-                if (!knownLegacy && !knownRuntime)
+                if (!missingIdentity && !knownLegacy && !knownRuntime)
                 {
                     return model;
                 }
@@ -119,6 +127,9 @@ internal static class CustomModelProjectIdentityRepair
                     RigSignature = runtime,
                     AuthoringRigContractSignature = authoring,
                     AnimationSkeletonSignature = skeleton,
+                    // The package reconstructs a rig, so the entry cannot be
+                    // a static prop no matter what it recorded.
+                    IsStatic = false,
                 };
                 repaired |= !Equals(updated, model);
                 return updated;

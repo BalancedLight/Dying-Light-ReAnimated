@@ -605,6 +605,13 @@ public sealed class ExportModelSelectionViewModel : ObservableObject
         _isSelected = Variants.Any(static variant => variant.IsSelected);
     }
 
+    /// <summary>
+    /// A character with no animations is still exportable on its own. Such a
+    /// row carries no variants, so its selection has to stand by itself
+    /// instead of being derived from them.
+    /// </summary>
+    public bool HasVariants => Variants.Count > 0;
+
     public Guid? ModelAssetId { get; }
 
     public string ModelName { get; }
@@ -622,6 +629,8 @@ public sealed class ExportModelSelectionViewModel : ObservableObject
                 return;
             }
 
+            // Propagate to variants when there are any. A variant-less
+            // character row is selected purely on its own account.
             foreach (ExportVariantSelectionViewModel variant in Variants)
             {
                 variant.IsSelected = value;

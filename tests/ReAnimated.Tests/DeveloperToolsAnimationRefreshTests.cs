@@ -458,7 +458,10 @@ public sealed class DeveloperToolsAnimationRefreshTests
         foreach (string mode in new[]
                  {
                      "Animations only",
-                     "Characters only",
+                     // Source staging and the prebuilt pack are separate
+                     // modes now, and each label says which one it is.
+                     "Characters (source)",
+                     "Characters (prebuilt RPack)",
                      "ANM2 only",
                      "Initial / full export",
                  })
@@ -478,9 +481,15 @@ public sealed class DeveloperToolsAnimationRefreshTests
                 "{Binding SelectDeveloperToolsExportModeCommand}",
                 StringComparison.Ordinal))
             .ToArray();
-        Assert.Equal(4, modeToggles.Length);
+        Assert.Equal(5, modeToggles.Length);
         Assert.Equal(
-            ["AnimationsOnly", "CharactersOnly", "Anm2Only", "Full"],
+            [
+                "AnimationsOnly",
+                "CharactersOnly",
+                "CharacterRpack",
+                "Anm2Only",
+                "Full",
+            ],
             modeToggles.Select(static element =>
                 (string?)element.Attribute("CommandParameter") ?? string.Empty));
         XElement compiler = Assert.Single(

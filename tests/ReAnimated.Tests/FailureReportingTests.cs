@@ -161,6 +161,10 @@ public sealed class FailureReportingTests : IDisposable
 
     private sealed class NoDialogs : IProjectFileDialogService
     {
+        public List<(string Title, string Summary, string Details)>
+            ReportedFailures
+        { get; } = [];
+
         public string? ShowOpenProjectDialog(string? initialPath) =>
             Path.Combine(
                 Path.GetTempPath(),
@@ -169,6 +173,12 @@ public sealed class FailureReportingTests : IDisposable
         public string? ShowSaveProjectDialog(
             string suggestedName,
             string? currentPath) => null;
+
+        public void ShowOperationFailure(
+            string title,
+            string summary,
+            string details) =>
+            ReportedFailures.Add((title, summary, details));
     }
 
     private sealed class StubFingerprintService
@@ -182,5 +192,38 @@ public sealed class FailureReportingTests : IDisposable
             string installPath,
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("Not used by this test.");
+    }
+
+    [Fact]
+    public async Task AFailedOperationInterruptsInsteadOfOnlyUpdatingTheCorner()
+    {
+        // A status-bar line is overwritten by the next status write, so a
+        // failure that only lands there is effectively silent.
+        Directory.CreateDirectory(_temporaryDirectory);
+        var dialogs = new NoDialogs();
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "popup-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "popup-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "popup-workspace.json")),
+            dialogs,
+            assets,
+            new StubFingerprintService());
+
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        (string Title, string Summary, string Details) failure =
+            Assert.Single(dialogs.ReportedFailures);
+        Assert.False(string.IsNullOrWhiteSpace(failure.Title));
+        Assert.False(string.IsNullOrWhiteSpace(failure.Summary));
+        Assert.False(string.IsNullOrWhiteSpace(failure.Details));
+
+        // The same failure still reaches the status bar and the drawer; the
+        // dialog is an addition, not a replacement.
+        Assert.False(string.IsNullOrWhiteSpace(viewModel.StatusText));
+        Assert.Contains(
+            viewModel.Diagnostics,
+            entry => entry.Severity == "Error");
     }
 }

@@ -84,12 +84,14 @@ internal static class Dl1CustomMaterialWriter
                     CustomModelTextureSemantic.BaseColor,
                     [255, 255, 255, 255],
                     CompressionFormat.Bc1,
+                    notes,
                     cancellationToken));
 
             if (TryCreateTexture(
                     package,
                     material,
                     CustomModelTextureSemantic.Normal,
+                    notes,
                     cancellationToken) is { } normalTexture)
             {
                 files.Add(normalName, normalTexture);
@@ -103,6 +105,7 @@ internal static class Dl1CustomMaterialWriter
                     package,
                     material,
                     CustomModelTextureSemantic.Specular,
+                    notes,
                     cancellationToken) is { } specularTexture)
             {
                 files.Add(specularName, specularTexture);
@@ -116,6 +119,7 @@ internal static class Dl1CustomMaterialWriter
                     package,
                     material,
                     CustomModelTextureSemantic.Mask,
+                    notes,
                     cancellationToken) is { } maskTexture)
             {
                 files.Add(maskName, maskTexture);
@@ -161,12 +165,20 @@ internal static class Dl1CustomMaterialWriter
         CustomModelTextureSemantic semantic,
         ReadOnlySpan<byte> fallbackColor,
         CompressionFormat fallbackFormat,
+        ImmutableArray<string>.Builder notes,
         CancellationToken cancellationToken)
     {
         CustomModelTextureBinding? binding = FindTexture(material, semantic);
-        if (binding is not null)
+        if (binding?.PackageEntryPath is not null)
         {
             return CreateTexture(package, binding, cancellationToken);
+        }
+
+        if (binding is not null)
+        {
+            notes.Add(
+                $"Material '{material.Name}' declares {semantic} texture '{binding.DisplayName}' without packaged bytes; " +
+                "DL1 output uses an opaque white 4x4 fallback.");
         }
 
         byte[] pixels = new byte[4 * 4 * 4];
@@ -182,10 +194,24 @@ internal static class Dl1CustomMaterialWriter
         CustomModelPackage package,
         CustomModelMaterial material,
         CustomModelTextureSemantic semantic,
+        ImmutableArray<string>.Builder notes,
         CancellationToken cancellationToken)
     {
         CustomModelTextureBinding? binding = FindTexture(material, semantic);
-        return binding is null ? null : CreateTexture(package, binding, cancellationToken);
+        if (binding is null)
+        {
+            return null;
+        }
+
+        if (binding.PackageEntryPath is null)
+        {
+            notes.Add(
+                $"Material '{material.Name}' declares {semantic} texture '{binding.DisplayName}' without packaged bytes; " +
+                "the optional texture is omitted from DL1 output.");
+            return null;
+        }
+
+        return CreateTexture(package, binding, cancellationToken);
     }
 
     private static CustomModelTextureBinding? FindTexture(

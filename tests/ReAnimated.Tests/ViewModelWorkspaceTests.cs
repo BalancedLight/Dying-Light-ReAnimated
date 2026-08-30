@@ -3691,4 +3691,61 @@ public sealed class ViewModelWorkspaceTests : IDisposable
             RpackTestData.DeleteTemporaryDirectory(root);
         }
     }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "Export")]
+    public void CharacterRowWithNoAnimationsIsSelectableOnItsOwn()
+    {
+        // "Characters only" compiles a model, not an animation. A project
+        // that owns a character but no animation row still has to be able to
+        // select it, so selection cannot be derived from variants.
+        var character = new ExportModelSelectionViewModel(
+            Guid.NewGuid(),
+            "aethernew_dl1_player_rig_stock_exact",
+            []);
+
+        Assert.False(character.HasVariants);
+        Assert.False(character.IsSelected);
+
+        var raised = new List<string?>();
+        character.PropertyChanged += (_, e) => raised.Add(e.PropertyName);
+        character.IsSelected = true;
+
+        Assert.True(character.IsSelected);
+        Assert.Contains(
+            nameof(ExportModelSelectionViewModel.IsSelected),
+            raised);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "Export")]
+    public void CharacterRowWithVariantsStillPropagatesSelection()
+    {
+        var variant = new ExportVariantSelectionViewModel(
+            Guid.NewGuid(),
+            "clip",
+            readiness: "Ready",
+            isEnabled: true,
+            isSelected: false,
+            originModel: "origin",
+            targetModel: "target",
+            primaryScript: "script",
+            effectiveScripts: "script",
+            outputName: "clip.anm2",
+            bindingState: "Reviewed retarget",
+            scriptMode: "Owned",
+            animationLibraryId: null);
+        var model = new ExportModelSelectionViewModel(
+            Guid.NewGuid(),
+            "model with animations",
+            [variant]);
+
+        Assert.True(model.HasVariants);
+
+        model.IsSelected = true;
+
+        Assert.True(variant.IsSelected);
+    }
 }

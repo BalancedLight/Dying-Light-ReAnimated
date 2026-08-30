@@ -74,6 +74,29 @@
                               IsChecked="{Binding FlipTextureCoordinateV}" />
 
                     <Separator Margin="0,12" />
+                    <!-- These four settings decide the character's on-disk
+                         identity in a Developer Tools project. They were
+                         editable on the view model but rendered nowhere, so
+                         the animation bank a model points at was invisible. -->
+                    <TextBlock FontWeight="SemiBold" Text="DL1 character identity" />
+                    <TextBlock Margin="0,6,0,2" Text="Character ID (data/characters/&lt;id&gt;/)" />
+                    <TextBox Text="{Binding CharacterId, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Folder name under data/characters in the Developer Tools project." />
+                    <TextBlock Margin="0,6,0,2" Text="Model resource name" />
+                    <TextBox Text="{Binding ResourceName, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="Base name of the emitted .msh / .chr / .bscr / .ascr files." />
+                    <TextBlock Margin="0,6,0,2" Text="Surface name" />
+                    <TextBox Text="{Binding SurfaceName, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Margin="0,6,0,2" Text="Animation script library (SCR)" />
+                    <TextBox Text="{Binding AnimationScriptAlias, UpdateSourceTrigger=PropertyChanged}"
+                             ToolTip="The animation bank this character drives. Point a player-model replacement at the base-game bank, for example anims_player." />
+                    <TextBlock Margin="0,3,0,0"
+                               FontSize="10"
+                               Foreground="{StaticResource MutedTextBrush}"
+                               Text="{Binding AnimationScriptAliasSummary}"
+                               TextWrapping="Wrap" />
+
+                    <Separator Margin="0,12" />
                     <TextBlock FontWeight="SemiBold" Text="Preview" />
                     <TextBlock Margin="0,5,0,2" Text="Preview contract" />
                     <ComboBox DisplayMemberPath="Label"

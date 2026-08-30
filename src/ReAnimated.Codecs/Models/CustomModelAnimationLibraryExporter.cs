@@ -15,6 +15,15 @@ namespace ReAnimated.Codecs.Models;
 
 public sealed record CustomModelAnimationLibraryRequest
 {
+    /// <summary>
+    /// Allows a library that declares no sequences of its own. A character
+    /// deployed to drive an existing base-game bank still needs its ASCR
+    /// redirect and loose script to exist, so an empty selection is a real
+    /// request rather than a mistake. Also suppresses the
+    /// empty-means-every-clip fallback.
+    /// </summary>
+    public bool AllowEmptyLibrary { get; init; }
+
     public required FbxModelAuthoringImportResult Model { get; init; }
 
     public required string OutputPath { get; init; }
@@ -211,11 +220,14 @@ public static class CustomModelAnimationLibraryExporter
             throw new InvalidOperationException("A static custom model has no rig for animation-library export.");
         }
 
-        ImmutableArray<CustomModelAnimationClip> selections = request.Selections.IsDefaultOrEmpty
-            ? request.Model.Package.Document.AnimationClips
-            : request.Selections;
-        CustomModelAnimationClip[] included = selections.Where(static clip => clip.Included).ToArray();
-        if (included.Length == 0)
+        ImmutableArray<CustomModelAnimationClip> selections =
+            request.Selections.IsDefaultOrEmpty && !request.AllowEmptyLibrary
+                ? request.Model.Package.Document.AnimationClips
+                : request.Selections;
+        CustomModelAnimationClip[] included = selections.IsDefaultOrEmpty
+            ? []
+            : selections.Where(static clip => clip.Included).ToArray();
+        if (included.Length == 0 && !request.AllowEmptyLibrary)
         {
             throw new InvalidOperationException("Select at least one decoded FBX animation stack for export.");
         }

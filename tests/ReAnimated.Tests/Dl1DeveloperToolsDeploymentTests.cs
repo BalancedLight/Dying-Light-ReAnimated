@@ -105,6 +105,141 @@ public sealed class Dl1DeveloperToolsDeploymentTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelDeployment")]
+    public async Task CharacterOnlyDeploymentPublishesModelSourceEndToEnd()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest request = WithSyntheticDeploymentPipeline(
+                CreateDeploymentRequest(
+                    directory,
+                    installLooseAnm2: false,
+                    exportPortableAnimationRpack: false)) with
+            {
+                AnimationSelections = [],
+                DeployWithoutAnimations = true,
+            };
+
+            Dl1DeveloperToolsDeploymentResult deployed =
+                await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+
+            Assert.True(File.Exists(deployed.ReceiptPath));
+            Assert.Equal("GenericLibrary", deployed.Receipt.AnimationLibraryName);
+
+            string[] published = deployed.Receipt.Artifacts
+                .Select(static artifact => artifact.RelativePath)
+                .ToArray();
+            Assert.Contains(
+                published,
+                path => path.StartsWith(
+                    "data/characters/generic_character/",
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                "data/characters/animations/animscripts/GenericLibrary.scr",
+                published);
+            Assert.DoesNotContain(
+                published,
+                path => path.EndsWith(".anm2", StringComparison.OrdinalIgnoreCase));
+
+            // Every published artifact really exists on disk.
+            foreach (string relative in published)
+            {
+                Assert.True(
+                    File.Exists(Path.Combine(
+                        request.ProjectRoot,
+                        relative.Replace('/', Path.DirectorySeparatorChar))),
+                    $"Receipt names '{relative}' but it was not published.");
+            }
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task CharacterOnlyDeploymentStagesModelSourceAndAnEmptyScript()
+    {
+        // A player-model replacement drives an existing base-game bank, so it
+        // ships no animation of its own but still needs its ASCR redirect and
+        // a loose script to exist.
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest request = CreateDeploymentRequest(
+                directory,
+                installLooseAnm2: false,
+                exportPortableAnimationRpack: false) with
+            {
+                AnimationSelections = [],
+                DeployWithoutAnimations = true,
+            };
+
+            Dl1DeveloperToolsDeploymentPlan plan =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+
+            Assert.True(plan.CanDeploy);
+            Assert.Empty(plan.AnimationNames);
+            Assert.Empty(plan.Animations);
+            Assert.Equal(
+                "data/characters/animations/animscripts/GenericLibrary.scr",
+                plan.AnimationScriptRelativePath);
+
+            string[] staged = plan.Artifacts
+                .Select(static artifact => artifact.RelativePath)
+                .ToArray();
+
+            // The model source Developer Tools compiles from.
+            Assert.Contains(
+                staged,
+                path => path.StartsWith(
+                    "data/characters/generic_character/",
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                "data/characters/animations/animscripts/GenericLibrary.scr",
+                staged);
+
+            // No ANM2 of its own.
+            Assert.DoesNotContain(
+                staged,
+                path => path.EndsWith(".anm2", StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task AnEmptySelectionStillMeansEveryClipWithoutTheExplicitOptIn()
+    {
+        // Guards the regression this opt-in was introduced to avoid: an empty
+        // AnimationSelections has always meant "every clip the model carries".
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentPlan plan =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(
+                    CreateDeploymentRequest(
+                        directory,
+                        installLooseAnm2: true,
+                        exportPortableAnimationRpack: false));
+
+            Assert.NotEmpty(plan.AnimationNames);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
     public async Task PreflightUsesCanonicalProjectPathsWithoutNestedPackageLayout()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();

@@ -98,6 +98,106 @@ public sealed class Dl1CustomMaterialWriterDdsTests
         Assert.Contains("alpha", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public void UnresolvedOptionalTextureIsOmittedInsteadOfBlockingExport()
+    {
+        CustomModelTextureBinding binding = CreateUnresolvedBinding(
+            CustomModelTextureSemantic.Mask,
+            "alpha_texture");
+
+        Dl1PreparedMaterialSet prepared = PrepareTextureBinding(binding);
+
+        Assert.DoesNotContain(
+            prepared.Files.Keys,
+            static path => path.EndsWith("_msk.dds", StringComparison.Ordinal));
+        byte[] materialSource = Assert.Single(
+            prepared.Files,
+            static file => file.Key.EndsWith(".dmt", StringComparison.Ordinal)).Value;
+        Assert.Contains(
+            "<msk_0_tex>\"\"</msk_0_tex>",
+            Encoding.UTF8.GetString(materialSource),
+            StringComparison.Ordinal);
+        Assert.Contains(prepared.Notes, note =>
+            note.Contains("alpha_texture", StringComparison.Ordinal) &&
+            note.Contains("omitted", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public void UnresolvedBaseColorUsesFallbackInsteadOfBlockingExport()
+    {
+        CustomModelTextureBinding binding = CreateUnresolvedBinding(
+            CustomModelTextureSemantic.BaseColor,
+            "missing_base_color");
+
+        Dl1PreparedMaterialSet prepared = PrepareTextureBinding(binding);
+
+        byte[] diffuse = Assert.Single(
+            prepared.Files,
+            static file => file.Key.EndsWith(".dds", StringComparison.Ordinal)).Value;
+        Assert.True(diffuse.AsSpan().StartsWith("DDS "u8));
+        Assert.Contains(prepared.Notes, note =>
+            note.Contains("missing_base_color", StringComparison.Ordinal) &&
+            note.Contains("fallback", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static CustomModelTextureBinding CreateUnresolvedBinding(
+        CustomModelTextureSemantic semantic,
+        string displayName) =>
+        new()
+        {
+            Id = new Guid("0e55662e-b06a-5dd8-a1fb-d12beb9fe892"),
+            Semantic = semantic,
+            SourceKind = CustomModelTextureSourceKind.ExternalFbx,
+            ColorSpace = semantic == CustomModelTextureSemantic.BaseColor
+                ? CustomModelTextureColorSpace.Srgb
+                : CustomModelTextureColorSpace.Linear,
+            DisplayName = displayName,
+            OriginalReference = displayName,
+            ContentSha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            MediaType = "image/png",
+        };
+
+    private static Dl1PreparedMaterialSet PrepareTextureBinding(
+        CustomModelTextureBinding binding)
+    {
+        byte[] sourceFbx = "Kaydara FBX Binary  synthetic texture binding"u8.ToArray();
+        string sourceHash = Convert.ToHexString(SHA256.HashData(sourceFbx)).ToLowerInvariant();
+        var package = new CustomModelPackage(
+            new CustomModelDocument
+            {
+                ModelId = new Guid("f300766b-d700-5ca8-951e-d8098b8589ed"),
+                Name = "Synthetic texture binding",
+                RigMode = CustomModelRigMode.StaticProp,
+                Source = new CustomModelSourceIdentity
+                {
+                    OriginalFileName = "synthetic.fbx",
+                    ContentSha256 = sourceHash,
+                    FbxVersion = 7400,
+                },
+                RigSignature = sourceHash,
+                Materials =
+                [
+                    new CustomModelMaterial
+                    {
+                        Id = new Guid("64d5458d-64c3-5c78-9bfc-488ce1d86a92"),
+                        Name = "Synthetic material",
+                        Textures = [binding],
+                    },
+                ],
+            },
+            sourceFbx.ToImmutableArray(),
+            ImmutableDictionary<string, ImmutableArray<byte>>.Empty);
+
+        return Dl1CustomMaterialWriter.Prepare(
+            package,
+            "texture_binding",
+            CancellationToken.None);
+    }
+
     private static Dl1PreparedMaterialSet PrepareNormalTexture(
         byte[] dds,
         CustomModelNormalMapConvention convention)

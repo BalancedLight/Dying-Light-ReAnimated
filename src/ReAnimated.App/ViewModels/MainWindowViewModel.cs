@@ -37,8 +37,24 @@ namespace ReAnimated.App.ViewModels;
 public enum DeveloperToolsExportMode
 {
     AnimationsOnly,
+
+    /// <summary>
+    /// Stages the character as Developer Tools source: the model's MSH/CHR/
+    /// BSCR/ASCR under <c>data/characters</c>, its asset placeholders under
+    /// <c>assets_pc</c>, and the loose animation script. Developer Tools
+    /// compiles it from there.
+    /// </summary>
     CharactersOnly,
+
     Anm2Only,
+
+    /// <summary>
+    /// Builds a prebuilt character RPack through Techland's model compiler
+    /// and drops it under <c>out/ReAnimated</c>. Kept for anyone who wants a
+    /// finished pack rather than source Developer Tools can rebuild.
+    /// </summary>
+    CharacterRpack,
+
     Full,
 }
 
@@ -507,6 +523,11 @@ public sealed partial class MainWindowViewModel :
     private ProjectModelItemViewModel? _selectedProjectModel;
     private AssetItemViewModel? _pendingExplorerAnimationSourceChoice;
     private string? _pendingLocalAnm2ImportPath;
+    private string? _lastErrorPopupKey;
+    private DateTimeOffset _lastErrorPopupUtc = DateTimeOffset.MinValue;
+    private string _developerToolsExportStatus =
+        "No Developer Tools export has run in this session.";
+    private string _developerToolsExportDetails = string.Empty;
     private AssetItemViewModel? _pendingExplorerAnimationTimingChoice;
     private Dl1RetailAnimationTiming? _selectedExplorerAnimationTiming;
     private JobViewModel? _assetDecodeJob;
@@ -1179,6 +1200,15 @@ public sealed partial class MainWindowViewModel :
     { get; } = [];
 
     /// <summary>
+    /// Project-owned custom models offered to "Characters only". A character
+    /// compiles on its own, so this list is deliberately not derived from the
+    /// animation rows the rest of the export surface is built from.
+    /// </summary>
+    public ObservableCollection<ExportModelSelectionViewModel>
+        CharacterExportSelections
+    { get; } = [];
+
+    /// <summary>
     /// Flat animation-centric export rows used by the Files and Developer
     /// Tools workspaces.  ExportModelSelections remains as a compatibility
     /// grouping for the transactional exporters while the UI no longer has
@@ -1485,10 +1515,53 @@ public sealed partial class MainWindowViewModel :
     public bool IsDeveloperToolsFullProjectSelected =>
         _developerToolsExportMode == DeveloperToolsExportMode.Full;
 
+    public bool IsDeveloperToolsCharacterRpackSelected =>
+        _developerToolsExportMode ==
+            DeveloperToolsExportMode.CharacterRpack;
+
     public bool IsCharacterCompilerRequired =>
         _developerToolsExportMode is
             DeveloperToolsExportMode.CharactersOnly or
+            DeveloperToolsExportMode.CharacterRpack or
             DeveloperToolsExportMode.Full;
+
+    /// <summary>
+    /// What the selected mode actually writes, and where. The panel used to
+    /// imply raw files for every mode while two of them produced a compiled
+    /// pack under out/ReAnimated instead.
+    /// </summary>
+    public string DeveloperToolsExportModeSummary =>
+        _developerToolsExportMode switch
+        {
+            DeveloperToolsExportMode.AnimationsOnly =>
+                "Writes ANM2 files and the animation RPack under data/characters/animations.",
+            DeveloperToolsExportMode.CharactersOnly =>
+                "Stages Developer Tools source: data/characters/<id>/<name>.msh, .chr, .bscr and .ascr, the loose animscripts SCR, and assets_pc placeholders. Developer Tools compiles it from there.",
+            DeveloperToolsExportMode.Anm2Only =>
+                "Writes loose ANM2 files only, with no animation RPack.",
+            DeveloperToolsExportMode.CharacterRpack =>
+                "Builds a prebuilt character RPack with Techland's compiler and writes it to out/ReAnimated/<project>/characters. Not raw source.",
+            _ =>
+                "Full export: animations, animation RPack and compiled characters.",
+        };
+
+    /// <summary>
+    /// The outcome of the last Developer Tools export. The panel used to show
+    /// the animation-refresh sub-status instead, so a failed export reported
+    /// an unrelated schema-2 receipt message and the real reason reached only
+    /// the status bar and the diagnostics drawer.
+    /// </summary>
+    public string DeveloperToolsExportStatus
+    {
+        get => _developerToolsExportStatus;
+        private set => SetProperty(ref _developerToolsExportStatus, value);
+    }
+
+    public string DeveloperToolsExportDetails
+    {
+        get => _developerToolsExportDetails;
+        private set => SetProperty(ref _developerToolsExportDetails, value);
+    }
 
     public AsyncRelayCommand DeployCheckedToDeveloperToolsCommand { get; }
 
@@ -2308,6 +2381,21 @@ public sealed partial class MainWindowViewModel :
 
     public bool IsDraftTargetPreview =>
         ActiveTargetBindingStatus == TargetBindingStatus.NeedsReview;
+
+    private void OnExportModelSelectionChanged(
+        object? sender,
+        System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is not
+            nameof(ExportModelSelectionViewModel.IsSelected))
+        {
+            return;
+        }
+
+        OnPropertyChanged(nameof(ExportSelectionSummary));
+        DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
+        DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
+    }
 
     public string ExportSelectionSummary
     {
@@ -5504,19 +5592,23 @@ public sealed partial class MainWindowViewModel :
             !IsAssetReferencedAsImmutableAnimationInput(project, previousAsset.Id);
         Guid packageAssetId = exactAsset?.Id ??
             (previousAssetMayBeReplaced ? previousAsset!.Id : Guid.NewGuid());
-        // A reused path is a deliberate in-place replacement of bytes this
-        // project already owns; only a freshly minted path must refuse to
-        // overwrite whatever happens to sit there.
-        bool replacesOwnedAssetPath =
-            exactAsset is not null || previousAssetMayBeReplaced;
-        string relativePath = exactAsset?.RelativePath ??
-            (previousAssetMayBeReplaced
-                ? previousAsset!.RelativePath
+        // A .dlrmodel is an immutable, content-fingerprinted asset: the file
+        // at a recorded path must always hash to the ContentSha256 the
+        // project recorded for it. Overwriting one in place breaks that
+        // invariant and leaves every model, variant and rig signature
+        // pointing at bytes that no longer exist, so edited bytes always take
+        // a new content-addressed path instead.
+        string? reusablePath = exactAsset?.RelativePath ??
+            (previousAssetMayBeReplaced ? previousAsset!.RelativePath : null);
+        string relativePath =
+            reusablePath is not null &&
+            CanPublishPackageAt(materializeProjectPath, reusablePath, sha256)
+                ? reusablePath
                 : CreatePendingCustomModelRelativePath(
                     project,
                     payload,
                     sha256,
-                    materializeProjectPath));
+                    materializeProjectPath);
         PendingProjectAssetReceipt staged =
             await _pendingProjectAssetStore.StageAsync(
                 packageAssetId,
@@ -5526,10 +5618,12 @@ public sealed partial class MainWindowViewModel :
         _pendingProjectAssets[packageAssetId] = staged;
         if (!string.IsNullOrWhiteSpace(materializeProjectPath))
         {
+            // Never replaceExisting here: the path was only reused when the
+            // destination is absent or already holds these exact bytes.
             _ = await _pendingProjectAssetStore.MaterializeAsync(
                 staged,
                 materializeProjectPath,
-                replacesOwnedAssetPath,
+                replaceExisting: false,
                 cancellationToken);
         }
 
@@ -5606,7 +5700,11 @@ public sealed partial class MainWindowViewModel :
                 payload.Dl1DescriptorInventoryFingerprint,
             RootAnimationLibraryId = rootAnimationLibraryId,
             MorphSignature = payload.MorphSignature,
-            IsStatic = Models.SelectedRigMode == CustomModelRigMode.StaticProp,
+            // Derived from the imported package, not from the workspace's
+            // current rig-mode selection. Reading transient UI state here
+            // recorded rigged packages as static props with no rig signature,
+            // which then failed every preview and export.
+            IsStatic = payload.RuntimeRigSignature is null,
             ExportableEyeCameraHelperCount =
                 payload.ExportableEyeCameraHelperCount,
             PreviewCameraNodeName = payload.PreviewCameraNodeName,
@@ -5662,6 +5760,61 @@ public sealed partial class MainWindowViewModel :
         }
 
         return $"Sources/{stem}-{sha256[..12]}.dlrmodel";
+    }
+
+    /// <summary>
+    /// True when publishing <paramref name="sha256"/> to
+    /// <paramref name="relativePath"/> would not change any bytes already
+    /// there. An untitled project has nowhere to check, so its recorded path
+    /// is decided when it is first saved.
+    /// </summary>
+    private static bool CanPublishPackageAt(
+        string? projectPath,
+        string relativePath,
+        string sha256)
+    {
+        if (string.IsNullOrWhiteSpace(projectPath))
+        {
+            return true;
+        }
+
+        try
+        {
+            string? projectDirectory = Path.GetDirectoryName(
+                Path.GetFullPath(projectPath));
+            if (string.IsNullOrWhiteSpace(projectDirectory))
+            {
+                return true;
+            }
+
+            string destination = Path.Combine(
+                projectDirectory,
+                relativePath.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(destination))
+            {
+                return true;
+            }
+
+            using FileStream stream = new(
+                destination,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read);
+            return string.Equals(
+                Convert.ToHexStringLower(SHA256.HashData(stream)),
+                sha256,
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or
+            IOException or
+            UnauthorizedAccessException or
+            NotSupportedException)
+        {
+            // Unreadable destination: take a fresh content-addressed path
+            // rather than risk publishing over something unknown.
+            return false;
+        }
     }
 
     /// <summary>
@@ -9930,6 +10083,46 @@ public sealed partial class MainWindowViewModel :
             .AnimationVariants
             .Where(variant => variant.Id != selected.Id)
             .ToImmutableArray();
+
+        // Removing the last target of a source used to leave the source
+        // behind, which re-rendered as a "No target variant" row: the target
+        // model disappeared and the animation looked like it survived. A row
+        // whose source retains no other target takes the source with it.
+        Guid sourceId = selected.IsSourceOnly
+            ? selected.Id
+            : selected.VariantGroupId;
+        bool sourceIsOrphaned = !variants.Any(
+            variant => variant.SourceId == sourceId);
+        ImmutableArray<ProjectAnimationSource> sources = sourceIsOrphaned
+            ? _project.AnimationSources
+                .Where(source => source.Id != sourceId)
+                .ToImmutableArray()
+            : _project.AnimationSources;
+
+        // The immutable source asset is shared, so it is only dropped when
+        // nothing else in the project still points at it.
+        ImmutableArray<ProjectAssetReference> assets = _project.Assets;
+        if (sourceIsOrphaned &&
+            _project.AnimationSources.FirstOrDefault(
+                source => source.Id == sourceId) is { } removedSource)
+        {
+            bool assetStillUsed =
+                sources.Any(source =>
+                    source.SourceAssetId == removedSource.SourceAssetId) ||
+                _project.Models.Any(model =>
+                    model.AssetId == removedSource.SourceAssetId) ||
+                variants.Any(variant =>
+                    _project.Models.Any(model =>
+                        model.Id == variant.TargetModelId &&
+                        model.AssetId == removedSource.SourceAssetId));
+            if (!assetStillUsed)
+            {
+                assets = assets
+                    .Where(asset => asset.Id != removedSource.SourceAssetId)
+                    .ToImmutableArray();
+            }
+        }
+
         Guid? next = removedActive
             ? animations.FirstOrDefault()?.Id ??
               variants.FirstOrDefault()?.Id
@@ -9945,8 +10138,10 @@ public sealed partial class MainWindowViewModel :
 
         CommitProject(_project with
         {
+            Assets = assets,
             Animations = animations,
             AnimationVariants = variants,
+            AnimationSources = sources,
             ActiveAnimationId = next,
             Workflow = _project.Workflow with
             {
@@ -9959,7 +10154,9 @@ public sealed partial class MainWindowViewModel :
         });
         Timeline.IsPlaying = false;
         RefreshAnimationPreview();
-        StatusText = $"Removed {selected.Name}";
+        StatusText = sourceIsOrphaned
+            ? $"Removed {selected.Name} and its immutable source"
+            : $"Removed target {selected.Name}; the source keeps its other targets";
     }
 
     private bool CanRemoveSelectedProjectModel() =>
@@ -15600,9 +15797,56 @@ public sealed partial class MainWindowViewModel :
                 variants));
         }
 
+        // Character export does not need an animation. Models with no variant
+        // never appeared in this list at all, so "Characters only" had nothing
+        // to select and could never run.
+        HashSet<Guid> modelsWithVariants = ExportModelSelections
+            .Where(static row => row.ModelAssetId is not null)
+            .Select(static row => row.ModelAssetId!.Value)
+            .ToHashSet();
+        foreach (ProjectModelEntry model in _project.Models
+                     .Where(model => !modelsWithVariants.Contains(model.Id))
+                     .OrderBy(static model => model.Name,
+                         StringComparer.OrdinalIgnoreCase))
+        {
+            if (FindProjectAsset(model.AssetId)?.Kind !=
+                ProjectAssetKind.CustomModelSource)
+            {
+                continue;
+            }
+
+            ExportModelSelections.Add(new ExportModelSelectionViewModel(
+                model.Id,
+                model.Name,
+                []));
+        }
+
+        CharacterExportSelections.Clear();
+        foreach (ExportModelSelectionViewModel row in ExportModelSelections)
+        {
+            if (row.ModelAssetId is not { } modelId)
+            {
+                continue;
+            }
+
+            ProjectModelEntry? entry = _project.Models.FirstOrDefault(
+                model => model.Id == modelId);
+            if (entry is null || entry.IsStatic ||
+                FindProjectAsset(entry.AssetId)?.Kind !=
+                    ProjectAssetKind.CustomModelSource)
+            {
+                continue;
+            }
+
+            row.PropertyChanged -= OnExportModelSelectionChanged;
+            row.PropertyChanged += OnExportModelSelectionChanged;
+            CharacterExportSelections.Add(row);
+        }
+
         RefreshAnimationScriptLibraries();
         RefreshActiveExportReadiness();
         OnPropertyChanged(nameof(ExportSelectionSummary));
+        OnPropertyChanged(nameof(HasCharacterExportSelections));
         ApplyExportSelectionCommand.NotifyCanExecuteChanged();
         ExportCheckedPortableCommand.NotifyCanExecuteChanged();
         DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
@@ -16814,9 +17058,25 @@ public sealed partial class MainWindowViewModel :
 
     private bool CanRunCheckedExportWorkflow() =>
         !IsBusy &&
-        ExportModelSelections
+        (ExportModelSelections
             .SelectMany(static model => model.Variants)
-            .Any(static variant => variant.IsEnabled);
+            .Any(static variant => variant.IsEnabled) ||
+         // "Characters only" compiles models, not animations, so a project
+         // with no animation rows must still be able to run it.
+         (_developerToolsExportMode is
+              DeveloperToolsExportMode.CharactersOnly or
+              DeveloperToolsExportMode.CharacterRpack &&
+          CharacterExportSelections.Any(static model => model.IsSelected)));
+
+    public bool HasCharacterExportSelections =>
+        CharacterExportSelections.Count > 0;
+
+    private ImmutableHashSet<Guid> GetSelectedCharacterModelIds() =>
+        CharacterExportSelections
+            .Where(static model =>
+                model.IsSelected && model.ModelAssetId is not null)
+            .Select(static model => model.ModelAssetId!.Value)
+            .ToImmutableHashSet();
 
     private void SelectDeveloperToolsExportMode(string? value)
     {
@@ -16833,7 +17093,9 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(IsDeveloperToolsCharactersOnlySelected));
         OnPropertyChanged(nameof(IsDeveloperToolsAnm2OnlySelected));
         OnPropertyChanged(nameof(IsDeveloperToolsFullProjectSelected));
+        OnPropertyChanged(nameof(IsDeveloperToolsCharacterRpackSelected));
         OnPropertyChanged(nameof(IsCharacterCompilerRequired));
+        OnPropertyChanged(nameof(DeveloperToolsExportModeSummary));
         DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
     }
 
@@ -16851,6 +17113,8 @@ public sealed partial class MainWindowViewModel :
                     includeAnimationRpack: false,
                     includeCharacters: false),
             DeveloperToolsExportMode.CharactersOnly =>
+                DeployCharacterSourceToDeveloperToolsAsync(),
+            DeveloperToolsExportMode.CharacterRpack =>
                 DeploySelectedProjectArtifactsAsync(
                     includeAnimations: false,
                     includeAnimationRpack: false,
@@ -16861,16 +17125,281 @@ public sealed partial class MainWindowViewModel :
                 "The selected Developer Tools export mode is unsupported."),
         };
 
+    /// <summary>
+    /// Names every missing character-compilation prerequisite up front. These
+    /// used to surface only after a long staging job threw deep inside the
+    /// compiler call, which read as "the export keeps failing" with no
+    /// indication of what to supply.
+    /// </summary>
+    private string? DescribeMissingCharacterExportPrerequisites()
+    {
+        var missing = new List<string>();
+        if (!File.Exists(Models.CompilerExecutablePath))
+        {
+            missing.Add(
+                "Techland's Developer Tools model compiler (use \"Choose compiler...\")");
+        }
+
+        if (ResolveRetailData0PakPath() is null)
+        {
+            missing.Add(
+                "a complete Dying Light 1 Data0.pak (configure the game install in Workflow)");
+        }
+
+        return missing.Count == 0
+            ? null
+            : "Characters cannot be compiled yet. Missing: " +
+                string.Join("; ", missing) + ".";
+    }
+
+    private void SetDeveloperToolsExportOutcome(
+        string status,
+        string details)
+    {
+        DeveloperToolsExportStatus = status;
+        DeveloperToolsExportDetails = details;
+    }
+
+    /// <summary>
+    /// Stages each selected character into a Developer Tools project as
+    /// source Techland's own toolchain compiles: the model MSH/CHR/BSCR/ASCR
+    /// under data/characters, its assets_pc placeholders, and the loose
+    /// animation script. A prebuilt RPack is a separate mode.
+    /// </summary>
+    private async Task DeployCharacterSourceToDeveloperToolsAsync()
+    {
+        ImmutableHashSet<Guid> characterModelIds =
+            GetSelectedCharacterModelIds();
+        if (characterModelIds.IsEmpty)
+        {
+            const string reason =
+                "Developer Tools character export needs at least one selected project model.";
+            StatusText = reason;
+            SetDeveloperToolsExportOutcome(
+                reason,
+                "Select the character in the Characters to compile list. A character exports on its own; it does not need an animation row.");
+            return;
+        }
+
+        if (DescribeMissingCharacterExportPrerequisites() is { } missing)
+        {
+            StatusText = missing;
+            SetDeveloperToolsExportOutcome(missing, string.Empty);
+            return;
+        }
+
+        string? projectRoot = Directory.Exists(
+                Models.DeveloperToolsProjectRoot)
+            ? Models.DeveloperToolsProjectRoot
+            : _fileDialogs.ShowSelectDl1DeveloperToolsProjectDialog(
+                ProjectPath);
+        if (string.IsNullOrWhiteSpace(projectRoot) ||
+            !Directory.Exists(projectRoot))
+        {
+            return;
+        }
+
+        projectRoot = Path.GetFullPath(projectRoot);
+        string retailData0PakPath = ResolveRetailData0PakPath()!;
+        IsBusy = true;
+        JobViewModel job = AddJob(
+            "Export characters to Developer Tools",
+            "Source staging",
+            "Writing model source the Developer Tools compiler consumes");
+        var written = new List<string>();
+        try
+        {
+            foreach (Guid modelId in characterModelIds.OrderBy(static id => id))
+            {
+                job.CancellationToken.ThrowIfCancellationRequested();
+                ProjectModelEntry model = _project.Models.FirstOrDefault(
+                        candidate => candidate.Id == modelId)
+                    ?? throw new InvalidDataException(
+                        "A selected character model is no longer in the project.");
+                ProjectAssetReference asset = FindProjectAsset(model.AssetId)
+                    ?? throw new InvalidDataException(
+                        $"Character '{model.Name}' has no source asset.");
+                job.Stage = $"Stage {model.Name}";
+                LoadedProjectCustomModel custom =
+                    await LoadProjectCustomModelAsync(
+                        model,
+                        asset,
+                        job.CancellationToken);
+                CustomModelBuildSettings settings =
+                    custom.Package.Document.BuildSettings;
+                string resourceName = Dl1SourceModelWriter.SanitizeName(
+                    settings.ResourceName,
+                    55);
+                if (string.IsNullOrWhiteSpace(settings.AnimationScriptAlias))
+                {
+                    throw new InvalidDataException(
+                        $"Character '{model.Name}' has no animation script library. Set it in Models under DL1 character identity - a player-model replacement usually points at the base-game bank, for example anims_player.");
+                }
+
+                var request = new Dl1DeveloperToolsDeploymentRequest
+                {
+                    Model = custom.Imported,
+                    ProjectRoot = projectRoot,
+                    CompilerExecutablePath = Models.CompilerExecutablePath,
+                    RetailData0PakPath = retailData0PakPath,
+                    CharacterId =
+                        string.IsNullOrWhiteSpace(settings.CharacterId)
+                            ? resourceName
+                            : settings.CharacterId,
+                    ModelResourceName = resourceName,
+                    SurfaceName = settings.SurfaceName,
+                    AnimationLibraryName = settings.AnimationScriptAlias!,
+                    AnimationSelections = [],
+                    // The character drives an existing bank; it ships no
+                    // animation of its own.
+                    DeployWithoutAnimations = true,
+                    InstallLooseAnm2 = false,
+                    ExportPortableAnimationRpack = false,
+                };
+
+                Dl1DeveloperToolsDeploymentPlan plan =
+                    await Dl1DeveloperToolsProjectDeployer.PreflightAsync(
+                        request,
+                        job.CancellationToken);
+                if (!plan.CanDeploy)
+                {
+                    var resolutions = ImmutableDictionary.CreateBuilder<
+                        string,
+                        Dl1DeploymentConflictResolution>(
+                        StringComparer.OrdinalIgnoreCase);
+                    foreach (Dl1DeveloperToolsDeploymentConflict conflict in
+                             plan.Conflicts)
+                    {
+                        DeveloperToolsDeploymentConflictDecision decision =
+                            _fileDialogs
+                                .ResolveDeveloperToolsDeploymentConflict(
+                                    conflict.RelativePath,
+                                    conflict.Message,
+                                    conflict.CanSkip);
+                        if (decision ==
+                            DeveloperToolsDeploymentConflictDecision.Cancel)
+                        {
+                            throw new OperationCanceledException(
+                                $"Replacement of '{conflict.RelativePath}' was canceled.");
+                        }
+
+                        resolutions[conflict.RelativePath] = decision ==
+                            DeveloperToolsDeploymentConflictDecision
+                                .BackUpAndReplace
+                                ? Dl1DeploymentConflictResolution
+                                    .BackUpAndReplace
+                                : Dl1DeploymentConflictResolution.Skip;
+                    }
+
+                    request = request with
+                    {
+                        ConflictResolutions = resolutions.ToImmutable(),
+                    };
+                    plan = await Dl1DeveloperToolsProjectDeployer
+                        .PreflightAsync(request, job.CancellationToken);
+                    if (!plan.CanDeploy)
+                    {
+                        throw new Dl1DeveloperToolsDeploymentConflictException(
+                            plan);
+                    }
+                }
+
+                Dl1DeveloperToolsDeploymentResult result =
+                    await Dl1DeveloperToolsProjectDeployer.DeployAsync(
+                        request,
+                        job.CancellationToken);
+                written.AddRange(result.Receipt.Artifacts
+                    .Select(static artifact => artifact.RelativePath));
+                _lastDeveloperToolsBatchReceiptPath = result.ReceiptPath;
+            }
+
+            RollBackDeveloperToolsBatchCommand.NotifyCanExecuteChanged();
+            job.Progress = 100.0;
+            job.Complete("Staged");
+            string[] ordered = written
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(static path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            StatusText =
+                $"Staged {ordered.Length:N0} character source file(s) to Developer Tools";
+            SetDeveloperToolsExportOutcome(
+                $"Staged {ordered.Length:N0} source file(s) into {projectRoot}.",
+                "Developer Tools compiles these; nothing is prebuilt here." +
+                Environment.NewLine + Environment.NewLine +
+                string.Join(Environment.NewLine, ordered));
+            AddDiagnostic(
+                "Info",
+                "Export",
+                "Character source staged to Developer Tools",
+                string.Join(", ", ordered));
+        }
+        catch (OperationCanceledException exception)
+        {
+            job.Complete("Canceled; project retained");
+            StatusText = "Developer Tools character export canceled";
+            SetDeveloperToolsExportOutcome(
+                "Canceled. The Developer Tools project was left unchanged.",
+                SummarizeException(exception));
+        }
+        catch (Exception exception)
+        {
+            job.Complete("Failed or rolled back");
+            ReportOperationFailure(
+                "Export",
+                "Character source was not staged",
+                exception);
+            SetDeveloperToolsExportOutcome(
+                $"Failed: {SummarizeException(exception)}",
+                DescribeException(exception));
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
     private async Task DeploySelectedProjectArtifactsAsync(
         bool includeAnimations,
         bool includeAnimationRpack,
         bool includeCharacters)
     {
-        if (!TryGetCheckedVariantIds(
-                out ImmutableHashSet<Guid> selectedVariantIds))
+        _ = TryGetCheckedVariantIds(
+            out ImmutableHashSet<Guid> selectedVariantIds);
+        ImmutableHashSet<Guid> characterModelIds = includeCharacters
+            ? GetSelectedCharacterModelIds()
+            : [];
+        if (selectedVariantIds.IsEmpty && characterModelIds.IsEmpty)
         {
-            StatusText =
-                "Developer Tools export needs at least one checked, export-ready animation row";
+            string reason = includeCharacters
+                ? "Developer Tools character export needs at least one selected project model."
+                : "Developer Tools export needs at least one checked, export-ready animation row.";
+            StatusText = reason;
+            SetDeveloperToolsExportOutcome(
+                reason,
+                includeCharacters
+                    ? "Select the character in the Export selection list. A character exports on its own; it does not need an animation row."
+                    : "Check an export-ready animation row in the Export selection list, then run the export again.");
+            return;
+        }
+
+        if (includeAnimations && selectedVariantIds.IsEmpty)
+        {
+            const string animationReason =
+                "This export mode writes animations and needs at least one checked, export-ready animation row.";
+            StatusText = animationReason;
+            SetDeveloperToolsExportOutcome(
+                animationReason,
+                "Use \"Characters only\" to send the model without any animation.");
+            return;
+        }
+
+        if (includeCharacters &&
+            DescribeMissingCharacterExportPrerequisites() is { } missing)
+        {
+            StatusText = missing;
+            SetDeveloperToolsExportOutcome(
+                missing,
+                "Character compilation runs Techland's official model compiler against an isolated bootstrap built from the retail Data0.pak. Both are machine-local choices and are never stored in the project.");
             return;
         }
 
@@ -16908,7 +17437,8 @@ public sealed partial class MainWindowViewModel :
                     includeCharacters,
                     stagingRoot,
                     job,
-                    job.CancellationToken);
+                    job.CancellationToken,
+                    characterModelIds);
             var writes = ImmutableArray.CreateBuilder<
                 ProjectArtifactWrite>();
             int scriptLinkUpdates = 0;
@@ -17035,7 +17565,10 @@ public sealed partial class MainWindowViewModel :
                     {
                         ProjectRoot = projectRoot,
                         OwnerProjectId = _project.ProjectId,
-                        Artifacts = writes.MoveToImmutable(),
+                        // ToImmutable, not MoveToImmutable: this builder is
+                        // grown dynamically, so Count only equals Capacity by
+                        // coincidence and MoveToImmutable throws otherwise.
+                        Artifacts = writes.ToImmutable(),
                     },
                     job.CancellationToken);
             _lastProjectArtifactProjectRoot = projectRoot;
@@ -17047,6 +17580,12 @@ public sealed partial class MainWindowViewModel :
             job.Complete("Committed");
             StatusText =
                 $"Developer Tools export committed {result.Receipt.Artifacts.Length:N0} artifact(s)";
+            SetDeveloperToolsExportOutcome(
+                $"Committed {result.Receipt.Artifacts.Length:N0} artifact(s) to {projectRoot}.",
+                $"Animations: {(includeAnimations ? "yes" : "no")}; animation RPack: " +
+                $"{(includeAnimationRpack ? "yes" : "no")}; characters: " +
+                $"{(includeCharacters ? "yes" : "no")}. Receipt: {result.ReceiptRelativePath}. " +
+                "Use \"Undo last export\" to roll the transaction back. Offline artifact validation is not live-game proof.");
             AddDiagnostic(
                 "Info",
                 "Export",
@@ -17055,10 +17594,13 @@ public sealed partial class MainWindowViewModel :
                 $"Root SCR link update(s): {scriptLinkUpdates:N0}. " +
                 "The internal receipt supports Undo last export. Offline artifact validation is not live-game proof.");
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException exception)
         {
             job.Complete("Canceled; project retained");
             StatusText = "Developer Tools export canceled";
+            SetDeveloperToolsExportOutcome(
+                "Canceled. The Developer Tools project was left unchanged.",
+                SummarizeException(exception));
         }
         // Report every failure type. Anything outside a filter
         // escaped the catch, faulting the command and leaving the
@@ -17070,6 +17612,9 @@ public sealed partial class MainWindowViewModel :
                 "Export",
                 "Developer Tools selection was not committed",
                 exception);
+            SetDeveloperToolsExportOutcome(
+                $"Failed: {SummarizeException(exception)}",
+                DescribeException(exception));
         }
         finally
         {
@@ -17834,7 +18379,7 @@ public sealed partial class MainWindowViewModel :
         artifacts.Add(new StandaloneExportArtifact(
             "project-export.json",
             manifest));
-        return artifacts.MoveToImmutable();
+        return artifacts.ToImmutable();
     }
 
     private static ImmutableArray<StandaloneExportArtifact>
@@ -17876,7 +18421,7 @@ public sealed partial class MainWindowViewModel :
                 "Character-only export needs at least one checked user-owned custom-model target. Retail model bytes are never redistributed.");
         }
 
-        return artifacts.MoveToImmutable();
+        return artifacts.ToImmutable();
     }
 
     /// <summary>
@@ -18690,12 +19235,15 @@ public sealed partial class MainWindowViewModel :
             bool compileCustomModels,
             string stagingRoot,
             JobViewModel job,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken,
+            ImmutableHashSet<Guid>? characterOnlyModelIds = null)
     {
-        if (selectedVariantIds.IsEmpty)
+        ImmutableHashSet<Guid> characterModelIds =
+            characterOnlyModelIds ?? [];
+        if (selectedVariantIds.IsEmpty && characterModelIds.IsEmpty)
         {
             throw new InvalidOperationException(
-                "No export-ready variants are checked.");
+                "No export-ready variants are checked and no character model is selected.");
         }
 
         ProjectAnimationVariant[] selectedVariants = _project
@@ -18717,10 +19265,24 @@ public sealed partial class MainWindowViewModel :
                 .ToDictionary(static source => source.Id);
             var prepared =
                 ImmutableArray.CreateBuilder<PreparedCheckedExportModel>();
-            IGrouping<Guid, ProjectAnimationVariant>[] modelGroups =
-                selectedVariants
-                    .GroupBy(static variant => variant.TargetModelId)
-                    .OrderBy(static group => group.Key)
+            // A character selected without any animation still needs a row
+            // here so its model is compiled; it simply carries no variants.
+            var groupedVariants = selectedVariants
+                .GroupBy(static variant => variant.TargetModelId)
+                .ToDictionary(
+                    static group => group.Key,
+                    static group => group.ToArray());
+            (Guid ModelId, ProjectAnimationVariant[] Variants)[] modelGroups =
+                groupedVariants.Keys
+                    .Union(characterModelIds)
+                    .OrderBy(static id => id)
+                    .Select(id => (
+                        ModelId: id,
+                        Variants: groupedVariants.TryGetValue(
+                            id,
+                            out ProjectAnimationVariant[]? rows)
+                                ? rows
+                                : []))
                     .ToArray();
 
             // Maps a claimed type-320 identity to the row that claimed it, so
@@ -18732,10 +19294,10 @@ public sealed partial class MainWindowViewModel :
                  modelIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                IGrouping<Guid, ProjectAnimationVariant> group =
+                (Guid ModelId, ProjectAnimationVariant[] Variants) group =
                     modelGroups[modelIndex];
                 ProjectModelEntry model = _project.Models.FirstOrDefault(
-                        candidate => candidate.Id == group.Key)
+                        candidate => candidate.Id == group.ModelId)
                     ?? throw new InvalidDataException(
                         "A checked variant target model is missing.");
                 ProjectAssetReference asset = FindProjectAsset(
@@ -18755,7 +19317,7 @@ public sealed partial class MainWindowViewModel :
                     (55.0 * modelIndex / Math.Max(1, modelGroups.Length));
                 var resources =
                     ImmutableArray.CreateBuilder<Dl1PortableAnimationResource>();
-                foreach (ProjectAnimationVariant variant in group
+                foreach (ProjectAnimationVariant variant in group.Variants
                              .OrderBy(static variant => variant.Name,
                                  StringComparer.OrdinalIgnoreCase)
                              .ThenBy(static variant => variant.Id))
@@ -28531,6 +29093,14 @@ public sealed partial class MainWindowViewModel :
                 area,
                 message,
                 detail));
+        // Errors interrupt. Reporting through the status bar and the drawer
+        // alone means an operator who is not looking at either never learns
+        // the run stopped, which reads as the app silently doing nothing.
+        if (severity == "Error")
+        {
+            ShowErrorPopup(area, message, detail);
+        }
+
         while (Diagnostics.Count > 500)
         {
             Diagnostics.RemoveAt(Diagnostics.Count - 1);
@@ -28603,6 +29173,33 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    /// <summary>
+    /// Raises one dialog per distinct error. A single operation can report
+    /// several rows (one per invalid variant, say); stacking a modal for each
+    /// would be worse than staying quiet, so repeats of the same text inside
+    /// one burst are folded into the first.
+    /// </summary>
+    private void ShowErrorPopup(
+        string area,
+        string message,
+        string? detail)
+    {
+        string key = $"{area}\u241F{message}\u241F{detail}";
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        if (string.Equals(_lastErrorPopupKey, key, StringComparison.Ordinal) &&
+            now - _lastErrorPopupUtc < TimeSpan.FromSeconds(10))
+        {
+            return;
+        }
+
+        _lastErrorPopupKey = key;
+        _lastErrorPopupUtc = now;
+        _fileDialogs.ShowOperationFailure(
+            area,
+            message,
+            detail ?? string.Empty);
+    }
+
     private void ReportOperationFailure(
         string area,
         string title,
@@ -28611,8 +29208,14 @@ public sealed partial class MainWindowViewModel :
         ArgumentException.ThrowIfNullOrWhiteSpace(area);
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
         ArgumentNullException.ThrowIfNull(exception);
-        StatusText = $"{title}: {SummarizeException(exception)}";
-        AddDiagnostic("Error", area, title, DescribeException(exception));
+        string summary = SummarizeException(exception);
+        StatusText = $"{title}: {summary}";
+        // AddDiagnostic raises the dialog for Error severity.
+        AddDiagnostic(
+            "Error",
+            area,
+            $"{title}: {summary}",
+            DescribeException(exception));
     }
 
     /// <summary>

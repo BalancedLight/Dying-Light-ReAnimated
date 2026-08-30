@@ -44,13 +44,20 @@ public static partial class Dl1DeveloperToolsProjectDeployer
     public static string GetAnimationFallbackRpackRelativePath(ReadOnlySpan<byte> rpackBytes) =>
         GetAnimationRuntimePackRelativePath(rpackBytes);
 
+    /// <param name="declaresAnimations">
+    /// Whether this deployment ships sequences of its own. A character staged
+    /// to drive an existing base-game bank publishes the alias script, the
+    /// loose animation script and the runtime pack, but no ANM2 - so the
+    /// loose-ANM2 requirement is stated by the caller rather than assumed.
+    /// </param>
     public static Dl1AnimationContentManifestBytes CreateAnimationContentManifest(
         string deploymentId,
         string characterId,
         string modelResourceName,
         string animationLibraryName,
         DateTimeOffset createdUtc,
-        IEnumerable<Dl1AnimationContentArtifact> artifacts)
+        IEnumerable<Dl1AnimationContentArtifact> artifacts,
+        bool declaresAnimations = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(deploymentId);
         ArgumentException.ThrowIfNullOrWhiteSpace(characterId);
@@ -113,9 +120,17 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         RequireManifestRoleCount(rows, Dl1AnimationContentArtifactRole.AliasScript, 1);
         RequireManifestRoleCount(rows, Dl1AnimationContentArtifactRole.AnimationScript, 1);
         RequireManifestRoleCount(rows, Dl1AnimationContentArtifactRole.AnimationRuntimePack, 1);
-        if (!rows.Any(static artifact => artifact.Role == Dl1AnimationContentArtifactRole.Animation))
+        bool hasAnimationRow = rows.Any(static artifact =>
+            artifact.Role == Dl1AnimationContentArtifactRole.Animation);
+        if (declaresAnimations && !hasAnimationRow)
         {
             throw new InvalidDataException("Animation content manifest contains no loose ANM2 artifact.");
+        }
+
+        if (!declaresAnimations && hasAnimationRow)
+        {
+            throw new InvalidDataException(
+                "Animation content manifest declares no animations but carries a loose ANM2 artifact.");
         }
 
         foreach (Dl1AnimationContentArtifact artifact in rows)
