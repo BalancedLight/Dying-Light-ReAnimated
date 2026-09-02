@@ -273,6 +273,43 @@ def read_morph(path, expected_vertices):
     return values.reshape((int(expected_vertices), MORPH_VERTEX_STRIDE))
 
 
+def normalize_or_none(vector):
+    if not all(math.isfinite(value) for value in vector):
+        raise ValueError("A decoded mesh normal is non-finite")
+    if vector.length_squared <= 1.0e-20:
+        return None
+    return vector.normalized()
+
+
+def repair_vertex_normals(mesh_data, source_normals, mesh_name):
+    """Keep source normals when valid; rebuild zero placeholders from faces."""
+
+    accumulated = [Vector((0.0, 0.0, 0.0)) for _ in source_normals]
+    for polygon in mesh_data.polygons:
+        face_normal = normalize_or_none(polygon.normal)
+        if face_normal is None:
+            continue
+        for loop_index in polygon.loop_indices:
+            vertex_index = mesh_data.loops[loop_index].vertex_index
+            accumulated[vertex_index] += face_normal
+
+    repaired = 0
+    normals = []
+    for vertex_index, source_normal in enumerate(source_normals):
+        normal = normalize_or_none(source_normal)
+        if normal is None:
+            normal = normalize_or_none(accumulated[vertex_index])
+            if normal is None:
+                raise ValueError(
+                    "Cannot reconstruct a normal for decoded retail mesh "
+                    f"'{mesh_name}', vertex {vertex_index}. Its source "
+                    "normal is empty and it has no non-degenerate face."
+                )
+            repaired += 1
+        normals.append(tuple(normal))
+    return normals, repaired
+
+
 def install_armature_only_bind_pose_export():
     """Emit armature edit-rest as BindPose, including an unskinned rig."""
 
@@ -964,8 +1001,8 @@ def build_meshes(job, armature):
             tuple(conversion3 @ Vector(value))
             for value in vertices[:, 0:3]
         ]
-        normals = [
-            tuple((conversion3 @ Vector(value)).normalized())
+        source_normals = [
+            conversion3 @ Vector(value)
             for value in vertices[:, 3:6]
         ]
         faces = [
@@ -975,6 +1012,23 @@ def build_meshes(job, armature):
         mesh_data = bpy.data.meshes.new(str(row["name"]) + "_Mesh")
         mesh_data.from_pydata(positions, [], faces)
         mesh_data.update()
+        normals, repaired_normal_count = repair_vertex_normals(
+            mesh_data,
+            source_normals,
+            str(row["name"]),
+        )
+        if repaired_normal_count:
+            print(
+                "DLR_NORMALS_REPAIRED:"
+                + json.dumps(
+                    {
+                        "mesh": str(row["name"]),
+                        "vertex_count": repaired_normal_count,
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
         del positions
         del faces
         del indices

@@ -126,12 +126,12 @@ public sealed class PendingProjectAssetStoreTests
             var store = new PendingProjectAssetStore(
                 Path.Combine(root, "recovery.json"));
             Guid assetId = Guid.NewGuid();
-            const string relativePath = "Sources/qiqinew-model.dlrmodel";
+            const string relativePath = "Sources/authored-model.dlrmodel";
             string projectPath = Path.Combine(root, "project.dlraproj");
             string destination = Path.Combine(
                 root,
                 "Sources",
-                "qiqinew-model.dlrmodel");
+                "authored-model.dlrmodel");
 
             PendingProjectAssetReceipt first = await store.StageAsync(
                 assetId,
@@ -336,12 +336,12 @@ public sealed class PendingProjectAssetStoreTests
             var store = new PendingProjectAssetStore(
                 Path.Combine(root, "recovery.json"));
             Guid assetId = Guid.NewGuid();
-            const string relativePath = "Sources/aether-model.dlrmodel";
+            const string relativePath = "Sources/fingerprinted-model.dlrmodel";
             string projectPath = Path.Combine(root, "project.dlraproj");
             string destination = Path.Combine(
                 root,
                 "Sources",
-                "aether-model.dlrmodel");
+                "fingerprinted-model.dlrmodel");
 
             byte[] original = "the fingerprinted package bytes"u8.ToArray();
             PendingProjectAssetReceipt first = await store.StageAsync(

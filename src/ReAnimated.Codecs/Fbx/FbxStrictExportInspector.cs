@@ -50,6 +50,7 @@ public sealed record FbxMeshGeometryInspection(
     int PolygonCount,
     int NormalVectorCount,
     int NormalIndexCount,
+    int NonNormalizableNormalVectorCount,
     int TextureCoordinateCount,
     int TextureCoordinateIndexCount,
     long? MeshModelId,
@@ -455,7 +456,7 @@ public static class FbxStrictExportInspector
             vertexCount,
             name);
 
-        (int normalCount, int normalIndexCount) =
+        (int normalCount, int normalIndexCount, int nonNormalizableNormalCount) =
             InspectNormals(
                 geometry,
                 name);
@@ -498,6 +499,7 @@ public static class FbxStrictExportInspector
             polygonCount,
             normalCount,
             normalIndexCount,
+            nonNormalizableNormalCount,
             uvCount,
             uvIndexCount,
             modelId,
@@ -557,13 +559,17 @@ public static class FbxStrictExportInspector
         return polygonCount;
     }
 
-    private static (int VectorCount, int IndexCount)
+    private static (
+        int VectorCount,
+        int IndexCount,
+        int NonNormalizableVectorCount)
         InspectNormals(
             FbxNode geometry,
             string geometryName)
     {
         int vectorCount = 0;
         int indexCount = 0;
+        int nonNormalizableVectorCount = 0;
         foreach (FbxNode layer in
                  geometry.FindChildren("LayerElementNormal"))
         {
@@ -575,11 +581,14 @@ public static class FbxStrictExportInspector
                 values,
                 3,
                 $"Geometry '{geometryName}' Normals",
-                requireNonZeroVectors: true,
+                requireNonZeroVectors: false,
                 allowEmpty: false);
             vectorCount = checked(
                 vectorCount +
                 (values.Length / 3));
+            nonNormalizableVectorCount = checked(
+                nonNormalizableVectorCount +
+                CountNonNormalizableVectors(values, 3));
             ImmutableArray<long> indices =
                 FbxSemanticValues.ReadInt64Array(
                     layer.FindChild("NormalsIndex"),
@@ -593,7 +602,10 @@ public static class FbxStrictExportInspector
                 indices.Length);
         }
 
-        return (vectorCount, indexCount);
+        return (
+            vectorCount,
+            indexCount,
+            nonNormalizableVectorCount);
     }
 
     private static (int CoordinateCount, int IndexCount)
@@ -677,6 +689,35 @@ public static class FbxStrictExportInspector
                     $"{label} contains an empty vector.");
             }
         }
+    }
+
+    private static int CountNonNormalizableVectors(
+        ImmutableArray<double> values,
+        int componentCount)
+    {
+        int count = 0;
+        for (int offset = 0;
+             offset < values.Length;
+             offset += componentCount)
+        {
+            double magnitudeSquared = 0.0;
+            for (int component = 0;
+                 component < componentCount;
+                 component++)
+            {
+                magnitudeSquared +=
+                    values[offset + component] *
+                    values[offset + component];
+            }
+
+            if (!double.IsFinite(magnitudeSquared) ||
+                magnitudeSquared <= 1.0e-20)
+            {
+                count++;
+            }
+        }
+
+        return count;
     }
 
     private static void ValidateDirectIndices(

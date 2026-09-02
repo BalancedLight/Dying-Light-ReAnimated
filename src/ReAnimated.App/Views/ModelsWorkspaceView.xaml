@@ -248,6 +248,13 @@
                     </Grid>
                 </TabItem>
 
+                <TabItem x:Name="AuthoringConformTab"
+                         Header="Conform"
+                         IsSelected="{Binding IsConformTabSelected, Mode=TwoWay}">
+                    <views:RigConformanceView xmlns:views="clr-namespace:ReAnimated.App.Views"
+                                              DataContext="{Binding Conformance}" />
+                </TabItem>
+
                 <TabItem x:Name="AuthoringMaterialsTab" Header="Materials">
                     <Grid Margin="7">
                         <Grid.RowDefinitions>

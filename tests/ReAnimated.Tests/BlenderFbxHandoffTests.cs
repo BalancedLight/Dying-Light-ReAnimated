@@ -79,6 +79,10 @@ public sealed class BlenderFbxHandoffTests : IDisposable
             helper,
             StringComparison.Ordinal);
         Assert.Contains(
+            "repair_vertex_normals",
+            helper,
+            StringComparison.Ordinal);
+        Assert.Contains(
             "active_bone_indices",
             helper,
             StringComparison.Ordinal);

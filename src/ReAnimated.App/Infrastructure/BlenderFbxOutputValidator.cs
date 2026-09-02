@@ -460,6 +460,7 @@ public sealed class BlenderFbxOutputValidator :
             }
 
             if (geometry.NormalVectorCount <= 0 ||
+                geometry.NonNormalizableNormalVectorCount != 0 ||
                 geometry.TextureCoordinateCount <= 0 ||
                 (geometry.NormalIndexCount > 0 &&
                  geometry.NormalIndexCount !=
@@ -469,7 +470,7 @@ public sealed class BlenderFbxOutputValidator :
                     expectedMesh.IndexCount))
             {
                 throw new InvalidDataException(
-                    $"Written FBX Geometry '{geometryName}' does not contain complete finite normals and UVs for its exported topology.");
+                    $"Written FBX Geometry '{geometryName}' does not contain complete finite non-empty normals and UVs for its exported topology.");
             }
 
             ValidateSkin(

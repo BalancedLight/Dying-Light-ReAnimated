@@ -171,7 +171,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         Func<string?> getRetailData0PakPath,
         CustomModelDeveloperToolsSettings? developerToolsSettings = null,
         Func<Task>? synchronizeProject = null,
-        Action? returnToProjectModels = null)
+        Action? returnToProjectModels = null,
+        Func<string, CancellationToken, Task<Dl1RigTemplateResolution>>? resolveRigTemplate = null,
+        Func<CancellationToken, Task<Dl1RetailAnimationPayload?>>? pickRetailAnimation = null)
     {
         _fileDialogs = fileDialogs ?? throw new ArgumentNullException(nameof(fileDialogs));
         _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
@@ -193,6 +195,16 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 new System.Numerics.Vector4(0.075f, 0.095f, 0.125f, 1.0f)));
         Timeline = new TimelineViewModel();
         Timeline.CurrentFrameChanged += OnTimelineFrameChanged;
+        Conformance = new RigConformanceWizardViewModel(
+            resolveRigTemplate ?? ((profile, _) => Task.FromResult(
+                Dl1RigTemplateResolution.Failed(
+                    profile,
+                    "This workspace was created without access to an indexed Dying Light installation."))),
+            value => _setStatus(value));
+        Conformance.SetRetailClipPicker(pickRetailAnimation);
+        Conformance.FitChanged += OnConformanceFitChanged;
+        Conformance.ApplyRequested += OnConformanceApplyRequested;
+        Conformance.PropertyChanged += OnConformancePropertyChanged;
 
         ImportFbxCommand = new AsyncRelayCommand(ImportFbxAsync, () => !IsBusy);
         OpenPackageCommand = new AsyncRelayCommand(OpenPackageAsync, () => !IsBusy);
@@ -255,6 +267,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     public ViewportPaneViewModel Viewport { get; }
 
     public TimelineViewModel Timeline { get; }
+
+    /// <summary>
+    /// The DL1 rig-conformance wizard. It owns only decisions; committing one
+    /// runs through this workspace so the change joins the ordinary undo and
+    /// persistence flow.
+    /// </summary>
+    public RigConformanceWizardViewModel Conformance { get; }
 
     public ObservableCollection<CustomModelBoneItemViewModel> Bones { get; } = [];
 
@@ -1549,6 +1568,14 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     ? string.Empty
                     : " " + string.Join("; ", result.Plan.StaleDuplicateResources));
             _setStatus(BuildStatus);
+            if (result.Receipt.Warnings.Contains(
+                    Dl1OfficialModelCompiler.MaterialExportWarning,
+                    StringComparer.Ordinal))
+            {
+                _fileDialogs.ShowOperationNotice(
+                    "Export",
+                    Dl1OfficialModelCompiler.MaterialExportWarning);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -2096,6 +2123,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             }
 
             _model = null;
+            InvalidateConformancePreview();
+            Conformance.SetModel(null);
             _previewSession = null;
             _helperUndo.Clear();
             _sourcePath = null;
@@ -2208,6 +2237,11 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             _previewSession = null;
             _helperUndo.Clear();
             _model = imported;
+            // A cached conformance preview belongs to the model it was built
+            // from; keeping it across a load pairs the new model's meshes with
+            // the old model's skeleton.
+            InvalidateConformancePreview();
+            Conformance.SetModel(imported);
             _sourcePath = sourcePath;
             _packagePath = packagePath;
             ModelName = imported.Package.Document.Name;

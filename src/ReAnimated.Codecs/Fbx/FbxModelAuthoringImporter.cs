@@ -1472,6 +1472,7 @@ public static class FbxModelAuthoringImporter
             bool reverseWinding = rawBake.LinearDeterminant * basis.LinearDeterminant < 0.0;
             var triangles = ImmutableArray.CreateBuilder<FbxExpandedTriangle>();
             var sourceMaterialSlots = ImmutableHashSet.CreateBuilder<int>();
+            int reconstructedNormalCount = 0;
             for (int polygonIndex = 0; polygonIndex < polygons.Length; polygonIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1509,13 +1510,29 @@ public static class FbxModelAuthoringImporter
                     Vector3D pa = transformedControlPoints[ca.ControlPointIndex];
                     Vector3D pb = transformedControlPoints[cb.ControlPointIndex];
                     Vector3D pc = transformedControlPoints[cc.ControlPointIndex];
-                    Vector3D faceNormal = Vector3D.Cross(pb - pa, pc - pa).Normalized();
+                    if (!Vector3D.Cross(pb - pa, pc - pa).TryNormalize(
+                            out Vector3D faceNormal))
+                    {
+                        throw new InvalidDataException(
+                            $"Geometry '{geometryName}' triangle {polygonIndex}:{first},{second},{third} is degenerate and cannot provide a fallback normal.");
+                    }
                     triangles.Add(new FbxExpandedTriangle(
                         sourceMaterialIndex,
-                        BuildExpandedCorner(ca, polygonIndex, pa, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis),
-                        BuildExpandedCorner(cb, polygonIndex, pb, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis),
-                        BuildExpandedCorner(cc, polygonIndex, pc, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis)));
+                        BuildExpandedCorner(ca, polygonIndex, pa, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount),
+                        BuildExpandedCorner(cb, polygonIndex, pb, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount),
+                        BuildExpandedCorner(cc, polygonIndex, pc, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount)));
                 }
+            }
+
+            if (reconstructedNormalCount > 0)
+            {
+                diagnostics.Add(new CustomModelImportDiagnostic
+                {
+                    Code = "model_zero_length_normals_reconstructed",
+                    Severity = CustomModelImportSeverity.Warning,
+                    Subject = meshName,
+                    Message = $"Mesh '{meshName}' contained {reconstructedNormalCount:N0} zero-length corner normal(s). They were reconstructed from the affected triangle faces for preview and export.",
+                });
             }
 
             int firstSurfaceIndex = surfaces.Count;
@@ -2072,7 +2089,8 @@ public static class FbxModelAuthoringImporter
         FbxVectorLayer? uvLayer,
         ImmutableArray<ImmutableArray<FbxBoneInfluence>> influences,
         TransformMatrix rawNormalTransform,
-        TransformMatrix basis)
+        TransformMatrix basis,
+        ref int reconstructedNormalCount)
     {
         Vector3D normal = faceNormal;
         if (normalLayer is not null)
@@ -2088,7 +2106,16 @@ public static class FbxModelAuthoringImporter
                 (rawNormalTransform.M11 * values[0]) + (rawNormalTransform.M21 * values[1]) + (rawNormalTransform.M31 * values[2]),
                 (rawNormalTransform.M12 * values[0]) + (rawNormalTransform.M22 * values[1]) + (rawNormalTransform.M32 * values[2]),
                 (rawNormalTransform.M13 * values[0]) + (rawNormalTransform.M23 * values[1]) + (rawNormalTransform.M33 * values[2]));
-            normal = basis.TransformDirection(rawNormal).Normalized();
+            if (basis.TransformDirection(rawNormal).TryNormalize(
+                    out Vector3D normalizedNormal,
+                    epsilon: 1.0e-10))
+            {
+                normal = normalizedNormal;
+            }
+            else
+            {
+                reconstructedNormalCount++;
+            }
         }
 
         double u = 0.0;

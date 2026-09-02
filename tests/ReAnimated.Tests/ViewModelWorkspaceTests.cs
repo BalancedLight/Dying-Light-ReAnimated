@@ -3626,7 +3626,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
             string projectPath = Path.Combine(root, "project.dlraproj");
             var payload = new ModelsWorkspacePersistencePayload(
                 modelId,
-                "qiqinew.dlrmodel",
+                "authored-model.dlrmodel",
                 [],
                 null,
                 new string('d', 64),
@@ -3648,7 +3648,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
                 true);
             var project = new DlraProject();
             string sha256 = new string('a', 64);
-            string preferred = $"Sources/qiqinew-{modelId:N}.dlrmodel";
+            string preferred = $"Sources/authored_model-{modelId:N}.dlrmodel";
 
             // Nothing claims the identity path and nothing occupies it.
             Assert.Equal(
@@ -3664,12 +3664,12 @@ public sealed class ViewModelWorkspaceTests : IDisposable
             string stale = Path.Combine(
                 root,
                 "Sources",
-                $"qiqinew-{modelId:N}.dlrmodel");
+                $"authored_model-{modelId:N}.dlrmodel");
             Directory.CreateDirectory(Path.GetDirectoryName(stale)!);
             File.WriteAllText(stale, "bytes from a removed model");
 
             Assert.Equal(
-                $"Sources/qiqinew-{sha256[..12]}.dlrmodel",
+                $"Sources/authored_model-{sha256[..12]}.dlrmodel",
                 MainWindowViewModel.CreatePendingCustomModelRelativePath(
                     project,
                     payload,
@@ -3702,7 +3702,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         // select it, so selection cannot be derived from variants.
         var character = new ExportModelSelectionViewModel(
             Guid.NewGuid(),
-            "aethernew_dl1_player_rig_stock_exact",
+            "synthetic_player_rig",
             []);
 
         Assert.False(character.HasVariants);

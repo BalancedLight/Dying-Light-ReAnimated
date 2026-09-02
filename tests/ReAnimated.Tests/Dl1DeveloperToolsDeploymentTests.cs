@@ -857,6 +857,57 @@ public sealed class Dl1DeveloperToolsDeploymentTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelDeployment")]
+    public async Task MissingCompiledMaterialDatabasePublishesModelWithWarning()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest request =
+                WithSyntheticDeploymentPipeline(
+                    CreateDeploymentRequest(
+                        directory,
+                        installLooseAnm2: true,
+                        exportPortableAnimationRpack: false)) with
+                {
+                    ModelCompilerOverride = async (compilerRequest, token) =>
+                        (await WriteSyntheticModelCompilerAsync(
+                            compilerRequest,
+                            token)) with
+                        {
+                            MaterialDatabasePath = null,
+                            Warnings =
+                            [
+                                Dl1OfficialModelCompiler.MaterialExportWarning,
+                            ],
+                        },
+                };
+
+            Dl1DeveloperToolsDeploymentResult deployed =
+                await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+
+            Assert.Contains(
+                Dl1OfficialModelCompiler.MaterialExportWarning,
+                deployed.Receipt.Warnings);
+            Assert.DoesNotContain(
+                deployed.Receipt.Artifacts,
+                static artifact => string.Equals(
+                    artifact.RelativePath,
+                    "assets_pc/local_dx11.mp",
+                    StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(
+                deployed.Receipt.Artifacts,
+                static artifact => artifact.RelativePath.EndsWith(
+                    ".msh_obj",
+                    StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
     public async Task CompilerFailureRetainsExactPriorProject()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();

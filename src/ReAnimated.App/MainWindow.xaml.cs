@@ -20,12 +20,7 @@ public partial class MainWindow : Window
     ];
     private static readonly string[] AuthoringModelPaneIds =
     [
-        "models.authoring.settings",
-        "models.authoring.preview",
-        "models.authoring.timeline",
-        "models.authoring.rig",
-        "models.authoring.materials",
-        "models.authoring.animations",
+        "models.authoring.workspace",
     ];
 
     private readonly MainWindowViewModel _viewModel;
@@ -277,20 +272,14 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.Export, "export.developer-tools", "Developer Tools", DetachTabContent(ExportDeveloperToolsTab), 420, 300),
         };
 
-        foreach (ModelsWorkspaceDockContent content in
-                 ModelsWorkspaceSurface.DetachDockContents())
-        {
-            panes.Add(Pane(
-                EditorDockWorkflow.Models,
-                content.Id,
-                content.Title,
-                content.Content,
-                260,
-                220,
-                _viewModel.Models));
-        }
-
-        Detach(ModelsWorkspaceSurface);
+        panes.Add(Pane(
+            EditorDockWorkflow.Models,
+            "models.authoring.workspace",
+            "Custom model authoring",
+            Detach(ModelsWorkspaceSurface),
+            960,
+            640,
+            _viewModel.Models));
         Detach(DiagnosticsDrawerPane);
         return new WorkflowDockController(
             WorkflowDockManager,

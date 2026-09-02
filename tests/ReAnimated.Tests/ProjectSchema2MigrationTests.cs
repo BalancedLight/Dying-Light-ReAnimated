@@ -101,6 +101,79 @@ public sealed class ProjectSchema2MigrationTests : IDisposable
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ProjectSchema")]
+    public void ResolvedRetargetMapFingerprintAndRowsStayInSchema2Variant()
+    {
+        Guid variantId = Guid.NewGuid();
+        Guid sourceId = Guid.NewGuid();
+        Guid modelId = Guid.NewGuid();
+        ProjectBoneMapping previousRow = new()
+        {
+            SourceBoneName = "source_spine",
+            TargetBoneName = "target_spine",
+            Method = "Semantic",
+            Confidence = 0.9,
+            Evidence = "Explicit author review.",
+            ReviewOrigin = ProjectMappingReviewOrigin.Explicit,
+            ScorerVersion = "test-v1",
+            EvidenceFingerprint = Sha('4'),
+            IsReviewed = true,
+            MappingKind = RetargetMappingKind.Bone,
+            TransferPolicy = RetargetTransferPolicy.RotationDelta,
+            ComponentPolicy = RetargetComponentPolicy.Rotation,
+            TransformComponents = RetargetTransformComponents.Rotation,
+        };
+        ProjectBoneMapping resolvedRow = previousRow with
+        {
+            TransferPolicy = RetargetTransferPolicy.AnatomicalDirection,
+        };
+        var variant = new ProjectAnimationVariant
+        {
+            Id = variantId,
+            SourceId = sourceId,
+            Name = "Retargeted motion",
+            TargetModelId = modelId,
+            TargetRigId = "target",
+            TargetRigSignature = Sha('1'),
+            BindingMode = ProjectAnimationBindingMode.Retarget,
+            MappingFingerprint = Sha('2'),
+            BoneMappings = [previousRow],
+        };
+        var resolved = new ProjectAnimation
+        {
+            Id = variantId,
+            TargetRigId = "target",
+            TargetRigSignature = Sha('1'),
+            BindingMode = ProjectAnimationBindingMode.Retarget,
+            MappingFingerprint = Sha('3'),
+            BoneMappings = [resolvedRow],
+            TargetBindReviews =
+            [
+                new ProjectTargetBindReview
+                {
+                    TargetBoneIndex = 4,
+                    TargetBoneName = "target_helper",
+                },
+            ],
+        };
+
+        DlraProject updated =
+            MainWindowViewModel.PersistResolvedAnimationBinding(
+                DlraProject.Create("Retarget migration") with
+                {
+                    AnimationVariants = [variant],
+                },
+                resolved);
+
+        ProjectAnimationVariant stored = Assert.Single(
+            updated.AnimationVariants);
+        Assert.Equal(resolved.MappingFingerprint, stored.MappingFingerprint);
+        Assert.Equal(resolved.BoneMappings, stored.BoneMappings);
+        Assert.Equal(resolved.TargetBindReviews, stored.TargetBindReviews);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
     public void LocalAnm2MayBindToExactProjectOwnedCustomModelSkeleton()
     {
         Guid animationAssetId = Guid.NewGuid();

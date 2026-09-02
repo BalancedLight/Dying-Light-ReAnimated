@@ -98,7 +98,9 @@ public sealed class EditorDockLayoutTests
 
                 Assert.False(second.IsPaneVisible("models.browser"));
                 Assert.True(second.IsPaneVisible("models.project"));
-                Assert.Equal(9, second.CurrentPaneStates.Count);
+                Assert.Equal(
+                    BrowserModelPaneIds.Length + AuthoringModelPaneIds.Length,
+                    second.CurrentPaneStates.Count);
             }
             finally
             {
@@ -183,12 +185,7 @@ public sealed class EditorDockLayoutTests
         Pane("models.project"),
         Pane("models.browser"),
         Pane("models.preview"),
-        Pane("models.authoring.settings"),
-        Pane("models.authoring.preview"),
-        Pane("models.authoring.timeline"),
-        Pane("models.authoring.rig"),
-        Pane("models.authoring.materials"),
-        Pane("models.authoring.animations"),
+        Pane("models.authoring.workspace"),
     ];
 
     private static EditorDockPaneDefinition Pane(string id) =>
@@ -247,12 +244,7 @@ public sealed class EditorDockLayoutTests
 
     private static readonly string[] AuthoringModelPaneIds =
     [
-        "models.authoring.settings",
-        "models.authoring.preview",
-        "models.authoring.timeline",
-        "models.authoring.rig",
-        "models.authoring.materials",
-        "models.authoring.animations",
+        "models.authoring.workspace",
     ];
 
     private static string CreateTemporaryDirectory()

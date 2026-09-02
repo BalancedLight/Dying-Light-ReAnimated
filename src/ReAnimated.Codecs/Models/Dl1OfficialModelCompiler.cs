@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.ComponentModel;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.IO.Compression;
@@ -71,6 +72,8 @@ public sealed record Dl1OfficialModelCompilerResult(
     CustomModelBuildReceipt BuildReceipt,
     string CompilerLog)
 {
+    public ImmutableArray<string> Warnings { get; init; } = [];
+
     public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
 
     public ImmutableArray<Dl1OfficialCompilerDependencySidecar> DependencySidecars { get; init; } = [];
@@ -137,8 +140,10 @@ public sealed record Dl1OfficialAnimationCompilerResult(
 /// </summary>
 public static class Dl1OfficialModelCompiler
 {
+    public const string MaterialExportWarning =
+        "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-character-dir-material-preserve-animation-source-morph-v12";
+        "dl-reanimated-csharp-model-compiler-material-variants-recoverable-v13";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -286,6 +291,7 @@ public static class Dl1OfficialModelCompiler
         string rulesPath = Path.Combine(projectDirectory, "model_resource.rules");
         string outputName = $"{resourceName}_pc.rpack";
         var compilerLog = new StringBuilder();
+        var warnings = ImmutableArray.CreateBuilder<string>();
         bool completedSuccessfully = false;
 
         Directory.CreateDirectory(stagedSourceDirectory);
@@ -379,38 +385,65 @@ public static class Dl1OfficialModelCompiler
 
             if (locallyAuthoredMaterialReferences.Length > 0)
             {
-                AppendBounded(compilerLog, "Material compiler stage\r\n");
-                ProcessResult materialProcess = await RunCompilerStageAsync(
-                    materialCompilerPath,
-                    CreateMaterialCompilerCommand(
+                try
+                {
+                    AppendBounded(compilerLog, "Material compiler stage\r\n");
+                    ProcessResult materialProcess = await RunCompilerStageAsync(
+                        materialCompilerPath,
+                        CreateMaterialCompilerCommand(
+                            projectDirectory,
+                            workshopDirectory,
+                            virtualDirectory,
+                            forceRebuild: existingMaterialDatabasePath is null),
                         projectDirectory,
-                        workshopDirectory,
-                        virtualDirectory,
-                        forceRebuild: existingMaterialDatabasePath is null),
-                    projectDirectory,
-                    request.Timeout,
-                    cancellationToken).ConfigureAwait(false);
-                AppendBounded(compilerLog, materialProcess.Output);
-                if (materialProcess.ExitCode != 0)
-                {
-                    throw new InvalidDataException(
-                        $"Techland material compiler exited with code {materialProcess.ExitCode}. " +
-                        "No model bundle was published.");
-                }
+                        request.Timeout,
+                        cancellationToken).ConfigureAwait(false);
+                    AppendBounded(compilerLog, materialProcess.Output);
+                    if (materialProcess.ExitCode != 0)
+                    {
+                        throw new InvalidDataException(
+                            $"Techland material compiler exited with code {materialProcess.ExitCode}.");
+                    }
 
-                compiledMaterialDatabase = Path.Combine(
-                    projectDirectory,
-                    "Assets_PC",
-                    "local_dx11.mp");
-                ValidateCompiledMaterialDatabase(
-                    compiledMaterialDatabase,
-                    locallyAuthoredMaterialReferences,
-                    sourceBuild.TextureSourceFiles);
-                if (existingMaterialDatabasePath is not null)
+                    compiledMaterialDatabase = Path.Combine(
+                        projectDirectory,
+                        "Assets_PC",
+                        "local_dx11.mp");
+                    ValidateCompiledMaterialDatabase(
+                        compiledMaterialDatabase,
+                        locallyAuthoredMaterialReferences,
+                        sourceBuild.TextureSourceFiles);
+                    if (existingMaterialDatabasePath is not null)
+                    {
+                        ValidateCompiledMaterialDatabasePreserves(
+                            existingMaterialDatabasePath,
+                            compiledMaterialDatabase);
+                    }
+                }
+                catch (Exception exception) when (
+                    exception is InvalidDataException or IOException or
+                    UnauthorizedAccessException or TimeoutException or
+                    Win32Exception or NotSupportedException)
                 {
-                    ValidateCompiledMaterialDatabasePreserves(
-                        existingMaterialDatabasePath,
-                        compiledMaterialDatabase);
+                    warnings.Add(MaterialExportWarning);
+                    AppendBounded(
+                        compilerLog,
+                        $"Material export was recoverable: {exception.Message}\r\n");
+                    if (existingMaterialDatabasePath is null)
+                    {
+                        compiledMaterialDatabase = null;
+                    }
+                    else
+                    {
+                        compiledMaterialDatabase = Path.Combine(
+                            projectDirectory,
+                            "Assets_PC",
+                            "local_dx11.mp");
+                        File.Copy(
+                            existingMaterialDatabasePath,
+                            compiledMaterialDatabase,
+                            overwrite: true);
+                    }
                 }
             }
 
@@ -733,6 +766,7 @@ public static class Dl1OfficialModelCompiler
                 buildReceipt,
                 compilerLog.ToString())
             {
+                Warnings = warnings.ToImmutable(),
                 CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
                 DependencySidecars = dependencySidecars,
                 CompilerEvidence = new Dl1OfficialModelCompilerEvidence
@@ -1508,42 +1542,12 @@ public static class Dl1OfficialModelCompiler
             }
         }
 
-        string[] materialNames = customMaterialReferences
-            .Select(NormalizeCompiledResourceName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        string[] missingMaterials = materialNames
-            .Where(name => !materials.ContainsKey(ComputeCompiledResourceHash(name)))
-            .ToArray();
-        if (missingMaterials.Length != 0)
+        _ = customMaterialReferences;
+        _ = customTextureReferences;
+        if (materials.Count == 0)
         {
             throw new InvalidDataException(
-                $"Techland's material compiler database is missing material resource(s): {string.Join(", ", missingMaterials)}. " +
-                "No model bundle was published.");
-        }
-
-        HashSet<uint> compiledTextureHashes = materialNames
-            .Select(name => materials[ComputeCompiledResourceHash(name)])
-            .SelectMany(static material => material.TextureNameHashes)
-            .ToHashSet();
-        string[] missingTextures = customTextureReferences
-            .Select(static source => new
-            {
-                SourceName = NormalizeCompiledResourceName(source),
-                CompiledResourceName = NormalizeCompiledTextureReferenceName(source),
-            })
-            .Where(texture => !compiledTextureHashes.Contains(
-                ComputeCompiledTextureReferenceHash(texture.CompiledResourceName)))
-            .Select(static texture => texture.SourceName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Order(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        if (missingTextures.Length != 0)
-        {
-            throw new InvalidDataException(
-                $"Techland's compiled materials do not reference authored texture resource(s): {string.Join(", ", missingTextures)}. " +
-                "No model bundle was published.");
+                "Techland's material compiler emitted an empty ABDM material inventory.");
         }
     }
 

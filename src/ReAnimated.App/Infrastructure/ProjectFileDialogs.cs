@@ -128,6 +128,10 @@ public interface IProjectFileDialogService
     {
     }
 
+    void ShowOperationNotice(string title, string message)
+    {
+    }
+
     string? ShowOpenAnimationDialog(string? initialPath) => null;
 
     ExternalFbxAnimationStackSelection?
@@ -993,16 +997,6 @@ public sealed class WindowsProjectFileDialogService :
         string details)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(title);
-        string body = string.IsNullOrWhiteSpace(details)
-            ? summary
-            : summary + Environment.NewLine + Environment.NewLine + details;
-        const int maximum = 4000;
-        if (body.Length > maximum)
-        {
-            body = body[..maximum] + Environment.NewLine +
-                "\u2026 (truncated; the full record is in Diagnostics)";
-        }
-
         Application? application = Application.Current;
         if (application?.Dispatcher is not { } dispatcher)
         {
@@ -1012,12 +1006,51 @@ public sealed class WindowsProjectFileDialogService :
         // Failures are raised from background export/import work, so the
         // dialog has to be marshalled. BeginInvoke keeps the worker from
         // blocking on a modal window.
+        _ = dispatcher.BeginInvoke(() =>
+        {
+            if (!string.IsNullOrWhiteSpace(details) &&
+                (details.Contains(Environment.NewLine, StringComparison.Ordinal) ||
+                 details.Length > 1200))
+            {
+                var dialog = new OperationFailureReportDialog(
+                    title,
+                    summary,
+                    details)
+                {
+                    Owner = application.MainWindow,
+                };
+                _ = dialog.ShowDialog();
+                return;
+            }
+
+            string body = string.IsNullOrWhiteSpace(details)
+                ? summary
+                : summary + Environment.NewLine + Environment.NewLine + details;
+            _ = MessageBox.Show(
+                application.MainWindow,
+                body,
+                title,
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        });
+    }
+
+    public void ShowOperationNotice(string title, string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(title);
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        Application? application = Application.Current;
+        if (application?.Dispatcher is not { } dispatcher)
+        {
+            return;
+        }
+
         _ = dispatcher.BeginInvoke(() => MessageBox.Show(
             application.MainWindow,
-            body,
+            message,
             title,
             MessageBoxButton.OK,
-            MessageBoxImage.Error));
+            MessageBoxImage.Information));
     }
 
     public DeveloperToolsDeploymentConflictDecision ResolveDeveloperToolsDeploymentConflict(

@@ -2,6 +2,7 @@ using System.Text.Json;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.DL1.Assets.Discovery;
+using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.Tests;
 
@@ -143,6 +144,43 @@ public sealed class FailureReportingTests : IDisposable
                 "event",
                 out _));
         }
+    }
+
+    [Fact]
+    public async Task RetargetDiagnosticBurstUsesOneCompleteFailureReport()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        var dialogs = new NoDialogs();
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "retarget-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "retarget-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "retarget-workspace.json")),
+            dialogs,
+            assets,
+            new StubFingerprintService());
+        CompatibilityDiagnostic[] diagnostics = Enumerable.Range(1, 50)
+            .Select(index => new CompatibilityDiagnostic(
+                $"missing_target_{index}",
+                CompatibilityDiagnosticSeverity.Error,
+                $"Required target bone {index} is not mapped."))
+            .ToArray();
+
+        viewModel.PublishCompatibilityDiagnostics(
+            "Retargeting",
+            diagnostics);
+
+        (string Title, string Summary, string Details) report =
+            Assert.Single(dialogs.ReportedFailures);
+        Assert.Equal("Retargeting", report.Title);
+        Assert.Contains("50 retargeting issues", report.Summary);
+        Assert.Contains("1. [Error] Required target bone 1", report.Details);
+        Assert.Contains("50. [Error] Required target bone 50", report.Details);
+        Assert.Equal(
+            50,
+            viewModel.Diagnostics.Count(entry =>
+                entry.Area == "Retargeting" && entry.Severity == "Error"));
     }
 
     public void Dispose()

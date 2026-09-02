@@ -434,7 +434,7 @@ public sealed class CustomModelAuthoringTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelCompilerContract")]
-    public void ModelCompilerValidatesMaterialAndTextureRecordsInsideAbdm()
+    public void ModelCompilerValidatesMaterialCompilerAbdmStructure()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();
         try
@@ -459,19 +459,12 @@ public sealed class CustomModelAuthoringTests
                 [materialName],
                 [diffuseName, normalName]);
 
-            InvalidDataException missingMaterial = Assert.Throws<InvalidDataException>(() =>
-                Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabase(
-                    databasePath,
-                    ["missing_surface.mat"],
-                    [diffuseName]));
-            Assert.Contains("missing_surface.mat", missingMaterial.Message, StringComparison.Ordinal);
-
-            InvalidDataException missingTexture = Assert.Throws<InvalidDataException>(() =>
+            File.WriteAllBytes(databasePath, []);
+            Assert.Throws<InvalidDataException>(() =>
                 Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabase(
                     databasePath,
                     [materialName],
-                    [diffuseName, "missing_surface_nrm.dds"]));
-            Assert.Contains("missing_surface_nrm.dds", missingTexture.Message, StringComparison.Ordinal);
+                    [diffuseName, normalName]));
         }
         finally
         {

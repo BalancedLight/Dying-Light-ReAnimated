@@ -695,7 +695,7 @@ public sealed class EditorUsabilitySurfaceTests
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(
-            "models.authoring.preview",
+            "models.authoring.workspace",
             windowCode,
             StringComparison.Ordinal);
         Assert.Contains(

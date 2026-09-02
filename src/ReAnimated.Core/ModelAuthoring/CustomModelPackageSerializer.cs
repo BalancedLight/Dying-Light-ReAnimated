@@ -229,9 +229,17 @@ public static class CustomModelPackageSerializer
                 Camera = new CustomModelCameraMetadata(),
                 MorphChannels = [],
                 MorphSignature = CustomModelDocument.EmptyMorphSignature,
+                RigConformance = null,
+            },
+            // Schema 2 predates rig conformance. An absent layer simply means
+            // the model keeps its imported rig, so the migration is additive.
+            2 => document with
+            {
+                SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                RigConformance = null,
             },
             _ => throw new CustomModelFormatException(
-                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 or {CustomModelDocument.CurrentSchemaVersion}."),
+                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1, 2, or {CustomModelDocument.CurrentSchemaVersion}."),
         };
     }
 

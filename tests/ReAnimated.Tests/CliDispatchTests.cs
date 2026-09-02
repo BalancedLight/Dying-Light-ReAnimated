@@ -20,6 +20,7 @@ public sealed class CliDispatchTests
         "index-dl1",
         "build-animation-rpack",
         "export-project",
+        "conform-model",
     ];
 
     [Fact]

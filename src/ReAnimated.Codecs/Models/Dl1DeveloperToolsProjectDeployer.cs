@@ -460,6 +460,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 contentManifest,
                 modelCompiler.CompilerFingerprint,
                 animationCompiler.CompilerFingerprint,
+                modelCompiler.Warnings,
                 deploymentId,
                 cancellationToken).ConfigureAwait(false);
         }
@@ -1021,16 +1022,6 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 "Official compiler dependency sidecar"));
         }
 
-        bool materialDatabaseRequired = sourceArtifacts.Any(static artifact =>
-                artifact.RelativePath.EndsWith(".dmt", StringComparison.OrdinalIgnoreCase)) ||
-            File.Exists(Path.Combine(validated.ProjectRoot, "assets_pc", "local_dx11.mp"));
-        if (materialDatabaseRequired &&
-            (modelCompiler.MaterialDatabasePath is null || !File.Exists(modelCompiler.MaterialDatabasePath)))
-        {
-            throw new InvalidDataException(
-                "The official compiler did not return the required staged local_dx11.mp material database.");
-        }
-
         if (modelCompiler.MaterialDatabasePath is not null && File.Exists(modelCompiler.MaterialDatabasePath))
         {
             artifacts.Add(new StagedArtifact(
@@ -1331,6 +1322,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         Dl1AnimationContentManifestBytes contentManifest,
         string modelCompilerFingerprint,
         string animationCompilerFingerprint,
+        ImmutableArray<string> modelCompilerWarnings,
         string deploymentId,
         CancellationToken cancellationToken)
     {
@@ -1573,6 +1565,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                         "Validated shared local_dx11.mp preservation through the official material compiler.")
                     : []),
                 Warnings = plan.LegacyOutputWarnings
+                    .AddRange(modelCompilerWarnings)
                     .Add("The project-owned animation runtime RPack is prepared for loader registration by the automatic refresh request.")
                     .AddRange(plan.StaleDuplicateResources)
                     .AddRange(library.Warnings)

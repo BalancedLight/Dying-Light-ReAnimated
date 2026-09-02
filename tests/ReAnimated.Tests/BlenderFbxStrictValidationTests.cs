@@ -184,6 +184,87 @@ public sealed class BlenderFbxStrictValidationTests :
     }
 
     [Fact]
+    public void
+        ImportsZeroLengthNormalsByReconstructingThemFromTheTriangleFace()
+    {
+        byte[] source = Serialize(BuildFixture(
+            FixtureCorruption.ZeroLengthNormal));
+
+        FbxModelAuthoringImportResult imported =
+            FbxModelAuthoringImporter.Import(
+                source,
+                "generic-zero-normal.fbx");
+
+        Assert.Equal(
+            1,
+            imported.Inspection.MeshGeometries[
+                "RetailMesh_Mesh"].NonNormalizableNormalVectorCount);
+        Assert.Contains(
+            imported.Package.Document.Diagnostics,
+            static diagnostic =>
+                diagnostic.Code ==
+                "model_zero_length_normals_reconstructed");
+        Assert.All(
+            imported.Surfaces.SelectMany(
+                static surface => surface.Vertices),
+            static vertex => Assert.Equal(1.0, vertex.Normal.Length, 6));
+    }
+
+    [Fact]
+    public async Task
+        RejectsZeroLengthNormalsOnRenderableExportGeometry()
+    {
+        string path = await WriteFixtureAsync(
+            FixtureCorruption.ZeroLengthNormal);
+        FbxStrictExportInspection inspection =
+            await FbxStrictExportInspector.InspectFileAsync(path);
+        Assert.Equal(
+            1,
+            inspection.MeshGeometries[
+                "RetailMesh_Mesh"].NonNormalizableNormalVectorCount);
+        var validator = new BlenderFbxOutputValidator();
+
+        InvalidDataException error =
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => validator.ValidateAsync(
+                    path,
+                    ExpectedBones(),
+                    ExpectedClips(),
+                    ExpectedMeshes(),
+                    ExpectedTextures(),
+                    CancellationToken.None));
+
+        Assert.Contains(
+            "non-empty normals",
+            error.Message,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task
+        AcceptsZeroLengthNormalsOnTheFacelessBindPoseGuard()
+    {
+        string path = await WriteFixtureAsync(
+            FixtureCorruption.ZeroLengthBindPoseGuardNormal);
+        FbxStrictExportInspection inspection =
+            await FbxStrictExportInspector.InspectFileAsync(path);
+        Assert.Equal(
+            2,
+            inspection.MeshGeometries[
+                "DLR_BindPoseGuard_Mesh"]
+                .NonNormalizableNormalVectorCount);
+        var validator = new BlenderFbxOutputValidator();
+
+        await validator.ValidateAsync(
+            path,
+            ExpectedBones(),
+            ExpectedClips(),
+            ExpectedMeshes(),
+            ExpectedTextures(),
+            CancellationToken.None);
+    }
+
+    [Fact]
     public async Task
         RejectsSkinnedGeometryWithoutConnectedClusters()
     {
@@ -543,6 +624,9 @@ public sealed class BlenderFbxStrictValidationTests :
             corruption ==
                 FixtureCorruption.NonFiniteNormal
                 ? double.NaN
+                : corruption ==
+                    FixtureCorruption.ZeroLengthNormal
+                    ? 0.0
                 : 1.0;
         ImmutableArray<double> textureCoordinates =
             corruption ==
@@ -556,6 +640,13 @@ public sealed class BlenderFbxStrictValidationTests :
             textureCoordinates.IsEmpty
                 ? []
                 : LongArray(0, 1, 2);
+        ImmutableArray<double> bindPoseGuardNormals =
+            corruption ==
+                FixtureCorruption.ZeroLengthBindPoseGuardNormal
+                ? DoubleArray(
+                    0.0, 0.0, 0.0,
+                    0.0, 0.0, 0.0)
+                : [];
         double rootSecondWeight =
             corruption ==
                 FixtureCorruption.NonFiniteWeight
@@ -659,7 +750,7 @@ public sealed class BlenderFbxStrictValidationTests :
                     0.0, 0.0, 0.0,
                     0.0, 1.0, 0.0),
                 [],
-                [],
+                bindPoseGuardNormals,
                 [],
                 []),
             BindPose(20, [1, 2, 3]),
@@ -1443,6 +1534,8 @@ public sealed class BlenderFbxStrictValidationTests :
         None,
         WrongChildParent,
         NonFiniteNormal,
+        ZeroLengthNormal,
+        ZeroLengthBindPoseGuardNormal,
         MissingClusters,
         NonFiniteWeight,
         MissingUv,

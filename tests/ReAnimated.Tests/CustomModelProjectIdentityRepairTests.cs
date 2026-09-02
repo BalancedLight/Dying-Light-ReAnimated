@@ -350,7 +350,7 @@ public sealed class CustomModelProjectIdentityRepairTests
         {
             Id = Guid.NewGuid(),
             AssetId = asset.Id,
-            Name = "aether",
+            Name = "synthetic_actor",
             RigSignature = null,
             IsStatic = true,
             MorphSignature = imported.Package.Document.MorphSignature,
@@ -397,7 +397,7 @@ public sealed class CustomModelProjectIdentityRepairTests
                 {
                     Id = Guid.NewGuid(),
                     AssetId = asset.Id,
-                    Name = "aether",
+                    Name = "synthetic_actor",
                     RigSignature = new string('a', 64),
                     MorphSignature = imported.Package.Document.MorphSignature,
                 },

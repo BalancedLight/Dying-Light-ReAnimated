@@ -311,31 +311,9 @@ public sealed class WorkflowDockController
             browser,
             preview);
 
-        LayoutAnchorablePane authoringSettings = Pane(
+        LayoutAnchorablePane authoringLayout = Pane(
             panes,
-            "models.authoring.settings");
-        authoringSettings.DockWidth = new GridLength(320.0);
-        LayoutAnchorablePane authoringPreview = Pane(
-            panes,
-            "models.authoring.preview");
-        LayoutAnchorablePane authoringTimeline = Pane(
-            panes,
-            "models.authoring.timeline");
-        authoringTimeline.DockHeight = new GridLength(235.0);
-        LayoutAnchorablePane authoringInspector = Pane(
-            panes,
-            "models.authoring.rig",
-            "models.authoring.materials",
-            "models.authoring.animations");
-        authoringInspector.DockWidth = new GridLength(380.0);
-        LayoutPanel authoringLayout = Split(
-            Orientation.Horizontal,
-            authoringSettings,
-            Split(
-                Orientation.Vertical,
-                authoringPreview,
-                authoringTimeline),
-            authoringInspector);
+            "models.authoring.workspace");
 
         return Split(
             Orientation.Vertical,
@@ -511,11 +489,6 @@ public sealed class WorkflowDockController
 
     private static readonly string[] AuthoringModelPaneIds =
     [
-        "models.authoring.settings",
-        "models.authoring.preview",
-        "models.authoring.timeline",
-        "models.authoring.rig",
-        "models.authoring.materials",
-        "models.authoring.animations",
+        "models.authoring.workspace",
     ];
 }

@@ -162,10 +162,20 @@ public static class Dl1RigDefinitionFactory
                 : BoneKind.Prop;
     }
 
-    private static string? ResolveSemanticRole(string name) =>
+    /// <summary>
+    /// Resolves the shared humanoid role for a DL1 entity name, or
+    /// <see langword="null"/> when the name is not one of the bounded anchors.
+    /// Exposed so rig-template extraction reuses exactly the spellings hashed
+    /// into persisted rig signatures instead of duplicating the table.
+    /// </summary>
+    public static string? TryResolveSemanticRole(string? name) =>
+        !string.IsNullOrWhiteSpace(name) &&
         SemanticRoles.TryGetValue(name, out string? role)
             ? role
             : null;
+
+    private static string? ResolveSemanticRole(string name) =>
+        TryResolveSemanticRole(name);
 
     private static TransformTRS ToTransform(CompactMeshEntity entity)
     {

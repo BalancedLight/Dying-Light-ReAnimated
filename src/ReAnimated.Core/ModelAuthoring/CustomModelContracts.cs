@@ -656,7 +656,7 @@ public sealed record CustomModelBuildSettings
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public const string EmptyMorphSignature =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -691,6 +691,14 @@ public sealed record CustomModelDocument
 
     public ImmutableArray<CustomModelAuthoredHelper> AuthoredHelpers { get; init; } = [];
 
+    /// <summary>
+    /// The authored DL1 rig-conformance settings, when this model was converted
+    /// to a Dying Light skeleton. Null for a model that keeps its imported rig.
+    /// Only the decisions are stored; the conformed bone table is re-derived
+    /// from the retained source FBX.
+    /// </summary>
+    public CustomModelRigConformance? RigConformance { get; init; }
+
     public CustomModelCameraMetadata Camera { get; init; } = new();
 
     public ImmutableArray<CustomModelMorphChannel> MorphChannels { get; init; } = [];
@@ -711,7 +719,8 @@ public sealed record CustomModelDocument
     {
         if (SchemaVersion != CurrentSchemaVersion || !string.Equals(Format, CurrentFormat, StringComparison.Ordinal))
         {
-            throw new ArgumentException("Only DL ReAnimated C# custom-model schema 2 is supported.");
+            throw new ArgumentException(
+                $"Only DL ReAnimated C# custom-model schema {CurrentSchemaVersion} is supported.");
         }
 
         if (ModelId == Guid.Empty)
@@ -781,6 +790,7 @@ public sealed record CustomModelDocument
             effectiveNames.Add(helper.Name);
         }
 
+        RigConformance?.Validate(nameof(RigConformance));
         Camera.Validate(effectiveNames, nameof(Camera));
 
         var morphNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

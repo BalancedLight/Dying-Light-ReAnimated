@@ -494,6 +494,7 @@ public sealed partial class MainWindowViewModel :
     private readonly SemaphoreSlim _modelsIntegrationGate = new(1, 1);
     private readonly IProjectFileDialogService _fileDialogs;
     private readonly Dl1AssetWorkspace _assetWorkspace;
+    private readonly Dl1RigTemplateProvider _rigTemplateProvider = new();
     private readonly IRetailMeshDecodeService _retailMeshDecodeService;
     private readonly IDl1InstalledBuildFingerprintService
         _installedBuildFingerprintService;
@@ -799,7 +800,9 @@ public sealed partial class MainWindowViewModel :
             OpenCustomModelAnimationInAnimateAsync,
             ResolveRetailData0PakPath,
             synchronizeProject: SynchronizeModelsWorkspaceProjectAsync,
-            returnToProjectModels: OpenRetailModelBrowser);
+            returnToProjectModels: OpenRetailModelBrowser,
+            resolveRigTemplate: ResolveConformanceRigTemplateAsync,
+            pickRetailAnimation: PickConformanceRetailAnimationAsync);
         Models.PersistenceStateChanged += OnModelsPersistenceStateChanged;
         _savedModelsRevision = Models.PersistenceRevision;
         _integratedModelsRevision = Models.PersistenceRevision;
@@ -7558,6 +7561,59 @@ public sealed partial class MainWindowViewModel :
             RetailAsset: not null,
         };
 
+    /// <summary>
+    /// Resolves the DL1 target skeleton for the model workspace's conformance
+    /// wizard. A thin delegate to the shared provider; the workspace stays
+    /// decoupled from the asset catalog.
+    /// </summary>
+    private Task<Dl1RigTemplateResolution> ResolveConformanceRigTemplateAsync(
+        string profileName,
+        CancellationToken cancellationToken) =>
+        _rigTemplateProvider.ResolveAsync(
+            _assetWorkspace,
+            profileName,
+            cancellationToken);
+
+    /// <summary>
+    /// Supplies the retail clip the conformance wizard verifies against, taken
+    /// from the current asset-browser selection.
+    /// </summary>
+    private async Task<Dl1RetailAnimationPayload?> PickConformanceRetailAnimationAsync(
+        CancellationToken cancellationToken)
+    {
+        if (AnimationBrowser.SelectedAsset is not
+            {
+                Kind: AssetKind.Animation,
+                RetailAsset: { } asset,
+            })
+        {
+            StatusText =
+                "Select a Dying Light animation in the asset browser, then verify the conformance against it.";
+            return null;
+        }
+
+        try
+        {
+            return await _assetWorkspace
+                .DecodeAnimationAsync(asset, cancellationToken)
+                .ConfigureAwait(true);
+        }
+        catch (Dl1AnimationTimingConflictException conflict)
+        {
+            StatusText =
+                $"'{conflict.AnimationName}' has several plausible cadences; choose one in Animations before verifying.";
+            return null;
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or
+            InvalidOperationException or
+            IOException)
+        {
+            StatusText = $"That animation could not be decoded: {exception.Message}";
+            return null;
+        }
+    }
+
     private bool CanAddSelectedRetailAnimation() =>
         !IsBusy &&
         AnimationBrowser.SelectedAsset is
@@ -9093,7 +9149,7 @@ public sealed partial class MainWindowViewModel :
         };
     }
 
-    private static DlraProject PersistResolvedAnimationBinding(
+    internal static DlraProject PersistResolvedAnimationBinding(
         DlraProject project,
         ProjectAnimation animation)
     {
@@ -9134,6 +9190,9 @@ public sealed partial class MainWindowViewModel :
             BindingEvidenceFingerprint =
                 animation.BindingEvidenceFingerprint,
             BindingPolicyVersion = animation.BindingPolicyVersion,
+            MappingFingerprint = animation.MappingFingerprint,
+            BoneMappings = animation.BoneMappings,
+            TargetBindReviews = animation.TargetBindReviews,
         };
         ImmutableArray<ProjectAnimationSource> sources = project
             .AnimationSources
@@ -9644,9 +9703,9 @@ public sealed partial class MainWindowViewModel :
                     RigSignature.Compute(session.Rig);
                 string targetRuntimeSignature =
                     RigSignature.Compute(targetRig);
-                bool generatedRetargetProposal =
+                bool resolvedRetargetMap =
                     bindingMode == ProjectAnimationBindingMode.Retarget &&
-                    animation.BoneMappings.IsEmpty;
+                    mapping is not null;
                 string? mappingFingerprint =
                     bindingMode == ProjectAnimationBindingMode.Retarget &&
                     mapping is not null
@@ -9673,13 +9732,18 @@ public sealed partial class MainWindowViewModel :
                         directBinding?.EvidenceFingerprint,
                     BindingPolicyVersion = directBinding?.Policy,
                     MappingFingerprint = mappingFingerprint,
-                    BoneMappings = generatedRetargetProposal
+                    // A saved project stores map rows by bone names while the
+                    // runtime map carries the exact current rig indices and
+                    // canonical fingerprint inputs. Persisting both together
+                    // prevents an already-reviewed legacy map from looking
+                    // ready in the UI but failing an export fingerprint check.
+                    BoneMappings = resolvedRetargetMap
                         ? ToProjectMappings(
                             session.Rig,
                             targetRig,
                             mapping!)
                         : animation.BoneMappings,
-                    TargetBindReviews = generatedRetargetProposal
+                    TargetBindReviews = resolvedRetargetMap
                         ? ToProjectTargetBindReviews(
                             targetRig,
                             mapping!)
@@ -12884,20 +12948,9 @@ public sealed partial class MainWindowViewModel :
         int targetBindRowCount = target.Bones.Count(
             bone => proposal.Entries.All(
                 entry => entry.TargetBoneIndex != bone.Index));
-        foreach (CompatibilityDiagnostic diagnostic in
-                 review.Diagnostics)
-        {
-            AddDiagnostic(
-                diagnostic.Severity switch
-                {
-                    CompatibilityDiagnosticSeverity.Error => "Error",
-                    CompatibilityDiagnosticSeverity.Warning => "Warning",
-                    _ => "Info",
-                },
-                "Retargeting",
-                diagnostic.Message,
-                diagnostic.Code);
-        }
+        PublishCompatibilityDiagnostics(
+            "Retargeting",
+            review.Diagnostics);
 
         MappingReviewStatus = FormatMappingReviewStatus(review);
         StatusText =
@@ -13231,8 +13284,18 @@ public sealed partial class MainWindowViewModel :
     private void PublishMappingReviewDiagnostics(
         RetargetMappingReviewReport review)
     {
-        foreach (CompatibilityDiagnostic diagnostic in
-                 review.Diagnostics)
+        PublishCompatibilityDiagnostics(
+            "Mapping review",
+            review.Diagnostics);
+    }
+
+    internal void PublishCompatibilityDiagnostics(
+        string area,
+        IReadOnlyList<CompatibilityDiagnostic> diagnostics)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(area);
+        ArgumentNullException.ThrowIfNull(diagnostics);
+        foreach (CompatibilityDiagnostic diagnostic in diagnostics)
         {
             AddDiagnostic(
                 diagnostic.Severity switch
@@ -13241,10 +13304,32 @@ public sealed partial class MainWindowViewModel :
                     CompatibilityDiagnosticSeverity.Warning => "Warning",
                     _ => "Info",
                 },
-                "Mapping review",
+                area,
                 diagnostic.Message,
-                diagnostic.Code);
+                diagnostic.Code,
+                showErrorPopup: false);
         }
+
+        CompatibilityDiagnostic[] errors = diagnostics
+            .Where(static diagnostic =>
+                diagnostic.Severity ==
+                    CompatibilityDiagnosticSeverity.Error)
+            .ToArray();
+        if (errors.Length == 0)
+        {
+            return;
+        }
+
+        string details = string.Join(
+            Environment.NewLine,
+            diagnostics.Select(static (diagnostic, index) =>
+                $"{index + 1}. [{diagnostic.Severity}] {diagnostic.Message} ({diagnostic.Code})"));
+        ShowErrorPopup(
+            area,
+            errors.Length == 1
+                ? errors[0].Message
+                : $"{errors.Length:N0} retargeting issues require attention.",
+            details);
     }
 
     private void NotifyMappingCommands()
@@ -15849,6 +15934,9 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(HasCharacterExportSelections));
         ApplyExportSelectionCommand.NotifyCanExecuteChanged();
         ExportCheckedPortableCommand.NotifyCanExecuteChanged();
+        ExportAnm2FilesCommand.NotifyCanExecuteChanged();
+        ExportAnimationRPackCommand.NotifyCanExecuteChanged();
+        ExportCharacterFilesCommand.NotifyCanExecuteChanged();
         DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
     }
 
@@ -15866,6 +15954,9 @@ public sealed partial class MainWindowViewModel :
         {
             OnPropertyChanged(nameof(ExportSelectionSummary));
             ExportCheckedPortableCommand.NotifyCanExecuteChanged();
+            ExportAnm2FilesCommand.NotifyCanExecuteChanged();
+            ExportAnimationRPackCommand.NotifyCanExecuteChanged();
+            ExportCharacterFilesCommand.NotifyCanExecuteChanged();
             DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
             DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
             return;
@@ -17311,6 +17402,14 @@ public sealed partial class MainWindowViewModel :
                 written.AddRange(result.Receipt.Artifacts
                     .Select(static artifact => artifact.RelativePath));
                 _lastDeveloperToolsBatchReceiptPath = result.ReceiptPath;
+                if (result.Receipt.Warnings.Contains(
+                        Dl1OfficialModelCompiler.MaterialExportWarning,
+                        StringComparer.Ordinal))
+                {
+                    _fileDialogs.ShowOperationNotice(
+                        "Export",
+                        Dl1OfficialModelCompiler.MaterialExportWarning);
+                }
             }
 
             RollBackDeveloperToolsBatchCommand.NotifyCanExecuteChanged();
@@ -19622,6 +19721,15 @@ public sealed partial class MainWindowViewModel :
         {
             throw new InvalidDataException(
                 "The official compiler returned a stale or mismatched custom-model validation receipt.");
+        }
+
+        if (result.Warnings.Contains(
+                Dl1OfficialModelCompiler.MaterialExportWarning,
+                StringComparer.Ordinal))
+        {
+            _fileDialogs.ShowOperationNotice(
+                "Export",
+                Dl1OfficialModelCompiler.MaterialExportWarning);
         }
 
         byte[] rpack = await File.ReadAllBytesAsync(
@@ -29083,7 +29191,8 @@ public sealed partial class MainWindowViewModel :
         string severity,
         string area,
         string message,
-        string? detail)
+        string? detail,
+        bool showErrorPopup = true)
     {
         Diagnostics.Insert(
             0,
@@ -29096,7 +29205,7 @@ public sealed partial class MainWindowViewModel :
         // Errors interrupt. Reporting through the status bar and the drawer
         // alone means an operator who is not looking at either never learns
         // the run stopped, which reads as the app silently doing nothing.
-        if (severity == "Error")
+        if (severity == "Error" && showErrorPopup)
         {
             ShowErrorPopup(area, message, detail);
         }

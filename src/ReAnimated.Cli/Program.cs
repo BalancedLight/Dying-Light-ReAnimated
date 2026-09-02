@@ -124,6 +124,7 @@ public static class CliApplication
             "index-dl1",
             "build-animation-rpack",
             "export-project",
+            "conform-model",
         ]);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -180,6 +181,10 @@ public static class CliApplication
                     cancellationToken).ConfigureAwait(false),
                 "build-animation-rpack" => await BuildAnimationRpackAsync(
                     args[1..],
+                    cancellationToken).ConfigureAwait(false),
+                "conform-model" => await ConformModelCommand.RunAsync(
+                    args[1..],
+                    JsonOptions,
                     cancellationToken).ConfigureAwait(false),
                 "export-project" => await ProjectExportCommand.RunAsync(
                     args[1..],
