@@ -751,9 +751,19 @@ public sealed class EditorUsabilitySurfaceTests
                 "ReAnimated.App",
                 "App.xaml.cs"));
         Assert.Contains(
-            "_ = InitializeAssetCatalogAsync(viewModel);",
+            "_ = InitializeWorkspaceAsync(viewModel);",
             applicationStartup,
             StringComparison.Ordinal);
+        // Startup opens the requested project before restoring its catalog,
+        // so the catalog uses that project's retail roots.
+        int projectOpen = applicationStartup.IndexOf(
+            "await viewModel.OpenWorkspaceAsync(projectPath);",
+            StringComparison.Ordinal);
+        int catalogRestore = applicationStartup.IndexOf(
+            "await InitializeAssetCatalogAsync(viewModel);",
+            StringComparison.Ordinal);
+        Assert.True(projectOpen >= 0);
+        Assert.True(catalogRestore > projectOpen);
         Assert.Contains(
             "if (_startupSmoke is null)",
             applicationStartup,

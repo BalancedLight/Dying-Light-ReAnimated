@@ -740,6 +740,8 @@ function Invoke-PackageSelfTest {
         "index-dl1"
         "build-animation-rpack"
         "export-project"
+        "conform-model"
+        "deploy-model"
     )
     $reportedCliCommands = @(
         $result.cliCommands |
@@ -753,7 +755,11 @@ function Invoke-PackageSelfTest {
         $cliCommandDifference.Count -ne 0 -or
         $reportedCliCommands.Count -ne
             $expectedCliCommands.Count) {
-        throw "The packaged executable does not report the complete CLI dispatch contract."
+        throw (
+            "The packaged executable does not report the complete CLI dispatch contract. " +
+            "Expected: $($expectedCliCommands -join ', '). " +
+            "Reported: $($reportedCliCommands -join ', '). " +
+            "Contract: '$($result.cliDispatchContract)'.")
     }
 
     $cliStartInfo =
