@@ -489,7 +489,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     child.CharacterId,
                     child.ModelResourceName,
                     child.SurfaceName,
-                    child.AnimationLibraryName));
+                    child.AnimationLibraryName,
+                    child.ReferenceExistingAnimationLibrary));
             }
             else
             {

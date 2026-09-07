@@ -200,6 +200,9 @@ public static class Dl1RestPoseBaker
             cancellationToken.ThrowIfCancellationRequested();
             var deltas = ImmutableArray.CreateBuilder<Vector3D>(
                 morph.PositionDeltas.Length);
+            var normalDeltas = ImmutableArray.CreateBuilder<Vector3D>(morph.NormalDeltas.Length);
+            if (!morph.NormalDeltas.IsDefaultOrEmpty && morph.NormalDeltas.Length != surface.Vertices.Length)
+                throw new InvalidDataException($"Morph '{morph.Name}' normal deltas do not match the surface vertex count.");
             for (int index = 0; index < morph.PositionDeltas.Length; index++)
             {
                 deltas.Add(RotateDelta(
@@ -211,7 +214,17 @@ public static class Dl1RestPoseBaker
                     transforms));
             }
 
-            baked.Add(morph with { PositionDeltas = deltas.MoveToImmutable() });
+            for (int index = 0; index < morph.NormalDeltas.Length; index++)
+            {
+                FbxModelVertex vertex = surface.Vertices[index];
+                Vector3D baseNormal = RotateDelta(vertex.Normal, vertex, surface.PaletteBoneIndices, transforms);
+                Vector3D targetNormal = RotateDelta(vertex.Normal + morph.NormalDeltas[index], vertex, surface.PaletteBoneIndices, transforms);
+                if (!baseNormal.TryNormalize(out Vector3D normalizedBase) || !targetNormal.TryNormalize(out Vector3D normalizedTarget))
+                    throw new InvalidDataException($"Morph '{morph.Name}' has an invalid normal after rest-pose transfer.");
+                normalDeltas.Add(normalizedTarget - normalizedBase);
+            }
+
+            baked.Add(morph with { PositionDeltas = deltas.MoveToImmutable(), NormalDeltas = normalDeltas.MoveToImmutable() });
         }
 
         return baked.ToImmutable();

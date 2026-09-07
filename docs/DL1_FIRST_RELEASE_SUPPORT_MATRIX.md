@@ -97,9 +97,19 @@ fingerprint. Raw FPP can follow the exact evaluated `EyeCamera` row with the
 ordinary scene lens, but it does not silently enable the DL1 hands projection,
 safe-frame emulation, or procedural stages.
 
-Physics, cloth, all animation-graph states, exact retail shaders and their
-normal/specular/mask behavior, post-processing, runtime randomness, and speech
-are outside every badge.
+Native-equivalent cloth/physics, complete animation-graph behavior, exact retail
+shaders, post-processing, runtime randomness and retail speech behavior remain
+outside every fidelity badge. The separate [secondary-motion preview](secondary-motion-preview.md)
+provides a deterministic approximation with native sidecar syntax validation.
+Saved model facial presets and explicit native PHX/MPCloth sources now flow
+through source export, complete-package building and transactional deployment.
+Companion identities, referenced bones and local source closure are checked;
+retained native declarations are not automatically re-fitted to compiled
+collision bounds or translated from preview tuning. Existing-bank package
+builds validate the stock bank and publish no replacement animation library.
+[Speech preview](speech-preview.md) supports model presets, FED writing and
+explicitly interpreted SPB curves; its Windows Player evidence is not a retail
+game or live-validation receipt.
 
 ## Explicitly deferred from the DL1 first release
 

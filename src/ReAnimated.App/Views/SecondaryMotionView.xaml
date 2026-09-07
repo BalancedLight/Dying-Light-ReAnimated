@@ -1,0 +1,36 @@
+<UserControl x:Class="ReAnimated.App.Views.SecondaryMotionView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="12">
+            <TextBlock Text="Secondary motion" FontWeight="SemiBold" FontSize="16"/>
+            <TextBlock Text="MPC preview approximation · 120 Hz · 8 iterations" Margin="0,6,0,12" TextWrapping="Wrap"/>
+            <CheckBox Content="Enable preview simulation" IsChecked="{Binding Enabled}"/>
+            <ComboBox ItemsSource="{Binding GroupNames}" SelectedItem="{Binding SelectedGroup}" Margin="0,10,0,6"/>
+            <CheckBox Content="Enable selected group" IsChecked="{Binding GroupEnabled}"/>
+            <TextBlock Text="Structural stiffness" Margin="0,10,0,0"/>
+            <Slider Minimum="0" Maximum="1" Value="{Binding Stiffness}"/>
+            <TextBlock Text="Bend stiffness" Margin="0,8,0,0"/>
+            <Slider Minimum="0" Maximum="1" Value="{Binding BendStiffness}"/>
+            <TextBlock Text="Damping" Margin="0,8,0,0"/>
+            <Slider Minimum="0" Maximum="20" Value="{Binding Damping}"/>
+            <TextBlock Text="Follow animated motion" Margin="0,8,0,0"/>
+            <Slider Minimum="0" Maximum="1" Value="{Binding MotionInfluence}"/>
+            <TextBlock Text="Animated shape spring" Margin="0,8,0,0"/>
+            <Slider Minimum="0" Maximum="1000" Value="{Binding RestShapeStiffness}"/>
+            <CheckBox Content="Show anchors and constraint links" IsChecked="{Binding ShowAnchors}" Margin="0,12,0,4"/>
+            <CheckBox Content="Show collision shapes" IsChecked="{Binding ShowCollisions}"/>
+            <WrapPanel Margin="0,12,0,0">
+                <Button Content="Reset" Command="{Binding ResetCommand}" Margin="0,0,6,6"/>
+                <Button Content="Load setup" Command="{Binding LoadSetupCommand}" Margin="0,0,6,6"/>
+                <Button Content="Save setup" Command="{Binding SaveSetupCommand}" Margin="0,0,6,6"/>
+                <Button Content="Save model copy" Command="{Binding SaveModelCopyCommand}" Margin="0,0,6,6"/>
+                <Button Content="Import native scripts" Command="{Binding ImportNativeCommand}" Margin="0,0,6,6"/>
+                <Button Content="Export native scripts" Command="{Binding ExportNativeCommand}" Margin="0,0,6,6"/>
+            </WrapPanel>
+            <TextBlock Text="Native export: import one MPCloth wrapper and its PHX files, then save and open the model copy. Deployment includes those scripts and facial presets automatically. Preview sliders do not change native coefficients; recheck native axes and collision bounds after changing the rig." TextWrapping="Wrap" Margin="0,10,0,0"/>
+            <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+            <TextBlock Text="{Binding PersistenceStatus}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

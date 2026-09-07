@@ -76,6 +76,12 @@ public sealed record Dl1OfficialModelCompilerResult(
 
     public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
 
+    /// <summary>Loose FED/MPCloth and PHX sources accompanying this compiled model.</summary>
+    public ImmutableArray<string> NativeCompanionPaths { get; init; } = [];
+
+    /// <summary>Unlinked official compiler output, retained for diagnostics and never deployed as a runtime object.</summary>
+    public string? RawCompiledMeshObjectPath { get; init; }
+
     public ImmutableArray<Dl1OfficialCompilerDependencySidecar> DependencySidecars { get; init; } = [];
 
     /// <summary>
@@ -143,7 +149,7 @@ public static class Dl1OfficialModelCompiler
     public const string MaterialExportWarning =
         "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-material-variants-recoverable-v13";
+        "dl-reanimated-csharp-model-compiler-native-companions-v19";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -152,6 +158,7 @@ public static class Dl1OfficialModelCompiler
     private const string CompilerEnvironmentVariable = "DLR_DL1_RESPACK_COMPILER";
 
     private static readonly string[] UnsupportedCompiledOutputs = [".skn"];
+    private static readonly string[] SpeechLabels = ["open", "W", "ShCh", "PBM", "FV", "wide", "tBack", "tRoof", "tTeeth"];
 
     private static readonly (string Target, string[] Sources)[] BootstrapFiles =
     [
@@ -308,6 +315,14 @@ public static class Dl1OfficialModelCompiler
                     AnimationScriptAlias = request.AnimationScriptAlias,
                 },
                 cancellationToken).ConfigureAwait(false);
+
+            warnings.AddRange(sourceBuild.NativeCompanionNotes);
+            foreach (string name in sourceBuild.NativeCompanionFiles.Where(name => name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
+            {
+                string destination = Path.Combine(projectDirectory, "data", "odephysics", "meshpartcloth", name);
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                File.Copy(Path.Combine(stagedSourceDirectory, name), destination);
+            }
 
             if (request.AnimationLibrary is not null)
             {
@@ -633,11 +648,23 @@ public static class Dl1OfficialModelCompiler
                 ?? throw new InvalidOperationException("The model RPack output path has no parent directory.");
             Directory.CreateDirectory(outputDirectory);
             string outputObjectPath = Path.Combine(outputDirectory, $"{resourceName}.msh_obj");
+            string rawObjectPath = Path.Combine(outputDirectory, $"{resourceName}.msh_compiler_obj");
             string? outputMaterialDatabasePath = compiledMaterialDatabase is null
                 ? null
                 : Path.Combine(outputDirectory, "local_dx11.mp");
+            // The console compiler emits zero-offset, compiler-addressed units.
+            // Player consumes standalone resource tables, just like objects rebuilt by Editor.
+            string runtimeObjectPath = Path.Combine(Path.GetDirectoryName(compiledMeshObject)!, $"{resourceName}.runtime.msh_obj");
+            await Rp6lCompilerObjectNormalizer.LinkAtomicAsync(
+                [compiledMeshObject], runtimeObjectPath, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var runtimeObject = await Dl1RuntimeMeshObjectValidator.ValidateAsync(
+                runtimeObjectPath, resourceName,
+                request.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary ? request.AnimationScriptAlias : null,
+                cancellationToken).ConfigureAwait(false);
+            runtimeObject = runtimeObject with { ObjectPath = outputObjectPath };
             await PublishFileAtomicallyAsync(compiledRpack, outputRpackPath, cancellationToken).ConfigureAwait(false);
-            await PublishFileAtomicallyAsync(compiledMeshObject, outputObjectPath, cancellationToken).ConfigureAwait(false);
+            await PublishFileAtomicallyAsync(runtimeObjectPath, outputObjectPath, cancellationToken).ConfigureAwait(false);
+            await PublishFileAtomicallyAsync(compiledMeshObject, rawObjectPath, cancellationToken).ConfigureAwait(false);
             var outputTextureObjectPaths = ImmutableArray.CreateBuilder<string>(Math.Max(0, compiledObjects.Count - 1));
             foreach (string compiledTextureObject in compiledObjects.Skip(1))
             {
@@ -663,8 +690,20 @@ public static class Dl1OfficialModelCompiler
                     compiledObjects,
                     outputDirectory,
                     cancellationToken).ConfigureAwait(false);
+            var nativeCompanionPaths = ImmutableArray.CreateBuilder<string>();
+            foreach (string name in sourceBuild.NativeCompanionFiles)
+            {
+                string destination = Path.Combine(outputDirectory, "native-companions",
+                    name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)
+                        ? Path.Combine("data", "odephysics", "meshpartcloth", name)
+                        : Path.Combine("data", "characters", characterId, name));
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                await PublishFileAtomicallyAsync(Path.Combine(stagedSourceDirectory, name), destination, cancellationToken).ConfigureAwait(false);
+                nativeCompanionPaths.Add(destination);
+            }
             string outputRpackSha256 = await Sha256FileAsync(outputRpackPath, cancellationToken).ConfigureAwait(false);
             string outputObjectSha256 = await Sha256FileAsync(outputObjectPath, cancellationToken).ConfigureAwait(false);
+            string rawObjectSha256 = await Sha256FileAsync(rawObjectPath, cancellationToken).ConfigureAwait(false);
             string? outputMaterialDatabaseSha256 = outputMaterialDatabasePath is null
                 ? null
                 : await Sha256FileAsync(
@@ -672,7 +711,8 @@ public static class Dl1OfficialModelCompiler
                     cancellationToken).ConfigureAwait(false);
             string outputManifestFingerprint = Sha256(
                 Encoding.UTF8.GetBytes(
-                    $"rpack={outputRpackSha256}\nmsh_obj={outputObjectSha256}\nlocal_dx11.mp={outputMaterialDatabaseSha256 ?? "none"}\n"));
+                    $"rpack={outputRpackSha256}\nmsh_obj={outputObjectSha256}\nlocal_dx11.mp={outputMaterialDatabaseSha256 ?? "none"}\n" +
+                    string.Join("\n", sourceBuild.NativeCompanionFiles.Select(name => name + "=" + sourceBuild.OutputSha256[name]))));
             string inputFingerprint = CreateInputFingerprint(request, resourceName);
             CustomModelBuildReceipt buildReceipt = new()
             {
@@ -715,11 +755,13 @@ public static class Dl1OfficialModelCompiler
                         kind = "opaque-mesh-and-texture-object-link",
                         toolFingerprint = CurrentToolFingerprint,
                         normalization.ConvertedResourceCount,
+                        runtimeObject,
                     },
                     outputs = new[]
                     {
                         new { path = Path.GetFileName(outputRpackPath), sha256 = outputRpackSha256 },
                         new { path = Path.GetFileName(outputObjectPath), sha256 = outputObjectSha256 },
+                        new { path = Path.GetFileName(rawObjectPath), sha256 = rawObjectSha256 },
                         outputMaterialDatabasePath is null
                             ? null
                             : new
@@ -747,7 +789,17 @@ public static class Dl1OfficialModelCompiler
                             : CompiledMorphDeltaFormat.PcHalf4.ToString(),
                         customMaterials = sourceBuild.CustomMaterialReferences.Length,
                         textures = sourceBuild.TextureSourceFiles.Length,
+                        nativeCompanionFiles = nativeCompanionPaths.Count,
+                        nativeCompanionSourceInventoryValidated = true,
+                        nativePhysicsCompiledBoundsValidated = false,
+                        nativeCompanionRuntimeValidated = false,
                     },
+                    nativeCompanions = nativeCompanionPaths.Select(path => new
+                    {
+                        path = Path.GetRelativePath(outputDirectory, path).Replace('\\', '/'),
+                        sha256 = sourceBuild.OutputSha256[Path.GetFileName(path)],
+                    }),
+                    nativeCompanionNotes = sourceBuild.NativeCompanionNotes,
                     unsupported = UnsupportedCompiledOutputs,
                     completedUtc = buildReceipt.CompletedUtc,
                 },
@@ -768,6 +820,8 @@ public static class Dl1OfficialModelCompiler
             {
                 Warnings = warnings.ToImmutable(),
                 CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
+                NativeCompanionPaths = nativeCompanionPaths.ToImmutable(),
+                RawCompiledMeshObjectPath = rawObjectPath,
                 DependencySidecars = dependencySidecars,
                 CompilerEvidence = new Dl1OfficialModelCompilerEvidence
                 {
@@ -1905,6 +1959,14 @@ public static class Dl1OfficialModelCompiler
             throw new ArgumentException("The compiled model output must use the .rpack extension.", nameof(request));
         }
 
+        if (request.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary)
+        {
+            if (request.AnimationLibrary is not null)
+                throw new ArgumentException("Stock-reference compilation cannot stage an authored animation library.", nameof(request));
+            _ = Dl1StockAnimationReferenceValidator.Validate(request.RetailData0PakPath!,
+                request.AnimationScriptAlias ?? throw new ArgumentException("Stock-reference compilation requires its animation bank alias.", nameof(request)));
+        }
+
         if (request.Timeout <= TimeSpan.Zero || request.Timeout > TimeSpan.FromHours(1))
         {
             throw new ArgumentOutOfRangeException(nameof(request), "The compiler timeout must be between zero and one hour.");
@@ -1915,6 +1977,8 @@ public static class Dl1OfficialModelCompiler
         FbxModelAuthoringImportResult source,
         CompiledMeshGeometryDocument compiled)
     {
+        ValidateCompiledSpeechOrder(source.Package.Document.MorphChannels.Select(channel => channel.Name),
+            compiled.MorphChannels.Select(channel => channel.Name));
         string[] expectedChannelNames = source.Package.Document.MorphChannels
             .Select(static channel => channel.Name)
             .Order(StringComparer.Ordinal)
@@ -2060,7 +2124,21 @@ public static class Dl1OfficialModelCompiler
         }
     }
 
-    private static void ValidateHalfMorphComponent(
+    internal static void ValidateCompiledSpeechOrder(IEnumerable<string> sourceNames, IEnumerable<string> compiledNames)
+    {
+        string[] source = sourceNames.ToArray();
+        string[] compiled = compiledNames.ToArray();
+        foreach (string label in SpeechLabels)
+        {
+            string? expected = source.FirstOrDefault(name => name.Equals(label, StringComparison.OrdinalIgnoreCase));
+            if (expected is null) continue;
+            string? actual = compiled.FirstOrDefault(name => name.StartsWith(label, StringComparison.OrdinalIgnoreCase));
+            if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"Compiled morph inventory binds speech label '{label}' to '{actual ?? "<missing>"}' instead of '{expected}' under Windows Player prefix-first lookup. No model RPack was published.");
+        }
+    }
+
+    internal static void ValidateHalfMorphComponent(
         float actual,
         double expected,
         string targetName,
@@ -2073,7 +2151,10 @@ public static class Dl1OfficialModelCompiler
         if (!float.IsFinite(sourceFloat) ||
             !Half.IsFinite(expectedHalf) ||
             !float.IsFinite(actual) ||
-            actual != expectedQuantized)
+            (float)(Half)actual != actual ||
+            // Both adjacent HALF values are valid at an exact midpoint. The
+            // native compiler and CLR need not choose the same tie direction.
+            Math.Abs((double)actual - sourceFloat) != Math.Abs((double)expectedQuantized - sourceFloat))
         {
             throw new InvalidDataException(
                 $"The official compiler did not preserve morph '{targetName}' vertex " +

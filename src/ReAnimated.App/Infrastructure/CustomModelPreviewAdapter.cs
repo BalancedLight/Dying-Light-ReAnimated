@@ -63,6 +63,10 @@ public sealed class CustomModelPreviewSession
 
     public ImmutableArray<string> Diagnostics { get; }
 
+    public CustomModelDocument Document => _model.Package.Document;
+
+    public CustomModelPackage Package => _model.Package;
+
     /// <summary>
     /// Converts an evaluated runtime-rig pose into the exact hierarchy and
     /// bind bases used by the prepared DL1-output meshes. Source FBX mode and
@@ -73,6 +77,16 @@ public sealed class CustomModelPreviewSession
     {
         ArgumentNullException.ThrowIfNull(runtimePose);
         return _authoredRig?.RebasePose(runtimePose) ?? runtimePose;
+    }
+
+    public int GetPresentationBoneIndex(int sourceBoneIndex)
+    {
+        if (_model.Rig is null || sourceBoneIndex < 0 || sourceBoneIndex >= _model.Rig.BoneCount)
+            throw new ArgumentOutOfRangeException(nameof(sourceBoneIndex));
+        int? index = MapSourceBoneIndex(sourceBoneIndex);
+        if (index is not { } mapped || mapped < 0)
+            throw new InvalidOperationException("The source bone has no emitted preview counterpart.");
+        return mapped;
     }
 
     public SkeletonRenderData CreateSkeleton(
@@ -416,7 +430,9 @@ public static class CustomModelPreviewAdapter
         FbxModelMorphTarget target)
     {
         if (target.PositionDeltas.Length != surface.Vertices.Length ||
-            target.PositionDeltas.Any(static delta => !delta.IsFinite))
+            target.PositionDeltas.Any(static delta => !delta.IsFinite) ||
+            (!target.NormalDeltas.IsDefaultOrEmpty &&
+             (target.NormalDeltas.Length != surface.Vertices.Length || target.NormalDeltas.Any(static delta => !delta.IsFinite))))
         {
             throw new InvalidDataException(
                 $"Morph target '{target.Name}' does not match surface '{surface.Id}'s expanded vertex buffer.");
@@ -431,7 +447,8 @@ public static class CustomModelPreviewAdapter
         return new MorphTargetRenderData(
             target.Name,
             positions,
-            new Vector3[positions.Length]);
+            target.NormalDeltas.IsDefaultOrEmpty ? ReadOnlyMemory<Vector3>.Empty : target.NormalDeltas
+                .Select(static delta => new Vector3(checked((float)delta.X), checked((float)delta.Y), checked((float)delta.Z))).ToArray());
     }
 
     private static TextureRenderData? TryDecodeTexture(

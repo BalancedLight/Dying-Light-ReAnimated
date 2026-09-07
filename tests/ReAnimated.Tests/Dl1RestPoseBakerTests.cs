@@ -15,6 +15,26 @@ namespace ReAnimated.Tests;
 public sealed class Dl1RestPoseBakerTests
 {
     [Fact]
+    public void MorphTargetNormalMovesWithTheRebasedRestPose()
+    {
+        RigDefinition rig=CreateRig();var globals=rig.CreateBindPose().GlobalMatrices;
+        var targets=globals.Select(static global=>(Vector3D?)global.Translation).ToImmutableArray();
+        int hand=rig.GetBoneIndex("hand"),elbow=rig.GetBoneIndex("forearm");
+        Vector3D offset=globals[hand].Translation-globals[elbow].Translation;
+        targets=targets.SetItem(hand,globals[elbow].Translation+new Vector3D(0,offset.X,0));
+        var transfer=RigRestPoseTransfer.Solve(rig,globals,targets);
+        FbxModelSurface original=CreateSurface(rig);
+        FbxModelSurface withMorph=original with { MorphTargets=[new FbxModelMorphTarget("normal_turn",1,2,3,
+            Enumerable.Repeat(Vector3D.Zero,original.Vertices.Length).ToImmutableArray())
+            {NormalDeltas=original.Vertices.Select(v=>Vector3D.UnitX-v.Normal).ToImmutableArray()}] };
+        var baked=Assert.Single(Dl1RestPoseBaker.Bake([withMorph],transfer).Surfaces);
+        var targetOnly=original with {Vertices=original.Vertices.Select(v=>v with {Normal=Vector3D.UnitX}).ToImmutableArray()};
+        var expected=Assert.Single(Dl1RestPoseBaker.Bake([targetOnly],transfer).Surfaces);
+        var deltas=Assert.Single(baked.MorphTargets).NormalDeltas;
+        for(int i=0;i<deltas.Length;i++)Assert.True((baked.Vertices[i].Normal+deltas[i]-expected.Vertices[i].Normal).Length<1e-9);
+    }
+
+    [Fact]
     public void AnUnchangedRestPoseLeavesEveryVertexWhereItWas()
     {
         RigDefinition rig = CreateRig();

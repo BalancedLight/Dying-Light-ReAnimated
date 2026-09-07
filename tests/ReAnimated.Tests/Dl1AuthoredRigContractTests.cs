@@ -15,6 +15,136 @@ public sealed class Dl1AuthoredRigContractTests
     private static readonly int[] DepthFirstSourceOrder = [0, 1, 3, 2];
 
     [Fact]
+    public async Task SourceBuildPublishesNativeCompanionsAndHashesTheirExactBytes()
+    {
+        var original = CreateSyntheticModel();
+        var model = original with { Package = original.Package with { Document = original.Package.Document with
+        {
+            SecondaryMotion = Dl1NativeCompanionWriterTests.NativeSetup with
+            {
+                NativeSources = Dl1NativeCompanionWriterTests.NativeSetup.NativeSources.Select(source => source with
+                {
+                    Text = source.Text.Replace("\"root\"", "\"" + original.Package.Document.Bones[0].Name + "\"", StringComparison.Ordinal),
+                }).ToImmutableArray(),
+            },
+        } } };
+        string output = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var source = await Dl1SourceModelWriter.WriteAsync(new() { Model = model, ResourceName = "cloth_sample", OutputDirectory = output });
+            Assert.Equal(["cloth_sample.mpcloth", "cloth_sample_000.phx"], source.NativeCompanionFiles.ToArray());
+            foreach (string name in source.NativeCompanionFiles)
+                Assert.Equal(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(await File.ReadAllBytesAsync(Path.Combine(output, name)))),
+                    source.OutputSha256[name]);
+            Assert.Contains(source.NativeCompanionNotes, note => note.Contains("not re-fitted", StringComparison.Ordinal));
+        }
+        finally { RpackTestData.DeleteTemporaryDirectory(output); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExistingAnimationBankPreservesSerializedFramesAndRawLocalPoseSkinning(bool secondary)
+    {
+        FbxModelAuthoringImportResult original = CreateSyntheticModel();
+        CustomModelDocument document = original.Package.Document with
+        {
+            Bones = original.Package.Document.Bones.Select(bone => bone with
+            {
+                ExactLocalBindMatrix = bone.LocalBindTransform.ToMatrix(),
+            }).ToImmutableArray(),
+            BuildSettings = original.Package.Document.BuildSettings with
+            {
+                ReferenceExistingAnimationLibrary = true,
+                AnimationScriptAlias = "existing_bank",
+            },
+            SecondaryMotion = new SecondaryMotionDefinition
+            {
+                Groups = secondary ? [new SecondaryMotionGroup
+                {
+                    Name = "strand",
+                    Particles = [new() { ReferenceBoneName = "chain_a", DrivenBoneName = "chain_a", Fixed = true, AimParticleIndex = 1 },
+                        new() { ReferenceBoneName = "chain_a_tip", DrivenBoneName = "chain_a_tip" }],
+                    Constraints = [new() { First = 0, Second = 1 }],
+                }] : [],
+            },
+        };
+        RigDefinition sourceRig = document.CreateRigDefinition();
+        ImmutableArray<TransformMatrix> sourceBind = sourceRig.CreateBindPose().GlobalMatrices;
+        FbxModelSurface sourceSurface = original.Surfaces[0] with
+        {
+            InverseBindMatrices = sourceBind.Select(matrix => matrix.InvertedAffine()).ToImmutableArray(),
+        };
+        FbxModelAuthoringImportResult imported = original with
+        {
+            Package = original.Package with { Document = document },
+            Rig = sourceRig,
+            Surfaces = [sourceSurface],
+        };
+        Dl1PreparedAuthoredRig prepared = Dl1CustomModelRigPreparer.Prepare(imported);
+        string output = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1SourceModelBuildResult build = await Dl1SourceModelWriter.WriteAsync(new()
+            {
+                Model = imported,
+                OutputDirectory = Path.Combine(output, "source"),
+                ResourceName = "generic_character",
+                AnimationScriptAlias = "existing_bank",
+            });
+            ImmutableArray<SerializedNode> emitted = ReadTopLevelNodes(await File.ReadAllBytesAsync(build.SourceMshPath));
+            Dl1ChrV4Document character = Dl1ChrV4Codec.Parse(await File.ReadAllBytesAsync(build.CharacterDefinitionPath));
+            foreach (Dl1AuthoredRigNode node in prepared.Contract.Nodes)
+            {
+                if (!secondary || !node.Name.StartsWith("chain_a", StringComparison.Ordinal))
+                {
+                    AssertMatrixNear(document.Bones[node.SourceBoneIndex].ExactLocalBindMatrix,
+                        emitted[node.PhysicalIndex].LocalMatrix, 2e-5);
+                    AssertMatrixNear(sourceBind[node.SourceBoneIndex].InvertedAffine(),
+                        emitted[node.PhysicalIndex].ReferenceMatrix, 2e-5);
+                }
+                AssertMatrixNear(emitted[node.PhysicalIndex].LocalMatrix,
+                    character.Variants[0].ObjectTransforms[node.PhysicalIndex], 2e-5);
+            }
+            if (secondary)
+            {
+                Dl1AuthoredRigNode anchor = prepared.Contract.Nodes.Single(node => node.Name == "chain_a");
+                Dl1AuthoredRigNode tip = prepared.Contract.Nodes.Single(node => node.Name == "chain_a_tip");
+                Vector3D direction = (tip.GlobalBindMatrix.Translation - anchor.GlobalBindMatrix.Translation).Normalized();
+                Assert.True(Vector3D.Dot(direction, anchor.GlobalBindMatrix.TransformDirection(Vector3D.UnitX)) > 0.99999);
+            }
+
+            foreach (double radians in new[] { 0.0, 0.35, 1.1 })
+            {
+                SkeletonPose rawSourcePose = sourceRig.CreateBindPose().WithLocalTransform(0,
+                    sourceRig.Bones[0].LocalBindPose with
+                    {
+                        Rotation = QuaternionD.FromAxisAngle(Vector3D.UnitZ, radians),
+                    });
+                // Native animation descriptors install local transforms directly.
+                // In particular, this must not call RebasePose/CreatePresentationPose.
+                var rawEmittedPose = new SkeletonPose(prepared.PreviewRig,
+                    prepared.Contract.Nodes.Select(node => secondary && node.Name.StartsWith("chain_a", StringComparison.Ordinal)
+                        ? prepared.PreviewRig.Bones[node.PhysicalIndex].LocalBindPose
+                        : rawSourcePose.LocalTransforms[node.SourceBoneIndex]));
+                foreach (FbxModelVertex vertex in sourceSurface.Vertices)
+                {
+                    int paletteIndex = vertex.BoneIndices[0];
+                    int sourceIndex = sourceSurface.PaletteBoneIndices[paletteIndex];
+                    int physicalIndex = prepared.Surfaces[0].PhysicalPalette[paletteIndex];
+                    Vector3D expected = (rawSourcePose.GlobalMatrices[sourceIndex] * sourceSurface.InverseBindMatrices[paletteIndex]).TransformPoint(vertex.Position);
+                    Vector3D actual = (rawEmittedPose.GlobalMatrices[physicalIndex] * emitted[physicalIndex].ReferenceMatrix).TransformPoint(vertex.Position);
+                    AssertVectorNear(expected, actual, 2e-5);
+                }
+            }
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(output);
+        }
+    }
+
+    [Fact]
     public void SmallAuthoredLocalShearIsProjectedAndReportedWithBoneIdentity()
     {
         TransformMatrix sheared = new(

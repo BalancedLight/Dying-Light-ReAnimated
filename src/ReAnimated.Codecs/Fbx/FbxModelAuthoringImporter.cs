@@ -71,7 +71,10 @@ public sealed record FbxModelMorphTarget(
     uint DescriptorHash,
     long BlendShapeChannelObjectId,
     long ShapeObjectId,
-    ImmutableArray<Vector3D> PositionDeltas);
+    ImmutableArray<Vector3D> PositionDeltas)
+{
+    public ImmutableArray<Vector3D> NormalDeltas { get; init; } = [];
+}
 
 public sealed record FbxModelAuthoringImportResult(
     CustomModelPackage Package,
@@ -406,6 +409,8 @@ public static class FbxModelAuthoringImporter
             AnimationClips = animations,
             Diagnostics = normalizedDiagnostics.ToImmutable(),
             BuildSettings = package.Document.BuildSettings,
+            SecondaryMotion = package.Document.SecondaryMotion,
+            FacialPresets = package.Document.FacialPresets,
             LastBuildReceipt = null,
         };
         document = ReapplyAuthoredHierarchyLayer(package.Document, document);
@@ -479,6 +484,17 @@ public static class FbxModelAuthoringImporter
             changes |= CustomModelReimportContractChange.Morph;
         }
 
+        if (changes != CustomModelReimportContractChange.None &&
+            (!existing.Document.SecondaryMotion.Groups.IsEmpty ||
+             !existing.Document.SecondaryMotion.NativeSources.IsEmpty ||
+             !existing.Document.FacialPresets.Controls.IsEmpty ||
+             !existing.Document.FacialPresets.Presets.IsEmpty))
+        {
+            throw new InvalidDataException(
+                "The replacement changes the rig or morph contract of a model with authored facial or secondary-motion data. " +
+                "Import it as a new model and review those feature bindings before replacing the project target.");
+        }
+
         CustomModelDocument replacementDocument = ReapplyAuthoredHierarchyLayer(
             existing.Document,
             replacement.Package.Document with
@@ -486,6 +502,8 @@ public static class FbxModelAuthoringImporter
                 ModelId = existing.Document.ModelId,
                 Name = existing.Document.Name,
                 BuildSettings = existing.Document.BuildSettings,
+                SecondaryMotion = existing.Document.SecondaryMotion,
+                FacialPresets = existing.Document.FacialPresets,
                 LastBuildReceipt = null,
             });
         replacement = replacement with
@@ -1661,6 +1679,7 @@ public static class FbxModelAuthoringImporter
         var vertices = ImmutableArray.CreateBuilder<FbxModelVertex>(triangles.Count * 3);
         var indices = ImmutableArray.CreateBuilder<uint>(triangles.Count * 3);
         var expandedControlPoints = ImmutableArray.CreateBuilder<int>(triangles.Count * 3);
+        var expandedCorners = ImmutableArray.CreateBuilder<FbxExpandedCorner>(triangles.Count * 3);
         foreach (FbxExpandedTriangle triangle in triangles)
         {
             foreach (FbxExpandedCorner corner in triangle.Corners)
@@ -1668,6 +1687,7 @@ public static class FbxModelAuthoringImporter
                 uint index = checked((uint)vertices.Count);
                 indices.Add(index);
                 expandedControlPoints.Add(corner.ControlPointIndex);
+                expandedCorners.Add(corner);
                 vertices.Add(new FbxModelVertex(
                     corner.Position,
                     corner.Normal,
@@ -1701,9 +1721,23 @@ public static class FbxModelAuthoringImporter
                     .Select(controlPoint => morph.DeltasByControlPoint.GetValueOrDefault(
                         controlPoint,
                         Vector3D.Zero))
-                    .ToImmutableArray()))
+                    .ToImmutableArray())
+                {
+                    NormalDeltas = morph.NormalDeltasByControlPoint.IsEmpty ? [] : expandedCorners
+                        .Select(corner => ExpandMorphNormalDelta(morph, corner)).ToImmutableArray(),
+                })
                 .ToImmutableArray(),
         };
+    }
+
+    private static Vector3D ExpandMorphNormalDelta(FbxGeometryMorphDraft morph, FbxExpandedCorner corner)
+    {
+        if (!morph.NormalDeltasByControlPoint.TryGetValue(corner.ControlPointIndex, out Vector3D delta))
+            return Vector3D.Zero;
+        if (!corner.TransformedBaseNormal.TryNormalize(out _, epsilon: 1.0e-10) ||
+            !(corner.TransformedBaseNormal + delta).TryNormalize(out Vector3D target, epsilon: 1.0e-10))
+            throw new InvalidDataException($"Shape '{morph.Name}' normal delta requires a finite, nonzero authored base and target normal at control point {corner.ControlPointIndex}.");
+        return target - corner.Normal;
     }
 
     private readonly record struct FbxPolygonCorner(int ControlPointIndex, int PolygonVertexIndex);
@@ -1729,6 +1763,7 @@ public static class FbxModelAuthoringImporter
         int ControlPointIndex,
         Vector3D Position,
         Vector3D Normal,
+        Vector3D TransformedBaseNormal,
         double U,
         double V,
         ImmutableArray<FbxBoneInfluence> Influences);
@@ -1747,7 +1782,8 @@ public static class FbxModelAuthoringImporter
         uint DescriptorHash,
         long BlendShapeChannelObjectId,
         long ShapeObjectId,
-        ImmutableDictionary<int, Vector3D> DeltasByControlPoint);
+        ImmutableDictionary<int, Vector3D> DeltasByControlPoint,
+        ImmutableDictionary<int, Vector3D> NormalDeltasByControlPoint);
 
     private static ImmutableArray<FbxGeometryMorphDraft> ReadGeometryMorphs(
         FbxSemanticScene scene,
@@ -1812,7 +1848,7 @@ public static class FbxModelAuthoringImporter
                 ImmutableArray<double> fullWeights = FbxSemanticValues.ReadDoubleArray(
                     channel.FindChild("FullWeights"),
                     $"BlendShapeChannel '{channelName}' FullWeights");
-                if (shapeIds.Length != 1 || fullWeights.Length > 1)
+                if (shapeIds.Length != 1)
                 {
                     throw new InvalidDataException(
                         $"BlendShapeChannel '{channelName}' uses progressive or multiple shapes; " +
@@ -1827,6 +1863,10 @@ public static class FbxModelAuthoringImporter
                 ImmutableArray<double> vertices = FbxSemanticValues.ReadDoubleArray(
                     shape.FindChild("Vertices"),
                     $"Shape '{channelName}' Vertices");
+                FbxNode? normalNode = shape.FindChild("Normals");
+                ImmutableArray<double> normals = FbxSemanticValues.ReadDoubleArray(normalNode, $"Shape '{channelName}' Normals");
+                if (normalNode is not null && (normals.Length != vertices.Length || normals.Any(static value => !double.IsFinite(value))))
+                    throw new InvalidDataException($"Shape '{channelName}' Normals must contain matching finite XYZ deltas for every sparse Indexes entry.");
                 if (indexes.IsEmpty || vertices.IsEmpty ||
                     vertices.Length % 3 != 0 ||
                     indexes.Length != vertices.Length / 3 ||
@@ -1836,8 +1876,23 @@ public static class FbxModelAuthoringImporter
                         $"Shape '{channelName}' must contain matching finite Indexes and XYZ delta arrays.");
                 }
 
+                // Some FBX producers repeat the single full-strength value for
+                // every affected control point. That is unambiguous only when
+                // there is one connected Shape, each value is exactly 100, and
+                // the array matches the Shape's sparse Indexes buffer. A scalar
+                // or omitted FullWeights retains the ordinary single-shape form.
+                if (!fullWeights.IsEmpty &&
+                    (fullWeights.Any(static value => value != 100.0) ||
+                     (fullWeights.Length != 1 && fullWeights.Length != indexes.Length)))
+                {
+                    throw new InvalidDataException(
+                        $"BlendShapeChannel '{channelName}' has unsupported FullWeights; " +
+                        "one shape requires a single 100 value or uniform 100 values matching its affected control points. " +
+                        "Bake masked, non-full-strength, or progressive weights before import.");
+                }
+
                 affectedControlPointCount = checked(affectedControlPointCount + indexes.Length);
-                decodedDeltaBytes = checked(decodedDeltaBytes + (vertices.Length * sizeof(double)));
+                decodedDeltaBytes = checked(decodedDeltaBytes + ((vertices.Length + normals.Length) * sizeof(double)));
                 if (affectedControlPointCount > options.MaximumMorphAffectedControlPoints ||
                     decodedDeltaBytes > options.MaximumDecodedMorphDeltaBytes)
                 {
@@ -1864,6 +1919,8 @@ public static class FbxModelAuthoringImporter
 
                 morphDescriptors.Add(descriptor, channelName);
                 var deltas = ImmutableDictionary.CreateBuilder<int, Vector3D>();
+                var normalDeltas = ImmutableDictionary.CreateBuilder<int, Vector3D>();
+                TransformMatrix inverseBake = rawBake.InvertedAffine();
                 for (int deltaIndex = 0; deltaIndex < indexes.Length; deltaIndex++)
                 {
                     long rawControlPointIndex = indexes[deltaIndex];
@@ -1888,6 +1945,16 @@ public static class FbxModelAuthoringImporter
                             $"Shape '{channelName}' contains a non-finite delta or duplicate control-point index " +
                             $"{controlPointIndex}.");
                     }
+                    if (!normals.IsEmpty)
+                    {
+                        Vector3D rawNormalDelta = new(normals[deltaIndex * 3], normals[(deltaIndex * 3) + 1], normals[(deltaIndex * 3) + 2]);
+                        Vector3D transformedNormalDelta = basis.TransformDirection(new Vector3D(
+                            (inverseBake.M11 * rawNormalDelta.X) + (inverseBake.M21 * rawNormalDelta.Y) + (inverseBake.M31 * rawNormalDelta.Z),
+                            (inverseBake.M12 * rawNormalDelta.X) + (inverseBake.M22 * rawNormalDelta.Y) + (inverseBake.M32 * rawNormalDelta.Z),
+                            (inverseBake.M13 * rawNormalDelta.X) + (inverseBake.M23 * rawNormalDelta.Y) + (inverseBake.M33 * rawNormalDelta.Z)));
+                        if (!transformedNormalDelta.IsFinite) throw new InvalidDataException($"Shape '{channelName}' normal transform is not finite.");
+                        normalDeltas.Add(controlPointIndex, transformedNormalDelta);
+                    }
                 }
 
                 var draft = new FbxGeometryMorphDraft(
@@ -1895,7 +1962,7 @@ public static class FbxModelAuthoringImporter
                     descriptor,
                     channelId,
                     shapeId,
-                    deltas.ToImmutable());
+                    deltas.ToImmutable(), normalDeltas.ToImmutable());
                 result.Add(draft);
                 morphChannels.Add(new CustomModelMorphChannel
                 {
@@ -2093,6 +2160,7 @@ public static class FbxModelAuthoringImporter
         ref int reconstructedNormalCount)
     {
         Vector3D normal = faceNormal;
+        Vector3D transformedBaseNormal = Vector3D.Zero;
         if (normalLayer is not null)
         {
             ImmutableArray<double> values = ResolveVectorLayerValue(
@@ -2106,7 +2174,8 @@ public static class FbxModelAuthoringImporter
                 (rawNormalTransform.M11 * values[0]) + (rawNormalTransform.M21 * values[1]) + (rawNormalTransform.M31 * values[2]),
                 (rawNormalTransform.M12 * values[0]) + (rawNormalTransform.M22 * values[1]) + (rawNormalTransform.M32 * values[2]),
                 (rawNormalTransform.M13 * values[0]) + (rawNormalTransform.M23 * values[1]) + (rawNormalTransform.M33 * values[2]));
-            if (basis.TransformDirection(rawNormal).TryNormalize(
+            transformedBaseNormal = basis.TransformDirection(rawNormal);
+            if (transformedBaseNormal.TryNormalize(
                     out Vector3D normalizedNormal,
                     epsilon: 1.0e-10))
             {
@@ -2135,6 +2204,7 @@ public static class FbxModelAuthoringImporter
             corner.ControlPointIndex,
             position,
             normal,
+            transformedBaseNormal,
             u,
             v,
             influences[corner.ControlPointIndex]);
@@ -2778,6 +2848,15 @@ public static class FbxModelAuthoringImporter
                     canonical.Append(delta.X.ToString("R", CultureInfo.InvariantCulture)).Append(',')
                         .Append(delta.Y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
                         .Append(delta.Z.ToString("R", CultureInfo.InvariantCulture)).Append(';');
+                }
+
+                if (!target.NormalDeltas.IsEmpty)
+                {
+                    canonical.Append("\0normal-deltas\0");
+                    foreach (Vector3D delta in target.NormalDeltas)
+                        canonical.Append(delta.X.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                            .Append(delta.Y.ToString("R", CultureInfo.InvariantCulture)).Append(',')
+                            .Append(delta.Z.ToString("R", CultureInfo.InvariantCulture)).Append(';');
                 }
 
                 canonical.Append('\0');

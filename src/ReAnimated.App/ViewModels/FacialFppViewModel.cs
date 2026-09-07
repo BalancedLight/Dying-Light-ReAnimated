@@ -8,7 +8,7 @@ using ReAnimated.Core.Project;
 
 namespace ReAnimated.App.ViewModels;
 
-public sealed class FacialFppViewModel : ObservableObject
+public sealed partial class FacialFppViewModel : ObservableObject
 {
     private float _fieldOfView = 60.0f;
     private float _nearPlane = 0.02f;
@@ -57,6 +57,7 @@ public sealed class FacialFppViewModel : ObservableObject
     {
         ResetMorphsCommand = new RelayCommand(ResetMorphs, () => Morphs.Count > 0);
         PreviewBlinkCommand = new RelayCommand(PreviewBlink, () => Morphs.Count > 0);
+        InitializeFacialPresets();
     }
 
     public event EventHandler? LensChanged;
@@ -579,17 +580,14 @@ public sealed class FacialFppViewModel : ObservableObject
 
     private void ResetMorphs()
     {
-        foreach (MorphChannelViewModel morph in Morphs)
-        {
-            morph.Weight = 0.0f;
-        }
+        ClearFacialPreview();
     }
 
     private void PreviewBlink()
     {
         MorphChannelViewModel? blink = Morphs.FirstOrDefault(item =>
             item.Name.Contains("blink", StringComparison.OrdinalIgnoreCase)
-            || item.Name.Contains("eye", StringComparison.OrdinalIgnoreCase));
+            );
         if (blink is not null)
         {
             blink.Weight = blink.Weight > 0.5f ? 0.0f : 1.0f;
@@ -601,7 +599,7 @@ public sealed class FacialFppViewModel : ObservableObject
         string filter = MimicFilter.Trim();
         VisibleMorphs.Clear();
         foreach (MorphChannelViewModel morph in Morphs.Where(item =>
-                     MatchesFilter(item.Name, filter)))
+                     MatchesFilter(item.Name, filter) && MatchesFacialGroup(item.Name)))
         {
             VisibleMorphs.Add(morph);
         }
@@ -638,6 +636,7 @@ public sealed class FacialFppViewModel : ObservableObject
                 nameof(MorphChannelViewModel.Weight),
                 StringComparison.Ordinal))
         {
+            if (HandleLinkedFacialControl(sender)) return;
             MorphWeightsChanged?.Invoke(this, EventArgs.Empty);
         }
     }

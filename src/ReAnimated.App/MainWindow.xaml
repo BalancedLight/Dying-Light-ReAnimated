@@ -2850,8 +2850,10 @@
                                              <Button Command="{Binding KeyMorphPoseCommand}" Content="Key facial pose" />
                                              <Button Command="{Binding FacialFpp.ResetMorphsCommand}" Content="Reset morphs" />
                                              <Button Command="{Binding FacialFpp.PreviewBlinkCommand}" Content="Blink" />
+                                             <Button Command="{Binding FollowFacialAnimationCommand}" Content="Follow animation" ToolTip="Release the temporary face pose and show evaluated facial keys" />
                                          </StackPanel>
-                                         <Grid Grid.Row="2" Margin="0,0,0,5">
+                                         <StackPanel Grid.Row="2" Margin="0,0,0,5">
+                                         <Grid>
                                              <Grid.ColumnDefinitions>
                                                  <ColumnDefinition Width="*" />
                                                  <ColumnDefinition Width="Auto" />
@@ -2860,9 +2862,37 @@
                                                        SelectedItem="{Binding FacialFpp.SelectedMimicPreset}"
                                                        ToolTip="FED expression preset" />
                                              <Button Grid.Column="1"
-                                                     Command="{Binding ApplyFedExpressionCommand}"
-                                                     Content="Apply FED layer" />
+                                                     Command="{Binding PreviewFedExpressionCommand}"
+                                                     Content="Preview FED" />
                                          </Grid>
+                                         <WrapPanel Margin="0,5,0,0">
+                                             <ComboBox Width="140" ItemsSource="{Binding FacialFpp.ExpressionPresets}"
+                                                       SelectedItem="{Binding FacialFpp.SelectedExpression}" ToolTip="Model expression preset; replaces the current preview" />
+                                             <TextBlock Text="Intensity" VerticalAlignment="Center" Margin="6,0" />
+                                             <Slider Width="95" Minimum="0" Maximum="1" Value="{Binding FacialFpp.PresetIntensity}" />
+                                             <CheckBox Content="Link sides" IsChecked="{Binding FacialFpp.LinkSides}" Margin="8,0" />
+                                         </WrapPanel>
+                                         <WrapPanel Margin="0,5,0,0">
+                                             <TextBox Width="140" Text="{Binding FacialFpp.PresetName, UpdateSourceTrigger=PropertyChanged}" ToolTip="Name for the captured pose" />
+                                             <Button Command="{Binding FacialFpp.SaveExpressionCommand}" Content="Save preset" />
+                                             <Button Command="{Binding SecondaryMotion.SaveModelCopyCommand}" Content="Save model copy..." ToolTip="Persist preset and secondary-motion changes to a new immutable model asset" />
+                                             <Button Command="{Binding ExportFacialPresetsCommand}" Content="Save FED..." />
+                                             <ComboBox Width="85" ItemsSource="{Binding FacialFpp.FacialGroups}" SelectedItem="{Binding FacialFpp.SelectedFacialGroup}" ToolTip="Facial control group" />
+                                         </WrapPanel>
+                                         <TextBlock Text="{Binding FacialFpp.ExpressionStatus}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4" />
+                                         <Expander Header="Speech and matched audio" IsExpanded="False">
+                                             <StackPanel Margin="4">
+                                                 <WrapPanel>
+                                                     <Button Command="{Binding LoadSpeechExchangeCommand}" Content="Load speech..." />
+                                                     <Button Command="{Binding LoadSpeechAudioCommand}" Content="Load audio..." />
+                                                     <Button Command="{Binding ConfigureSpeechToolCommand}" Content="Configure DyingAudio..." />
+                                                 </WrapPanel>
+                                                 <ComboBox ItemsSource="{Binding SpeechEntries}" SelectedItem="{Binding SelectedSpeechEntry}" Margin="0,4" />
+                                                 <CheckBox Content="Speech preview follows timeline" IsChecked="{Binding EnableSpeechPreview}" />
+                                                 <TextBlock Text="{Binding SpeechPreviewStatus}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4" />
+                                             </StackPanel>
+                                         </Expander>
+                                         </StackPanel>
                                          <Expander Grid.Row="3"
                                                    Margin="0,2,0,7"
                                                    Header="Facial FBX mapping review"
@@ -3028,6 +3058,9 @@
                                     </Grid>
                                 </TabItem>
 
+                                <TabItem x:Name="RetargetSecondaryMotionTab" Header="Secondary motion">
+                                    <views:SecondaryMotionView DataContext="{Binding SecondaryMotion}" />
+                                </TabItem>
                                 <TabItem x:Name="RetargetFppCameraTab" Header="FPP / camera">
                                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                                         <StackPanel Margin="10">

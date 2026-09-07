@@ -493,6 +493,7 @@ public static class ProjectSerializer
         // App integration remains source compatible: projects constructed by
         // the schema-1 WPF surface are promoted before validation/save.
         if (allowLegacyProjectionFallback &&
+            project.Models.IsEmpty &&
             sources.IsEmpty &&
             variants.IsEmpty &&
             (!project.Animations.IsEmpty ||

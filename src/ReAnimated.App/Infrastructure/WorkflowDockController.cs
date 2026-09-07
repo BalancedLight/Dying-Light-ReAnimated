@@ -401,6 +401,7 @@ public sealed class WorkflowDockController
             "retarget.attachments",
             "retarget.ik",
             "retarget.facial",
+            "retarget.secondary-motion",
             "retarget.fpp-camera",
             "retarget.movie-camera");
         inspector.DockWidth = new GridLength(430.0);

@@ -618,6 +618,10 @@ public sealed partial class MainWindowViewModel :
     private string? _pendingFacialFbxSourcePath;
     private Guid? _pendingFacialFbxAssetId;
     private FedDocument? _fedDocument;
+    private sealed record DescriptorReadinessKey(Guid ProjectId, string? ProjectPath,
+        ProjectModelEntry Model, ProjectAssetReference Asset, string PackagePath);
+    private readonly Dictionary<DescriptorReadinessKey, DescriptorInventoryValidation> _descriptorReadinessCache = [];
+    private int _descriptorReadinessImportCount;
     private bool _synchronizingMorphWeights;
     private bool _synchronizingProjectBindings;
     private bool _batchReviewingMapping;
@@ -1091,6 +1095,8 @@ public sealed partial class MainWindowViewModel :
         FacialFpp.LensChanged += OnLensChanged;
         FacialFpp.MorphWeightsChanged += OnMorphWeightsChanged;
         FacialFpp.PropertyChanged += OnFacialFppPropertyChanged;
+        InitializeFacialPreviewFeature();
+        InitializeSecondaryMotionFeature();
         IkEditor.PropertyChanged += OnIkEditorPropertyChanged;
         AttachmentEditor.PropertyChanged +=
             OnAttachmentEditorPropertyChanged;
@@ -3671,6 +3677,8 @@ public sealed partial class MainWindowViewModel :
         }
 
         CancelRootMotionTrailJob("Canceled");
+        DisposeFacialPreviewFeature();
+        DisposeSecondaryMotionFeature();
         AssetBrowser.IndexGameRequested -= OnIndexGameRequested;
         AssetBrowser.SelectedAssetChanged -= OnSelectedAssetChanged;
         AssetBrowser.ProfileScanRequested -= OnProfileScanRequested;
@@ -4205,6 +4213,25 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        await OpenWorkspaceAsync(path);
+    }
+
+    /// <summary>
+    /// Opens a supplied project using the same transactional restore and
+    /// failure reporting as the Open command, without displaying a file picker.
+    /// Call on the UI thread after any current workspace operation completes.
+    /// </summary>
+    public async Task OpenWorkspaceAsync(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (IsBusy)
+        {
+            throw new InvalidOperationException(
+                "A project cannot be opened while another workspace operation is running.");
+        }
+
+        path = Path.GetFullPath(path);
         AnimationRuntimeSnapshot previous =
             CaptureAnimationRuntimeSnapshot();
         ModelsWorkspaceSessionSnapshot previousModels =
@@ -11332,6 +11359,14 @@ public sealed partial class MainWindowViewModel :
                 }
             }
 
+            // Export-readiness rows share model assets across many variants.
+            // Reuse only a successful descriptor check after re-verifying the
+            // actual file SHA above. Export/import operations still perform
+            // their independent full validation; this cache is UI readiness only.
+            var readinessKey = new DescriptorReadinessKey(_project.ProjectId, ProjectPath, model, asset, packagePath);
+            if (_descriptorReadinessCache.TryGetValue(readinessKey, out DescriptorInventoryValidation? cached))
+                return cached;
+            _descriptorReadinessImportCount++;
             CustomModelPackage package = CustomModelPackageSerializer.Load(
                 packagePath);
 
@@ -11383,6 +11418,8 @@ public sealed partial class MainWindowViewModel :
             // not the source FBX runtime-rig identity stored in RigSignature.
             // Comparing those two independent signatures made every valid
             // owning-model variant look stale and disabled its export row.
+            if (_descriptorReadinessCache.Count >= 256) _descriptorReadinessCache.Clear();
+            _descriptorReadinessCache[readinessKey] = DescriptorInventoryValidation.Valid;
             return DescriptorInventoryValidation.Valid;
         }
         catch (Exception exception) when (
@@ -11937,6 +11974,7 @@ public sealed partial class MainWindowViewModel :
             "Facial editor",
             $"Stored {FacialFpp.Morphs.Count:N0} authored morph values at frame {frame:N0}",
             $"The final immutable '{FacialEditorLayerName}' override layer stores absolute authored totals and is included in mimic export.");
+        FacialFpp.ReleasePreviewOverrides();
         RefreshAnimationPreview();
         StatusText = $"Keyed facial pose at frame {frame:N0}";
     }
@@ -13565,6 +13603,7 @@ public sealed partial class MainWindowViewModel :
         bool clearPreview)
     {
         ArgumentNullException.ThrowIfNull(project);
+        _descriptorReadinessCache.Clear();
         CancelRootMotionTrailJob("Project changed");
         _rootMotionTrailCache = null;
         _project = project;
@@ -13636,6 +13675,7 @@ public sealed partial class MainWindowViewModel :
             SourceViewport.SceneSource.SetScene([], null, []);
             TargetViewport.SceneSource.SetScene([], null, []);
             FacialFpp.ReplaceMorphs([]);
+            LoadFacialModelLibrary(null);
             FacialFpp.ReplaceMimicPresets([]);
             IkEditor.ReplaceChains([]);
             AutoMapCommand.NotifyCanExecuteChanged();
@@ -13961,6 +14001,7 @@ public sealed partial class MainWindowViewModel :
                 customTarget.Rig.MorphChannels.Select(
                     static morph =>
                         new MorphChannelViewModel(morph.Name)));
+            LoadFacialModelLibrary(customTarget.PreviewSession.Document.FacialPresets);
             IkEditor.ReplaceChains(
                 customTarget.Rig.IkChains.Select(
                     static chain => chain.Name));
@@ -14047,12 +14088,14 @@ public sealed partial class MainWindowViewModel :
             ? null
             : string.Join("; ", model.PreviewDiagnostics);
         _customTargetPreviewSession = model.CustomPreviewSession;
+        SynchronizeSecondaryMotionModel();
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
         SetTargetPreviewScene(model.PreviewMeshes, model.Skeleton);
         UpdateTargetPreviewPresentation();
         ReplaceSkeleton(model.Skeleton);
         FacialFpp.ReplaceMorphs(model.Rig.MorphChannels.Select(
             static morph => new MorphChannelViewModel(morph.Name)));
+        LoadFacialModelLibrary(model.CustomPreviewSession?.Document.FacialPresets);
         IkEditor.ReplaceChains(model.Rig.IkChains.Select(
             static chain => chain.Name));
         InitializeIkEditorFromBindPose();
@@ -17344,6 +17387,7 @@ public sealed partial class MainWindowViewModel :
                     // The character drives an existing bank; it ships no
                     // animation of its own.
                     DeployWithoutAnimations = true,
+                    ReferenceExistingAnimationLibrary = settings.ReferenceExistingAnimationLibrary,
                     InstallLooseAnm2 = false,
                     ExportPortableAnimationRpack = false,
                 };
@@ -23485,15 +23529,14 @@ public sealed partial class MainWindowViewModel :
             SkeletonPose sourcePose = SampleSourcePose();
             SetSourcePreviewScene(
                 _sourceBaseMeshes,
-                CorePreviewAdapter.ToRenderSkeleton(
-                    sourcePose,
-                    SelectedSourceBoneIndex));
+                CreateSourcePresentationSkeleton(sourcePose));
         }
 
         SetTargetPreviewScene(previewMeshes, payload.Skeleton);
         ReplaceSkeleton(payload.Skeleton);
         FacialFpp.ReplaceMorphs(payload.MorphChannelNames.Select(
             static name => new MorphChannelViewModel(name)));
+        LoadFacialModelLibrary(_customTargetPreviewSession?.Document.FacialPresets);
         IkEditor.ReplaceChains(
             _targetRig?.IkChains.Select(static chain => chain.Name)
             ?? []);
@@ -24659,8 +24702,7 @@ public sealed partial class MainWindowViewModel :
         ArgumentNullException.ThrowIfNull(animation);
         ArgumentNullException.ThrowIfNull(projectAssets);
         ArgumentNullException.ThrowIfNull(catalogAssets);
-        if (animation.SourceBinding is not { } binding ||
-            catalogAssets.Count == 0)
+        if (animation.SourceBinding is not { } binding)
         {
             return false;
         }
@@ -24668,6 +24710,7 @@ public sealed partial class MainWindowViewModel :
         Dictionary<Guid, ProjectAssetReference> assets = projectAssets
             .ToDictionary(static asset => asset.Id);
         List<ProjectAssetReference> requiredRetailAssets = [];
+        bool hasLocalCustomAnm2Source = false;
         if (binding.Kind == AnimationSourceKind.RetailAnm2)
         {
             if (!assets.TryGetValue(
@@ -24692,7 +24735,19 @@ public sealed partial class MainWindowViewModel :
                 return false;
             }
 
-            requiredRetailAssets.Add(sourceModel);
+            if (sourceModel.Kind == ProjectAssetKind.RetailGameResource)
+            {
+                requiredRetailAssets.Add(sourceModel);
+            }
+            else if (sourceModel.Kind == ProjectAssetKind.CustomModelSource)
+            {
+                hasLocalCustomAnm2Source =
+                    binding.Kind == AnimationSourceKind.LocalAnm2;
+            }
+            else
+            {
+                return false;
+            }
         }
 
         if (animation.TargetAssetId is { } targetId)
@@ -24710,11 +24765,11 @@ public sealed partial class MainWindowViewModel :
             }
         }
 
-        // A local FBX with no target needs no retail lookup and is restored by
-        // LoadActiveSourceAsync. Everything listed here must resolve by exact
-        // retail identity; names and the currently selected browser row are
-        // never accepted as substitutes.
-        return requiredRetailAssets.Count > 0 &&
+        // A local ANM2 can use a fingerprinted project-owned custom model;
+        // activation validates its package and payload without a retail lookup.
+        // Any actual retail dependency still requires its exact catalog identity.
+        // Local FBX sources without retail targets use LoadActiveSourceAsync.
+        return (hasLocalCustomAnm2Source || requiredRetailAssets.Count > 0) &&
                requiredRetailAssets.All(asset =>
                    FindRetailCatalogAsset(
                        asset,
@@ -25961,6 +26016,7 @@ public sealed partial class MainWindowViewModel :
                         frame.DisplayPose,
                         SelectedTargetBoneIndex,
                         frame.ActorWorldTransform);
+            rendered = ApplySecondaryMotionPreview(projectAnimation, request, rendered);
             GizmoRenderData[] boneGizmos =
                 BuildBoneEditGizmos(rendered);
             GizmoRenderData[] cameraGizmos =
@@ -25969,7 +26025,7 @@ public sealed partial class MainWindowViewModel :
                     ? BuildCameraHelperGizmos(frame.CameraHelpers)
                     : [];
             GizmoRenderData[] targetGizmos =
-                boneGizmos.Concat(cameraGizmos).ToArray();
+                boneGizmos.Concat(cameraGizmos).Concat(_secondaryGizmos).ToArray();
             MorphWeight[] targetMorphs =
                 frame.DisplayMorphWeights.Select(static pair =>
                     new MorphWeight(
@@ -26057,6 +26113,7 @@ public sealed partial class MainWindowViewModel :
             SynchronizeMorphControls(
                 frame.AuthoredMorphWeights);
             ApplyEvaluatedPreviewCamera(frame);
+            UpdateFacialSpeechPreview();
             ApplyAuthoringOverlays();
             EnsureRootMotionTrail();
             _lastPreviewDiagnostic = null;
@@ -26176,9 +26233,7 @@ public sealed partial class MainWindowViewModel :
         {
             SetSourcePreviewScene(
                 _sourceBaseMeshes,
-                CorePreviewAdapter.ToRenderSkeleton(
-                    sourcePose,
-                    SelectedSourceBoneIndex),
+                CreateSourcePresentationSkeleton(sourcePose),
                 generation: generation);
             TargetViewport.SceneSource.SetScene(
                 _targetBaseMeshes,
@@ -26219,9 +26274,7 @@ public sealed partial class MainWindowViewModel :
         // the timeline is being scrubbed.
         SetSourcePreviewScene(
             _sourceBaseMeshes,
-            CorePreviewAdapter.ToRenderSkeleton(
-                sourcePose,
-                SelectedSourceBoneIndex),
+            CreateSourcePresentationSkeleton(sourcePose),
             generation: Interlocked.Increment(
                 ref _previewGeneration));
         if (!UsesLinkedTargetExternalView())
@@ -26250,9 +26303,7 @@ public sealed partial class MainWindowViewModel :
                 .ToArray();
         SetSourcePreviewScene(
             _sourceBaseMeshes,
-            CorePreviewAdapter.ToRenderSkeleton(
-                frame.RawSourcePose,
-                SelectedSourceBoneIndex),
+            CreateSourcePresentationSkeleton(frame.RawSourcePose),
             morphWeights: rawMorphs,
             generation: generation);
         if (!UsesLinkedTargetExternalView())
@@ -26264,6 +26315,11 @@ public sealed partial class MainWindowViewModel :
                     : "Exact source rig, retail mesh, ANM2 pose, and authored morph channels");
         }
     }
+
+    private SkeletonRenderData CreateSourcePresentationSkeleton(SkeletonPose sourcePose) =>
+        _sourceModelContext?.CustomPreviewSession is { } customSource
+            ? customSource.CreateSkeleton(sourcePose, SelectedSourceBoneIndex)
+            : CorePreviewAdapter.ToRenderSkeleton(sourcePose, SelectedSourceBoneIndex);
 
     private void UpdateAdaptiveViewport(
         ImportedAnimationSession source,
@@ -26292,6 +26348,7 @@ public sealed partial class MainWindowViewModel :
                 ? null
                 : string.Join("; ", target.PreviewDiagnostics);
         _customTargetPreviewSession = target.PreviewSession;
+        SynchronizeSecondaryMotionModel();
     }
 
     private void ClearCustomTargetPreviewPresentation()
@@ -26299,6 +26356,7 @@ public sealed partial class MainWindowViewModel :
         _customTargetUsesSourcePreviewFallback = false;
         _customTargetPreviewDiagnostic = null;
         _customTargetPreviewSession = null;
+        SynchronizeSecondaryMotionModel();
     }
 
     private void UpdateTargetPreviewPresentation()
@@ -27576,10 +27634,16 @@ public sealed partial class MainWindowViewModel :
         RenderFrameSnapshot evaluatedDisplayFrame)
     {
         SkeletonRenderData skeleton =
-            CorePreviewAdapter.ToRenderSkeleton(
-                frame.AuthoredPose,
-                SelectedTargetBoneIndex,
-                frame.ActorWorldTransform);
+            _customTargetPreviewSession is { } customPreview
+                ? customPreview.CreateSkeleton(
+                    frame.AuthoredPose,
+                    SelectedTargetBoneIndex,
+                    frame.ActorWorldTransform)
+                : CorePreviewAdapter.ToRenderSkeleton(
+                    frame.AuthoredPose,
+                    SelectedTargetBoneIndex,
+                    frame.ActorWorldTransform);
+        skeleton = ApplySecondaryMotionToExternalSkeleton(skeleton);
         AttachmentSceneComposition scene =
             AttachmentSceneComposer.Compose(
                 _targetBaseMeshes,
@@ -27619,7 +27683,7 @@ public sealed partial class MainWindowViewModel :
         {
             Meshes = meshes,
             Skeleton = skeleton,
-            Gizmos = BuildBoneEditGizmos(skeleton),
+            Gizmos = BuildBoneEditGizmos(skeleton).Concat(_secondaryExternalGizmos).ToArray(),
             MorphWeights = morphs,
             FppProjectionState = null,
         };
@@ -28719,14 +28783,7 @@ public sealed partial class MainWindowViewModel :
         _synchronizingMorphWeights = true;
         try
         {
-            foreach (MorphChannelViewModel morph in FacialFpp.Morphs)
-            {
-                morph.Weight = values.TryGetValue(
-                    morph.Name,
-                    out double value)
-                        ? checked((float)value)
-                        : 0;
-            }
+            FacialFpp.SynchronizeEvaluatedWeights(values);
         }
         finally
         {

@@ -95,6 +95,9 @@
                                Foreground="{StaticResource MutedTextBrush}"
                                Text="{Binding AnimationScriptAliasSummary}"
                                TextWrapping="Wrap" />
+                    <CheckBox Margin="0,5,0,0" Content="Reference existing game animation bank"
+                              IsChecked="{Binding ReferenceExistingAnimationLibrary}"
+                              ToolTip="Emit only the model ASCR redirect. Validate the stock source graph and never publish an empty local bank." />
 
                     <Separator Margin="0,12" />
                     <TextBlock FontWeight="SemiBold" Text="Preview" />

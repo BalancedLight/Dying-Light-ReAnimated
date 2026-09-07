@@ -9,6 +9,7 @@ namespace ReAnimated.App;
 public partial class App : Application, IDisposable
 {
     private readonly WpfStartupSmoke? _startupSmoke;
+    private readonly DesktopStartupOptions? _startupOptions;
     private readonly FatalCrashPresentationGate _fatalCrashPresentation =
         new();
     private CrashReporter? _crashReporter;
@@ -19,9 +20,11 @@ public partial class App : Application, IDisposable
     private bool _disposed;
 
     internal App(
-        WpfStartupSmoke? startupSmoke = null)
+        WpfStartupSmoke? startupSmoke = null,
+        DesktopStartupOptions? startupOptions = null)
     {
         _startupSmoke = startupSmoke;
+        _startupOptions = startupOptions;
     }
 
     protected override void OnStartup(StartupEventArgs e)
@@ -50,6 +53,8 @@ public partial class App : Application, IDisposable
                     string.Empty,
                 ["runtime"] = Environment.Version.ToString(),
                 ["os"] = Environment.OSVersion.VersionString,
+                ["softwareUi"] =
+                    (_startupOptions?.SoftwareUi ?? false).ToString(),
             });
 
         DispatcherUnhandledException += OnDispatcherUnhandledException;
@@ -62,7 +67,7 @@ public partial class App : Application, IDisposable
         window.Show();
         if (_startupSmoke is null)
         {
-            _ = InitializeAssetCatalogAsync(viewModel);
+            _ = InitializeWorkspaceAsync(viewModel);
         }
         _ = InitializeInstalledBuildStatusAsync(viewModel);
     }
@@ -244,6 +249,36 @@ public partial class App : Application, IDisposable
                 "dl1_asset_catalog_unexpected_failure",
                 "The saved Dying Light 1 asset catalog could not be opened unexpectedly.",
                 exception: exception);
+        }
+    }
+
+    private async Task InitializeWorkspaceAsync(
+        MainWindowViewModel viewModel)
+    {
+        if (_startupOptions?.ProjectPath is { } projectPath)
+        {
+            try
+            {
+                await viewModel.OpenWorkspaceAsync(projectPath);
+            }
+            catch (Exception exception)
+            {
+                // Expected project/read failures use the open transaction's
+                // normal diagnostics. Keep unexpected startup errors logged
+                // without making the entire editor unavailable.
+                _logger?.Write(
+                    AppLogLevel.Error,
+                    "startup_project_open_unexpected_failure",
+                    "The supplied project failed to open during startup.",
+                    exception: exception);
+            }
+        }
+
+        if (!_disposed)
+        {
+            // Read project-specific retail roots only after its transaction
+            // completes; catalog restore also resolves saved retail sources.
+            await InitializeAssetCatalogAsync(viewModel);
         }
     }
 }

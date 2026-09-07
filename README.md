@@ -6,7 +6,21 @@ retail RPack asset browsing, FBX/ANM2 import, retargeting, non-destructive bone
 edits, facial preview, FPP/EyeCamera preview, ANM2 export, and animation-library
 RPack output.
 
-This repository contains the C# application only. It has no Python runtime, packaging, validation, or GitHub Actions dependency. The checked-in JSON compatibility fixtures are static C# test inputs that preserve reviewed historical behavior.
+This repository contains the C# application. Its build, packaging and core validation do not require Python. Optional direct SPB inspection uses a configured DyingAudio Python environment; importing an already-generated speech exchange does not require that tool. The checked-in JSON compatibility fixtures are static C# test inputs that preserve reviewed historical behavior.
+
+Model-owned expression presets, FED writing and synchronized speech preview are
+described in [Speech and facial preview](docs/speech-preview.md). The
+[secondary-motion preview](docs/secondary-motion-preview.md) supports a
+deterministic cloth/hair approximation, collision and anchor overlays, and
+validated native sidecar syntax. Preview simulation is separate from authored
+animation and is not proof of native game behavior.
+
+The normal model source, complete-package and Developer Tools deployment paths
+include saved facial presets as FED and imported PHX/MPCloth companions, with
+resource-specific names, dependency checks and rollback ownership. See the
+[native export workflow](docs/secondary-motion-preview.md#native-export-from-the-model-workflow).
+Both package building and deployment honor the saved
+[existing animation bank](docs/stock-animation-reference-export.md) choice.
 
 ## Build
 

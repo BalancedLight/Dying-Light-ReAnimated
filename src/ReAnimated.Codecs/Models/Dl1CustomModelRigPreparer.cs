@@ -114,9 +114,9 @@ public sealed class Dl1PreparedAuthoredRig
 }
 
 /// <summary>
-/// Authors Chrome's local +X bone frames while retaining source pivots, exact
-/// inverse-global references, deterministic physical order, and nonzero
-/// segment-proxy bounds.
+/// Prepares emitted bone frames, exact inverse-global references, deterministic
+/// physical order and nonzero segment-proxy bounds. Existing animation banks
+/// require the source bind basis; newly authored animation uses Chrome +X frames.
 /// </summary>
 public static class Dl1CustomModelRigPreparer
 {
@@ -165,11 +165,20 @@ public static class Dl1CustomModelRigPreparer
         ImmutableArray<TransformMatrix> originalGlobals = physicalOriginalGlobals.MoveToImmutable();
         ImmutableArray<int> parentArray = physicalParents.MoveToImmutable();
         ImmutableArray<bool> deformArray = physicalDeform.MoveToImmutable();
-        ImmutableArray<TransformMatrix> authoredGlobals = AuthorChromeFrames(
-            originalGlobals,
-            parentArray,
-            deformArray,
-            cancellationToken);
+        bool preserveSourceFrames = model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
+        HashSet<string> secondaryBones = model.Package.Document.SecondaryMotion.Groups
+            .SelectMany(group => group.Particles)
+            .Where(particle => particle.DrivenBoneName is not null)
+            .Select(particle => particle.DrivenBoneName!)
+            .ToHashSet(StringComparer.Ordinal);
+        ImmutableArray<TransformMatrix> chromeGlobals = !preserveSourceFrames || secondaryBones.Count > 0
+            ? AuthorChromeFrames(originalGlobals, parentArray, deformArray, cancellationToken)
+            : originalGlobals;
+        ImmutableArray<TransformMatrix> authoredGlobals = preserveSourceFrames
+            ? depthFirstSource.Select((sourceIndex, physicalIndex) => secondaryBones.Contains(sourceBones[sourceIndex].Name)
+                ? chromeGlobals[physicalIndex]
+                : originalGlobals[physicalIndex]).ToImmutableArray()
+            : chromeGlobals;
         ImmutableArray<Dl1AuthoredBoneBounds> bounds = ComputeSegmentProxyBounds(
             model.Surfaces,
             authoredGlobals,
@@ -185,9 +194,13 @@ public static class Dl1CustomModelRigPreparer
             int sourceIndex = depthFirstSource[physicalIndex];
             CustomModelBone sourceBone = sourceBones[sourceIndex];
             int parent = sourceBone.ParentIndex < 0 ? -1 : sourceToPhysical[sourceBone.ParentIndex];
-            TransformMatrix local = parent < 0
-                ? authoredGlobals[physicalIndex]
-                : authoredGlobals[parent].InvertedAffine() * authoredGlobals[physicalIndex];
+            bool preserveLocal = preserveSourceFrames && !secondaryBones.Contains(sourceBone.Name) &&
+                (sourceBone.ParentIndex < 0 || !secondaryBones.Contains(sourceBones[sourceBone.ParentIndex].Name));
+            TransformMatrix local = preserveLocal
+                ? sourceBone.ExactLocalBindMatrix
+                : parent < 0
+                    ? authoredGlobals[physicalIndex]
+                    : authoredGlobals[parent].InvertedAffine() * authoredGlobals[physicalIndex];
             bool deform = IsDeform(sourceBone);
             uint descriptor = Dl1NameHash.Compute(sourceBone.Name);
             if (descriptorOwners.TryGetValue(descriptor, out string? existing))

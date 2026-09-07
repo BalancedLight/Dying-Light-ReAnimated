@@ -230,6 +230,8 @@ public static class CustomModelPackageSerializer
                 MorphChannels = [],
                 MorphSignature = CustomModelDocument.EmptyMorphSignature,
                 RigConformance = null,
+                SecondaryMotion = new(),
+                FacialPresets = new(),
             },
             // Schema 2 predates rig conformance. An absent layer simply means
             // the model keeps its imported rig, so the migration is additive.
@@ -237,9 +239,25 @@ public static class CustomModelPackageSerializer
             {
                 SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
                 RigConformance = null,
+                SecondaryMotion = new(),
+                FacialPresets = new(),
+            },
+            // Schema 3 has no model-owned secondary motion or facial preset library.
+            3 => document with
+            {
+                SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                SecondaryMotion = new(),
+                FacialPresets = new(),
+            },
+            // Schema 4 already owns physics/presets; retain them. The new bank
+            // reference switch defaults false so earlier authored behavior stays intact.
+            4 => document with
+            {
+                SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                BuildSettings = document.BuildSettings with { ReferenceExistingAnimationLibrary = false },
             },
             _ => throw new CustomModelFormatException(
-                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1, 2, or {CustomModelDocument.CurrentSchemaVersion}."),
+                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1, 2, 3, 4, or {CustomModelDocument.CurrentSchemaVersion}."),
         };
     }
 

@@ -1,5 +1,8 @@
 using System.Numerics;
 using System.Runtime.InteropServices;
+using ReAnimated.App.Infrastructure;
+using ReAnimated.Codecs.Fbx;
+using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Renderer.D3D11;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -20,6 +23,53 @@ public sealed class RendererOffscreenGoldenTests
         ITestOutputHelper output)
     {
         _output = output;
+    }
+
+    [Fact]
+    [Trait("Category", "Renderer")]
+    public void AuthoredFbxMorphNormalsMatchCpuBakedSurfaceThroughWarp()
+    {
+        var imported=FbxModelAuthoringImporter.Import(FbxCustomModelMorphImportTests.CreateNormalMorphFbx(),"normal-parity.fbx",
+            new FbxModelAuthoringImportOptions { RigMode=CustomModelRigMode.StaticProp });
+        var preview=CustomModelPreviewAdapter.Create(imported,null,0,mode:CustomModelPreviewMode.SourceFbx);
+        MeshRenderData mesh=Assert.Single(preview.Meshes) with { LocalToWorld=Matrix4x4.CreateScale(80) };
+        MorphWeight[] weights=[new("generic_smile",.65f)];
+        CpuDeformedVertex[] evaluated=CpuMeshDeformationEvaluator.Evaluate(mesh,null,weights);
+        MeshRenderData cpu=new("cpu-normal-reference",evaluated.Select(v=>new MeshVertex(v.Position,v.Normal,v.TextureCoordinate,Vector4.Zero,Vector4.Zero)).ToArray(),
+            mesh.Indices,Matrix4x4.Identity,ReadOnlyMemory<Matrix4x4>.Empty,false) { Tint=mesh.Tint };
+        var frame=new RenderFrameSnapshot(new Vector4(.03f,.05f,.09f,1),
+            new RenderCamera(new Vector3(.4f,.4f,2.6f),new Vector3(.4f,.4f,0),Vector3.UnitY,40,.001f,20),[mesh],null,[],weights);
+        D3D11CreateDevice(null,DriverType.Warp,DeviceCreationFlags.BgraSupport,[FeatureLevel.Level_11_0],
+            out ID3D11Device? device,out _,out ID3D11DeviceContext? context).CheckError();
+        using(device) using(context)
+        {
+            Assert.NotNull(device);Assert.NotNull(context);
+            using var color=device.CreateTexture2D(CreateTextureDescription(Format.B8G8R8A8_UNorm,ResourceUsage.Default,BindFlags.RenderTarget,CpuAccessFlags.None));
+            using var target=device.CreateRenderTargetView(color);
+            using var depth=device.CreateTexture2D(CreateTextureDescription(Format.D24_UNorm_S8_UInt,ResourceUsage.Default,BindFlags.DepthStencil,CpuAccessFlags.None));
+            using var depthView=device.CreateDepthStencilView(depth);
+            using var staging=device.CreateTexture2D(CreateTextureDescription(Format.B8G8R8A8_UNorm,ResourceUsage.Staging,BindFlags.None,CpuAccessFlags.Read));
+            using var pass=new GpuSkinnedMeshRenderPass();
+            List<string> diagnostics=[];
+            byte[] gpu=Draw(frame,1);
+            byte[] cpuPixels=Draw(frame with { Meshes=[cpu],MorphWeights=[] },2);
+            Assert.Empty(diagnostics);
+            Assert.True(FindChangedPixelBounds(gpu).PixelCount>200);
+            int maximumDifference=gpu.Zip(cpuPixels,static(a,b)=>Math.Abs(a-b)).Max();
+            Assert.InRange(maximumDifference,0,2);
+            byte[] neutral=Draw(frame with { MorphWeights=[] },3);
+            Assert.True(gpu.Zip(neutral,static(a,b)=>Math.Abs(a-b)>5).Count(x=>x)>100,
+                "The morphed surface must visibly differ from the unmorphed control.");
+
+            byte[] Draw(RenderFrameSnapshot snapshot,long index)
+            {
+                context.OMSetRenderTargets(target,depthView);context.RSSetViewport(0,0,Width,Height);
+                context.ClearRenderTargetView(target,new Color4(.03f,.05f,.09f,1));
+                context.ClearDepthStencilView(depthView,DepthStencilClearFlags.Depth,1,0);
+                D3D11RenderFrameContext renderContext=new(device,context,target,depthView,Width,Height,index,diagnostics.Add);
+                pass.Render(in renderContext,snapshot);context.Flush();return ReadBack(context,color,staging);
+            }
+        }
     }
 
     [Fact]

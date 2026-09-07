@@ -16,6 +16,119 @@ namespace ReAnimated.Tests;
 
 public sealed class Dl1DeveloperToolsDeploymentTests
 {
+    [Fact]
+    public async Task NativeCompanionsParticipateInDeploymentOwnershipConflictsAndRollback()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request = WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory, true, false));
+            request = request with
+            {
+                Model = request.Model with { Package = request.Model.Package with
+                {
+                    Document = request.Model.Package.Document with { SecondaryMotion = Dl1NativeCompanionWriterTests.NativeSetup },
+                } },
+                SourceWriterOverride = async (sourceRequest, token) =>
+                {
+                    var source = await WriteSyntheticSourceAsync(sourceRequest, token);
+                    var companions = Dl1NativeCompanionWriter.Build(sourceRequest.Model.Package.Document,
+                        sourceRequest.ResourceName, ["root"]);
+                    foreach ((string name, byte[] bytes) in companions.Files)
+                        await File.WriteAllBytesAsync(Path.Combine(sourceRequest.OutputDirectory, name), bytes, token);
+                    return source with { NativeCompanionNotes = companions.Notes,
+                        NativeCompanionFiles = companions.Files.Keys.ToImmutableArray() };
+                },
+            };
+            const string physicsPath = "data/odephysics/meshpartcloth/GenericModel_000.phx";
+            string existing = Path.Combine(request.ProjectRoot, physicsPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(existing)!);
+            await File.WriteAllTextAsync(existing, "previous author physics");
+            var plan = await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+            Assert.Contains(plan.Conflicts, conflict => conflict.RelativePath == physicsPath);
+            Assert.Contains(plan.NativeCompanionNotes, note => note.Contains("not re-fitted", StringComparison.Ordinal));
+            request = ResolveConflict(request, physicsPath, Dl1DeploymentConflictResolution.BackUpAndReplace);
+            var result = await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            Assert.Equal(Dl1NativeCompanionWriterTests.PhysicsText, await File.ReadAllTextAsync(existing));
+            Assert.Contains(result.Receipt.Artifacts, artifact => artifact.RelativePath == physicsPath && artifact.Role == Dl1DeploymentArtifactRole.Source);
+            Assert.Contains(result.Receipt.Artifacts, artifact => artifact.RelativePath == "data/characters/generic_character/GenericModel.mpcloth");
+            Assert.Equal(result.Receipt.DeploymentId, Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot)!.DeploymentId);
+            await Dl1DeveloperToolsProjectDeployer.RollbackAsync(result.ReceiptPath);
+            Assert.Equal("previous author physics", await File.ReadAllTextAsync(existing));
+            Assert.False(File.Exists(Path.Combine(request.ProjectRoot, "data/characters/generic_character/GenericModel.mpcloth")));
+        }
+        finally { RpackTestData.DeleteTemporaryDirectory(directory); }
+    }
+
+    [Fact]
+    public async Task StockReferenceDeploysOnlyModelArtifactsAndRollsBackWithoutTouchingTheBank()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request = WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory, false, false)) with
+            {
+                ReferenceExistingAnimationLibrary = true,
+                DeployWithoutAnimations = true,
+                AnimationSelections = [],
+                ModelCompilerOverride = async (compilerRequest, token) =>
+                {
+                    Assert.True(compilerRequest.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary);
+                    var compiled = await WriteSyntheticModelCompilerAsync(compilerRequest, token);
+                    string raw = Path.Combine(Path.GetDirectoryName(compiled.OutputRpackPath)!, "GenericModel.msh_compiler_obj");
+                    await File.WriteAllTextAsync(raw, "raw compiler provenance", token);
+                    return compiled with { RawCompiledMeshObjectPath = raw };
+                },
+            };
+            File.Delete(request.RetailData0PakPath);
+            using (var zip = System.IO.Compression.ZipFile.Open(request.RetailData0PakPath, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                using var writer = new StreamWriter(zip.CreateEntry("data/characters/animations/animscripts/GenericLibrary.scr").Open());
+                writer.Write("SeqTrack(\"idle\",\"stock_idle\",0,2,30,1,0)\n");
+            }
+            StockAnimationReferenceTests.WriteCompiledBank(request.RetailData0PakPath, "GenericLibrary");
+            var plan = await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+            Assert.True(plan.ReferenceExistingAnimationLibrary);
+            Assert.Null(plan.AnimationRuntimePackRelativePath);
+            Assert.Null(plan.AnimationContentManifestRelativePath);
+            const string modelPack = "out/ReAnimated/GenericModel/model/GenericModel_pc.rpack";
+            const string rawObject = "out/ReAnimated/GenericModel/compiler/GenericModel.msh_compiler_obj";
+            Assert.Contains(plan.Artifacts, artifact => artifact.RelativePath == modelPack &&
+                artifact.Role == Dl1DeploymentArtifactRole.PortableOnly);
+            Assert.DoesNotContain(plan.Artifacts, a => a.RelativePath.StartsWith("data/characters/animations/", StringComparison.OrdinalIgnoreCase));
+            var result = await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            Assert.Equal(3, result.Receipt.SchemaVersion);
+            Assert.True(result.Receipt.ReferenceExistingAnimationLibrary);
+            Assert.Null(result.Receipt.AnimationContentManifestRelativePath);
+            Assert.Null(result.Receipt.AnimationRuntimePackSha256);
+            Assert.DoesNotContain(result.Receipt.Artifacts, a => a.RelativePath.Contains("animation-refresh", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(result.Receipt.Artifacts, a => a.RelativePath.EndsWith(".ascr", StringComparison.Ordinal));
+            Dl1DeveloperToolsDeploymentReceiptArtifact retainedPack = Assert.Single(result.Receipt.Artifacts, artifact => artifact.RelativePath == modelPack);
+            Assert.Equal(Dl1DeploymentArtifactRole.PortableOnly, retainedPack.Role);
+            Assert.Equal("synthetic rpack", await File.ReadAllTextAsync(Path.Combine(request.ProjectRoot, modelPack)));
+            Assert.Equal("raw compiler provenance", await File.ReadAllTextAsync(Path.Combine(request.ProjectRoot, rawObject)));
+            Assert.Equal(result.Receipt.DeploymentId,
+                Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot)!.DeploymentId);
+            await Dl1DeveloperToolsProjectDeployer.RollbackAsync(result.ReceiptPath);
+            Assert.False(File.Exists(Path.Combine(request.ProjectRoot, modelPack)));
+            Assert.False(File.Exists(Path.Combine(request.ProjectRoot, rawObject)));
+            Assert.False(File.Exists(Path.Combine(request.ProjectRoot, "data/characters/animations/animscripts/GenericLibrary.scr")));
+        }
+        finally { RpackTestData.DeleteTemporaryDirectory(directory); }
+    }
+
+    [Fact]
+    public async Task StockReferenceRejectsAuthoredAnimationOptions()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request = CreateDeploymentRequest(directory, true, true) with { ReferenceExistingAnimationLibrary = true };
+            await Assert.ThrowsAsync<InvalidOperationException>(() => Dl1DeveloperToolsProjectDeployer.PreflightAsync(request));
+        }
+        finally { RpackTestData.DeleteTemporaryDirectory(directory); }
+    }
+
     private static readonly JsonSerializerOptions LegacyReceiptJsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,

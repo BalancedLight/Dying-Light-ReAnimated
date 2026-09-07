@@ -127,6 +127,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     private bool _characterIdWasExplicitlyEdited;
     private string _surfaceName = "default";
     private string _animationScriptAlias = string.Empty;
+    private bool _referenceExistingAnimationLibrary;
     private bool _flipTextureCoordinateV = true;
     private string _compilerExecutablePath = Dl1OfficialModelCompiler.FindDefaultCompilerExecutable() ?? string.Empty;
     private string _developerToolsProjectRoot = string.Empty;
@@ -477,9 +478,24 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     /// </summary>
     public string AnimationScriptAliasSummary =>
         string.IsNullOrWhiteSpace(AnimationScriptAlias)
-            ? "No library set. Deploying the character emits an ASCR with no target; set the bank it should drive."
-            : $"The deployed ASCR redirects to '{AnimationScriptAlias.Trim()}.scr' " +
+            ? "No library set. Set the animation bank before deploying this character."
+            : ReferenceExistingAnimationLibrary
+                ? $"References the existing '{AnimationScriptAlias.Trim()}.scr' bank; no local animation script or clips are published."
+                : $"The deployed ASCR redirects to '{AnimationScriptAlias.Trim()}.scr' " +
                 $"(data/characters/animations/animscripts/{AnimationScriptAlias.Trim()}.scr).";
+
+    public bool ReferenceExistingAnimationLibrary
+    {
+        get => _referenceExistingAnimationLibrary;
+        set
+        {
+            if (!SetProperty(ref _referenceExistingAnimationLibrary, value)) return;
+            MarkAuthoringChanged();
+            InvalidateDeploymentPreflight();
+            OnPropertyChanged(nameof(AnimationScriptAliasSummary));
+            NotifyCommands();
+        }
+    }
 
     public string DeveloperToolsProjectRoot
     {
@@ -537,16 +553,34 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             var lines = new List<string>
             {
                 $"data/characters/{character}/{model}.msh, .chr, .bscr, .ascr",
-                $"data/characters/animations/animscripts/{library}.scr",
                 $"assets_pc/characters/{character}/{model}.msh_obj",
-                $"assets_pc/characters/animations/<clip>.anm2_obj ({animationCount:N0})",
             };
-            if (InstallLooseAnm2)
+            if (ReferenceExistingAnimationLibrary)
+            {
+                lines.Add($"Existing bank reference: {library}.scr (no replacement script or clips)");
+                lines.Add($"out/ReAnimated/{model}/model/{model}_pc.rpack (retained compiled model)");
+            }
+            else
+            {
+                lines.Add($"data/characters/animations/animscripts/{library}.scr");
+                lines.Add($"assets_pc/characters/animations/<clip>.anm2_obj ({animationCount:N0})");
+            }
+            if (_model?.Package.Document is { } document)
+            {
+                if (!document.FacialPresets.Presets.IsEmpty)
+                    lines.Add($"data/characters/{character}/{model}.fed (saved facial presets)");
+                if (!document.SecondaryMotion.NativeSources.IsEmpty)
+                {
+                    lines.Add($"data/characters/{character}/{model}.mpcloth");
+                    lines.Add($"data/odephysics/meshpartcloth/{model}_NNN.phx (saved native sources)");
+                }
+            }
+            if (!ReferenceExistingAnimationLibrary && InstallLooseAnm2)
             {
                 lines.Add("data/characters/animations/<clip>.anm2");
             }
 
-            if (ExportPortableAnimationRpack)
+            if (!ReferenceExistingAnimationLibrary && ExportPortableAnimationRpack)
             {
                 lines.Add($"out/ReAnimated/{model}/{library}_pc.rpack (optional portable copy)");
             }
@@ -1237,7 +1271,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             BuildStatus =
                 $"Source model ready: {Path.GetFileName(result.SourceMshPath)}, " +
                 $"{Path.GetFileName(result.CharacterDefinitionPath)}, {Path.GetFileName(result.BoneScriptPath)}. " +
-                "Use Compile model RPack to create the validated .msh_obj and RPack; .skn remains unsupported.";
+                "Use Compile model RPack to create the validated .msh_obj and RPack; .skn remains unsupported. " +
+                string.Join(" ", result.NativeCompanionNotes);
             _setStatus($"Built custom-model source files in {directory}");
         }
         catch (OperationCanceledException)
@@ -1339,6 +1374,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             BuildStatus = result.AnimationLibrary is null
                 ? $"Complete DL1 model package built: {result.PackageDirectory}"
                 : $"Complete DL1 model + {result.AnimationLibrary.AnimationNames.Length:N0} animation(s): {result.PackageDirectory}";
+            if (result.StockAnimationReference is { } stock)
+                BuildStatus += $" References existing bank {stock.BankName}; no replacement animation bank was generated. Runtime binding still requires Player verification.";
+            BuildStatus += " " + string.Join(" ", result.SourceModel.NativeCompanionNotes);
             if (!currentDraftMatchesBuild)
             {
                 BuildStatus += " The authoring draft changed during the build, so its compiler-validation receipt was not attached; rebuild the current draft before publishing it.";
@@ -1418,7 +1456,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         HasModel &&
         !IsBusy &&
         Directory.Exists(DeveloperToolsProjectRoot) &&
-        Animations.Any(static clip => clip.Included && clip.DecodedClip is not null);
+        (ReferenceExistingAnimationLibrary || Animations.Any(static clip => clip.Included && clip.DecodedClip is not null));
 
     private Dl1DeveloperToolsDeploymentRequest CreateDeveloperToolsDeploymentRequest(
         ImmutableDictionary<string, Dl1DeploymentConflictResolution>? conflictResolutions = null)
@@ -1442,11 +1480,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             ModelResourceName = ResourceName,
             SurfaceName = SurfaceName,
             AnimationLibraryName = AnimationScriptAlias,
-            AnimationSelections = Animations
+            ReferenceExistingAnimationLibrary = ReferenceExistingAnimationLibrary,
+            DeployWithoutAnimations = ReferenceExistingAnimationLibrary,
+            AnimationSelections = ReferenceExistingAnimationLibrary ? [] : Animations
                 .Select(static animation => animation.ToContract())
                 .ToImmutableArray(),
-            InstallLooseAnm2 = InstallLooseAnm2,
-            ExportPortableAnimationRpack = ExportPortableAnimationRpack,
+            InstallLooseAnm2 = !ReferenceExistingAnimationLibrary && InstallLooseAnm2,
+            ExportPortableAnimationRpack = !ReferenceExistingAnimationLibrary && ExportPortableAnimationRpack,
             ConflictResolutions = conflictResolutions ??
                 ImmutableDictionary<string, Dl1DeploymentConflictResolution>.Empty
                     .WithComparers(StringComparer.OrdinalIgnoreCase),
@@ -1538,7 +1578,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 DeveloperToolsProjectRoot,
                 result.Receipt.AnimationScriptRelativePath);
             _canRollbackLastDeployment = true;
-            QueueAutomaticDeveloperToolsAnimationRefresh(
+            if (!result.Receipt.ReferenceExistingAnimationLibrary)
+                QueueAutomaticDeveloperToolsAnimationRefresh(
                 DeveloperToolsProjectRoot,
                 result.Receipt);
             OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
@@ -1559,11 +1600,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 $"{result.Receipt.AnimationLibraryName}.scr at {result.Receipt.AnimationScriptRelativePath}; " +
                 $"installed {looseAnimationCount:N0} loose and " +
                 $"{compiledAnimationCount:N0} compiled animation(s). " +
-                $"The project-owned animation runtime RPack is ready for the selected-model loader route and an Editor refresh request was queued. " +
+                (result.Plan.ReferenceExistingAnimationLibrary
+                    ? "The existing animation bank is referenced; its runtime binding still requires Player verification. "
+                    : "The project-owned animation runtime RPack is ready for the selected-model loader route and an Editor refresh request was queued. ") +
                 (result.Plan.ExportPortableAnimationRpack
                     ? "A separate portable export copy was also written. "
                     : "The optional portable export copy was disabled. ") +
-                duplicateNote +
+                duplicateNote + " " + string.Join(" ", result.Plan.NativeCompanionNotes) +
                 (result.Plan.StaleDuplicateResources.IsEmpty
                     ? string.Empty
                     : " " + string.Join("; ", result.Plan.StaleDuplicateResources));
@@ -1722,7 +1765,10 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         };
         lines.AddRange(plan.Animations.Select(static animation =>
             $"  {animation.SourceName} -> {animation.Anm2FileName}; {animation.ScrSequence}"));
-        lines.Add($"Loader runtime RPack: {plan.AnimationRuntimePackRelativePath}");
+        lines.AddRange(plan.NativeCompanionNotes);
+        lines.Add(plan.ReferenceExistingAnimationLibrary
+            ? "Existing bank reference: no replacement animation SCR or animation RPack is published."
+            : $"Loader runtime RPack: {plan.AnimationRuntimePackRelativePath}");
         lines.Add(plan.PortableRpackRelativePath is null
             ? "Optional portable animation RPack copy: disabled"
             : $"Optional portable animation RPack copy: {plan.PortableRpackRelativePath}");
@@ -2136,6 +2182,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             _characterIdWasExplicitlyEdited = false;
             _surfaceName = "default";
             _animationScriptAlias = string.Empty;
+            _referenceExistingAnimationLibrary = false;
             _flipTextureCoordinateV = true;
             _selectedPreviewMode = PreviewModeChoicesValue[0];
             _selectedAnimation = null;
@@ -2257,6 +2304,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 nameof(CharacterId));
             SurfaceName = imported.Package.Document.BuildSettings.SurfaceName;
             AnimationScriptAlias = imported.Package.Document.BuildSettings.AnimationScriptAlias ?? string.Empty;
+            ReferenceExistingAnimationLibrary = imported.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
             OnPropertyChanged(nameof(AnimationScriptAliasSummary));
             _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
             OnPropertyChanged(nameof(FlipTextureCoordinateV));
@@ -2473,6 +2521,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 ? null
                 : AnimationScriptAlias.Trim(),
             FlipTextureCoordinateV = FlipTextureCoordinateV,
+            ReferenceExistingAnimationLibrary = ReferenceExistingAnimationLibrary,
         };
         CustomModelDocument current = _model.Package.Document;
         bool invalidatesBuildReceipt =

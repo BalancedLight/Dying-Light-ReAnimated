@@ -1,3 +1,7 @@
+using System.IO;
+using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Cli;
 
@@ -59,7 +63,32 @@ internal static class Program
                 .GetResult();
         }
 
-        var application = new App();
+        DesktopStartupOptions startupOptions;
+        try
+        {
+            startupOptions = DesktopStartupOptions.Parse(args);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException
+            or NotSupportedException
+            or PathTooLongException)
+        {
+            MessageBox.Show(
+                $"{exception.Message}\n\n{DesktopStartupOptions.Usage}",
+                "Dying Light ReAnimated",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return 2;
+        }
+
+        if (startupOptions.SoftwareUi)
+        {
+            // A process-local WPF diagnostic override. Native D3D viewports
+            // keep their existing renderer and no machine settings are saved.
+            RenderOptions.ProcessRenderMode = RenderMode.SoftwareOnly;
+        }
+
+        var application = new App(startupOptions: startupOptions);
         application.InitializeComponent();
         return application.Run();
     }

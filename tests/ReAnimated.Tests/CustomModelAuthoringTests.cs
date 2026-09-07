@@ -557,10 +557,15 @@ public sealed class CustomModelAuthoringTests
         Assert.Equal("Untextured", diagnostic.Subject);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData((byte)0x00, (byte)0x00)]
+    [InlineData((byte)0x01, (byte)0x00)]
+    [InlineData((byte)0xA1, (byte)0xA0)]
+    [InlineData((byte)0xA0, (byte)0xA0)]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelCompilerContract")]
-    public async Task CompilerObjectNormalizerLinksOpaquePayloadAndClearsOnlyCompilerTypeBit()
+    public async Task CompilerObjectNormalizerClearsCompilerLoadSuppressionAndPreservesPayloadAndOtherFlags(
+        byte compilerItemFlags, byte expectedItemFlags)
     {
         string directory = RpackTestData.CreateTemporaryDirectory();
         try
@@ -568,6 +573,7 @@ public sealed class CustomModelAuthoringTests
             string objectPath = Path.Combine(directory, "synthetic.msh_obj");
             string outputPath = Path.Combine(directory, "synthetic_pc.rpack");
             byte[] compilerObject = BuildSyntheticCompilerObject();
+            compilerObject[36 + 20 + 1] = compilerItemFlags;
             await File.WriteAllBytesAsync(objectPath, compilerObject);
 
             Rp6lCompilerObjectNormalizationResult result =
@@ -581,6 +587,8 @@ public sealed class CustomModelAuthoringTests
             Rp6lResourceDescriptor resource = Assert.Single(archive.Resources);
             Assert.Equal(Rp6lResourceTypes.Mesh, resource.ResourceType);
             Assert.Equal("synthetic_mesh", resource.Name);
+            Assert.Equal(expectedItemFlags, Assert.Single(resource.Items).Flags);
+            Assert.Equal((ushort)0x2104, Assert.Single(archive.Chunks).Category);
             await using var cache = new Rp6lChunkCache(
                 new Rp6lChunkCacheOptions
                 {
@@ -614,12 +622,10 @@ public sealed class CustomModelAuthoringTests
             string textureObjectPath = Path.Combine(directory, "synthetic.dds_obj");
             string outputPath = Path.Combine(directory, "synthetic_pc.rpack");
             await File.WriteAllBytesAsync(meshObjectPath, BuildSyntheticCompilerObject());
-            await File.WriteAllBytesAsync(
-                textureObjectPath,
-                BuildSyntheticStandaloneObject(
-                    "synthetic_texture",
-                    Rp6lResourceTypes.Texture,
-                    [0x12, 0x34, 0x56, 0x78]));
+            byte[] ordinaryTexture = BuildSyntheticStandaloneObject(
+                "synthetic_texture", Rp6lResourceTypes.Texture, [0x12, 0x34, 0x56, 0x78]);
+            ordinaryTexture[36 + 20 + 1] = 0xA1;
+            await File.WriteAllBytesAsync(textureObjectPath, ordinaryTexture);
 
             Rp6lCompilerObjectNormalizationResult result =
                 await Rp6lCompilerObjectNormalizer.LinkAtomicAsync(
@@ -636,6 +642,8 @@ public sealed class CustomModelAuthoringTests
                 static resource => resource.ResourceType == Rp6lResourceTypes.Texture);
             Assert.Equal("synthetic_mesh", mesh.Name);
             Assert.Equal("synthetic_texture", texture.Name);
+            Assert.Equal((byte)0, Assert.Single(mesh.Items).Flags);
+            Assert.Equal((byte)0xA1, Assert.Single(texture.Items).Flags);
             await using var cache = new Rp6lChunkCache(
                 new Rp6lChunkCacheOptions
                 {

@@ -73,6 +73,9 @@ public sealed record Dl1DeveloperToolsDeploymentRequest
     /// </remarks>
     public bool DeployWithoutAnimations { get; init; }
 
+    /// <summary>ASCR reference only: never publish a local SCR, ANM2, or animation RPack.</summary>
+    public bool ReferenceExistingAnimationLibrary { get; init; }
+
     /// <summary>
     /// Optional animation library that has already been sampled through the
     /// editor's authoritative export evaluator. The unified Export workflow
@@ -141,7 +144,10 @@ public sealed record Dl1DeveloperToolsDeploymentPlan(
     bool InstallLooseAnm2,
     bool ExportPortableAnimationRpack)
 {
+    public bool ReferenceExistingAnimationLibrary { get; init; }
     public bool CanDeploy => Conflicts.IsEmpty;
+
+    public ImmutableArray<string> NativeCompanionNotes { get; init; } = [];
 
     public ImmutableArray<Dl1DeveloperToolsDeploymentAnimation> Animations { get; init; } = [];
 
@@ -175,6 +181,8 @@ public sealed record Dl1DeveloperToolsDeploymentReceipt
     public string Format { get; init; } = "dl-reanimated-developer-tools-deployment";
 
     public int SchemaVersion { get; init; } = 2;
+
+    public bool ReferenceExistingAnimationLibrary { get; init; }
 
     public required string DeploymentId { get; init; }
 
@@ -376,7 +384,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     cancellationToken).ConfigureAwait(false);
             var modelCompilerRequest = new Dl1OfficialModelCompilerRequest
             {
-                Model = request.Model,
+                Model = GetDeploymentModel(request),
                 CompilerExecutablePath = validated.CompilerExecutablePath,
                 RetailData0PakPath = validated.RetailData0PakPath,
                 OutputRpackPath = Path.Combine(compilerOutput, $"{validated.ModelResourceName}_pc.rpack"),
@@ -384,7 +392,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 ResourceName = validated.ModelResourceName,
                 SurfaceName = validated.SurfaceName,
                 AnimationScriptAlias = validated.AnimationLibraryName,
-                AnimationLibrary = source.Library,
+                AnimationLibrary = request.ReferenceExistingAnimationLibrary ? null : source.Library,
                 ExistingMaterialDatabasePath = materialDatabaseSnapshot?.SnapshotPath,
                 Timeout = request.CompilerTimeout,
             };
@@ -428,8 +436,9 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 modelCompiler,
                 animationCompiler);
             string deploymentId = CreateDeploymentId(request, validated, source.Library);
-            (completeArtifacts, Dl1AnimationContentManifestBytes contentManifest) =
-                await AddAnimationContentManifestAsync(
+            Dl1AnimationContentManifestBytes? contentManifest = null;
+            if (!request.ReferenceExistingAnimationLibrary)
+                (completeArtifacts, contentManifest) = await AddAnimationContentManifestAsync(
                     validated,
                     completeArtifacts,
                     source.Library,
@@ -822,10 +831,11 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         bool includeCompiledPlaceholders,
         CancellationToken cancellationToken)
     {
+        FbxModelAuthoringImportResult deploymentModel = GetDeploymentModel(request);
         string modelSourceDirectory = Path.Combine(jobDirectory, "model-source");
         var sourceRequest = new Dl1SourceModelBuildRequest
         {
-            Model = request.Model,
+            Model = deploymentModel,
             OutputDirectory = modelSourceDirectory,
             ResourceName = validated.ModelResourceName,
             SurfaceName = validated.SurfaceName,
@@ -838,23 +848,31 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         {
             throw new InvalidDataException("The source writer did not produce the required model ASCR redirect.");
         }
+        Dl1NativeCompanionBuild expectedCompanions = Dl1NativeCompanionWriter.Build(
+            deploymentModel.Package.Document, validated.ModelResourceName,
+            deploymentModel.Package.Document.CreateEffectiveBones().Select(bone => bone.Name));
+        foreach ((string name, byte[] bytes) in expectedCompanions.Files)
+        {
+            string path = Path.Combine(modelSourceDirectory, name);
+            if (!File.Exists(path) || !File.ReadAllBytes(path).AsSpan().SequenceEqual(bytes))
+                throw new InvalidDataException($"Required native companion '{name}' is missing or differs from the saved model definition.");
+        }
 
-        PreparedCustomModelAnimationLibrary library =
-            request.PreparedAnimationLibrary ??
+        PreparedCustomModelAnimationLibrary library = request.ReferenceExistingAnimationLibrary
+            ? new PreparedCustomModelAnimationLibrary(validated.AnimationLibraryName, [], [], string.Empty, [])
+            : request.PreparedAnimationLibrary ??
             await CustomModelAnimationLibraryExporter.PrepareAsync(
                 new CustomModelAnimationLibraryRequest
                 {
-                    Model = request.Model,
+                    Model = deploymentModel,
                     OutputPath = Path.Combine(jobDirectory, "unused.rpack"),
                     AnimationScriptAlias = validated.AnimationLibraryName,
                     Selections = request.AnimationSelections,
                     AllowEmptyLibrary = request.DeployWithoutAnimations,
                 },
                 cancellationToken).ConfigureAwait(false);
-        ValidatePreparedAnimationLibrary(
-            library,
-            validated.AnimationLibraryName,
-            cancellationToken);
+        if (!request.ReferenceExistingAnimationLibrary)
+            ValidatePreparedAnimationLibrary(library, validated.AnimationLibraryName, cancellationToken);
 
         var artifacts = ImmutableArray.CreateBuilder<StagedArtifact>();
         foreach (string sourcePath in Directory.EnumerateFiles(modelSourceDirectory, "*", SearchOption.TopDirectoryOnly))
@@ -866,68 +884,83 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             }
 
             artifacts.Add(new StagedArtifact(
-                NormalizeRelativePath($"data/characters/{validated.CharacterId}/{fileName}"),
+                NormalizeRelativePath(fileName.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)
+                    ? $"data/odephysics/meshpartcloth/{fileName}"
+                    : $"data/characters/{validated.CharacterId}/{fileName}"),
                 Dl1DeploymentArtifactRole.Source,
                 sourcePath,
                 Required: true,
                 $"Model source {fileName}"));
         }
 
-        string animationSourceDirectory = Path.Combine(jobDirectory, "animation-source");
-        Directory.CreateDirectory(animationSourceDirectory);
-        string scriptPath = Path.Combine(animationSourceDirectory, $"{validated.AnimationLibraryName}.scr");
-        await File.WriteAllTextAsync(
-            scriptPath,
-            library.LooseScriptText,
-            new UTF8Encoding(false),
-            cancellationToken).ConfigureAwait(false);
-        artifacts.Add(new StagedArtifact(
-            NormalizeRelativePath($"data/characters/animations/animscripts/{validated.AnimationLibraryName}.scr"),
-            Dl1DeploymentArtifactRole.Source,
-            scriptPath,
-            Required: true,
-            "Loose animation script"));
-
-        foreach (PreparedCustomModelAnimation animation in library.Animations)
+        if (!request.ReferenceExistingAnimationLibrary)
         {
-            string animationPath = Path.Combine(animationSourceDirectory, animation.Anm2FileName);
-            await File.WriteAllBytesAsync(animationPath, animation.Payload, cancellationToken).ConfigureAwait(false);
+            string animationSourceDirectory = Path.Combine(jobDirectory, "animation-source");
+            Directory.CreateDirectory(animationSourceDirectory);
+            string scriptPath = Path.Combine(animationSourceDirectory, $"{validated.AnimationLibraryName}.scr");
+            await File.WriteAllTextAsync(
+                scriptPath,
+                library.LooseScriptText,
+                new UTF8Encoding(false),
+                cancellationToken).ConfigureAwait(false);
             artifacts.Add(new StagedArtifact(
-                NormalizeRelativePath($"data/characters/animations/{animation.Anm2FileName}"),
+                NormalizeRelativePath($"data/characters/animations/animscripts/{validated.AnimationLibraryName}.scr"),
                 Dl1DeploymentArtifactRole.Source,
-                animationPath,
+                scriptPath,
                 Required: true,
-                "Required loose ANM2 source referenced by the alias-mode SCR"));
-        }
+                "Loose animation script"));
 
-        byte[] runtimePackBytes = library.BuildPortableRpack();
-        string runtimePackPath = Path.Combine(jobDirectory, "animation-runtime.rpack");
-        await File.WriteAllBytesAsync(
-            runtimePackPath,
-            runtimePackBytes,
-            cancellationToken).ConfigureAwait(false);
-        await ValidatePortableRpackAsync(runtimePackPath, library, cancellationToken).ConfigureAwait(false);
-        string runtimePackRelativePath = GetAnimationRuntimePackRelativePath(runtimePackBytes);
-        artifacts.Add(new StagedArtifact(
-            NormalizeRelativePath(runtimePackRelativePath),
-            Dl1DeploymentArtifactRole.ManifestOwned,
-            runtimePackPath,
-            Required: true,
-            "Project-owned animation runtime RPack for loader registration and playback"));
+            foreach (PreparedCustomModelAnimation animation in library.Animations)
+            {
+                string animationPath = Path.Combine(animationSourceDirectory, animation.Anm2FileName);
+                await File.WriteAllBytesAsync(animationPath, animation.Payload, cancellationToken).ConfigureAwait(false);
+                artifacts.Add(new StagedArtifact(
+                    NormalizeRelativePath($"data/characters/animations/{animation.Anm2FileName}"),
+                    Dl1DeploymentArtifactRole.Source,
+                    animationPath,
+                    Required: true,
+                    "Required loose ANM2 source referenced by the alias-mode SCR"));
+            }
 
-        if (request.ExportPortableAnimationRpack)
-        {
-            artifacts.Add(new StagedArtifact(
-                NormalizeRelativePath(
-                    $"out/ReAnimated/{validated.ModelResourceName}/{validated.AnimationLibraryName}_pc.rpack"),
-                Dl1DeploymentArtifactRole.PortableOnly,
+            byte[] runtimePackBytes = library.BuildPortableRpack();
+            string runtimePackPath = Path.Combine(jobDirectory, "animation-runtime.rpack");
+            await File.WriteAllBytesAsync(
                 runtimePackPath,
-                Required: false,
-                "Optional portable copy of the animation RPack; the manifest-owned runtime pack is registered separately"));
+                runtimePackBytes,
+                cancellationToken).ConfigureAwait(false);
+            await ValidatePortableRpackAsync(runtimePackPath, library, cancellationToken).ConfigureAwait(false);
+            string runtimePackRelativePath = GetAnimationRuntimePackRelativePath(runtimePackBytes);
+            artifacts.Add(new StagedArtifact(
+                NormalizeRelativePath(runtimePackRelativePath),
+                Dl1DeploymentArtifactRole.ManifestOwned,
+                runtimePackPath,
+                Required: true,
+                "Project-owned animation runtime RPack for loader registration and playback"));
+
+            if (request.ExportPortableAnimationRpack)
+            {
+                artifacts.Add(new StagedArtifact(
+                    NormalizeRelativePath(
+                        $"out/ReAnimated/{validated.ModelResourceName}/{validated.AnimationLibraryName}_pc.rpack"),
+                    Dl1DeploymentArtifactRole.PortableOnly,
+                    runtimePackPath,
+                    Required: false,
+                    "Optional portable copy of the animation RPack; the manifest-owned runtime pack is registered separately"));
+            }
+
         }
 
         if (includeCompiledPlaceholders)
         {
+            if (request.ReferenceExistingAnimationLibrary)
+            {
+                artifacts.Add(StagedArtifact.Placeholder(
+                    NormalizeRelativePath($"out/ReAnimated/{validated.ModelResourceName}/model/{validated.ModelResourceName}_pc.rpack"),
+                    Dl1DeploymentArtifactRole.PortableOnly,
+                    required: true,
+                    "Retained official compiler model RPack for inspection and portable delivery"));
+            }
+
             artifacts.Add(StagedArtifact.Placeholder(
                 NormalizeRelativePath($"assets_pc/characters/{validated.CharacterId}/{validated.ModelResourceName}.msh_obj"),
                 Dl1DeploymentArtifactRole.Compiled,
@@ -963,7 +996,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     "Official compiler animation object"));
             }
 
-            artifacts.Add(StagedArtifact.Placeholder(
+            if (!request.ReferenceExistingAnimationLibrary)
+                artifacts.Add(StagedArtifact.Placeholder(
                 NormalizeRelativePath($".dl-reanimated/animation-refresh/manifests/<deployment-id>.json"),
                 Dl1DeploymentArtifactRole.ManifestOwned,
                 required: true,
@@ -979,6 +1013,22 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         return new PreparedDeployment(source, library, artifacts.ToImmutable());
     }
 
+    private static FbxModelAuthoringImportResult GetDeploymentModel(Dl1DeveloperToolsDeploymentRequest request) =>
+        request.Model with
+        {
+            Package = request.Model.Package with
+            {
+                Document = request.Model.Package.Document with
+                {
+                    BuildSettings = request.Model.Package.Document.BuildSettings with
+                    {
+                        ReferenceExistingAnimationLibrary = request.ReferenceExistingAnimationLibrary,
+                        AnimationScriptAlias = request.AnimationLibraryName,
+                    },
+                },
+            },
+        };
+
     private static ImmutableArray<StagedArtifact> AddCompiledArtifacts(
         Dl1DeveloperToolsDeploymentRequest request,
         ValidatedRequest validated,
@@ -987,6 +1037,25 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         Dl1OfficialAnimationCompilerResult animationCompiler)
     {
         var artifacts = sourceArtifacts.ToBuilder();
+        if (request.ReferenceExistingAnimationLibrary)
+        {
+            artifacts.Add(new StagedArtifact(
+                NormalizeRelativePath($"out/ReAnimated/{validated.ModelResourceName}/model/{validated.ModelResourceName}_pc.rpack"),
+                Dl1DeploymentArtifactRole.PortableOnly,
+                modelCompiler.OutputRpackPath,
+                Required: true,
+                "Retained official compiler model RPack for inspection and portable delivery"));
+            if (modelCompiler.RawCompiledMeshObjectPath is { } rawObjectPath)
+            {
+                artifacts.Add(new StagedArtifact(
+                    NormalizeRelativePath($"out/ReAnimated/{validated.ModelResourceName}/compiler/{validated.ModelResourceName}.msh_compiler_obj"),
+                    Dl1DeploymentArtifactRole.PortableOnly,
+                    rawObjectPath,
+                    Required: true,
+                    "Raw official compiler unit retained for diagnostics; runtime loading uses the normalized assets_pc object"));
+            }
+        }
+
         artifacts.Add(new StagedArtifact(
             NormalizeRelativePath($"assets_pc/characters/{validated.CharacterId}/{validated.ModelResourceName}.msh_obj"),
             Dl1DeploymentArtifactRole.Compiled,
@@ -1294,17 +1363,20 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             request.InstallLooseAnm2,
             request.ExportPortableAnimationRpack)
         {
+            ReferenceExistingAnimationLibrary = request.ReferenceExistingAnimationLibrary,
+            NativeCompanionNotes = Dl1NativeCompanionWriter.Build(request.Model.Package.Document,
+                validated.ModelResourceName, request.Model.Package.Document.CreateEffectiveBones().Select(bone => bone.Name)).Notes,
             Animations = animations,
             LegacyOutputPaths = legacyPaths,
             PortableRpackRelativePath = request.ExportPortableAnimationRpack
                 ? NormalizeRelativePath(
                     $"out/ReAnimated/{validated.ModelResourceName}/{validated.AnimationLibraryName}_pc.rpack")
                 : null,
-            AnimationRuntimePackRelativePath = effectiveArtifacts.Single(artifact =>
+            AnimationRuntimePackRelativePath = effectiveArtifacts.FirstOrDefault(artifact =>
                 artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
                 artifact.RelativePath.StartsWith(
                     $"{AnimationRefreshDirectoryRelativePath}/packages/",
-                    StringComparison.OrdinalIgnoreCase)).RelativePath,
+                    StringComparison.OrdinalIgnoreCase))?.RelativePath,
             AnimationContentManifestRelativePath = effectiveArtifacts
                 .FirstOrDefault(artifact => artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
                     artifact.RelativePath.StartsWith(
@@ -1319,7 +1391,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         Dl1DeveloperToolsDeploymentPlan plan,
         ImmutableArray<StagedArtifact> stagedArtifacts,
         PreparedCustomModelAnimationLibrary library,
-        Dl1AnimationContentManifestBytes contentManifest,
+        Dl1AnimationContentManifestBytes? contentManifest,
         string modelCompilerFingerprint,
         string animationCompilerFingerprint,
         ImmutableArray<string> modelCompilerWarnings,
@@ -1540,15 +1612,17 @@ public static partial class Dl1DeveloperToolsProjectDeployer
 
             Dl1DeveloperToolsDeploymentReceipt receipt = new()
             {
+                SchemaVersion = request.ReferenceExistingAnimationLibrary ? 3 : 2,
+                ReferenceExistingAnimationLibrary = request.ReferenceExistingAnimationLibrary,
                 DeploymentId = deploymentId,
                 CharacterId = validated.CharacterId,
                 ModelResourceName = validated.ModelResourceName,
                 AnimationLibraryName = validated.AnimationLibraryName,
                 AnimationScriptRelativePath = plan.AnimationScriptRelativePath,
-                AnimationContentManifestRelativePath = contentManifest.ManifestRelativePath,
-                AnimationContentManifestSha256 = contentManifest.Sha256,
+                AnimationContentManifestRelativePath = contentManifest?.ManifestRelativePath,
+                AnimationContentManifestSha256 = contentManifest?.Sha256,
                 AnimationRuntimePackRelativePath = plan.AnimationRuntimePackRelativePath,
-                AnimationRuntimePackSha256 = contentManifest.Manifest.Artifacts.Single(
+                AnimationRuntimePackSha256 = contentManifest?.Manifest.Artifacts.Single(
                     static artifact => artifact.Role == Dl1AnimationContentArtifactRole.AnimationRuntimePack).Sha256,
                 ModelCompilerFingerprint = modelCompilerFingerprint,
                 AnimationCompilerFingerprint = animationCompilerFingerprint,
@@ -1558,15 +1632,20 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     $"Validated model ASCR redirects to {validated.AnimationLibraryName}.scr.",
                     $"Validated {library.Sequences.Length:N0} loose SCR sequence(s) against the same prepared ANM2 inventory.",
                     $"Validated {library.Animations.Length:N0} compiled ANM2 object(s).",
-                    $"Validated immutable animation content manifest {contentManifest.Sha256} and project-owned runtime RPack.")
+                    request.ReferenceExistingAnimationLibrary
+                        ? "Referenced an existing stock animation graph without publishing SCR, ANM2, or animation RPack."
+                        : $"Validated immutable animation content manifest {contentManifest!.Sha256} and project-owned runtime RPack.")
                     .AddRange(plan.Artifacts.Any(static artifact =>
                         artifact.Role == Dl1DeploymentArtifactRole.Shared)
                     ? ImmutableArray.Create(
                         "Validated shared local_dx11.mp preservation through the official material compiler.")
                     : []),
                 Warnings = plan.LegacyOutputWarnings
+                    .AddRange(plan.NativeCompanionNotes)
                     .AddRange(modelCompilerWarnings)
-                    .Add("The project-owned animation runtime RPack is prepared for loader registration by the automatic refresh request.")
+                    .Add(request.ReferenceExistingAnimationLibrary
+                        ? "Stock animation-bank reference only; no automatic animation refresh is required."
+                        : "The project-owned animation runtime RPack is prepared for loader registration by the automatic refresh request.")
                     .AddRange(plan.StaleDuplicateResources)
                     .AddRange(library.Warnings)
                     .Add(request.ExportPortableAnimationRpack
@@ -1650,6 +1729,9 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         // The requirement exists so an alias-mode script never references an
         // ANM2 that was not deployed. A character-only deployment declares no
         // sequences at all, so there is nothing for it to guarantee.
+        if (request.ReferenceExistingAnimationLibrary && (!request.DeployWithoutAnimations || request.InstallLooseAnm2 ||
+            request.ExportPortableAnimationRpack || !request.AnimationSelections.IsDefaultOrEmpty || request.PreparedAnimationLibrary is not null))
+            throw new InvalidOperationException("Stock-reference mode requires character-only deployment with no authored selections, loose ANM2, prepared library, or portable animation pack.");
         if (!request.InstallLooseAnm2 && !request.DeployWithoutAnimations)
         {
             throw new InvalidOperationException(
@@ -1700,7 +1782,10 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 "Compiler timeout must be between zero and one hour.");
         }
 
-        return new ValidatedRequest(projectRoot, compiler, retailData, characterId, model, surface, library);
+        if (request.ReferenceExistingAnimationLibrary)
+            _ = Dl1StockAnimationReferenceValidator.Validate(retailData, library, projectRoot);
+        return new ValidatedRequest(projectRoot, compiler, retailData, characterId, model, surface, library,
+            request.ReferenceExistingAnimationLibrary);
     }
 
     private static void ValidatePreparedAnimationLibrary(
@@ -1823,6 +1908,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         ];
         foreach (string relativePath in requiredPaths)
         {
+            if (request.ReferenceExistingAnimationLibrary && relativePath.EndsWith($"/{request.AnimationLibraryName}.scr", StringComparison.OrdinalIgnoreCase)) continue;
             StagedArtifact? artifact = artifacts.FirstOrDefault(item =>
                 string.Equals(item.RelativePath, relativePath, StringComparison.OrdinalIgnoreCase));
             if (artifact?.StagedPath is null || !File.Exists(artifact.StagedPath))
@@ -1867,25 +1953,29 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             }
         }
 
-        StagedArtifact runtimePack = artifacts.SingleOrDefault(artifact =>
-            artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
-            artifact.RelativePath.StartsWith(
-                $"{AnimationRefreshDirectoryRelativePath}/packages/",
-                StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidDataException("The staged animation runtime RPack is missing.");
-        StagedArtifact manifest = artifacts.SingleOrDefault(artifact =>
-            artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
-            artifact.RelativePath.StartsWith(
-                $"{AnimationRefreshDirectoryRelativePath}/manifests/",
-                StringComparison.OrdinalIgnoreCase))
-            ?? throw new InvalidDataException("The staged animation content manifest is missing.");
-        if (runtimePack.StagedPath is null || !File.Exists(runtimePack.StagedPath) ||
-            manifest.StagedPath is null || !File.Exists(manifest.StagedPath))
+        if (!request.ReferenceExistingAnimationLibrary)
         {
-            throw new InvalidDataException(
-                "The staged animation content manifest or runtime RPack is unavailable.");
-        }
+            StagedArtifact runtimePack = artifacts.SingleOrDefault(artifact =>
+                artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
+                artifact.RelativePath.StartsWith(
+                    $"{AnimationRefreshDirectoryRelativePath}/packages/",
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException("The staged animation runtime RPack is missing.");
+            StagedArtifact manifest = artifacts.SingleOrDefault(artifact =>
+                artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
+                artifact.RelativePath.StartsWith(
+                    $"{AnimationRefreshDirectoryRelativePath}/manifests/",
+                    StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidDataException("The staged animation content manifest is missing.");
+            if (runtimePack.StagedPath is null || !File.Exists(runtimePack.StagedPath) ||
+                manifest.StagedPath is null || !File.Exists(manifest.StagedPath))
+            {
+                throw new InvalidDataException(
+                    "The staged animation content manifest or runtime RPack is unavailable.");
+            }
 
+
+        }
 
         string ascrArtifactPath = artifacts.First(item =>
             string.Equals(
@@ -1906,6 +1996,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 $"redirecting to '{expectedAlias}'.");
         }
 
+
+        if (request.ReferenceExistingAnimationLibrary)
+        {
+            if (artifacts.Any(a => a.RelativePath.StartsWith("data/characters/animations/", StringComparison.OrdinalIgnoreCase) ||
+                a.RelativePath.StartsWith(AnimationRefreshDirectoryRelativePath + "/", StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidDataException("Stock-reference deployment cannot own animation scripts, clips or runtime packs.");
+            return;
+        }
 
         string scrArtifactPath = artifacts.First(item =>
             string.Equals(
@@ -2652,7 +2750,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         string path,
         string projectRoot)
     {
-        if (receipt.Format != ReceiptFormat || receipt.SchemaVersion is not (1 or 2))
+        if (receipt.Format != ReceiptFormat || receipt.SchemaVersion is not (1 or 2 or 3))
         {
             throw new InvalidDataException("Deployment receipt format or schema is unsupported.");
         }
@@ -2694,6 +2792,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             throw new InvalidDataException("Deployment receipt resource identities are not canonical.");
         }
 
+        if (receipt.ReferenceExistingAnimationLibrary != (receipt.SchemaVersion == 3))
+            throw new InvalidDataException("Stock-reference deployment must use schema 3 and an explicit reference flag.");
         string expectedScript = NormalizeRelativePath(
             $"data/characters/animations/animscripts/{library}.scr");
         if (!string.Equals(
@@ -2704,7 +2804,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             throw new InvalidDataException("Deployment receipt contains a non-canonical animation script path.");
         }
 
-        if (receipt.SchemaVersion == 1)
+        if (receipt.SchemaVersion == 1 || receipt.ReferenceExistingAnimationLibrary)
         {
             if (receipt.AnimationContentManifestRelativePath is not null ||
                 receipt.AnimationContentManifestSha256 is not null ||
@@ -2832,6 +2932,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             }
         }
 
+        if (receipt.ReferenceExistingAnimationLibrary && receipt.Artifacts.Any(a =>
+            a.RelativePath.StartsWith("data/characters/animations/", StringComparison.OrdinalIgnoreCase) ||
+            a.RelativePath.StartsWith(AnimationRefreshDirectoryRelativePath + "/", StringComparison.OrdinalIgnoreCase) ||
+            a.Role == Dl1DeploymentArtifactRole.PortableOnly && !string.Equals(a.RelativePath,
+                $"out/ReAnimated/{receipt.ModelResourceName}/model/{receipt.ModelResourceName}_pc.rpack", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(a.RelativePath,
+                $"out/ReAnimated/{receipt.ModelResourceName}/compiler/{receipt.ModelResourceName}.msh_compiler_obj", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("Stock-reference receipt cannot own animation content.");
         if (receipt.SchemaVersion == 2)
         {
             Dl1DeveloperToolsDeploymentReceiptArtifact manifestArtifact = receipt.Artifacts.SingleOrDefault(
@@ -2866,7 +2974,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         {
             Dl1DeploymentArtifactRole.Source =>
                 relative.StartsWith($"data/characters/{character}/", StringComparison.OrdinalIgnoreCase) ||
-                relative.StartsWith("data/characters/animations/", StringComparison.OrdinalIgnoreCase),
+                relative.StartsWith("data/characters/animations/", StringComparison.OrdinalIgnoreCase) ||
+                IsOwnedNativePhysicsPath(relative, model),
             Dl1DeploymentArtifactRole.Compiled =>
                 relative.StartsWith($"assets_pc/characters/{character}/", StringComparison.OrdinalIgnoreCase) ||
                 relative.StartsWith("assets_pc/characters/animations/", StringComparison.OrdinalIgnoreCase) ||
@@ -2878,6 +2987,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 string.Equals(
                     relative,
                     NormalizeRelativePath($"out/ReAnimated/{model}/{library}_pc.rpack"),
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    relative,
+                    NormalizeRelativePath($"out/ReAnimated/{model}/model/{model}_pc.rpack"),
+                    StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(
+                    relative,
+                    NormalizeRelativePath($"out/ReAnimated/{model}/compiler/{model}.msh_compiler_obj"),
                     StringComparison.OrdinalIgnoreCase),
             Dl1DeploymentArtifactRole.ManifestOwned =>
                 relative.StartsWith(
@@ -2896,6 +3013,11 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 $"Deployment artifact '{relative}' is not valid for its recorded role '{role}'.");
         }
     }
+
+    private static bool IsOwnedNativePhysicsPath(string relative, string model) =>
+        Regex.IsMatch(relative,
+            "^data/odephysics/meshpartcloth/" + Regex.Escape(model) + "_[0-9]{3}\\.phx$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
 
     private static string ValidateCanonicalProjectRelativePath(
         string projectRoot,
@@ -3035,7 +3157,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         string CharacterId,
         string ModelResourceName,
         string SurfaceName,
-        string AnimationLibraryName);
+        string AnimationLibraryName,
+        bool ReferenceExistingAnimationLibrary = false);
 
     private sealed record StagedArtifact(
         string RelativePath,

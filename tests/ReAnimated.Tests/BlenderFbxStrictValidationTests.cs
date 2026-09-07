@@ -21,6 +21,22 @@ public sealed class BlenderFbxStrictValidationTests :
     internal static byte[] CreateValidModelFixture() =>
         Serialize(BuildFixture(FixtureCorruption.None));
 
+    internal static byte[] CreateMultiRootModelFixture()
+    {
+        FbxBinaryDocument document = BuildFixture(FixtureCorruption.None);
+        FbxNode objects = document.Nodes.Single(node => node.Name == "Objects");
+        FbxNode connections = document.Nodes.Single(node => node.Name == "Connections");
+        var children = objects.Children.Select(node => node.Name == "Pose"
+                ? BindPose(20, [1, 2, 3, 8]) : node)
+            .Append(Model(8, "SeparateRoot", "LimbNode")).ToImmutableArray();
+        return Serialize(document with
+        {
+            Nodes = document.Nodes
+                .Replace(objects, objects with { Children = children })
+                .Replace(connections, connections with { Children = connections.Children.Add(Connection("OO", 8, 1)) }),
+        });
+    }
+
     [Fact]
     public async Task
         AcceptsCompleteHierarchyMeshSkinMaterialAndAnimation()

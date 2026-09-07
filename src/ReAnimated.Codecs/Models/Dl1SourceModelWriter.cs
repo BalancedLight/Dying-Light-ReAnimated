@@ -39,7 +39,11 @@ public sealed record Dl1SourceModelBuildResult(
     ImmutableArray<string> CustomMaterialReferences,
     ImmutableArray<string> TextureSourceFiles,
     ImmutableDictionary<string, string> OutputSha256,
-    ImmutableArray<string> BlockingReasons);
+    ImmutableArray<string> BlockingReasons)
+{
+    public ImmutableArray<string> NativeCompanionFiles { get; init; } = [];
+    public ImmutableArray<string> NativeCompanionNotes { get; init; } = [];
+}
 
 /// <summary>
 /// Writes the documented Chrome source-MSH, structured CHR v4 character
@@ -82,6 +86,8 @@ public static class Dl1SourceModelWriter
         cancellationToken.ThrowIfCancellationRequested();
 
         PreparedSourceModel prepared = Prepare(request.Model, resourceName, surfaceName, cancellationToken);
+        Dl1NativeCompanionBuild companions = Dl1NativeCompanionWriter.Build(
+            request.Model.Package.Document, resourceName, prepared.BoneNames);
         byte[] msh = BuildMsh(prepared);
         byte[] chr = Dl1ChrV4Codec.Build(
             Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(
@@ -113,6 +119,7 @@ public static class Dl1SourceModelWriter
         {
             files.Add(relativePath, bytes);
         }
+        foreach ((string relativePath, byte[] bytes) in companions.Files) files.Add(relativePath, bytes);
 
         if (ascr is not null)
         {
@@ -154,6 +161,9 @@ public static class Dl1SourceModelWriter
                 animationScript = ascr is null ? "not authored" : "explicit user-supplied alias",
                 materials = "Techland DMT sources with user-owned diffuse/normal/specular DDS dependencies",
                 morphTargets = "Chrome LOD 0x0104 records with fixed UTF-8 names and one float3 position delta per expanded draw vertex",
+                boneFrames = request.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary
+                    ? "Original source bind frames preserved for the explicitly referenced existing animation bank; only declared secondary driven bones use Chrome +X frames"
+                    : "Authored Chrome +X frames shared with authored animation conversion",
                 unsupported = new[] { ".skn", ".msh_obj" },
             },
             counts = new
@@ -168,7 +178,10 @@ public static class Dl1SourceModelWriter
                 morphSurfaceBindings = request.Model.Surfaces.Count(
                     static surface => !surface.MorphTargets.IsEmpty),
                 materialSourceFiles = prepared.MaterialFiles.Count,
+                nativeCompanionFiles = companions.Files.Count,
             },
+            nativeCompanions = new { files = companions.Files.Keys.Order(StringComparer.Ordinal), notes = companions.Notes,
+                compiledPhysicsBoundsValidated = false, runtimeValidated = false },
             outputs = hashes.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
                 .Select(static pair => new { path = pair.Key, sha256 = pair.Value })
                 .ToArray(),
@@ -235,7 +248,11 @@ public static class Dl1SourceModelWriter
             [
                 ".skn and .msh_obj require the matching official Techland compiler.",
                 .. prepared.MaterialNotes,
-            ]);
+            ])
+        {
+            NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
+            NativeCompanionNotes = companions.Notes,
+        };
     }
 
     private static ImmutableArray<Dl1ChrV4ObjectTransform> BuildChrObjects(

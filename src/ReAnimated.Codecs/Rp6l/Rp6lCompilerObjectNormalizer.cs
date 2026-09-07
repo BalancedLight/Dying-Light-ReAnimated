@@ -13,8 +13,8 @@ public sealed record Rp6lCompilerObjectNormalizationResult(
 /// <summary>
 /// Links Techland compiler <c>*_obj</c> RP6L units into a normal standalone
 /// RP6L container. Compiled chunk payloads remain opaque and byte-identical;
-/// only compiler-object addressing, table indexes, and the compiler-only
-/// resource type bit are normalized.
+/// only compiler-object addressing, table indexes, compiler-only resource
+/// types, and compiler-owned item load-suppression flags are normalized.
 /// </summary>
 public static class Rp6lCompilerObjectNormalizer
 {
@@ -23,6 +23,7 @@ public static class Rp6lCompilerObjectNormalizer
     private const int ItemRowSize = 16;
     private const int ResourceRowSize = 12;
     private const ushort CompilerObjectTypeBit = 0x8000;
+    private const byte SuppressItemLoadFlag = 0x01;
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     public static Task<Rp6lCompilerObjectNormalizationResult> NormalizeAtomicAsync(
@@ -428,6 +429,19 @@ public static class Rp6lCompilerObjectNormalizer
                 {
                     ResourceType = unchecked((short)(rawType & ~CompilerObjectTypeBit)),
                 };
+                // The runtime per-resource task builder skips item flag bit 0.
+                // Compiler work units set it because the final linker chooses
+                // which resources to publish. Clear it only for items owned by
+                // a converted compiler resource; ordinary linked units retain
+                // their scheduling flags and every chunk keeps its load mode,
+                // allocation, alignment, and callback settings.
+                for (int itemIndex = resource.FirstItemIndex;
+                     itemIndex < resource.FirstItemIndex + resource.ItemCount;
+                     itemIndex++)
+                {
+                    CompilerItem item = items[itemIndex];
+                    items[itemIndex] = item with { Flags = (byte)(item.Flags & ~SuppressItemLoadFlag) };
+                }
                 convertedResourceCount++;
             }
         }

@@ -125,6 +125,7 @@ public static class CliApplication
             "build-animation-rpack",
             "export-project",
             "conform-model",
+            "deploy-model",
         ]);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -190,6 +191,7 @@ public static class CliApplication
                     args[1..],
                     JsonOptions,
                     cancellationToken).ConfigureAwait(false),
+                "deploy-model" => await ModelDeploymentCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(args[0]),
             };
         }
@@ -735,6 +737,7 @@ public static class CliApplication
               DLReAnimated index-dl1 <install-directory> [index.sqlite] [--rpack-root <path>]...
               DLReAnimated build-animation-rpack <manifest.json> <output.rpack>
               DLReAnimated export-project <project.dlraproj> <dl1-install> <output-directory> [animation-id-or-name] [body|mimic|both]
+              DLReAnimated deploy-model <model.dlrmodel> <project-root> <compiler.exe> <retail-Data0.pak> <character-id> <resource-name> <animation-bank> [--stock-bank] [--preflight]
 
             The C# project format is DL1-only. Legacy Python projects are never
             migrated or overwritten by this application.

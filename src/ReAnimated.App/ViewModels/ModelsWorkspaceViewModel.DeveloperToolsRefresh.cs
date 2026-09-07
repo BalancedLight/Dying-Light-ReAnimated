@@ -194,6 +194,13 @@ public sealed partial class ModelsWorkspaceViewModel
     {
         StopAnimationRefreshMonitor();
         _lastAnimationRefreshRequest = null;
+        if (receipt.ReferenceExistingAnimationLibrary)
+        {
+            AnimationRefreshStatus = "The active deployment references an existing stock animation bank; no animation refresh is required.";
+            AnimationRefreshResultDetails = string.Empty;
+            return;
+        }
+
         _lastAnimationRefreshRequest =
             DeveloperToolsAnimationRefreshService.WriteRequest(
                 projectRoot,
@@ -384,6 +391,13 @@ public sealed partial class ModelsWorkspaceViewModel
         StopAnimationRefreshMonitor();
         _lastAnimationRefreshRequest = null;
         AnimationRefreshResultDetails = string.Empty;
+        if (activeReceipt?.ReferenceExistingAnimationLibrary == true)
+        {
+            AnimationRefreshStatus = "The active deployment references an existing stock animation bank; no animation refresh is required.";
+            CheckDeveloperToolsAnimationRefreshResultCommand.NotifyCanExecuteChanged();
+            return;
+        }
+
         if (activeReceipt is null || !Directory.Exists(DeveloperToolsProjectRoot))
         {
             AnimationRefreshStatus =

@@ -47,7 +47,10 @@ public sealed record Dl1CustomModelPackageResult(
     Dl1SourceModelBuildResult SourceModel,
     Dl1OfficialModelCompilerResult CompiledModel,
     CustomModelAnimationLibraryResult? AnimationLibrary,
-    ImmutableDictionary<string, string> OutputSha256);
+    ImmutableDictionary<string, string> OutputSha256)
+{
+    public Dl1StockAnimationReference? StockAnimationReference { get; init; }
+}
 
 /// <summary>
 /// Builds the complete DL1 custom-model handoff as a single transaction. A
@@ -82,14 +85,23 @@ public static class Dl1CustomModelPackageBuilder
         ImmutableArray<CustomModelAnimationClip> selections = request.AnimationSelections.IsDefaultOrEmpty
             ? request.Model.Package.Document.AnimationClips
             : request.AnimationSelections;
-        bool hasAnimations = selections.Any(static selection => selection.Included);
+        bool stockReference = request.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
+        bool hasAnimations = !stockReference && selections.Any(static selection => selection.Included);
+        Dl1StockAnimationReference? stockBank = null;
+        if (stockReference)
+        {
+            if (string.IsNullOrWhiteSpace(alias) || string.IsNullOrWhiteSpace(request.RetailData0PakPath))
+                throw new InvalidOperationException("Existing-bank package export requires an animation-script alias and the selected retail Data0.pak.");
+            stockBank = await Task.Run(() => Dl1StockAnimationReferenceValidator.Validate(
+                request.RetailData0PakPath, alias, cancellationToken: cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
         if (hasAnimations && string.IsNullOrWhiteSpace(alias))
         {
             throw new InvalidOperationException(
                 "Selected animation stacks require an animation script alias. " +
                 "Set one Models > Animation script alias before building the DL1 package.");
         }
-        if (!hasAnimations && !string.IsNullOrWhiteSpace(alias))
+        if (!stockReference && !hasAnimations && !string.IsNullOrWhiteSpace(alias))
         {
             throw new InvalidOperationException(
                 "An animation script alias cannot be packaged without at least one included animation stack. " +
@@ -145,6 +157,7 @@ public static class Dl1CustomModelPackageBuilder
                 SurfaceName = surfaceName,
                 AnimationScriptAlias = alias,
                 Timeout = request.CompilerTimeout,
+                CharacterId = request.Model.Package.Document.BuildSettings.CharacterId,
             };
             Dl1OfficialModelCompilerResult compiled = await (
                 request.ModelCompilerOverride?.Invoke(compilerRequest, cancellationToken) ??
@@ -179,6 +192,10 @@ public static class Dl1CustomModelPackageBuilder
                     resourceName,
                     surfaceName,
                     animationScriptAlias = alias,
+                    referenceExistingAnimationLibrary = stockReference,
+                    stockAnimationReference = stockBank,
+                    runtimeAnimationBindingVerified = false,
+                    nativeCompanionNotes = source.NativeCompanionNotes,
                     input = new
                     {
                         request.Model.Package.Document.ModelId,
@@ -208,7 +225,10 @@ public static class Dl1CustomModelPackageBuilder
                 Remap(source, staging, target),
                 Remap(compiled, staging, target),
                 animations is null ? null : Remap(animations, staging, target),
-                hashes);
+                hashes)
+            {
+                StockAnimationReference = stockBank,
+            };
         }
         finally
         {
@@ -272,6 +292,9 @@ public static class Dl1CustomModelPackageBuilder
         }
 
         RequireNonEmpty(source.CharacterDefinitionPath, "DL1 character definition .chr");
+        foreach (string name in source.NativeCompanionFiles)
+            RequireNonEmpty(Path.Combine(Path.GetDirectoryName(source.SourceMshPath)!, name), "native companion " + name);
+        foreach (string path in compiled.NativeCompanionPaths) RequireNonEmpty(path, "compiled-model native companion");
 
         RequireNonEmpty(compiled.OutputRpackPath, "compiled model RPack");
         RequireNonEmpty(compiled.CompiledMeshObjectPath, "compiled mesh object");
@@ -432,6 +455,13 @@ public static class Dl1CustomModelPackageBuilder
             CompiledMeshObjectPath = Remap(value.CompiledMeshObjectPath, oldRoot, newRoot),
             MaterialDatabasePath = RemapOptional(value.MaterialDatabasePath, oldRoot, newRoot),
             ReceiptPath = Remap(value.ReceiptPath, oldRoot, newRoot),
+            RawCompiledMeshObjectPath = RemapOptional(value.RawCompiledMeshObjectPath, oldRoot, newRoot),
+            CompiledTextureObjectPaths = value.CompiledTextureObjectPaths.Select(path => Remap(path, oldRoot, newRoot)).ToImmutableArray(),
+            NativeCompanionPaths = value.NativeCompanionPaths.Select(path => Remap(path, oldRoot, newRoot)).ToImmutableArray(),
+            DependencySidecars = value.DependencySidecars.Select(sidecar => sidecar with
+            {
+                Path = Remap(sidecar.Path, oldRoot, newRoot),
+            }).ToImmutableArray(),
         };
 
     private static CustomModelAnimationLibraryResult Remap(

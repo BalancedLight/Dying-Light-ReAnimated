@@ -3,6 +3,9 @@ using System.Text;
 using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Core.ModelAuthoring;
+using ReAnimated.App.Infrastructure;
+using ReAnimated.Core.Mathematics;
+using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.Tests;
 
@@ -36,6 +39,121 @@ public sealed class FbxCustomModelMorphImportTests
         Assert.Equal(0.005, target.PositionDeltas[0].X, precision: 9);
         Assert.Equal(0.0, target.PositionDeltas[1].Length, precision: 9);
         Assert.Equal(-0.0025, target.PositionDeltas[2].Y, precision: 9);
+    }
+
+    [Fact]
+    public void ImportsUniformFullWeightsPerAffectedPointWithoutChangingSourceOrDeltas()
+    {
+        byte[] fbx = CreateMorphFbx(["generic_smile"], fullWeights: [100.0, 100.0]);
+        var imported = FbxModelAuthoringImporter.Import(fbx, "uniform-point-weights.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp });
+        var target = Assert.Single(Assert.Single(imported.Surfaces).MorphTargets);
+        Assert.Equal(0.005, target.PositionDeltas[0].X, precision: 9);
+        Assert.Equal(0.0, target.PositionDeltas[1].Length, precision: 9);
+        Assert.Equal(-0.0025, target.PositionDeltas[2].Y, precision: 9);
+        Assert.True(fbx.AsSpan().SequenceEqual(imported.Package.SourceFbx.AsSpan()));
+        var reopened = FbxModelAuthoringImporter.ImportPackage(imported.Package);
+        Assert.Equal(imported.Package.Document.MorphSignature, reopened.Package.Document.MorphSignature);
+        Assert.True(target.PositionDeltas.SequenceEqual(Assert.Single(Assert.Single(reopened.Surfaces).MorphTargets).PositionDeltas));
+    }
+
+    [Theory]
+    [InlineData(100.0, 50.0)]
+    [InlineData(50.0, 50.0)]
+    [InlineData(100.0, double.NaN)]
+    [InlineData(100.0, double.PositiveInfinity)]
+    public void RejectsMaskedOrNonfinitePerPointFullWeights(double first, double second)
+    {
+        var error = Assert.Throws<InvalidDataException>(() => FbxModelAuthoringImporter.Import(
+            CreateMorphFbx(["generic_smile"], fullWeights: [first, second]), "unsupported-weights.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+        Assert.Contains("FullWeights", error.Message);
+    }
+
+    [Fact]
+    public void RejectsUniformWeightsWithWrongPointCountAndNonFullScalar()
+    {
+        Assert.Throws<InvalidDataException>(() => FbxModelAuthoringImporter.Import(
+            CreateMorphFbx(["generic_smile"], fullWeights: [100.0, 100.0, 100.0]), "wrong-count.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+        Assert.Throws<InvalidDataException>(() => FbxModelAuthoringImporter.Import(
+            CreateMorphFbx(["generic_smile"], fullWeights: [50.0]), "non-full-scalar.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+    }
+
+    [Fact]
+    public void UniformWeightsDoNotPermitMultipleConnectedShapes()
+    {
+        var error = Assert.Throws<InvalidDataException>(() => FbxModelAuthoringImporter.Import(
+            CreateMorphFbx(["generic_smile"], addSecondShapeToFirstChannel: true, fullWeights: [100.0, 100.0]), "multiple-shapes.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+        Assert.Contains("progressive or multiple", error.Message);
+    }
+
+    internal static byte[] CreateNormalMorphFbx() => CreateMorphFbx(["generic_smile"],
+        normalDeltas: [0, 1, -1, 1, 0, -1]);
+
+    [Fact]
+    public void AuthoredNormalsReachExpandedVerticesPreviewAndCpuDeformation()
+    {
+        var imported = FbxModelAuthoringImporter.Import(CreateNormalMorphFbx(), "normal-morph.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp });
+        var surface = Assert.Single(imported.Surfaces);
+        var target = Assert.Single(surface.MorphTargets);
+        Assert.Equal(3, target.NormalDeltas.Length);
+        Assert.True((surface.Vertices[0].Normal + target.NormalDeltas[0] - Vector3D.UnitY).Length < 1e-9);
+        Assert.Equal(Vector3D.Zero, target.NormalDeltas[1]);
+        Assert.True((surface.Vertices[2].Normal + target.NormalDeltas[2] - Vector3D.UnitX).Length < 1e-9);
+        var preview = CustomModelPreviewAdapter.Create(imported, null, 0, mode: CustomModelPreviewMode.SourceFbx);
+        var mesh = Assert.Single(preview.Meshes);
+        Assert.False(Assert.Single(mesh.MorphTargets).NormalDeltas.IsEmpty);
+        var full = CpuMeshDeformationEvaluator.Evaluate(mesh, preview.Skeleton, [new MorphWeight("generic_smile",1)]);
+        Assert.True(System.Numerics.Vector3.Distance(System.Numerics.Vector3.UnitY,full[0].Normal) < 1e-6);
+        var reopened = FbxModelAuthoringImporter.ImportPackage(imported.Package);
+        Assert.True(target.NormalDeltas.SequenceEqual(Assert.Single(Assert.Single(reopened.Surfaces).MorphTargets).NormalDeltas));
+    }
+
+    [Fact]
+    public void NormalDeltasUseInverseTransposeAndRemainIndependentOfLengthUnits()
+    {
+        double n = Math.Sqrt(.5);
+        var imported = FbxModelAuthoringImporter.Import(CreateMorphFbx(["generic_smile"],
+                normalDeltas: [-n, 1-n, 0, -n, 1-n, 0],
+                baseNormals: [n,n,0,n,n,0,n,n,0], scaleMesh: true),
+            "scaled-normal-morph.fbx",new FbxModelAuthoringImportOptions { RigMode=CustomModelRigMode.StaticProp });
+        var surface=Assert.Single(imported.Surfaces);var target=Assert.Single(surface.MorphTargets);
+        Assert.Equal(.5,surface.Vertices[0].Normal.X/surface.Vertices[0].Normal.Y,precision:9);
+        Assert.True((surface.Vertices[0].Normal+target.NormalDeltas[0]-Vector3D.UnitY).Length<1e-9);
+    }
+
+    [Fact]
+    public void SameControlPointNormalDeltaUsesEachDistinctBaseCornerNormal()
+    {
+        var imported=FbxModelAuthoringImporter.Import(CreateMorphFbx(["generic_smile"], normalDeltas:[0,1,0,0,0,0],
+            baseNormals:[0,0,1,0,0,1,0,0,1,1,0,0,1,0,0,1,0,0], splitCorners:true),
+            "split-normal-morph.fbx",new FbxModelAuthoringImportOptions { RigMode=CustomModelRigMode.StaticProp });
+        var surface=Assert.Single(imported.Surfaces);var target=Assert.Single(surface.MorphTargets);
+        Assert.Equal(6,target.NormalDeltas.Length);
+        Assert.True((target.NormalDeltas[0]-target.NormalDeltas[3]).Length>.3);
+        Assert.True((surface.Vertices[0].Normal+target.NormalDeltas[0]-new Vector3D(0,Math.Sqrt(.5),Math.Sqrt(.5))).Length<1e-9);
+        Assert.True((surface.Vertices[3].Normal+target.NormalDeltas[3]-new Vector3D(Math.Sqrt(.5),Math.Sqrt(.5),0)).Length<1e-9);
+    }
+
+    [Fact]
+    public void RejectsMalformedNonfiniteAndCollapsedShapeNormals()
+    {
+        Assert.Throws<InvalidDataException>(()=>FbxModelAuthoringImporter.Import(CreateMorphFbx(["generic_smile"],normalDeltas:[1,0,0]),"short.fbx"));
+        Assert.Throws<InvalidDataException>(()=>FbxModelAuthoringImporter.Import(CreateMorphFbx(["generic_smile"],normalDeltas:[double.NaN,0,0,0,0,0]),"nan.fbx"));
+        Assert.Throws<InvalidDataException>(()=>FbxModelAuthoringImporter.Import(CreateMorphFbx(["generic_smile"],normalDeltas:[0,0,-1,0,0,0]),"collapsed.fbx"));
+    }
+
+    [Fact]
+    public void NormalOnlyTargetChangesInvalidateTheMorphContract()
+    {
+        var a=FbxModelAuthoringImporter.Import(CreateNormalMorphFbx(),"original.fbx");
+        var b=FbxModelAuthoringImporter.PreviewReimport(a.Package,CreateMorphFbx(["generic_smile"],normalDeltas:[1,0,-1,1,0,-1]),"normals-changed.fbx");
+        Assert.True(b.FacialMappingsBecomeStale);
+        Assert.False(b.BoneAndHelperMappingsBecomeStale);
     }
 
     [Fact]
@@ -186,10 +304,37 @@ public sealed class FbxCustomModelMorphImportTests
             changed.ReplacementMorphSignature);
     }
 
+    [Fact]
+    public void ChangedMorphContractCannotSilentlyDropAuthoredModelFeatures()
+    {
+        var original = FbxModelAuthoringImporter.Import(CreateMorphFbx(["generic_smile"]),
+            "generic.fbx", new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp });
+        var package = original.Package with
+        {
+            Document = original.Package.Document with
+            {
+                FacialPresets = new FacialPresetLibrary
+                {
+                    Presets = [new FacialPresetDefinition { Name = "Smile",
+                        Weights = System.Collections.Immutable.ImmutableDictionary<string, double>.Empty.Add("generic_smile", 1) }],
+                },
+            },
+        };
+        var error = Assert.Throws<InvalidDataException>(() => FbxModelAuthoringImporter.PreviewReimport(
+            package, CreateMorphFbx(["generic_smile"], firstShapeDeltaX: 0.75), "changed.fbx"));
+        Assert.Contains("review those feature bindings", error.Message);
+        Assert.Equal("Smile", Assert.Single(package.Document.FacialPresets.Presets).Name);
+    }
+
     private static byte[] CreateMorphFbx(
         IReadOnlyList<string> channelNames,
         bool addSecondShapeToFirstChannel = false,
-        double firstShapeDeltaX = 0.5)
+        double firstShapeDeltaX = 0.5,
+        double[]? fullWeights = null,
+        double[]? normalDeltas = null,
+        double[]? baseNormals = null,
+        bool scaleMesh = false,
+        bool splitCorners = false)
     {
         const long baseGeometryId = 10;
         const long blendShapeId = 40;
@@ -202,6 +347,7 @@ public sealed class FbxCustomModelMorphImportTests
                     ScalarString("Geometry::GenericMesh"),
                     ScalarString("Mesh"),
                 ],
+                [
                 Node(
                     "Vertices",
                     [DoubleArray([
@@ -211,7 +357,11 @@ public sealed class FbxCustomModelMorphImportTests
                     ])]),
                 Node(
                     "PolygonVertexIndex",
-                    [Int64Array([0, 1, -3])])),
+                    [Int64Array(splitCorners ? [0,1,-3,0,2,-2] : [0, 1, -3])]),
+                ..(normalDeltas is null ? Array.Empty<FbxTreeNode>() : new[] { Node("LayerElementNormal", [ScalarInt64(0)],
+                    Node("MappingInformationType", [ScalarString("ByPolygonVertex")]),
+                    Node("ReferenceInformationType", [ScalarString("Direct")]),
+                    Node("Normals", [DoubleArray(baseNormals ?? [0,0,1,0,0,1,0,0,1])])) })]),
             Node(
                 "Deformer",
                 [
@@ -224,6 +374,12 @@ public sealed class FbxCustomModelMorphImportTests
         {
             Connection(blendShapeId, baseGeometryId),
         };
+        if (scaleMesh)
+        {
+            objects.Add(Node("Model",[ScalarInt64(70),ScalarString("Model::ScaledMesh"),ScalarString("Mesh")],
+                Node("Properties70",[],Node("P",[ScalarString("Lcl Scaling"),ScalarString("Lcl Scaling"),ScalarString(""),ScalarString("A"),ScalarDouble(2),ScalarDouble(1),ScalarDouble(3)]))));
+            connections.Add(Connection(baseGeometryId,70));
+        }
 
         for (int index = 0; index < channelNames.Count; index++)
         {
@@ -238,11 +394,11 @@ public sealed class FbxCustomModelMorphImportTests
                     ScalarString("BlendShapeChannel"),
                 ],
                 Node("DeformPercent", [ScalarDouble(0.0)]),
-                Node("FullWeights", [DoubleArray([100.0])])));
+                Node("FullWeights", [DoubleArray(fullWeights ?? [100.0])])));
             objects.Add(CreateShape(
                 shapeId,
                 channelName,
-                index == 0 ? firstShapeDeltaX : 0.5));
+                index == 0 ? firstShapeDeltaX : 0.5, normalDeltas));
             connections.Add(Connection(shapeId, channelId));
             connections.Add(Connection(channelId, blendShapeId));
 
@@ -267,7 +423,8 @@ public sealed class FbxCustomModelMorphImportTests
     private static FbxTreeNode CreateShape(
         long shapeId,
         string name,
-        double firstDeltaX) =>
+        double firstDeltaX,
+        double[]? normalDeltas = null) =>
         Node(
             "Geometry",
             [
@@ -275,11 +432,13 @@ public sealed class FbxCustomModelMorphImportTests
                 ScalarString($"Geometry::{name}"),
                 ScalarString("Shape"),
             ],
+            [
             Node("Indexes", [Int64Array([0, 2])]),
             Node("Vertices", [DoubleArray([
                 firstDeltaX, 0.0, 0.0,
                 0.0, -0.25, 0.0,
-            ])]));
+            ])]),
+            ..(normalDeltas is null ? Array.Empty<FbxTreeNode>() : new[] { Node("Normals",[DoubleArray(normalDeltas)]) })]);
 
     private static FbxTreeNode Connection(long childId, long parentId) =>
         Node(
@@ -374,17 +533,17 @@ public sealed class FbxCustomModelMorphImportTests
         return ArrayProperty('l', values.Count, raw);
     }
 
-    private static byte[] DoubleArray(IReadOnlyList<double> values)
+    private static byte[] DoubleArray(double[] values)
     {
-        byte[] raw = new byte[checked(values.Count * sizeof(double))];
-        for (int index = 0; index < values.Count; index++)
+        byte[] raw = new byte[checked(values.Length * sizeof(double))];
+        for (int index = 0; index < values.Length; index++)
         {
             BinaryPrimitives.WriteInt64LittleEndian(
                 raw.AsSpan(index * sizeof(double)),
                 BitConverter.DoubleToInt64Bits(values[index]));
         }
 
-        return ArrayProperty('d', values.Count, raw);
+        return ArrayProperty('d', values.Length, raw);
     }
 
     private static byte[] ArrayProperty(

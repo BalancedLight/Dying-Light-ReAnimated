@@ -610,6 +610,9 @@ public sealed record CustomModelBuildSettings
     /// </summary>
     public string? AnimationScriptAlias { get; init; }
 
+    /// <summary>Use an existing game animation bank without authoring a local replacement.</summary>
+    public bool ReferenceExistingAnimationLibrary { get; init; }
+
     /// <summary>
     /// Converts the FBX lower-left texture-coordinate origin to the
     /// Direct3D/DL1 upper-left origin at preview and source-MSH boundaries.
@@ -646,17 +649,19 @@ public sealed record CustomModelBuildSettings
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(AnimationScriptAlias, parameterName);
         }
+        if (ReferenceExistingAnimationLibrary && string.IsNullOrWhiteSpace(AnimationScriptAlias))
+            throw new ArgumentException("An existing animation-bank reference requires its alias.", parameterName);
     }
 }
 
 /// <summary>
-/// Portable schema-2 metadata stored inside a .dlrmodel container. The package
+/// Portable metadata stored inside a .dlrmodel container. The package
 /// embeds only user-owned source FBX and explicitly supplied texture bytes.
 /// Retail DL1 resources remain fingerprint references.
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 5;
 
     public const string EmptyMorphSignature =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -702,6 +707,10 @@ public sealed record CustomModelDocument
     public CustomModelCameraMetadata Camera { get; init; } = new();
 
     public ImmutableArray<CustomModelMorphChannel> MorphChannels { get; init; } = [];
+
+    public FacialPresetLibrary FacialPresets { get; init; } = new();
+
+    public SecondaryMotionDefinition SecondaryMotion { get; init; } = new();
 
     public ImmutableArray<CustomModelMeshPart> Meshes { get; init; } = [];
 
@@ -792,6 +801,16 @@ public sealed record CustomModelDocument
 
         RigConformance?.Validate(nameof(RigConformance));
         Camera.Validate(effectiveNames, nameof(Camera));
+        ArgumentNullException.ThrowIfNull(SecondaryMotion);
+        SecondaryMotion.Validate(effectiveNames);
+        HashSet<string> secondaryOutputs = SecondaryMotion.Groups.SelectMany(static group => group.Particles)
+            .Where(static particle => !particle.Fixed && particle.DrivenBoneName is not null)
+            .Select(static particle => particle.DrivenBoneName!).ToHashSet(StringComparer.Ordinal);
+        if (Bones.Any(bone => secondaryOutputs.Contains(bone.Name) && bone.Kind is BoneKind.Root or BoneKind.Camera or BoneKind.Prop) ||
+            AuthoredHelpers.Any(helper => secondaryOutputs.Contains(helper.Name) && helper.Kind is CustomModelAuthoredHelperKind.Camera or CustomModelAuthoredHelperKind.Prop))
+            throw new ArgumentException("Secondary motion cannot drive root, camera or prop helper entities.", nameof(SecondaryMotion));
+        ArgumentNullException.ThrowIfNull(FacialPresets);
+        FacialPresets.Validate(MorphChannels.Select(static morph => morph.Name));
 
         var morphNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var morphDescriptors = new Dictionary<uint, string>();

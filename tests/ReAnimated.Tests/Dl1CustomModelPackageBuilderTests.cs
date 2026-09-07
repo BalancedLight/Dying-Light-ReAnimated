@@ -15,6 +15,86 @@ public sealed class Dl1CustomModelPackageBuilderTests
 {
     private const string OwnershipMarker = ".dl-reanimated-package-owned";
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExistingBankPackageUsesSavedModeWithoutExportingReviewClips(bool includedReviewClip)
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            string archive = Path.Combine(parent, "Data0.pak");
+            using (var zip = System.IO.Compression.ZipFile.Open(archive, System.IO.Compression.ZipArchiveMode.Create))
+            {
+                using var writer = new StreamWriter(zip.CreateEntry("data/characters/animations/animscripts/existing_bank.scr").Open());
+                writer.Write("SeqTrack(\"idle\",\"stock_idle\",0,2,30,1,0)\n");
+            }
+            StockAnimationReferenceTests.WriteCompiledBank(archive, "existing_bank");
+            var model = CreateSyntheticModel(includedReviewClip);
+            model = model with { Package = model.Package with { Document = model.Package.Document with
+            {
+                BuildSettings = model.Package.Document.BuildSettings with { ReferenceExistingAnimationLibrary = true,
+                    AnimationScriptAlias = "existing_bank" },
+            } } };
+            var request = CreateRequest(parent, model) with
+            {
+                AnimationScriptAlias = "existing_bank",
+                RetailData0PakPath = archive,
+                AnimationExporterOverride = (_, _) => throw new InvalidOperationException("A stock-reference build must never export authored clips."),
+                ModelCompilerOverride = async (compiler, token) =>
+                {
+                    Assert.True(compiler.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary);
+                    Assert.Null(compiler.AnimationLibrary);
+                    return await WriteSyntheticCompiledAsync(compiler, token);
+                },
+            };
+            var result = await Dl1CustomModelPackageBuilder.BuildAsync(request);
+            Assert.Null(result.AnimationLibrary);
+            Assert.Equal("existing_bank", result.StockAnimationReference!.BankName);
+            Assert.False(Directory.Exists(Path.Combine(result.PackageDirectory, "animations")));
+            Assert.DoesNotContain(result.OutputSha256.Keys, path => path.EndsWith(".scr", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains("existing_bank.scr", await File.ReadAllTextAsync(result.SourceModel.AnimationScriptPath!));
+            using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(result.ManifestPath));
+            Assert.True(manifest.RootElement.GetProperty("referenceExistingAnimationLibrary").GetBoolean());
+            Assert.False(manifest.RootElement.GetProperty("runtimeAnimationBindingVerified").GetBoolean());
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task PackageRemapsCompanionTextureAndDependencyPathsAfterAtomicPublish()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            var request = CreateRequest(parent) with
+            {
+                ModelCompilerOverride = async (compiler, token) =>
+                {
+                    var compiled = await WriteSyntheticCompiledAsync(compiler, token);
+                    string directory = Path.GetDirectoryName(compiled.OutputRpackPath)!;
+                    string companion = Path.Combine(directory, "native-companions", "data", "characters", "sample", "sample.fed");
+                    Directory.CreateDirectory(Path.GetDirectoryName(companion)!);
+                    string raw = Path.Combine(directory, "sample.msh_compiler_obj");
+                    string texture = Path.Combine(directory, "sample.dds_obj");
+                    string dependency = Path.Combine(directory, "sample.msh.deps");
+                    foreach (string path in new[] { companion, raw, texture, dependency }) await File.WriteAllTextAsync(path, "fixture", token);
+                    return compiled with { NativeCompanionPaths = [companion], RawCompiledMeshObjectPath = raw,
+                        CompiledTextureObjectPaths = [texture], DependencySidecars = [new("sample.msh_obj", "sample.msh.deps", dependency, new string('a', 64))] };
+                },
+            };
+            var result = await Dl1CustomModelPackageBuilder.BuildAsync(request);
+            foreach (string path in new[] { result.CompiledModel.NativeCompanionPaths.Single(), result.CompiledModel.RawCompiledMeshObjectPath!,
+                result.CompiledModel.CompiledTextureObjectPaths.Single(), result.CompiledModel.DependencySidecars.Single().Path })
+            {
+                Assert.StartsWith(result.PackageDirectory + Path.DirectorySeparatorChar, path, StringComparison.OrdinalIgnoreCase);
+                Assert.True(File.Exists(path));
+                Assert.Contains(Path.GetRelativePath(result.PackageDirectory, path).Replace('\\', '/'), result.OutputSha256.Keys);
+            }
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "PackageSmoke")]

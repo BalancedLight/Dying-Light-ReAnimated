@@ -260,6 +260,7 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.attachments", "Attachments", DetachTabContent(RetargetAttachmentsTab), 320, 260),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.ik", "IK", DetachTabContent(RetargetIkTab), 320, 240),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.facial", "Facial", DetachTabContent(RetargetFacialTab), 340, 280),
+            Pane(EditorDockWorkflow.RetargetEdit, "retarget.secondary-motion", "Secondary motion", DetachTabContent(RetargetSecondaryMotionTab), 340, 280),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.fpp-camera", "FPP / camera", DetachTabContent(RetargetFppCameraTab), 340, 280),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.movie-camera", "Movie camera", DetachTabContent(RetargetMovieCameraTab), 340, 280),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.animations", "Animations", DetachTabContent(RetargetAnimationsTab), 340, 180),
