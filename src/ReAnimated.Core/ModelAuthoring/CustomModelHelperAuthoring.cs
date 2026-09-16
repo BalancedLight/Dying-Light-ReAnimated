@@ -46,7 +46,7 @@ public static class CustomModelHelperAuthoring
             ExactLocalMatrix = TransformMatrix.Identity,
             Kind = kind,
         };
-        return FinalizeRigMutation(document with
+        return FinalizeRigMutation(document, document with
         {
             AuthoredHelpers = document.AuthoredHelpers.Add(helper),
         });
@@ -117,13 +117,17 @@ public static class CustomModelHelperAuthoring
             throw new KeyNotFoundException($"Authored helper '{helperId}' was not found.");
         }
 
-        TransformMatrix exact = exactLocalMatrix ?? localTransform.ToMatrix();
+        CustomModelAuthoredHelper previous = document.AuthoredHelpers[index];
+        TransformMatrix previousTrs = previous.LocalTransform.ToMatrix();
+        TransformMatrix exact = exactLocalMatrix ?? (previous.ExactLocalMatrix.NearlyEquals(previousTrs, 1e-12)
+            ? localTransform.ToMatrix()
+            : localTransform.ToMatrix() * previousTrs.InvertedAffine() * previous.ExactLocalMatrix);
         CustomModelAuthoredHelper replacement = document.AuthoredHelpers[index] with
         {
             LocalTransform = localTransform,
             ExactLocalMatrix = exact,
         };
-        return FinalizeRigMutation(document with
+        return FinalizeRigMutation(document, document with
         {
             AuthoredHelpers = document.AuthoredHelpers.SetItem(index, replacement),
         });
@@ -159,7 +163,7 @@ public static class CustomModelHelperAuthoring
         return updated;
     }
 
-    private static CustomModelDocument FinalizeRigMutation(CustomModelDocument document)
+    private static CustomModelDocument FinalizeRigMutation(CustomModelDocument original, CustomModelDocument document)
     {
         string rigSignature = CustomModelContractSignatures.ComputeRig(
             document.CreateEffectiveBones());
@@ -168,8 +172,66 @@ public static class CustomModelHelperAuthoring
             RigSignature = rigSignature,
             LastBuildReceipt = null,
         };
+        updated = SynchronizeStudioHelpers(original, updated);
         updated.Validate();
         return updated;
+    }
+
+    private static CustomModelDocument SynchronizeStudioHelpers(CustomModelDocument original, CustomModelDocument updated)
+    {
+        if (original.RiggingSession is not { } session) return updated;
+        ImmutableArray<RigParentObservation> originalNodes = RiggingSessions.ObserveSourceHierarchy(original);
+        var entities = session.Recipe.Entities.ToBuilder();
+        var recipes = session.Recipe.Helpers.ToBuilder();
+        var policies = session.Recipe.FramePolicies.ToBuilder();
+        ImmutableArray<CustomModelBone> bones = updated.CreateEffectiveBones();
+        var globals = new List<TransformMatrix>(bones.Length);
+        foreach (CustomModelBone bone in bones)
+            globals.Add(bone.ParentIndex < 0 ? bone.ExactLocalBindMatrix : globals[bone.ParentIndex] * bone.ExactLocalBindMatrix);
+        foreach (CustomModelAuthoredHelper helper in updated.AuthoredHelpers)
+        {
+            CustomModelAuthoredHelper? previous = original.AuthoredHelpers.FirstOrDefault(h => h.Id == helper.Id);
+            if (previous == helper) continue;
+            int entityIndex = FindEntity(entities, helper.Id);
+            if (entityIndex < 0)
+                entities.Add(new() { EntityId = helper.Id, OwnerAssetId = updated.ModelId, NativeName = helper.Name,
+                    SourceEntityId = "authored:" + helper.Id.ToString("N"), Kind = RigNativeEntityKind.Helper, Imported = false });
+            else entities[entityIndex] = entities[entityIndex] with { NativeName = helper.Name };
+            Guid parentId = helper.ParentNodeIndex < updated.Bones.Length ? originalNodes[helper.ParentNodeIndex].EntityId
+                : updated.AuthoredHelpers[helper.ParentNodeIndex - updated.Bones.Length].Id;
+            int recipeIndex = -1;
+            for (int i = 0; i < recipes.Count; i++) if (recipes[i].EntityId == helper.Id) { recipeIndex = i; break; }
+            if (recipeIndex >= 0)
+            {
+                HelperRecipe recipe = recipes[recipeIndex];
+                recipes[recipeIndex] = recipe with
+                {
+                    LocalFrame = helper.ExactLocalMatrix, ParentEntityId = parentId, UserApproved = false,
+                    FramePolicy = recipe.FramePolicy is RigFramePolicy.PreserveSource or RigFramePolicy.GeneratedDeform ? RigFramePolicy.Manual : recipe.FramePolicy,
+                };
+            }
+            else
+            {
+                int policyIndex = -1;
+                for (int i = 0; i < policies.Count; i++) if (policies[i].EntityId == helper.Id) { policyIndex = i; break; }
+                RigEntityFramePolicy policy = policyIndex < 0 ? new() { EntityId = helper.Id } : policies[policyIndex];
+                int nodeIndex = updated.Bones.Length + updated.AuthoredHelpers.IndexOf(helper);
+                policy = policy with
+                {
+                    FramePolicy = policy.FramePolicy is RigFramePolicy.PreserveSource or RigFramePolicy.GeneratedDeform ? RigFramePolicy.Manual : policy.FramePolicy,
+                    SolvedGlobalFrame = globals[nodeIndex],
+                };
+                if (policyIndex < 0) policies.Add(policy); else policies[policyIndex] = policy;
+            }
+        }
+        var replacement = session with { Recipe = session.Recipe with { Entities = entities.ToImmutable(), Helpers = recipes.ToImmutable(), FramePolicies = policies.ToImmutable() } };
+        return updated with { RiggingSession = RiggingSessions.Change(session, replacement, RiggingEditKind.Helpers) };
+
+        static int FindEntity(ImmutableArray<RigEntityBinding>.Builder source, Guid id)
+        {
+            for (int i = 0; i < source.Count; i++) if (source[i].EntityId == id) return i;
+            return -1;
+        }
     }
 
     private static string BuildUniqueName(CustomModelDocument document, string stem)

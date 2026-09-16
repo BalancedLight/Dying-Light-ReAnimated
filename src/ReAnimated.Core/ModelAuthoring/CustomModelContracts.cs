@@ -533,6 +533,9 @@ public sealed record CustomModelAnimationClip
 
     public bool HasMorphTracks { get; init; }
 
+    /// <summary>Optional portable derived motion metadata; the original source clip remains authoritative.</summary>
+    public DerivedMotionReference? DerivedMotion { get; init; }
+
     public string FacialSourceValueUnit { get; init; } = "percent";
 
     internal void Validate(string parameterName)
@@ -550,6 +553,7 @@ public sealed record CustomModelAnimationClip
         }
 
         ProjectAssetReference.ValidateSha256(SourceFingerprint, parameterName);
+        DerivedMotion?.Validate();
         if (FacialSourceValueUnit is not ("percent" or "normalized"))
         {
             throw new ArgumentException(
@@ -661,7 +665,7 @@ public sealed record CustomModelBuildSettings
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 7;
 
     public const string EmptyMorphSignature =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -699,10 +703,19 @@ public sealed record CustomModelDocument
     /// <summary>
     /// The authored DL1 rig-conformance settings, when this model was converted
     /// to a Dying Light skeleton. Null for a model that keeps its imported rig.
-    /// Only the decisions are stored; the conformed bone table is re-derived
-    /// from the retained source FBX.
+    /// Decisions remain separate from the source. Schema-7 AuthoredLayer data
+    /// preserves the resulting rig, rest edits and binding for verified replay.
     /// </summary>
     public CustomModelRigConformance? RigConformance { get; init; }
+
+    /// <summary>
+    /// Versioned studio decisions and evidence. Null preserves the legacy
+    /// conformance/export workflow; this is not a second emitted bone table.
+    /// </summary>
+    public RiggingSession? RiggingSession { get; init; }
+
+    /// <summary>Source-linked geometry/binding edits, separate from the immutable embedded FBX.</summary>
+    public AuthoredModelLayerReference? AuthoredLayer { get; init; }
 
     public CustomModelCameraMetadata Camera { get; init; } = new();
 
@@ -800,6 +813,13 @@ public sealed record CustomModelDocument
         }
 
         RigConformance?.Validate(nameof(RigConformance));
+        AuthoredLayer?.Validate();
+        if (RiggingSession is { } studio)
+        {
+            studio.Validate();
+            if (studio.OwnerModelId != ModelId)
+                throw new ArgumentException("A rigging session belongs to another model.", nameof(RiggingSession));
+        }
         Camera.Validate(effectiveNames, nameof(Camera));
         ArgumentNullException.ThrowIfNull(SecondaryMotion);
         SecondaryMotion.Validate(effectiveNames);
@@ -929,17 +949,26 @@ public sealed record CustomModelDocument
             }
         }
 
+        var semanticRoles = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (RiggingSession is { } session)
+        {
+            var assignments = session.Recipe.Assignments.GroupBy(static a => a.EntityId).Where(static g => g.Count() == 1)
+                .ToDictionary(static g => g.Key, static g => g.Single().RoleId);
+            foreach (var entity in session.Recipe.Entities.Where(e => e.OwnerAssetId == ModelId))
+                if (assignments.TryGetValue(entity.EntityId, out var role)) semanticRoles.TryAdd(entity.NativeName, role);
+        }
         return new RigDefinition(
             $"custom:{ModelId:N}",
             Name,
-            descriptors.Select(static row => new BoneDefinition(
+            descriptors.Select(row => new BoneDefinition(
                 row.Bone.Index,
                 row.Bone.Name,
                 row.Bone.ParentIndex,
                 row.Bone.LocalBindTransform,
                 row.Bone.Kind,
                 requiredForExport: true,
-                descriptorHash: row.Descriptor)),
+                descriptorHash: row.Descriptor,
+                semanticRole: semanticRoles.GetValueOrDefault(row.Bone.Name))),
             MorphChannels.Select(static morph => new MorphChannelDefinition(
                 morph.Index,
                 morph.Name,
@@ -1003,6 +1032,9 @@ public sealed record CustomModelPackage(
     ImmutableArray<byte> SourceFbx,
     ImmutableDictionary<string, ImmutableArray<byte>> TexturePayloads)
 {
+    public ImmutableArray<byte> AuthoredLayerPayload { get; init; } = [];
+    public ImmutableDictionary<Guid, ImmutableArray<byte>> DerivedAnimationPayloads { get; init; } =
+        ImmutableDictionary<Guid, ImmutableArray<byte>>.Empty;
     public const string ManifestEntryPath = "model.json";
 
     public const string SourceFbxEntryPath = "source/model.fbx";

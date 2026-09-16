@@ -15,6 +15,9 @@ public readonly record struct Dl1AuthoredBoneBounds(
     Vector3D Center,
     Vector3D HalfExtents)
 {
+    public bool IsFiniteAndNonNegative => Center.IsFinite && HalfExtents.IsFinite &&
+        HalfExtents.X >= 0 && HalfExtents.Y >= 0 && HalfExtents.Z >= 0;
+
     public bool IsFiniteAndNonZero =>
         Center.IsFinite &&
         HalfExtents.IsFinite &&
@@ -37,6 +40,13 @@ public sealed record Dl1AuthoredRigDecompositionDiagnostic(
 
 public sealed record Dl1AuthoredRigNode
 {
+    /// <summary>Studio identity and explicit policies; null retains the legacy preparation contract.</summary>
+    public Guid? SemanticEntityId { get; init; }
+
+    public RigFramePolicy? FramePolicy { get; init; }
+
+    public RigBoundsPolicy? BoundsPolicy { get; init; }
+
     public required int PhysicalIndex { get; init; }
 
     public required int SourceBoneIndex { get; init; }
@@ -191,7 +201,7 @@ public sealed class Dl1AuthoredRigContract
         return (poses.MoveToImmutable(), diagnostics.ToImmutable());
     }
 
-    private static TransformTRS ProjectAffineToTrs(TransformMatrix matrix)
+    internal static TransformTRS ProjectAffineToTrs(TransformMatrix matrix)
     {
         TransformMatrix rotation = OrthonormalizeRotation(matrix);
         double scaleX = new Vector3D(matrix.M11, matrix.M21, matrix.M31).Length;
@@ -372,9 +382,22 @@ public sealed class Dl1AuthoredRigContract
         var sourceIndexes = new HashSet<int>();
         var normalizedNames = new HashSet<string>(StringComparer.Ordinal);
         var descriptors = new Dictionary<uint, string>();
+        var semanticIds = new HashSet<Guid>();
         for (int index = 0; index < nodes.Length; index++)
         {
             Dl1AuthoredRigNode node = nodes[index];
+            if (node.FramePolicy is { } framePolicy)
+            {
+                if (node.SemanticEntityId is not { } semanticId || semanticId == Guid.Empty || !semanticIds.Add(semanticId) || node.BoundsPolicy is null)
+                    throw new ArgumentException("Studio-authored nodes require distinct semantic identities and explicit bounds policies.", nameof(nodes));
+                RigContractRules.Defined(framePolicy, nameof(node.FramePolicy));
+                RigContractRules.Defined(node.BoundsPolicy.Value, nameof(node.BoundsPolicy));
+                RigRecipeRules.Affine(node.LocalBindMatrix, nameof(node.LocalBindMatrix));
+                RigRecipeRules.Affine(node.GlobalBindMatrix, nameof(node.GlobalBindMatrix));
+                RigRecipeRules.Affine(node.InverseGlobalReferenceMatrix, nameof(node.InverseGlobalReferenceMatrix));
+            }
+            else if (node.SemanticEntityId is not null || node.BoundsPolicy is not null)
+                throw new ArgumentException("Legacy nodes cannot carry partial studio preparation policies.", nameof(nodes));
             if (node.PhysicalIndex != index ||
                 node.SourceBoneIndex < 0 ||
                 !sourceIndexes.Add(node.SourceBoneIndex))
@@ -397,7 +420,8 @@ public sealed class Dl1AuthoredRigContract
             if (!node.LocalBindMatrix.IsFinite ||
                 !node.GlobalBindMatrix.IsFinite ||
                 !node.InverseGlobalReferenceMatrix.IsFinite ||
-                !node.Bounds.IsFiniteAndNonZero)
+                !(node.BoundsPolicy is RigBoundsPolicy.PreserveSource or RigBoundsPolicy.Solved
+                    ? node.Bounds.IsFiniteAndNonNegative : node.Bounds.IsFiniteAndNonZero))
             {
                 throw new ArgumentException($"Authored-rig entity '{node.Name}' contains an invalid matrix or bound.", nameof(nodes));
             }
@@ -416,7 +440,7 @@ public sealed class Dl1AuthoredRigContract
                 throw new ArgumentException($"Authored-rig entity '{node.Name}' violates the inverse-global reference contract.", nameof(nodes));
             }
 
-            ValidateOrthonormalFrame(node);
+            if (node.FramePolicy is null or RigFramePolicy.GeneratedDeform) ValidateOrthonormalFrame(node);
             if (descriptors.TryGetValue(node.DescriptorHash, out string? existing))
             {
                 throw new ArgumentException(

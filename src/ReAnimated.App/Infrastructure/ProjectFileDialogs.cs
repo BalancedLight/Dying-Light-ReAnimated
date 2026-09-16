@@ -246,6 +246,9 @@ public interface IProjectFileDialogService
     string? ShowSelectAdditionalRpackRootDialog(string? initialPath) => null;
 
     string? ShowOpenCustomModelFbxDialog(string? initialPath) => null;
+    string? ShowOpenScaleStudySourceDialog() => null;
+    string? ShowOpenRigDoctorRulesDialog() => null;
+    string? ShowSaveScaleStudyDialog() => null;
 
     string? ShowOpenCustomModelPackageDialog(string? initialPath) => null;
 
@@ -363,6 +366,27 @@ public sealed class WindowsProjectFileDialogService :
         return dialog.ShowDialog() == true
             ? dialog.FileName
             : null;
+    }
+
+    public string? ShowOpenRigDoctorRulesDialog()
+    {
+        OpenFileDialog dialog = new() { Filter = "Rig Doctor contact rules (*.json)|*.json", CheckFileExists = true,
+            Multiselect = false, Title = "Choose explicit contact repair rules" };
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenScaleStudySourceDialog()
+    {
+        OpenFileDialog dialog = new() { Filter = "HumanAI preset source (*.pre)|*.pre", CheckFileExists = true,
+            Multiselect = false, Title = "Choose a HumanAI preset source for size studies" };
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveScaleStudyDialog()
+    {
+        SaveFileDialog dialog = new() { Filter = "Preset study source (*.pre)|*.pre", DefaultExt = ".pre", AddExtension = true,
+            FileName = "size-study.pre", CheckPathExists = true, OverwritePrompt = true, Title = "Save a separate size-study source" };
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
     }
 
     public string? ShowSaveProjectDialog(

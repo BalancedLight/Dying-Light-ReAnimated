@@ -4,6 +4,8 @@ using ReAnimated.Core.Project;
 
 namespace ReAnimated.Core.ModelAuthoring;
 
+public enum CustomModelCorrespondenceMethod { LegacyNameRoles, GeometryHierarchyV1 }
+
 /// <summary>
 /// Which corresponding segments the uniform conformance scale is solved from.
 /// </summary>
@@ -85,6 +87,8 @@ public sealed record CustomModelConformancePositionOverride
 /// </remarks>
 public sealed record CustomModelRigConformance
 {
+    /// <summary>Missing in older documents: retain the original name-only replay behavior.</summary>
+    public CustomModelCorrespondenceMethod CorrespondenceMethod { get; init; }
     /// <summary>Stable identity of the target skeleton these settings targeted.</summary>
     public string TemplateId { get; init; } = string.Empty;
 
@@ -138,7 +142,7 @@ public sealed record CustomModelRigConformance
         ProjectAssetReference.ValidateSha256(TemplateFingerprint, parameterName);
         ProjectAssetReference.ValidateSha256(SourceFbxSha256, parameterName);
 
-        if (!Enum.IsDefined(ScaleMode))
+        if (!Enum.IsDefined(ScaleMode) || !Enum.IsDefined(CorrespondenceMethod))
         {
             throw new ArgumentException(
                 "The conformance scale mode is not supported.",

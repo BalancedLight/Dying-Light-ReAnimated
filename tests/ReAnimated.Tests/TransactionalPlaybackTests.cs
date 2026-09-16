@@ -652,6 +652,33 @@ public sealed class TransactionalPlaybackTests : IDisposable
             StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Gate", "Recovery")]
+    public async Task PendingRecoveryCannotBeOverwrittenByIntervalOrWindowClosing(bool restore)
+    {
+        var store = new JsonWorkspaceStateStore(Path.Combine(_temporaryDirectory, "guarded-recovery.json"));
+        var snapshot = new WorkspaceSnapshot(WorkspaceSnapshot.CurrentSchemaVersion, DateTimeOffset.UtcNow, null, "", null, null,
+            0, true, 60, .02f, "Models", DlraProject.Create("Recoverable draft"), IsProjectDirty: true);
+        store.Save(snapshot);
+        string original = File.ReadAllText(store.FilePath);
+        await using var assets = new Dl1AssetWorkspace(Path.Combine(_temporaryDirectory, "guarded-index.sqlite3"), Path.Combine(_temporaryDirectory, "guarded-cache"));
+        await using var viewModel = new MainWindowViewModel(store, new NoOpDialogs(), assets, new NullFingerprintService());
+        using var autosave = new WorkspaceAutosaveService(viewModel, store);
+        Assert.True(viewModel.HasRecoverySnapshot);
+        Assert.False(viewModel.CanSaveWorkspaceSnapshot);
+        Assert.False(autosave.SaveNow("interval"));
+        Assert.False(autosave.SaveNow("window-closing"));
+        Assert.Equal(original, File.ReadAllText(store.FilePath));
+        if (restore) await viewModel.RestoreRecoveryCommand.ExecuteAsync(null);
+        else viewModel.DismissRecoveryCommand.Execute(null);
+        Assert.False(viewModel.HasRecoverySnapshot);
+        Assert.True(viewModel.CanSaveWorkspaceSnapshot);
+        Assert.True(autosave.SaveNow("after-recovery-decision"));
+        Assert.Equal(restore ? "Recoverable draft" : "Untitled", store.Load()!.Project!.Name);
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_temporaryDirectory))

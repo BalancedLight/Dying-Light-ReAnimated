@@ -13,6 +13,7 @@ public static class CorePreviewAdapter
         TransformMatrix? actorWorldTransform = null)
     {
         ArgumentNullException.ThrowIfNull(pose);
+        var localMatrices = pose.LocalMatrices;
         BoneRenderData[] bones = new BoneRenderData[pose.Rig.BoneCount];
         for (int index = 0; index < bones.Length; index++)
         {
@@ -20,7 +21,7 @@ public static class CorePreviewAdapter
             bones[index] = new BoneRenderData(
                 bone.Name,
                 bone.ParentIndex,
-                ToSystemMatrix(pose.LocalTransforms[index].ToMatrix()),
+                ToSystemMatrix(localMatrices[index]),
                 ToSystemMatrix(pose.GlobalMatrices[index]),
                 selectedBoneIndex == index)
             {

@@ -7,6 +7,7 @@ using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Core.Project;
 using ReAnimated.Evaluation;
@@ -264,6 +265,7 @@ public static class CustomModelAnimationLibraryExporter
         {
             cancellationToken.ThrowIfCancellationRequested();
             selection.ValidateForExport();
+            FbxDerivedMotionAuthoring.ValidateExport(request.Model, selection);
             if (!request.Model.AnimationClips.TryGetValue(selection.Id, out AnimationClip? imported))
             {
                 throw new InvalidOperationException(
@@ -305,6 +307,8 @@ public static class CustomModelAnimationLibraryExporter
                 preparedRig,
                 name,
                 outputFrameRate,
+                selection.DerivedMotion is null ? [] : request.Model.Package.Document.CreateEffectiveBones()
+                    .Select(static bone => bone.ExactLocalBindMatrix).ToImmutableArray(),
                 cancellationToken);
             AnimationRootMode rootMode = selection.RootMotionMode switch
             {
@@ -600,6 +604,7 @@ public static class CustomModelAnimationLibraryExporter
         Dl1PreparedAuthoredRig prepared,
         string name,
         FrameRate frameRate,
+        ImmutableArray<TransformMatrix> exactSourceBindLocals,
         CancellationToken cancellationToken)
     {
         long outputFrameCount = source.FrameCount == 1
@@ -618,6 +623,7 @@ public static class CustomModelAnimationLibraryExporter
         var keysByBone = Enumerable.Range(0, prepared.PreviewRig.BoneCount)
             .Select(_ => ImmutableArray.CreateBuilder<TransformKeyframe>(checked((int)outputFrameCount)))
             .ToArray();
+        var animatedBones = source.TransformTracks.Select(static track => track.BoneIndex).ToHashSet();
         for (long frame = 0; frame < outputFrameCount; frame++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -628,9 +634,19 @@ public static class CustomModelAnimationLibraryExporter
                 prepared.SourceRig,
                 seconds,
                 PlaybackMode.Clamp);
+            if (!exactSourceBindLocals.IsDefaultOrEmpty)
+            {
+                var locals = sourcePose.LocalMatrices.ToArray();
+                for (int bone = 0; bone < locals.Length; bone++)
+                    if (!animatedBones.Contains(bone)) locals[bone] = exactSourceBindLocals[bone];
+                sourcePose = new SkeletonPose(prepared.SourceRig, sourcePose.LocalTransforms, locals);
+            }
             SkeletonPose rebased = prepared.RebasePose(sourcePose);
             for (int boneIndex = 0; boneIndex < rebased.LocalTransforms.Length; boneIndex++)
             {
+                if (!exactSourceBindLocals.IsDefaultOrEmpty &&
+                    !rebased.LocalTransforms[boneIndex].ToMatrix().NearlyEquals(rebased.LocalMatrices[boneIndex],1e-7))
+                    throw new InvalidOperationException($"Derived animation '{name}' cannot represent emitted local frame for '{prepared.PreviewRig.Bones[boneIndex].Name}' as POS/ROT/SCL at frame {frame}. Review the native bind basis before export.");
                 keysByBone[boneIndex].Add(new TransformKeyframe(frame, rebased.LocalTransforms[boneIndex]));
             }
         }

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
@@ -43,6 +44,10 @@ public sealed record Dl1SourceModelBuildResult(
 {
     public ImmutableArray<string> NativeCompanionFiles { get; init; } = [];
     public ImmutableArray<string> NativeCompanionNotes { get; init; } = [];
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public ImmutableArray<Dl1ResolvedBoneScriptPolicy> BoneScriptPolicies { get; init; }
+    [JsonIgnore]
+    public Dl1AuthoredRigContract? AuthoredRigContract { get; init; }
 }
 
 /// <summary>
@@ -86,6 +91,8 @@ public static class Dl1SourceModelWriter
         cancellationToken.ThrowIfCancellationRequested();
 
         PreparedSourceModel prepared = Prepare(request.Model, resourceName, surfaceName, cancellationToken);
+        ImmutableArray<Dl1ResolvedBoneScriptPolicy> componentPolicies = request.Model.Package.Document.RiggingSession is not null && prepared.RigContract is not null
+            ? Dl1BoneScriptPolicyResolver.Resolve(request.Model.Package.Document, prepared.RigContract) : default;
         Dl1NativeCompanionBuild companions = Dl1NativeCompanionWriter.Build(
             request.Model.Package.Document, resourceName, prepared.BoneNames);
         byte[] msh = BuildMsh(prepared);
@@ -93,7 +100,7 @@ public static class Dl1SourceModelWriter
             Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(
                 BuildChrObjects(prepared),
                 "default"));
-        string bscr = BuildBoneScript(prepared.BoneNames);
+        string bscr = BuildBoneScript(prepared.BoneNames, componentPolicies);
         string? animationScriptAlias = string.IsNullOrWhiteSpace(request.AnimationScriptAlias)
             ? null
             : RequireExactResourceName(request.AnimationScriptAlias, 63, "animation script alias");
@@ -115,6 +122,16 @@ public static class Dl1SourceModelWriter
             [$"{resourceName}.bscr"] = Encoding.UTF8.GetBytes(bscr),
             ["BLOCKED_OUTPUTS.txt"] = Encoding.UTF8.GetBytes(blocked),
         };
+        if (!componentPolicies.IsDefault)
+            files[$"{resourceName}.components.json"] = JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                format = "dl-reanimated-bone-script-policies-v1",
+                sourceFbxSha256 = request.Model.Package.Document.Source.ContentSha256,
+                authoredContractId = prepared.RigContract!.ContractId,
+                policies = componentPolicies,
+                runtimeBehaviorVerified = false,
+                note = "Portable component values and explicit source tokens; native ownership composition and runtime behavior require separate verification.",
+            }, ManifestJsonOptions);
         foreach ((string relativePath, byte[] bytes) in prepared.MaterialFiles)
         {
             files.Add(relativePath, bytes);
@@ -157,7 +174,7 @@ public static class Dl1SourceModelWriter
                 state = CustomModelBuildState.CompilerReady.ToString(),
                 sourceMsh = "Chrome source MSH for the official Techland compiler",
                 characterDefinition = "Structured DL1 CHR v4 with one default variant in exact physical object order",
-                boneScript = "Per-entity POS/ROT, plus root SCL",
+                boneScript = componentPolicies.IsDefault ? "Per-entity POS/ROT, plus root SCL" : "Explicit per-entity studio component and LOD decisions",
                 animationScript = ascr is null ? "not authored" : "explicit user-supplied alias",
                 materials = "Techland DMT sources with user-owned diffuse/normal/specular DDS dependencies",
                 morphTargets = "Chrome LOD 0x0104 records with fixed UTF-8 names and one float3 position delta per expanded draw vertex",
@@ -251,6 +268,8 @@ public static class Dl1SourceModelWriter
             ])
         {
             NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
+            BoneScriptPolicies = componentPolicies,
+            AuthoredRigContract = prepared.RigContract,
             NativeCompanionNotes = companions.Notes,
         };
     }
@@ -723,36 +742,7 @@ public static class Dl1SourceModelWriter
 
     private static short[] QuantizeWeights(ReadOnlySpan<double> weights)
     {
-        double total = 0;
-        for (int index = 0; index < weights.Length; index++)
-        {
-            total += Math.Max(0, weights[index]);
-        }
-
-        if (!double.IsFinite(total) || total <= 0)
-        {
-            throw new InvalidDataException("Skin weights must contain one finite positive value.");
-        }
-
-        var result = new short[weights.Length];
-        int sum = 0;
-        int largest = 0;
-        double largestValue = double.NegativeInfinity;
-        for (int index = 0; index < weights.Length; index++)
-        {
-            double normalized = Math.Max(0, weights[index]) / total;
-            int value = (int)Math.Floor(normalized * 32767.0);
-            result[index] = checked((short)value);
-            sum += value;
-            if (normalized > largestValue)
-            {
-                largest = index;
-                largestValue = normalized;
-            }
-        }
-
-        result[largest] = checked((short)(result[largest] + (32767 - sum)));
-        return result;
+        return Dl1SkinWeightQuantization.Encode(weights);
     }
 
     private static (ImmutableArray<Vector3D> Tangents, ImmutableArray<Vector3D> Bitangents) ComputeTangentBasis(
@@ -1025,7 +1015,7 @@ public static class Dl1SourceModelWriter
         offset += 4;
     }
 
-    private static string BuildBoneScript(ImmutableArray<string> boneNames)
+    private static string BuildBoneScript(ImmutableArray<string> boneNames, ImmutableArray<Dl1ResolvedBoneScriptPolicy> policies)
     {
         var builder = new StringBuilder();
         builder.AppendLine("import \"bscr.def\"");
@@ -1034,12 +1024,13 @@ public static class Dl1SourceModelWriter
         builder.AppendLine("{");
         for (int index = 0; index < boneNames.Length; index++)
         {
-            string components = index == 0 ? "POS | ROT | SCL" : "POS | ROT";
+            string components = policies.IsDefault ? index == 0 ? "POS | ROT | SCL" : "POS | ROT" : policies[index].Components;
+            string lod = policies.IsDefault ? "LOD_OFF" : policies[index].LodToken;
             builder.Append("    SetBoneAnimTrans(\"")
                 .Append(EscapeScriptString(boneNames[index]))
                 .Append("\", ")
                 .Append(components)
-                .AppendLine(", LOD_OFF);");
+                .Append(", ").Append(lod).AppendLine(");");
         }
 
         builder.AppendLine("}");

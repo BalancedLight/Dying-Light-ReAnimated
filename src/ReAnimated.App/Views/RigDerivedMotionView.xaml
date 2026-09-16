@@ -1,0 +1,15 @@
+<UserControl x:Class="ReAnimated.App.Views.RigDerivedMotionView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="5">
+  <TextBlock Text="Derive compatible motion" FontWeight="SemiBold"/>
+  <TextBlock Text="Create a separate sampled clip for the current rig after rest or parent changes. Original FBX animation remains intact. Animated position, rotation and scale are retained; dynamic shear and excessive interpolation error require review." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,7"/>
+  <TextBlock Text="Original FBX source clip"/><ComboBox ItemsSource="{Binding DerivedSources}" SelectedItem="{Binding DerivedSource}" DisplayMemberPath="Name" Margin="0,3,0,6"/>
+  <TextBlock Text="Derived clip name"/><TextBox Text="{Binding DerivedName, UpdateSourceTrigger=PropertyChanged}"/>
+  <TextBlock Text="Sample-rate multiplier (1 to 8)" Margin="0,5,0,0"/><TextBox Text="{Binding DerivedSampleMultiplier, UpdateSourceTrigger=PropertyChanged}"/>
+  <WrapPanel Margin="0,5,0,5"><Button Content="Derive and measure" Command="{Binding DeriveMotionCommand}"/><Button Content="Cancel" Command="{Binding CancelDerivedMotionCommand}"/><Button Content="Clear" Command="{Binding ClearDerivedMotionCommand}"/></WrapPanel>
+  <CheckBox Content="Preview the derived clip" IsChecked="{Binding DerivedPreviewEnabled}"/>
+  <WrapPanel Margin="0,5,0,5"><Button Content="Play / pause preview" Command="{Binding StudioWorkspace.Timeline.TogglePlaybackCommand}"/><Button Content="Stop" Command="{Binding StudioWorkspace.Timeline.StopCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding DerivedMotionStatus}" TextWrapping="Wrap" Margin="0,5,0,6"/>
+  <Button Content="Save as a separate clip" Command="{Binding SaveDerivedMotionCommand}" HorizontalAlignment="Left"/>
+  <TextBlock Text="Preview shows recorded motion; root policy remains an export setting. This FBX path does not establish additive-reference, graph/event or runtime contact/IK parity." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,5,0,0"/>
+ </StackPanel>
+</UserControl>

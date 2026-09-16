@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Geometry;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Codecs.Models;
@@ -64,6 +65,9 @@ public sealed record FbxModelSurface(
     bool IsSkinned)
 {
     public ImmutableArray<FbxModelMorphTarget> MorphTargets { get; init; } = [];
+    public GeometrySourceComponent? SourceGeometry { get; init; }
+    public ImmutableArray<GeometrySourceCorner> SourceCorners { get; init; } = [];
+    public ImmutableArray<GeometrySourceTriangle> SourceTriangles { get; init; } = [];
 }
 
 public sealed record FbxModelMorphTarget(
@@ -339,10 +343,9 @@ public static class FbxModelAuthoringImporter
     /// <summary>
     /// Re-decodes the immutable FBX snapshot and reapplies only the authored
     /// model-package state. Geometry, hierarchy, binds, and animation samples
-    /// always come from the embedded FBX bytes; editable material bindings and
-    /// stack settings, authored helpers, and preview camera selection come from
-    /// the validated schema-2 package manifest. Schema-1 packages are migrated
-    /// in memory before reaching this boundary.
+    /// start from the embedded FBX bytes. Source-linked authored edits are
+    /// verified and replayed before helpers, camera and editable metadata are
+    /// restored. Older manifests are migrated before reaching this boundary.
     /// </summary>
     public static FbxModelAuthoringImportResult ImportPackage(
         CustomModelPackage package,
@@ -350,6 +353,7 @@ public static class FbxModelAuthoringImporter
     {
         ArgumentNullException.ThrowIfNull(package);
         package.Document.Validate();
+        CustomModelPackageSerializer.ValidateAuthoredLayer(package);
         bool ignoreMorphChannels = package.Document.IgnoreMorphChannels ||
             package.Document.Diagnostics.Any(static diagnostic =>
                 string.Equals(
@@ -361,12 +365,13 @@ public static class FbxModelAuthoringImporter
             package.Document.Source.OriginalFileName,
             new FbxModelAuthoringImportOptions
             {
-                RigMode = package.Document.RigMode,
-                IgnoreMorphChannels = ignoreMorphChannels,
+                RigMode = package.Document.AuthoredLayer?.SourceRigMode ??
+                    (package.Document.RigConformance is null ? package.Document.RigMode : CustomModelRigMode.Auto),
+                IgnoreMorphChannels = package.Document.AuthoredLayer?.SourceIgnoreMorphChannels ?? ignoreMorphChannels,
             },
             cancellationToken);
 
-        Dictionary<string, CustomModelAnimationClip> savedAnimations = package.Document.AnimationClips
+        Dictionary<string, CustomModelAnimationClip> savedAnimations = package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is null)
             .ToDictionary(static clip => clip.SourceFingerprint, StringComparer.Ordinal);
         ImmutableArray<CustomModelAnimationClip> animations = decoded.Package.Document.AnimationClips
             .Select(clip => savedAnimations.TryGetValue(clip.SourceFingerprint, out CustomModelAnimationClip? saved)
@@ -380,6 +385,7 @@ public static class FbxModelAuthoringImporter
                 }
                 : clip)
             .ToImmutableArray();
+        animations = animations.AddRange(package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is not null));
         var savedMaterials = package.Document.Materials.ToBuilder();
         var normalizedDiagnostics = decoded.Package.Document.Diagnostics
             .Where(static diagnostic =>
@@ -401,6 +407,7 @@ public static class FbxModelAuthoringImporter
             savedMaterials,
             package.TexturePayloads,
             package.Document.Diagnostics));
+        normalizedDiagnostics.AddRange(package.Document.Diagnostics.Where(static d => d.Code is FbxGeneratedBodyBinding.UnboundDiagnostic or "generated_binding_review" or FbxRegionalHandBinding.ReviewDiagnosticCode or FbxRigidEyeBinding.ReviewDiagnosticCode or FbxRestPoseAuthoring.ReviewDiagnosticCode or FbxHierarchyAuthoring.ReviewDiagnosticCode or FbxDerivedMotionAuthoring.ReviewDiagnosticCode));
         CustomModelDocument document = decoded.Package.Document with
         {
             ModelId = package.Document.ModelId,
@@ -411,8 +418,28 @@ public static class FbxModelAuthoringImporter
             BuildSettings = package.Document.BuildSettings,
             SecondaryMotion = package.Document.SecondaryMotion,
             FacialPresets = package.Document.FacialPresets,
+            RigConformance = package.Document.RigConformance,
+            RiggingSession = package.Document.RiggingSession is { } studio
+                ? RiggingSessions.ReconcileSource(studio, decoded.Package.Document.Source.ContentSha256) : null,
             LastBuildReceipt = null,
         };
+        if (package.Document.AuthoredLayer is not null)
+        {
+            // Authored-layer validation binds the payload to the base bone
+            // table while the document signature covers the full effective
+            // hierarchy. Carry the separate helper rows into this staging
+            // document so that validation sees the same effective hierarchy;
+            // ReapplyAuthoredHierarchyLayer below still performs the single
+            // source-name parent remap after replay.
+            document = document with { Bones = package.Document.Bones, AuthoredHelpers = package.Document.AuthoredHelpers,
+                RigSignature = package.Document.RigSignature, RigMode = package.Document.RigMode,
+                AuthoredLayer = package.Document.AuthoredLayer, Meshes = package.Document.Meshes };
+            decoded = FbxAuthoredModelLayer.Replay(decoded, package with { Document = document }, cancellationToken);
+        }
+        else if (package.Document.RigConformance is not null && !string.Equals(package.Document.RigSignature, decoded.Package.Document.RigSignature, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new CustomModelFormatException("This package contains a conformed rig without the source-linked data needed to restore its geometry and weights. The original package was retained; recapture the authored revision from its working session before replacing it.");
+        }
         document = ReapplyAuthoredHierarchyLayer(package.Document, document);
         bool buildReceiptCompatible = string.Equals(
                 package.Document.RigSignature,
@@ -432,11 +459,11 @@ public static class FbxModelAuthoringImporter
             ? null
             : document.CreateRigDefinition();
         document.Validate();
-        return decoded with
+        return FbxDerivedMotionAuthoring.RestoreAvailability(decoded with
         {
-            Package = new CustomModelPackage(document, package.SourceFbx, package.TexturePayloads),
+            Package = package with { Document = document },
             Rig = reopenedRig,
-        };
+        });
     }
 
     public static CustomModelReimportPreview PreviewReimport(
@@ -449,6 +476,13 @@ public static class FbxModelAuthoringImporter
         ArgumentNullException.ThrowIfNull(existing);
         existing.Document.Validate();
         ArgumentException.ThrowIfNullOrWhiteSpace(replacementFileName);
+        if (existing.Document.AuthoredLayer is not null)
+        {
+            if (!string.Equals(Convert.ToHexStringLower(SHA256.HashData(replacementFbx)), existing.Document.Source.ContentSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("This model has source-linked authored rig or skin edits. A changed source requires explicit reconciliation; the existing revision has been retained.");
+            var unchanged = ImportPackage(existing, cancellationToken);
+            return new(unchanged, existing.Document.RigSignature, existing.Document.RigSignature, existing.Document.MorphSignature, existing.Document.MorphSignature, CustomModelReimportContractChange.None);
+        }
         FbxModelAuthoringImportOptions effectiveOptions =
             (options ?? new FbxModelAuthoringImportOptions()) with
             {
@@ -504,6 +538,10 @@ public static class FbxModelAuthoringImporter
                 BuildSettings = existing.Document.BuildSettings,
                 SecondaryMotion = existing.Document.SecondaryMotion,
                 FacialPresets = existing.Document.FacialPresets,
+                AnimationClips = replacement.Package.Document.AnimationClips.AddRange(
+                    existing.Document.AnimationClips.Where(static clip => clip.DerivedMotion is not null)),
+                RiggingSession = existing.Document.RiggingSession is { } studio
+                    ? RiggingSessions.ReconcileSource(studio, replacement.Package.Document.Source.ContentSha256) : null,
                 LastBuildReceipt = null,
             });
         replacement = replacement with
@@ -511,14 +549,15 @@ public static class FbxModelAuthoringImporter
             Package = new CustomModelPackage(
                 replacementDocument,
                 replacement.Package.SourceFbx,
-                replacement.Package.TexturePayloads),
+                replacement.Package.TexturePayloads)
+                { DerivedAnimationPayloads = existing.DerivedAnimationPayloads },
             Rig = replacementDocument.Bones.IsEmpty
                 ? null
                 : replacementDocument.CreateRigDefinition(),
         };
 
         return new CustomModelReimportPreview(
-            replacement,
+            FbxDerivedMotionAuthoring.RestoreAvailability(replacement),
             existingSourceRigSignature,
             replacementSourceRigSignature,
             existing.Document.MorphSignature,
@@ -1449,6 +1488,7 @@ public static class FbxModelAuthoringImporter
                 out int maximumSourceInfluences,
                 out int maximumRetainedInfluences,
                 out double maximumDiscardedWeight,
+                out GeometrySourceSkinning sourceSkinning,
                 diagnostics,
                 cancellationToken);
 
@@ -1488,6 +1528,12 @@ public static class FbxModelAuthoringImporter
             }
 
             bool reverseWinding = rawBake.LinearDeterminant * basis.LinearDeterminant < 0.0;
+            var sourceGeometry = new GeometrySourceComponent(
+                string.Create(CultureInfo.InvariantCulture, $"fbx:{modelObjectId ?? 0}:{geometryObjectId}"), transformedControlPoints.ToImmutable())
+            {
+                Skinning = sourceSkinning,
+                Coordinates = new(metersPerUnit, basis * TransformMatrix.CreateScale(Vector3D.One * metersPerUnit) * rawBake),
+            };
             var triangles = ImmutableArray.CreateBuilder<FbxExpandedTriangle>();
             var sourceMaterialSlots = ImmutableHashSet.CreateBuilder<int>();
             int reconstructedNormalCount = 0;
@@ -1517,8 +1563,9 @@ public static class FbxModelAuthoringImporter
                 }
 
                 sourceMaterialSlots.Add(sourceMaterialIndex);
-                foreach ((int first, int second, int third) in polygonTriangles)
+                for (int triangleOrdinal = 0; triangleOrdinal < polygonTriangles.Length; triangleOrdinal++)
                 {
+                    (int first, int second, int third) = polygonTriangles[triangleOrdinal];
                     int a = first;
                     int b = reverseWinding ? third : second;
                     int c = reverseWinding ? second : third;
@@ -1536,6 +1583,7 @@ public static class FbxModelAuthoringImporter
                     }
                     triangles.Add(new FbxExpandedTriangle(
                         sourceMaterialIndex,
+                        new GeometrySourceTriangle(polygonIndex, triangleOrdinal),
                         BuildExpandedCorner(ca, polygonIndex, pa, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount),
                         BuildExpandedCorner(cb, polygonIndex, pb, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount),
                         BuildExpandedCorner(cc, polygonIndex, pc, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount)));
@@ -1575,6 +1623,7 @@ public static class FbxModelAuthoringImporter
                     {
                         surfaces.Add(CreateSurface(
                             meshName,
+                            sourceGeometry,
                             materialGroup.Key,
                             partitionIndex++,
                             modelMaterialIds[materialGroup.Key],
@@ -1600,6 +1649,7 @@ public static class FbxModelAuthoringImporter
                 {
                     surfaces.Add(CreateSurface(
                         meshName,
+                        sourceGeometry,
                         materialGroup.Key,
                         partitionIndex++,
                         modelMaterialIds[materialGroup.Key],
@@ -1664,6 +1714,7 @@ public static class FbxModelAuthoringImporter
 
     private static FbxModelSurface CreateSurface(
         string meshName,
+        GeometrySourceComponent sourceGeometry,
         int materialIndex,
         int partitionIndex,
         Guid materialId,
@@ -1680,13 +1731,17 @@ public static class FbxModelAuthoringImporter
         var indices = ImmutableArray.CreateBuilder<uint>(triangles.Count * 3);
         var expandedControlPoints = ImmutableArray.CreateBuilder<int>(triangles.Count * 3);
         var expandedCorners = ImmutableArray.CreateBuilder<FbxExpandedCorner>(triangles.Count * 3);
+        var sourceCorners = ImmutableArray.CreateBuilder<GeometrySourceCorner>(triangles.Count * 3);
+        var sourceTriangles = ImmutableArray.CreateBuilder<GeometrySourceTriangle>(triangles.Count);
         foreach (FbxExpandedTriangle triangle in triangles)
         {
+            sourceTriangles.Add(triangle.SourceIdentity);
             foreach (FbxExpandedCorner corner in triangle.Corners)
             {
                 uint index = checked((uint)vertices.Count);
                 indices.Add(index);
                 expandedControlPoints.Add(corner.ControlPointIndex);
+                sourceCorners.Add(new(corner.ControlPointIndex, corner.PolygonVertexIndex));
                 expandedCorners.Add(corner);
                 vertices.Add(new FbxModelVertex(
                     corner.Position,
@@ -1712,6 +1767,9 @@ public static class FbxModelAuthoringImporter
             inverseBinds,
             !palette.IsEmpty)
         {
+            SourceGeometry = sourceGeometry,
+            SourceCorners = sourceCorners.MoveToImmutable(),
+            SourceTriangles = sourceTriangles.MoveToImmutable(),
             MorphTargets = geometryMorphs.Select(morph => new FbxModelMorphTarget(
                 morph.Name,
                 morph.DescriptorHash,
@@ -1761,6 +1819,7 @@ public static class FbxModelAuthoringImporter
 
     private sealed record FbxExpandedCorner(
         int ControlPointIndex,
+        int PolygonVertexIndex,
         Vector3D Position,
         Vector3D Normal,
         Vector3D TransformedBaseNormal,
@@ -1770,6 +1829,7 @@ public static class FbxModelAuthoringImporter
 
     private sealed record FbxExpandedTriangle(
         int MaterialIndex,
+        GeometrySourceTriangle SourceIdentity,
         FbxExpandedCorner First,
         FbxExpandedCorner Second,
         FbxExpandedCorner Third)
@@ -2202,6 +2262,7 @@ public static class FbxModelAuthoringImporter
 
         return new FbxExpandedCorner(
             corner.ControlPointIndex,
+            corner.PolygonVertexIndex,
             position,
             normal,
             transformedBaseNormal,
@@ -2267,12 +2328,14 @@ public static class FbxModelAuthoringImporter
         out int maximumSourceInfluences,
         out int maximumRetainedInfluences,
         out double maximumDiscardedWeight,
+        out GeometrySourceSkinning sourceSkinning,
         ImmutableArray<CustomModelImportDiagnostic>.Builder diagnostics,
         CancellationToken cancellationToken)
     {
         var rows = Enumerable.Range(0, controlPointCount)
             .Select(static _ => new Dictionary<int, double>())
             .ToArray();
+        var sourceRows = new List<GeometrySourceInfluence>?[controlPointCount];
         long[] skinObjectIds = scene.GetChildren(geometryObjectId)
             .Where(connection =>
                 connection.Kind == "OO" &&
@@ -2318,8 +2381,12 @@ public static class FbxModelAuthoringImporter
                         $"Geometry '{geometryName}' Cluster {clusterObjectId} must contain equal Indexes and Weights arrays.");
                 }
 
+                string sourceSkinId = skinObjectId.ToString(CultureInfo.InvariantCulture);
+                string sourceClusterId = clusterObjectId.ToString(CultureInfo.InvariantCulture);
+                string sourceJointId = boneIds[0].ToString(CultureInfo.InvariantCulture);
                 for (int influenceIndex = 0; influenceIndex < indices.Length; influenceIndex++)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     long controlPointIndex = indices[influenceIndex];
                     double weight = weights[influenceIndex];
                     if (controlPointIndex < 0 || controlPointIndex >= controlPointCount ||
@@ -2330,7 +2397,12 @@ public static class FbxModelAuthoringImporter
                     }
 
                     Dictionary<int, double> controlPoint = rows[checked((int)controlPointIndex)];
-                    controlPoint[boneIndex] = controlPoint.GetValueOrDefault(boneIndex) + weight;
+                    double accumulated = controlPoint.GetValueOrDefault(boneIndex) + weight;
+                    if (!double.IsFinite(accumulated))
+                        throw new InvalidDataException($"Geometry '{geometryName}' Cluster {clusterObjectId} has overflowing aggregate weights.");
+                    controlPoint[boneIndex] = accumulated;
+                    (sourceRows[(int)controlPointIndex] ??= []).Add(new GeometrySourceInfluence(
+                        sourceSkinId, sourceClusterId, sourceJointId, influenceIndex, boneIndex, weight, false));
                 }
             }
         }
@@ -2340,8 +2412,10 @@ public static class FbxModelAuthoringImporter
         maximumRetainedInfluences = 0;
         maximumDiscardedWeight = 0.0;
         var result = ImmutableArray.CreateBuilder<ImmutableArray<FbxBoneInfluence>>(controlPointCount);
+        var sourcePoints = ImmutableArray.CreateBuilder<GeometrySourceControlPointWeights>(controlPointCount);
         for (int controlPointIndex = 0; controlPointIndex < rows.Length; controlPointIndex++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             KeyValuePair<int, double>[] ordered = rows[controlPointIndex]
                 .Where(static pair => pair.Value > 1e-12)
                 .OrderByDescending(static pair => pair.Value)
@@ -2368,6 +2442,15 @@ public static class FbxModelAuthoringImporter
             result.Add(retained
                 .Select(pair => new FbxBoneInfluence(pair.Key, pair.Value / retainedTotal))
                 .ToImmutableArray());
+            var retainedBones = retained.Select(static pair => pair.Key).ToHashSet();
+            ImmutableArray<GeometrySourceInfluence> raw = sourceRows[controlPointIndex] is { } entries
+                ? entries.Select(entry => entry with { Retained = retainedBones.Contains(entry.ImportedBoneIndex) }).ToImmutableArray()
+                : [];
+            // Unlike the legacy diagnostic maximum, this includes weights filtered below the import threshold.
+            double discardedSourceWeight = raw.Where(static entry => !entry.Retained).Sum(static entry => entry.Weight);
+            if (!double.IsFinite(discardedSourceWeight) || !double.IsFinite(retainedTotal + discardedSourceWeight))
+                throw new InvalidDataException($"Geometry '{geometryName}' control point {controlPointIndex} has overflowing source weight totals.");
+            sourcePoints.Add(new(raw, retainedTotal, discardedSourceWeight));
         }
 
         if (maximumSourceInfluences > MaximumInfluencesPerVertex)
@@ -2387,6 +2470,7 @@ public static class FbxModelAuthoringImporter
                 $"Geometry '{geometryName}' contains a Skin deformer but the selected model mode has no rig.");
         }
 
+        sourceSkinning = new(isSkinned, sourcePoints.ToImmutable());
         return result.ToImmutable();
     }
 

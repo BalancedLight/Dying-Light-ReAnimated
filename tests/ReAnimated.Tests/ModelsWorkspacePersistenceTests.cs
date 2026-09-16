@@ -526,6 +526,116 @@ public sealed class ModelsWorkspacePersistenceTests
         CustomModelAuthoredHelper restored = Assert.Single(
             viewModel.CaptureProjectSession().Model!.Package.Document.AuthoredHelpers);
         Assert.Equal(0.0, restored.LocalTransform.Translation.X, 8);
+        Assert.True(viewModel.RedoHelperEditCommand.CanExecute(null));
+        viewModel.RedoHelperEditCommand.Execute(null);
+        Assert.Equal(moved, Assert.Single(viewModel.CaptureProjectSession().Model!.Package.Document.AuthoredHelpers));
+        viewModel.UndoHelperEditCommand.Execute(null);
+        viewModel.UndoHelperEditCommand.Execute(null);
+        Assert.Empty(viewModel.CaptureProjectSession().Model!.Package.Document.AuthoredHelpers);
+        viewModel.RedoHelperEditCommand.Execute(null);
+        Assert.Equal(eyeCamera.Id, Assert.Single(viewModel.CaptureProjectSession().Model!.Package.Document.AuthoredHelpers).Id);
+        viewModel.HelperTranslationX = .25;
+        viewModel.ApplyHelperTransformCommand.Execute(null);
+        Assert.False(viewModel.RedoHelperEditCommand.CanExecute(null));
+    }
+
+    [Fact]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task ConformanceUndoRedoRestoresMeshBindingsWithTheDocument()
+    {
+        using var viewModel = new ModelsWorkspaceViewModel(new NullProjectFileDialogs(), static _ => { },
+            static _ => Task.CompletedTask, static () => null,
+            resolveRigTemplate: (profile, _) => Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)),
+            // This test isolates history with an in-memory rig fixture. Binary source replay has separate real-FBX coverage.
+            captureAuthoredLayer: static (model, _) => model);
+        viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(RigConformanceWizardTests.CreateModel(), "synthetic.dlrmodel",
+            new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        FbxModelAuthoringImportResult original = viewModel.CaptureProjectSession().Model!;
+        await viewModel.Conformance.ResolveTemplateCommand.ExecuteAsync(null);
+        Assert.True(viewModel.Conformance.ApplyConformanceCommand.CanExecute(null));
+        viewModel.Conformance.ApplyConformanceCommand.Execute(null);
+        FbxModelAuthoringImportResult conformed = viewModel.CaptureProjectSession().Model!;
+        Assert.NotEqual(original.Package.Document.RigSignature, conformed.Package.Document.RigSignature);
+        Assert.True(viewModel.UndoHelperEditCommand.CanExecute(null));
+        viewModel.UndoHelperEditCommand.Execute(null);
+        FbxModelAuthoringImportResult undone = viewModel.CaptureProjectSession().Model!;
+        Assert.Equal(original.Package.Document.RigSignature, undone.Package.Document.RigSignature);
+        Assert.Same(original.Surfaces[0], undone.Surfaces[0]);
+        Assert.Equal(original.Package.Document.Bones.Select(b => b.Name), undone.Package.Document.Bones.Select(b => b.Name));
+        viewModel.RedoHelperEditCommand.Execute(null);
+        FbxModelAuthoringImportResult redone = viewModel.CaptureProjectSession().Model!;
+        Assert.Equal(conformed.Package.Document.RigSignature, redone.Package.Document.RigSignature);
+        Assert.Same(conformed.Surfaces[0], redone.Surfaces[0]);
+        Assert.True(original.Package.SourceFbx.AsSpan().SequenceEqual(redone.Package.SourceFbx.AsSpan()));
+    }
+
+    [Fact]
+    [Trait("Gate", "ViewModelWpf")]
+    public void StudioHelperHistoryRestoresDecisionsWithoutRevivingStaleJobs()
+    {
+        using var viewModel = new ModelsWorkspaceViewModel(new EyeCameraProjectDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
+        var imported = CustomModelPreviewSessionTests.CreateModel(flipTextureCoordinateV: true);
+        var session = RiggingSessions.Create(imported.Package.Document, RigStudioEntryPath.RepairExistingRig);
+        imported = imported with { Package = imported.Package with { Document = imported.Package.Document with { RiggingSession = session } } };
+        viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(imported, "synthetic.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        viewModel.SelectPreviewCameraCommand.Execute(null);
+        var created = viewModel.CaptureProjectSession().Model!.Package.Document;
+        var token = created.RiggingSession!.CreateJobToken();
+        Guid helperId = Assert.Single(created.AuthoredHelpers).Id;
+        Assert.Contains(created.RiggingSession.Recipe.Entities, e => e.EntityId == helperId);
+        viewModel.HelperTranslationX = .125;
+        viewModel.ApplyHelperTransformCommand.Execute(null);
+        var moved = viewModel.CaptureProjectSession().Model!.Package.Document;
+        Assert.False(moved.RiggingSession!.Matches(token));
+        Assert.NotEqual(created.RiggingSession.ComputeInputFingerprint(), moved.RiggingSession.ComputeInputFingerprint());
+        viewModel.UndoHelperEditCommand.Execute(null);
+        var restored = viewModel.CaptureProjectSession().Model!.Package.Document;
+        Assert.Equal(created.RiggingSession.ComputeInputFingerprint(), restored.RiggingSession!.ComputeInputFingerprint());
+        Assert.False(restored.RiggingSession.Matches(token));
+        Assert.Equal(helperId, viewModel.SelectedBone!.AuthoredHelperId);
+        viewModel.RedoHelperEditCommand.Execute(null);
+        var redone = viewModel.CaptureProjectSession().Model!.Package.Document;
+        Assert.Equal(moved.RiggingSession.ComputeInputFingerprint(), redone.RiggingSession!.ComputeInputFingerprint());
+        Assert.True(redone.RiggingSession.Revision > moved.RiggingSession.Revision);
+    }
+
+    [Fact]
+    [Trait("Gate", "ViewModelWpf")]
+    public void ApplyingPreparedHelpersIsOneUndoableModelTransaction()
+    {
+        using var viewModel = new ModelsWorkspaceViewModel(new NullProjectFileDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
+        var imported = CustomModelPreviewSessionTests.CreateModel(flipTextureCoordinateV: true);
+        imported = imported with { Package = imported.Package with { Document = RiggingHelperEditTests.DocumentWithPendingHelpers(imported.Package.Document) } };
+        viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(imported, "synthetic.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        Assert.True(viewModel.ApplyPreparedHelpersCommand.CanExecute(null));
+        viewModel.ApplyPreparedHelpersCommand.Execute(null);
+        var applied = viewModel.CaptureProjectSession().Model!;
+        Assert.Equal(2, applied.Package.Document.AuthoredHelpers.Length);
+        viewModel.UndoHelperEditCommand.Execute(null);
+        Assert.Empty(viewModel.CaptureProjectSession().Model!.Package.Document.AuthoredHelpers);
+        viewModel.RedoHelperEditCommand.Execute(null);
+        var restored = viewModel.CaptureProjectSession().Model!;
+        Assert.Equal<CustomModelAuthoredHelper>(applied.Package.Document.AuthoredHelpers, restored.Package.Document.AuthoredHelpers);
+        Assert.Same(imported.Surfaces[0], restored.Surfaces[0]);
+    }
+
+    [Fact]
+    [Trait("Gate", "ViewModelWpf")]
+    public void InterleavedBuildSettingEditHasItsOwnUndoEntry()
+    {
+        using var viewModel = new ModelsWorkspaceViewModel(new EyeCameraProjectDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
+        viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(CustomModelPreviewSessionTests.CreateModel(flipTextureCoordinateV: true),
+            "synthetic.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        viewModel.SelectPreviewCameraCommand.Execute(null);
+        Guid helper = Assert.Single(viewModel.CaptureProjectSession().Model!.Package.Document.AuthoredHelpers).Id;
+        viewModel.FlipTextureCoordinateV = false;
+        Assert.False(viewModel.CaptureProjectSession().Model!.Package.Document.BuildSettings.FlipTextureCoordinateV);
+        viewModel.UndoHelperEditCommand.Execute(null);
+        var undone = viewModel.CaptureProjectSession().Model!.Package.Document;
+        Assert.True(undone.BuildSettings.FlipTextureCoordinateV);
+        Assert.Equal(helper, Assert.Single(undone.AuthoredHelpers).Id);
+        viewModel.RedoHelperEditCommand.Execute(null);
+        Assert.False(viewModel.CaptureProjectSession().Model!.Package.Document.BuildSettings.FlipTextureCoordinateV);
     }
 
     [Fact]

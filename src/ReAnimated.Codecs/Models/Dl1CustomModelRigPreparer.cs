@@ -18,15 +18,18 @@ public sealed record Dl1PreparedSkinSurface(
 /// </summary>
 public sealed class Dl1PreparedAuthoredRig
 {
+    private readonly ImmutableArray<TransformMatrix> _exactSourceBindGlobals;
     internal Dl1PreparedAuthoredRig(
         Dl1AuthoredRigContract contract,
         RigDefinition sourceRig,
-        ImmutableArray<Dl1PreparedSkinSurface> surfaces)
+        ImmutableArray<Dl1PreparedSkinSurface> surfaces,
+        ImmutableArray<TransformMatrix> exactSourceBindGlobals)
     {
         Contract = contract;
         SourceRig = sourceRig;
         PreviewRig = contract.CreateRigDefinition();
         Surfaces = surfaces;
+        _exactSourceBindGlobals = exactSourceBindGlobals;
     }
 
     public Dl1AuthoredRigContract Contract { get; }
@@ -54,9 +57,11 @@ public sealed class Dl1PreparedAuthoredRig
             throw new ArgumentException("The sampled pose does not belong to the prepared source rig.", nameof(sourcePose));
         }
 
-        ImmutableArray<TransformMatrix> sourceBindGlobals = SourceRig.CreateBindPose().GlobalMatrices;
+        ImmutableArray<TransformMatrix> sourceBindGlobals = sourcePose.HasAffineLocalMatrices
+            ? _exactSourceBindGlobals : SourceRig.CreateBindPose().GlobalMatrices;
         var targetGlobals = ImmutableArray.CreateBuilder<TransformMatrix>(Contract.Nodes.Length);
         var targetLocals = ImmutableArray.CreateBuilder<TransformTRS>(Contract.Nodes.Length);
+        var targetLocalMatrices = ImmutableArray.CreateBuilder<TransformMatrix>(Contract.Nodes.Length);
         foreach (Dl1AuthoredRigNode node in Contract.Nodes)
         {
             TransformMatrix bindBasis = sourceBindGlobals[node.SourceBoneIndex].InvertedAffine() *
@@ -66,13 +71,15 @@ public sealed class Dl1PreparedAuthoredRig
                 ? targetGlobal
                 : targetGlobals[node.ParentPhysicalIndex].InvertedAffine() * targetGlobal;
             targetGlobals.Add(targetGlobal);
+            targetLocalMatrices.Add(targetLocal);
             targetLocals.Add(ProjectAffineToTrs(
                 targetLocal,
                 node.Name,
                 node.PhysicalIndex));
         }
 
-        return new SkeletonPose(PreviewRig, targetLocals.MoveToImmutable());
+        return new SkeletonPose(PreviewRig, targetLocals.MoveToImmutable(),
+            sourcePose.HasAffineLocalMatrices || Contract.Nodes.Any(static node => node.FramePolicy is not null) ? targetLocalMatrices.MoveToImmutable() : null);
     }
 
     private static TransformTRS ProjectAffineToTrs(
@@ -150,6 +157,7 @@ public static class Dl1CustomModelRigPreparer
         }
 
         ImmutableArray<TransformMatrix> sourceGlobals = ComputeSourceGlobals(sourceBones);
+        ImmutableArray<RigEntityFramePolicy> studioPolicies = Dl1StudioRigPolicies.Resolve(model.Package.Document, sourceGlobals);
         var physicalOriginalGlobals = ImmutableArray.CreateBuilder<TransformMatrix>(sourceBones.Length);
         var physicalParents = ImmutableArray.CreateBuilder<int>(sourceBones.Length);
         var physicalDeform = ImmutableArray.CreateBuilder<bool>(sourceBones.Length);
@@ -165,16 +173,24 @@ public static class Dl1CustomModelRigPreparer
         ImmutableArray<TransformMatrix> originalGlobals = physicalOriginalGlobals.MoveToImmutable();
         ImmutableArray<int> parentArray = physicalParents.MoveToImmutable();
         ImmutableArray<bool> deformArray = physicalDeform.MoveToImmutable();
+        ImmutableArray<RigEntityFramePolicy> physicalPolicies = studioPolicies.IsDefault ? default :
+            depthFirstSource.Select(sourceIndex => studioPolicies[sourceIndex]).ToImmutableArray();
+        ImmutableArray<bool> generateFrames = physicalPolicies.IsDefault ? default :
+            physicalPolicies.Select(static p => p.FramePolicy == RigFramePolicy.GeneratedDeform && p.SolvedGlobalFrame is null).ToImmutableArray();
         bool preserveSourceFrames = model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
         HashSet<string> secondaryBones = model.Package.Document.SecondaryMotion.Groups
             .SelectMany(group => group.Particles)
             .Where(particle => particle.DrivenBoneName is not null)
             .Select(particle => particle.DrivenBoneName!)
             .ToHashSet(StringComparer.Ordinal);
-        ImmutableArray<TransformMatrix> chromeGlobals = !preserveSourceFrames || secondaryBones.Count > 0
-            ? AuthorChromeFrames(originalGlobals, parentArray, deformArray, cancellationToken)
+        ImmutableArray<TransformMatrix> chromeGlobals = physicalPolicies.IsDefault
+            ? (!preserveSourceFrames || secondaryBones.Count > 0 ? AuthorChromeFrames(originalGlobals, parentArray, deformArray, default, cancellationToken) : originalGlobals)
+            : generateFrames.Any(static generate => generate)
+            ? AuthorChromeFrames(originalGlobals, parentArray, deformArray, generateFrames, cancellationToken)
             : originalGlobals;
-        ImmutableArray<TransformMatrix> authoredGlobals = preserveSourceFrames
+        ImmutableArray<TransformMatrix> authoredGlobals = !physicalPolicies.IsDefault
+            ? physicalPolicies.Select((policy, index) => policy.SolvedGlobalFrame ?? (generateFrames[index] ? chromeGlobals[index] : originalGlobals[index])).ToImmutableArray()
+            : preserveSourceFrames
             ? depthFirstSource.Select((sourceIndex, physicalIndex) => secondaryBones.Contains(sourceBones[sourceIndex].Name)
                 ? chromeGlobals[physicalIndex]
                 : originalGlobals[physicalIndex]).ToImmutableArray()
@@ -187,6 +203,7 @@ public static class Dl1CustomModelRigPreparer
             cancellationToken);
 
         var nodes = ImmutableArray.CreateBuilder<Dl1AuthoredRigNode>(sourceBones.Length);
+        var emittedGlobals = new List<TransformMatrix>(sourceBones.Length);
         var descriptorOwners = new Dictionary<uint, string>();
         for (int physicalIndex = 0; physicalIndex < depthFirstSource.Length; physicalIndex++)
         {
@@ -202,6 +219,24 @@ public static class Dl1CustomModelRigPreparer
                     ? authoredGlobals[physicalIndex]
                     : authoredGlobals[parent].InvertedAffine() * authoredGlobals[physicalIndex];
             bool deform = IsDeform(sourceBone);
+            RigEntityFramePolicy? policy = physicalPolicies.IsDefault ? null : physicalPolicies[physicalIndex];
+            TransformMatrix global = authoredGlobals[physicalIndex];
+            TransformMatrix reference = global.InvertedAffine();
+            Dl1AuthoredBoneBounds nodeBounds = bounds[physicalIndex];
+            if (policy is not null)
+            {
+                bool unchangedBasis = policy.FramePolicy == RigFramePolicy.PreserveSource &&
+                    (parent < 0 || authoredGlobals[parent] == originalGlobals[parent]);
+                local = unchangedBasis ? sourceBone.ExactLocalBindMatrix : parent < 0
+                    ? global : emittedGlobals[parent].InvertedAffine() * global;
+                local = Dl1StudioRigPolicies.RoundMatrix(local);
+                global = parent < 0 ? local : emittedGlobals[parent] * local;
+                reference = Dl1StudioRigPolicies.RoundMatrix(global.InvertedAffine());
+                if (policy.BoundsPolicy != RigBoundsPolicy.GenerateSegmentProxy)
+                    nodeBounds = new(policy.BoundsCenter!.Value, policy.BoundsHalfExtents!.Value);
+                nodeBounds = Dl1StudioRigPolicies.RoundBounds(nodeBounds);
+            }
+            emittedGlobals.Add(global);
             uint descriptor = Dl1NameHash.Compute(sourceBone.Name);
             if (descriptorOwners.TryGetValue(descriptor, out string? existing))
             {
@@ -212,6 +247,9 @@ public static class Dl1CustomModelRigPreparer
             descriptorOwners.Add(descriptor, sourceBone.Name);
             nodes.Add(new Dl1AuthoredRigNode
             {
+                SemanticEntityId = policy?.EntityId,
+                FramePolicy = policy?.FramePolicy,
+                BoundsPolicy = policy?.BoundsPolicy,
                 PhysicalIndex = physicalIndex,
                 SourceBoneIndex = sourceIndex,
                 Name = sourceBone.Name,
@@ -223,9 +261,9 @@ public static class Dl1CustomModelRigPreparer
                         : BoneKind.Helper,
                 IsDeform = deform,
                 LocalBindMatrix = local,
-                GlobalBindMatrix = authoredGlobals[physicalIndex],
-                InverseGlobalReferenceMatrix = authoredGlobals[physicalIndex].InvertedAffine(),
-                Bounds = bounds[physicalIndex],
+                GlobalBindMatrix = global,
+                InverseGlobalReferenceMatrix = reference,
+                Bounds = nodeBounds,
                 DescriptorHash = descriptor,
             });
         }
@@ -259,7 +297,8 @@ public static class Dl1CustomModelRigPreparer
         return new Dl1PreparedAuthoredRig(
             contract,
             sourceRig,
-            preparedSurfaces.MoveToImmutable());
+            preparedSurfaces.MoveToImmutable(),
+            sourceGlobals);
     }
 
     internal static TransformMatrix OrthonormalizeRotation(TransformMatrix value)
@@ -377,6 +416,7 @@ public static class Dl1CustomModelRigPreparer
         ImmutableArray<TransformMatrix> originalGlobals,
         ImmutableArray<int> parents,
         ImmutableArray<bool> deform,
+        ImmutableArray<bool> generateOnly,
         CancellationToken cancellationToken)
     {
         int count = originalGlobals.Length;
@@ -387,6 +427,11 @@ public static class Dl1CustomModelRigPreparer
         for (int index = 0; index < count; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (!generateOnly.IsDefault && !generateOnly[index])
+            {
+                authored.Add(originalGlobals[index]);
+                continue;
+            }
             int chosenChild = -1;
             Vector3D? chosenDirection = null;
             double chosenAlignment = double.NegativeInfinity;

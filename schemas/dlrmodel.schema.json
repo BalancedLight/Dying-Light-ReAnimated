@@ -1,316 +1,2687 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dl-reanimated.local/schemas/dlrmodel.schema.json",
-  "title": "DL ReAnimated C# Custom Model Manifest",
-  "description": "Schema for model.json inside a deterministic .dlrmodel ZIP. The container embeds user-supplied FBX and texture bytes, never retail DL1 assets.",
   "type": "object",
-  "additionalProperties": false,
-  "required": [
-    "schemaVersion",
-    "format",
-    "modelId",
-    "name",
-    "rigMode",
-    "source",
-    "axisSystem",
-    "rigSignature",
-    "morphSignature",
-    "bones",
-    "authoredHelpers",
-    "camera",
-    "morphChannels",
-    "meshes",
-    "materials",
-    "animationClips",
-    "diagnostics",
-    "buildSettings"
-  ],
   "properties": {
-    "schemaVersion": { "const": 2 },
-    "format": { "const": "dl-reanimated-csharp-model" },
-    "modelId": { "type": "string", "format": "uuid" },
-    "name": { "type": "string", "minLength": 1 },
-    "rigMode": { "enum": ["auto", "staticProp", "exactFbxRig", "dl1HumanoidFit"] },
-    "source": { "$ref": "#/$defs/source" },
-    "axisSystem": { "$ref": "#/$defs/axisSystem" },
-    "rigSignature": { "$ref": "#/$defs/sha256" },
-    "morphSignature": { "$ref": "#/$defs/sha256" },
-    "ignoreMorphChannels": { "type": "boolean" },
-    "bones": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/bone" }
+    "schemaVersion": {
+      "const": 7
     },
-    "authoredHelpers": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/authoredHelper" }
+    "format": {
+      "const": "dl-reanimated-csharp-model"
     },
-    "camera": { "$ref": "#/$defs/camera" },
-    "morphChannels": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/morphChannel" }
-    },
-    "meshes": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/mesh" }
-    },
-    "materials": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/material" }
-    },
-    "animationClips": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/animationClip" }
-    },
-    "diagnostics": {
-      "type": "array",
-      "items": { "$ref": "#/$defs/diagnostic" }
-    },
-    "buildSettings": { "$ref": "#/$defs/buildSettings" },
-    "lastBuildReceipt": { "$ref": "#/$defs/buildReceipt" }
-  },
-  "$defs": {
-    "sha256": {
+    "modelId": {
       "type": "string",
-      "pattern": "^[A-Fa-f0-9]{64}$"
+      "format": "uuid"
     },
-    "packagePath": {
-      "type": "string",
-      "minLength": 1,
-      "pattern": "^(?![/\\\\])(?!.*(?:^|/)(?:\\.\\.?)(?:/|$))[^\\\\]+$"
+    "name": {
+      "type": "string"
+    },
+    "rigMode": {
+      "enum": [
+        "auto",
+        "staticProp",
+        "exactFbxRig",
+        "dl1HumanoidFit"
+      ]
     },
     "source": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["originalFileName", "contentSha256", "fbxVersion", "embeddedEntryPath"],
       "properties": {
-        "originalFileName": { "type": "string", "pattern": "\\.[fF][bB][xX]$" },
-        "contentSha256": { "$ref": "#/$defs/sha256" },
-        "fbxVersion": { "type": "integer", "minimum": 1 },
-        "embeddedEntryPath": { "$ref": "#/$defs/packagePath" }
-      }
+        "originalFileName": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "fbxVersion": {
+          "type": "integer"
+        },
+        "embeddedEntryPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
     },
     "axisSystem": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["upAxis", "upAxisSign", "frontAxis", "frontAxisSign", "coordinateAxis", "coordinateAxisSign", "unitScaleFactor"],
       "properties": {
-        "upAxis": { "type": "integer", "minimum": 0, "maximum": 2 },
-        "upAxisSign": { "enum": [-1, 1] },
-        "frontAxis": { "type": "integer", "minimum": 0, "maximum": 2 },
-        "frontAxisSign": { "enum": [-1, 1] },
-        "coordinateAxis": { "type": "integer", "minimum": 0, "maximum": 2 },
-        "coordinateAxisSign": { "enum": [-1, 1] },
-        "unitScaleFactor": { "type": "number", "exclusiveMinimum": 0 }
+        "upAxis": {
+          "type": "integer"
+        },
+        "upAxisSign": {
+          "type": "integer"
+        },
+        "frontAxis": {
+          "type": "integer"
+        },
+        "frontAxisSign": {
+          "type": "integer"
+        },
+        "coordinateAxis": {
+          "type": "integer"
+        },
+        "coordinateAxisSign": {
+          "type": "integer"
+        },
+        "unitScaleFactor": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "rigSignature": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "morphSignature": {
+      "type": "string",
+      "pattern": "^[A-Fa-f0-9]{64}$"
+    },
+    "ignoreMorphChannels": {
+      "type": "boolean"
+    },
+    "bones": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "fbxObjectId": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parentIndex": {
+            "type": "integer"
+          },
+          "localBindTransform": {
+            "type": "object",
+            "properties": {
+              "translation": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "rotation": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  },
+                  "w": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "scale": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          "exactLocalBindMatrix": {
+            "type": "object",
+            "properties": {
+              "m11": {
+                "type": "number"
+              },
+              "m12": {
+                "type": "number"
+              },
+              "m13": {
+                "type": "number"
+              },
+              "m14": {
+                "type": "number"
+              },
+              "m21": {
+                "type": "number"
+              },
+              "m22": {
+                "type": "number"
+              },
+              "m23": {
+                "type": "number"
+              },
+              "m24": {
+                "type": "number"
+              },
+              "m31": {
+                "type": "number"
+              },
+              "m32": {
+                "type": "number"
+              },
+              "m33": {
+                "type": "number"
+              },
+              "m34": {
+                "type": "number"
+              },
+              "m41": {
+                "type": "number"
+              },
+              "m42": {
+                "type": "number"
+              },
+              "m43": {
+                "type": "number"
+              },
+              "m44": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "kind": {
+            "enum": [
+              "root",
+              "deform",
+              "helper",
+              "camera",
+              "prop"
+            ]
+          },
+          "isWeighted": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "vector3": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["x", "y", "z"],
-      "properties": {
-        "x": { "type": "number" },
-        "y": { "type": "number" },
-        "z": { "type": "number" }
+    "authoredHelpers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parentNodeIndex": {
+            "type": "integer"
+          },
+          "localTransform": {
+            "type": "object",
+            "properties": {
+              "translation": {
+                "$ref": "#/properties/bones/items/properties/localBindTransform/properties/translation"
+              },
+              "rotation": {
+                "$ref": "#/properties/bones/items/properties/localBindTransform/properties/rotation"
+              },
+              "scale": {
+                "$ref": "#/properties/bones/items/properties/localBindTransform/properties/scale"
+              }
+            },
+            "additionalProperties": false
+          },
+          "exactLocalMatrix": {
+            "type": "object",
+            "properties": {
+              "m11": {
+                "type": "number"
+              },
+              "m12": {
+                "type": "number"
+              },
+              "m13": {
+                "type": "number"
+              },
+              "m14": {
+                "type": "number"
+              },
+              "m21": {
+                "type": "number"
+              },
+              "m22": {
+                "type": "number"
+              },
+              "m23": {
+                "type": "number"
+              },
+              "m24": {
+                "type": "number"
+              },
+              "m31": {
+                "type": "number"
+              },
+              "m32": {
+                "type": "number"
+              },
+              "m33": {
+                "type": "number"
+              },
+              "m34": {
+                "type": "number"
+              },
+              "m41": {
+                "type": "number"
+              },
+              "m42": {
+                "type": "number"
+              },
+              "m43": {
+                "type": "number"
+              },
+              "m44": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false
+          },
+          "kind": {
+            "enum": [
+              "helper",
+              "camera",
+              "prop"
+            ]
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "quaternion": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["x", "y", "z", "w"],
+    "rigConformance": {
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "x": { "type": "number" },
-        "y": { "type": "number" },
-        "z": { "type": "number" },
-        "w": { "type": "number" }
-      }
+        "correspondenceMethod": {
+          "enum": [
+            "legacyNameRoles",
+            "geometryHierarchyV1"
+          ]
+        },
+        "templateId": {
+          "type": "string"
+        },
+        "templateProfileName": {
+          "type": "string"
+        },
+        "templateSourceResourceName": {
+          "type": "string"
+        },
+        "templateFingerprint": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "sourceFbxSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "dropExtraBones": {
+          "type": "boolean"
+        },
+        "roleOverrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "role": {
+                "type": "string"
+              },
+              "sourceBoneName": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "excludedSourceBones": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scaleMode": {
+          "enum": [
+            "automatic",
+            "leg",
+            "torso",
+            "arm",
+            "manual"
+          ]
+        },
+        "manualScale": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "conformanceStrength": {
+          "type": "number"
+        },
+        "positionOverrides": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "boneName": {
+                "type": "string"
+              },
+              "position": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     },
-    "trs": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["translation", "rotation", "scale"],
+    "riggingSession": {
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "translation": { "$ref": "#/$defs/vector3" },
-        "rotation": { "$ref": "#/$defs/quaternion" },
-        "scale": { "$ref": "#/$defs/vector3" }
-      }
+        "version": {
+          "const": 1
+        },
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "ownerModelId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "generation": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "revision": {
+          "type": "integer"
+        },
+        "sourceSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "previousSourceSha256": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "requiresSourceReview": {
+          "type": "boolean"
+        },
+        "entryPath": {
+          "enum": [
+            "repairExistingRig",
+            "adaptExistingRig",
+            "autoRigBiped"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "import",
+            "detect",
+            "fit",
+            "helpersAndHooks",
+            "skin",
+            "animate",
+            "verifyAndExport"
+          ]
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "displayName": {
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "unknown",
+                  "body",
+                  "clothing",
+                  "accessory"
+                ]
+              },
+              "included": {
+                "type": "boolean"
+              },
+              "useForAnatomy": {
+                "type": "boolean"
+              },
+              "bindingMode": {
+                "enum": [
+                  "keepSource",
+                  "automatic",
+                  "rigid"
+                ]
+              },
+              "rigidBoneRoleId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "landmarks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "roleId": {
+                "type": "string"
+              },
+              "position": {
+                "type": "object",
+                "properties": {
+                  "x": {
+                    "type": "number"
+                  },
+                  "y": {
+                    "type": "number"
+                  },
+                  "z": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "locked": {
+                "type": "boolean"
+              },
+              "userApproved": {
+                "type": "boolean"
+              },
+              "mirrorPartnerId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "provenance": {
+                "enum": [
+                  "importedSource",
+                  "profileRule",
+                  "geometryInference",
+                  "userOverride",
+                  "offlineTest",
+                  "compiledReadBack",
+                  "loadedResourceCapture",
+                  "liveScenarioCapture"
+                ]
+              },
+              "confidence": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "importedSource",
+                        "profileRule",
+                        "geometryInference",
+                        "userOverride",
+                        "offlineTest",
+                        "compiledReadBack",
+                        "loadedResourceCapture",
+                        "liveScenarioCapture"
+                      ]
+                    },
+                    "artifactSha256": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[A-Fa-f0-9]{64}$"
+                    },
+                    "buildFingerprint": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[A-Fa-f0-9]{64}$"
+                    },
+                    "consumerId": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "description": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "hands": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "side": {
+                "enum": [
+                  "left",
+                  "right"
+                ]
+              },
+              "wristGuideId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "palmFrame": {
+                "type": "object",
+                "properties": {
+                  "m11": {
+                    "type": "number"
+                  },
+                  "m12": {
+                    "type": "number"
+                  },
+                  "m13": {
+                    "type": "number"
+                  },
+                  "m14": {
+                    "type": "number"
+                  },
+                  "m21": {
+                    "type": "number"
+                  },
+                  "m22": {
+                    "type": "number"
+                  },
+                  "m23": {
+                    "type": "number"
+                  },
+                  "m24": {
+                    "type": "number"
+                  },
+                  "m31": {
+                    "type": "number"
+                  },
+                  "m32": {
+                    "type": "number"
+                  },
+                  "m33": {
+                    "type": "number"
+                  },
+                  "m34": {
+                    "type": "number"
+                  },
+                  "m41": {
+                    "type": "number"
+                  },
+                  "m42": {
+                    "type": "number"
+                  },
+                  "m43": {
+                    "type": "number"
+                  },
+                  "m44": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "userApproved": {
+                "type": "boolean"
+              },
+              "fingers": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "presence": {
+                      "enum": [
+                        "unresolved",
+                        "present",
+                        "absent",
+                        "fused"
+                      ]
+                    },
+                    "jointGuideIds": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "format": "uuid"
+                      }
+                    },
+                    "curlPlaneNormal": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "x": {
+                          "type": "number"
+                        },
+                        "y": {
+                          "type": "number"
+                        },
+                        "z": {
+                          "type": "number"
+                        },
+                        "lengthSquared": {
+                          "type": "number"
+                        },
+                        "length": {
+                          "type": "number"
+                        },
+                        "isFinite": {
+                          "type": "boolean"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "rollDegrees": {
+                      "type": "number"
+                    },
+                    "userApproved": {
+                      "type": "boolean"
+                    },
+                    "evidence": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "eyes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "side": {
+                "enum": [
+                  "left",
+                  "right",
+                  "shared"
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "sourceEye",
+                  "geometryPivot",
+                  "gazeReference",
+                  "mimic"
+                ]
+              },
+              "geometryKind": {
+                "enum": [
+                  "unspecified",
+                  "globeCandidate",
+                  "manualPivot",
+                  "painted"
+                ]
+              },
+              "sourceEntityId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "parentEntityId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "helperEntityId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "deformEntityId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "globalFrame": {
+                "type": "object",
+                "properties": {
+                  "m11": {
+                    "type": "number"
+                  },
+                  "m12": {
+                    "type": "number"
+                  },
+                  "m13": {
+                    "type": "number"
+                  },
+                  "m14": {
+                    "type": "number"
+                  },
+                  "m21": {
+                    "type": "number"
+                  },
+                  "m22": {
+                    "type": "number"
+                  },
+                  "m23": {
+                    "type": "number"
+                  },
+                  "m24": {
+                    "type": "number"
+                  },
+                  "m31": {
+                    "type": "number"
+                  },
+                  "m32": {
+                    "type": "number"
+                  },
+                  "m33": {
+                    "type": "number"
+                  },
+                  "m34": {
+                    "type": "number"
+                  },
+                  "m41": {
+                    "type": "number"
+                  },
+                  "m42": {
+                    "type": "number"
+                  },
+                  "m43": {
+                    "type": "number"
+                  },
+                  "m44": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "componentId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "islandIndex": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "sourceControlPointIds": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "globeRadius": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "morphDescriptors": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "userApproved": {
+                "type": "boolean"
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "parentDecisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "entityId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "parentEntityId": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "sourceSha256": {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              "userApproved": {
+                "type": "boolean"
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "weightLocks": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "componentId": {
+                "type": "string"
+              },
+              "controlPointIndex": {
+                "type": "integer"
+              },
+              "entityId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "componentId",
+              "controlPointIndex",
+              "entityId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "weightMirrorPairs": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "entityId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "counterpartEntityId": {
+                "type": "string",
+                "format": "uuid"
+              }
+            },
+            "required": [
+              "entityId",
+              "counterpartEntityId"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "mirrorWeightEdits": {
+          "type": "boolean"
+        },
+        "weightMirrorTolerance": {
+          "type": "number"
+        },
+        "recipe": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "profile": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "version": {
+                  "type": "string"
+                },
+                "contentSha256": {
+                  "type": "string",
+                  "pattern": "^[A-Fa-f0-9]{64}$"
+                },
+                "buildFingerprint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "pattern": "^[A-Fa-f0-9]{64}$"
+                }
+              },
+              "additionalProperties": false
+            },
+            "selectedCapabilityIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "assetRoles": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "roleId": {
+                    "type": "string"
+                  },
+                  "assetId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "roleId",
+                  "assetId"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "entities": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entityId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "ownerAssetId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "sourceEntityId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "nativeName": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "unknown",
+                      "bone",
+                      "helper",
+                      "mesh",
+                      "morph",
+                      "particle",
+                      "collision"
+                    ]
+                  },
+                  "imported": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "assignments": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "roleId": {
+                    "type": "string"
+                  },
+                  "entityId": {
+                    "type": "string",
+                    "format": "uuid"
+                  }
+                },
+                "required": [
+                  "roleId",
+                  "entityId"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "helpers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entityId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "ownerAssetId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "roleId": {
+                    "type": "string"
+                  },
+                  "parentEntityId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "localFrame": {
+                    "type": "object",
+                    "properties": {
+                      "m11": {
+                        "type": "number"
+                      },
+                      "m12": {
+                        "type": "number"
+                      },
+                      "m13": {
+                        "type": "number"
+                      },
+                      "m14": {
+                        "type": "number"
+                      },
+                      "m21": {
+                        "type": "number"
+                      },
+                      "m22": {
+                        "type": "number"
+                      },
+                      "m23": {
+                        "type": "number"
+                      },
+                      "m24": {
+                        "type": "number"
+                      },
+                      "m31": {
+                        "type": "number"
+                      },
+                      "m32": {
+                        "type": "number"
+                      },
+                      "m33": {
+                        "type": "number"
+                      },
+                      "m34": {
+                        "type": "number"
+                      },
+                      "m41": {
+                        "type": "number"
+                      },
+                      "m42": {
+                        "type": "number"
+                      },
+                      "m43": {
+                        "type": "number"
+                      },
+                      "m44": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "boundsCenter": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      },
+                      "lengthSquared": {
+                        "type": "number"
+                      },
+                      "length": {
+                        "type": "number"
+                      },
+                      "isFinite": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "boundsHalfExtents": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      },
+                      "lengthSquared": {
+                        "type": "number"
+                      },
+                      "length": {
+                        "type": "number"
+                      },
+                      "isFinite": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "framePolicy": {
+                    "enum": [
+                      "preserveSource",
+                      "generatedDeform",
+                      "contact",
+                      "camera",
+                      "socket",
+                      "structural",
+                      "manual"
+                    ]
+                  },
+                  "placementProvenance": {
+                    "enum": [
+                      "importedSource",
+                      "profileRule",
+                      "geometryInference",
+                      "userOverride",
+                      "offlineTest",
+                      "compiledReadBack",
+                      "loadedResourceCapture",
+                      "liveScenarioCapture"
+                    ]
+                  },
+                  "detectionConfidence": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "lockedFields": {
+                    "type": "string"
+                  },
+                  "userApproved": {
+                    "type": "boolean"
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "componentPolicies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entityId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "position": {
+                    "type": "object",
+                    "properties": {
+                      "owners": {
+                        "type": "array",
+                        "items": {
+                          "enum": [
+                            "unknown",
+                            "bindInherited",
+                            "clip",
+                            "procedural",
+                            "attachment",
+                            "runtimeBodyScale"
+                          ]
+                        }
+                      },
+                      "compositionRuleId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "rotation": {
+                    "type": "object",
+                    "properties": {
+                      "owners": {
+                        "$ref": "#/properties/riggingSession/properties/recipe/properties/componentPolicies/items/properties/position/properties/owners"
+                      },
+                      "compositionRuleId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "$ref": "#/properties/riggingSession/properties/recipe/properties/componentPolicies/items/properties/position/properties/evidence"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "scale": {
+                    "type": "object",
+                    "properties": {
+                      "owners": {
+                        "$ref": "#/properties/riggingSession/properties/recipe/properties/componentPolicies/items/properties/position/properties/owners"
+                      },
+                      "compositionRuleId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "evidence": {
+                        "$ref": "#/properties/riggingSession/properties/recipe/properties/componentPolicies/items/properties/position/properties/evidence"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "emittedMask": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "lodRuleId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "animationLod": {
+                    "enum": [
+                      "lod0",
+                      "lod1",
+                      "lod2",
+                      "lod3",
+                      "off",
+                      null
+                    ]
+                  },
+                  "lodEvidence": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "framePolicies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "entityId": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "framePolicy": {
+                    "enum": [
+                      "preserveSource",
+                      "generatedDeform",
+                      "contact",
+                      "camera",
+                      "socket",
+                      "structural",
+                      "manual"
+                    ]
+                  },
+                  "boundsPolicy": {
+                    "enum": [
+                      "preserveSource",
+                      "solved",
+                      "generateSegmentProxy"
+                    ]
+                  },
+                  "solvedGlobalFrame": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "m11": {
+                        "type": "number"
+                      },
+                      "m12": {
+                        "type": "number"
+                      },
+                      "m13": {
+                        "type": "number"
+                      },
+                      "m14": {
+                        "type": "number"
+                      },
+                      "m21": {
+                        "type": "number"
+                      },
+                      "m22": {
+                        "type": "number"
+                      },
+                      "m23": {
+                        "type": "number"
+                      },
+                      "m24": {
+                        "type": "number"
+                      },
+                      "m31": {
+                        "type": "number"
+                      },
+                      "m32": {
+                        "type": "number"
+                      },
+                      "m33": {
+                        "type": "number"
+                      },
+                      "m34": {
+                        "type": "number"
+                      },
+                      "m41": {
+                        "type": "number"
+                      },
+                      "m42": {
+                        "type": "number"
+                      },
+                      "m43": {
+                        "type": "number"
+                      },
+                      "m44": {
+                        "type": "number"
+                      },
+                      "translation": {
+                        "$ref": "#/properties/bones/items/properties/exactLocalBindMatrix/properties/translation"
+                      },
+                      "linearDeterminant": {
+                        "type": "number"
+                      },
+                      "isFinite": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "boundsCenter": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      },
+                      "lengthSquared": {
+                        "type": "number"
+                      },
+                      "length": {
+                        "type": "number"
+                      },
+                      "isFinite": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "boundsHalfExtents": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      },
+                      "lengthSquared": {
+                        "type": "number"
+                      },
+                      "length": {
+                        "type": "number"
+                      },
+                      "isFinite": {
+                        "type": "boolean"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "evidence": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "scalePolicy": {
+              "type": "object",
+              "properties": {
+                "sourceMetersPerUnit": {
+                  "type": [
+                    "number",
+                    "null"
+                  ]
+                },
+                "sourceToAuthoring": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "m11": {
+                      "type": "number"
+                    },
+                    "m12": {
+                      "type": "number"
+                    },
+                    "m13": {
+                      "type": "number"
+                    },
+                    "m14": {
+                      "type": "number"
+                    },
+                    "m21": {
+                      "type": "number"
+                    },
+                    "m22": {
+                      "type": "number"
+                    },
+                    "m23": {
+                      "type": "number"
+                    },
+                    "m24": {
+                      "type": "number"
+                    },
+                    "m31": {
+                      "type": "number"
+                    },
+                    "m32": {
+                      "type": "number"
+                    },
+                    "m33": {
+                      "type": "number"
+                    },
+                    "m34": {
+                      "type": "number"
+                    },
+                    "m41": {
+                      "type": "number"
+                    },
+                    "m42": {
+                      "type": "number"
+                    },
+                    "m43": {
+                      "type": "number"
+                    },
+                    "m44": {
+                      "type": "number"
+                    },
+                    "translation": {
+                      "$ref": "#/properties/bones/items/properties/exactLocalBindMatrix/properties/translation"
+                    },
+                    "linearDeterminant": {
+                      "type": "number"
+                    },
+                    "isFinite": {
+                      "type": "boolean"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "importConversionAlreadyApplied": {
+                  "type": "boolean"
+                },
+                "anatomy": {
+                  "enum": [
+                    "preserve",
+                    "explicitConformance"
+                  ]
+                },
+                "runtimeUniformBodyScale": {
+                  "type": "number"
+                },
+                "nativeBodyScaleRuleId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "motionStrategy": {
+              "enum": [
+                "repairExistingRig",
+                "nativeStockReuse",
+                "preserveAnatomyMapped",
+                "conformToReference"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "detectionBackend": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "settingsSha256": {
+              "type": "string",
+              "pattern": "^[A-Fa-f0-9]{64}$"
+            },
+            "deterministicSeed": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "bindingBackend": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "settingsSha256": {
+              "type": "string",
+              "pattern": "^[A-Fa-f0-9]{64}$"
+            },
+            "deterministicSeed": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "additionalProperties": false
+        },
+        "symmetryOrigin": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "symmetryNormal": {
+          "type": "object",
+          "properties": {
+            "x": {
+              "type": "number"
+            },
+            "y": {
+              "type": "number"
+            },
+            "z": {
+              "type": "number"
+            }
+          },
+          "additionalProperties": false
+        },
+        "mirroringEnabled": {
+          "type": "boolean"
+        },
+        "stages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "stage": {
+                "enum": [
+                  "import",
+                  "detect",
+                  "fit",
+                  "helpersAndHooks",
+                  "skin",
+                  "animate",
+                  "verifyAndExport"
+                ]
+              },
+              "revision": {
+                "type": "integer"
+              },
+              "reviewedInputFingerprint": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              "reviewedUtc": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "validationHistory": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "capabilityId": {
+                "type": "string"
+              },
+              "facet": {
+                "enum": [
+                  "geometryAndBind",
+                  "mapping",
+                  "runtimeNodeCompleteness",
+                  "motionCompatibility",
+                  "compiledVerification",
+                  "loadedResourceIdentity",
+                  "liveScenario"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "unverified",
+                  "passed",
+                  "failed",
+                  "notApplicable"
+                ]
+              },
+              "scope": {
+                "type": "object",
+                "properties": {
+                  "sourceSha256": {
+                    "type": "string",
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "inputFingerprint": {
+                    "type": "string",
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "authoredContractSha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "profileId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "profileVersion": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "buildFingerprint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "compilerFingerprint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "compiledAssetSha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "loadedResourceId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "loadedResourceSha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "runtimeSessionId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "runtimeActorId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "clipSha256": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  },
+                  "scenarioId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "scenarioFingerprint": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "pattern": "^[A-Fa-f0-9]{64}$"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "evidence": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/properties/riggingSession/properties/landmarks/items/properties/evidence/items"
+                }
+              },
+              "observedUtc": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
     },
-    "matrix": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["m11", "m12", "m13", "m14", "m21", "m22", "m23", "m24", "m31", "m32", "m33", "m34", "m41", "m42", "m43", "m44"],
+    "authoredLayer": {
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "m11": { "type": "number" }, "m12": { "type": "number" }, "m13": { "type": "number" }, "m14": { "type": "number" },
-        "m21": { "type": "number" }, "m22": { "type": "number" }, "m23": { "type": "number" }, "m24": { "type": "number" },
-        "m31": { "type": "number" }, "m32": { "type": "number" }, "m33": { "type": "number" }, "m34": { "type": "number" },
-        "m41": { "type": "number" }, "m42": { "type": "number" }, "m43": { "type": "number" }, "m44": { "type": "number" }
-      }
-    },
-    "bone": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["index", "fbxObjectId", "name", "parentIndex", "localBindTransform", "exactLocalBindMatrix", "kind", "isWeighted"],
-      "properties": {
-        "index": { "type": "integer", "minimum": 0 },
-        "fbxObjectId": { "type": "integer" },
-        "name": { "type": "string", "minLength": 1 },
-        "parentIndex": { "type": "integer", "minimum": -1 },
-        "localBindTransform": { "$ref": "#/$defs/trs" },
-        "exactLocalBindMatrix": { "$ref": "#/$defs/matrix" },
-        "kind": { "enum": ["deform", "helper", "camera", "prop", "root"] },
-        "isWeighted": { "type": "boolean" }
-      }
-    },
-    "authoredHelper": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "name", "parentNodeIndex", "localTransform", "exactLocalMatrix", "kind"],
-      "properties": {
-        "id": { "type": "string", "format": "uuid" },
-        "name": { "type": "string", "minLength": 1 },
-        "parentNodeIndex": { "type": "integer", "minimum": 0 },
-        "localTransform": { "$ref": "#/$defs/trs" },
-        "exactLocalMatrix": { "$ref": "#/$defs/matrix" },
-        "kind": { "enum": ["helper", "camera", "prop"] }
-      }
+        "version": {
+          "type": "integer"
+        },
+        "entryPath": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "payloadLength": {
+          "type": "integer"
+        },
+        "sourceRigMode": {
+          "enum": [
+            "auto",
+            "staticProp",
+            "exactFbxRig",
+            "dl1HumanoidFit"
+          ]
+        },
+        "sourceIgnoreMorphChannels": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
     "camera": {
       "type": "object",
-      "additionalProperties": false,
       "properties": {
-        "activePreviewNodeName": { "type": "string", "minLength": 1 }
-      }
-    },
-    "morphChannel": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["index", "blendShapeChannelObjectId", "shapeObjectId", "name", "descriptorHash", "geometryObjectIds"],
-      "properties": {
-        "index": { "type": "integer", "minimum": 0 },
-        "blendShapeChannelObjectId": { "type": "integer" },
-        "shapeObjectId": { "type": "integer" },
-        "name": { "type": "string", "minLength": 1 },
-        "descriptorHash": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
-        "geometryObjectIds": {
-          "type": "array",
-          "minItems": 1,
-          "items": { "type": "integer" }
+        "activePreviewNodeName": {
+          "type": [
+            "string",
+            "null"
+          ]
         }
+      },
+      "additionalProperties": false
+    },
+    "morphChannels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "blendShapeChannelObjectId": {
+            "type": "integer"
+          },
+          "shapeObjectId": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "descriptorHash": {
+            "type": "integer"
+          },
+          "geometryObjectIds": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "mesh": {
+    "facialPresets": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["name", "geometryObjectId", "modelObjectId", "controlPointCount", "polygonCount", "triangleCount", "expandedVertexCount", "materialSlotCount", "maximumSourceInfluences", "maximumRetainedInfluences", "maximumDiscardedWeight", "requiredPaletteSize", "sourceMaterialIndices"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "geometryObjectId": { "type": "integer" },
-        "modelObjectId": { "type": "integer" },
-        "controlPointCount": { "type": "integer", "minimum": 0 },
-        "polygonCount": { "type": "integer", "minimum": 0 },
-        "triangleCount": { "type": "integer", "minimum": 0 },
-        "expandedVertexCount": { "type": "integer", "minimum": 0 },
-        "materialSlotCount": { "type": "integer", "minimum": 0 },
-        "maximumSourceInfluences": { "type": "integer", "minimum": 0 },
-        "maximumRetainedInfluences": { "type": "integer", "minimum": 0 },
-        "maximumDiscardedWeight": { "type": "number", "minimum": 0 },
-        "requiredPaletteSize": { "type": "integer", "minimum": 0 },
-        "sourceMaterialIndices": { "type": "array", "items": { "type": "integer", "minimum": 0 } }
+        "controls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "morphName": {
+                "type": "string"
+              },
+              "group": {
+                "enum": [
+                  "eyes",
+                  "brows",
+                  "mouth",
+                  "other"
+                ]
+              },
+              "partnerName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "presets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "sourceLabel": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "weights": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              },
+              "speechWeights": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "number"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "secondaryMotion": {
+      "type": "object",
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "particles": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "referenceBoneName": {
+                      "type": "string"
+                    },
+                    "localPosition": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "number"
+                        },
+                        "y": {
+                          "type": "number"
+                        },
+                        "z": {
+                          "type": "number"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "fixed": {
+                      "type": "boolean"
+                    },
+                    "radius": {
+                      "type": "number"
+                    },
+                    "drivenBoneName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "aimParticleIndex": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "constraints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "first": {
+                      "type": "integer"
+                    },
+                    "second": {
+                      "type": "integer"
+                    },
+                    "kind": {
+                      "enum": [
+                        "structural",
+                        "shear",
+                        "bend"
+                      ]
+                    },
+                    "restLength": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "colliders": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "boneName": {
+                      "type": "string"
+                    },
+                    "localPosition": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "number"
+                        },
+                        "y": {
+                          "type": "number"
+                        },
+                        "z": {
+                          "type": "number"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "endBoneName": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "endLocalPosition": {
+                      "type": "object",
+                      "properties": {
+                        "x": {
+                          "type": "number"
+                        },
+                        "y": {
+                          "type": "number"
+                        },
+                        "z": {
+                          "type": "number"
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "radius": {
+                      "type": "number"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "preview": {
+                "type": "object",
+                "properties": {
+                  "gravity": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "damping": {
+                    "type": "number"
+                  },
+                  "structuralStiffness": {
+                    "type": "number"
+                  },
+                  "shearStiffness": {
+                    "type": "number"
+                  },
+                  "bendStiffness": {
+                    "type": "number"
+                  },
+                  "animationFollow": {
+                    "type": "number"
+                  },
+                  "collisionFriction": {
+                    "type": "number"
+                  },
+                  "restShapeStiffness": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "nativeSources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "phx",
+                  "mpCloth"
+                ]
+              },
+              "resourceName": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "meshes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "geometryObjectId": {
+            "type": "integer"
+          },
+          "modelObjectId": {
+            "type": "integer"
+          },
+          "controlPointCount": {
+            "type": "integer"
+          },
+          "polygonCount": {
+            "type": "integer"
+          },
+          "triangleCount": {
+            "type": "integer"
+          },
+          "expandedVertexCount": {
+            "type": "integer"
+          },
+          "materialSlotCount": {
+            "type": "integer"
+          },
+          "maximumSourceInfluences": {
+            "type": "integer"
+          },
+          "maximumRetainedInfluences": {
+            "type": "integer"
+          },
+          "maximumDiscardedWeight": {
+            "type": "number"
+          },
+          "requiredPaletteSize": {
+            "type": "integer"
+          },
+          "sourceMaterialIndices": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "texture": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "semantic", "sourceKind", "displayName", "contentSha256", "mediaType"],
-      "properties": {
-        "id": { "type": "string", "format": "uuid" },
-        "semantic": { "enum": ["baseColor", "normal", "specular", "mask"] },
-        "sourceKind": { "enum": ["embeddedFbx", "externalFbx", "userOverride", "existingDl1Material"] },
-        "colorSpace": { "enum": ["auto", "srgb", "linear"] },
-        "normalMapConvention": { "enum": ["rgbOpenGl", "rgbDirectX", "dl1AlphaGreen"] },
-        "displayName": { "type": "string", "minLength": 1 },
-        "packageEntryPath": { "$ref": "#/$defs/packagePath" },
-        "originalReference": { "type": "string" },
-        "contentSha256": { "$ref": "#/$defs/sha256" },
-        "mediaType": { "type": "string", "minLength": 1 }
+    "materials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "existingDl1MaterialReference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "textures": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "semantic": {
+                  "enum": [
+                    "baseColor",
+                    "normal",
+                    "specular",
+                    "mask"
+                  ]
+                },
+                "sourceKind": {
+                  "enum": [
+                    "embeddedFbx",
+                    "externalFbx",
+                    "userOverride",
+                    "existingDl1Material"
+                  ]
+                },
+                "colorSpace": {
+                  "enum": [
+                    "auto",
+                    "srgb",
+                    "linear"
+                  ]
+                },
+                "normalMapConvention": {
+                  "enum": [
+                    "rgbOpenGl",
+                    "rgbDirectX",
+                    "dl1AlphaGreen"
+                  ]
+                },
+                "displayName": {
+                  "type": "string"
+                },
+                "packageEntryPath": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "originalReference": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "contentSha256": {
+                  "type": "string",
+                  "pattern": "^[A-Fa-f0-9]{64}$"
+                },
+                "mediaType": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "material": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "name", "textures"],
-      "properties": {
-        "id": { "type": "string", "format": "uuid" },
-        "name": { "type": "string", "minLength": 1 },
-        "existingDl1MaterialReference": { "type": "string" },
-        "textures": { "type": "array", "items": { "$ref": "#/$defs/texture" } }
+    "animationClips": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "fbxObjectId": {
+            "type": "integer"
+          },
+          "sourceName": {
+            "type": "string"
+          },
+          "displayName": {
+            "type": "string"
+          },
+          "included": {
+            "type": "boolean"
+          },
+          "frameRate": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "numerator",
+              "denominator"
+            ],
+            "properties": {
+              "numerator": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "denominator": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "startFrame": {
+            "type": "integer"
+          },
+          "frameCount": {
+            "type": "integer"
+          },
+          "rootMotionMode": {
+            "enum": [
+              "recorded",
+              "inPlace",
+              "bip01",
+              "motionAccumulator"
+            ]
+          },
+          "rootBoneName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceFingerprint": {
+            "type": "string",
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          },
+          "hasSkeletalTracks": {
+            "type": "boolean"
+          },
+          "hasMorphTracks": {
+            "type": "boolean"
+          },
+          "derivedMotion": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "sourceClipId": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "sourceClipFingerprint": {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              "sourceFileSha256": {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              "sourceRigSignature": {
+                "type": "string"
+              },
+              "targetRigSignature": {
+                "type": "string"
+              },
+              "algorithmId": {
+                "type": "string"
+              },
+              "sampleMultiplier": {
+                "type": "integer"
+              },
+              "payloadSha256": {
+                "type": "string",
+                "pattern": "^[A-Fa-f0-9]{64}$"
+              },
+              "payloadLength": {
+                "type": "integer"
+              },
+              "maximumPositionError": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "maximumAngularError": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              },
+              "maximumLinearError": {
+                "type": [
+                  "number",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "facialSourceValueUnit": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
       }
     },
-    "frameRate": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["numerator", "denominator"],
-      "properties": {
-        "numerator": { "type": "integer", "minimum": 1 },
-        "denominator": { "type": "integer", "minimum": 1 }
-      }
-    },
-    "animationClip": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "fbxObjectId", "sourceName", "displayName", "included", "frameRate", "startFrame", "frameCount", "rootMotionMode", "sourceFingerprint", "hasSkeletalTracks", "hasMorphTracks", "facialSourceValueUnit"],
-      "properties": {
-        "id": { "type": "string", "format": "uuid" },
-        "fbxObjectId": { "type": "integer" },
-        "sourceName": { "type": "string", "minLength": 1 },
-        "displayName": { "type": "string", "minLength": 1 },
-        "included": { "type": "boolean" },
-        "frameRate": { "$ref": "#/$defs/frameRate" },
-        "startFrame": { "type": "integer", "minimum": 0 },
-        "frameCount": { "type": "integer", "minimum": 1 },
-        "rootMotionMode": { "enum": ["recorded", "inPlace", "bip01", "motionAccumulator"] },
-        "rootBoneName": { "type": "string", "minLength": 1 },
-        "sourceFingerprint": { "$ref": "#/$defs/sha256" },
-        "hasSkeletalTracks": { "type": "boolean" },
-        "hasMorphTracks": { "type": "boolean" },
-        "facialSourceValueUnit": { "enum": ["percent", "normalized"] }
-      }
-    },
-    "diagnostic": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["code", "severity", "message"],
-      "properties": {
-        "code": { "type": "string", "minLength": 1 },
-        "severity": { "enum": ["information", "warning", "error", "blocker"] },
-        "message": { "type": "string", "minLength": 1 },
-        "subject": { "type": "string" }
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "severity": {
+            "enum": [
+              "information",
+              "warning",
+              "error",
+              "blocker"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "subject": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
       }
     },
     "buildSettings": {
       "type": "object",
-      "additionalProperties": false,
-      "required": ["resourceName", "surfaceName"],
       "properties": {
-        "characterId": { "type": "string" },
-        "resourceName": { "type": "string", "minLength": 1, "maxLength": 55 },
-        "surfaceName": { "type": "string", "minLength": 1, "maxLength": 63 },
-        "animationScriptAlias": { "type": "string", "minLength": 1 },
-        "flipTextureCoordinateV": { "type": "boolean" }
-      }
+        "characterId": {
+          "type": "string"
+        },
+        "resourceName": {
+          "type": "string"
+        },
+        "surfaceName": {
+          "type": "string"
+        },
+        "animationScriptAlias": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "referenceExistingAnimationLibrary": {
+          "type": "boolean"
+        },
+        "flipTextureCoordinateV": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
     },
-    "buildReceipt": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["inputFingerprint", "toolFingerprint", "outputManifestFingerprint", "state", "completedUtc", "blockingReasons"],
+    "lastBuildReceipt": {
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "inputFingerprint": { "$ref": "#/$defs/sha256" },
-        "toolFingerprint": { "$ref": "#/$defs/sha256" },
-        "compilerFingerprint": { "$ref": "#/$defs/sha256" },
-        "outputManifestFingerprint": { "$ref": "#/$defs/sha256" },
-        "state": { "enum": ["notBuilt", "authoringDraft", "compilerReady", "compilerValidated", "gameReady", "blocked"] },
-        "completedUtc": { "type": "string", "format": "date-time" },
-        "blockingReasons": { "type": "array", "items": { "type": "string" } }
-      }
+        "inputFingerprint": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "toolFingerprint": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "compilerFingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "outputManifestFingerprint": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "state": {
+          "enum": [
+            "notBuilt",
+            "authoringDraft",
+            "compilerReady",
+            "compilerValidated",
+            "gameReady",
+            "blocked"
+          ]
+        },
+        "completedUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "blockingReasons": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "hasGameReadyEyeCamera": {
+      "type": "boolean"
     }
-  }
+  },
+  "additionalProperties": false,
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dl-reanimated.local/schemas/dlrmodel.schema.json",
+  "title": "DL ReAnimated C# Custom Model Manifest",
+  "description": "Structural schema for model.json. Numerical, ownership, capability evidence and cross-field invariants are checked by CustomModelDocument.Validate. Retail payloads are not part of this contract."
 }

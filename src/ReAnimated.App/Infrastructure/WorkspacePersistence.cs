@@ -33,6 +33,9 @@ public sealed record WorkspaceSnapshot(
 
 public interface IWorkspaceSnapshotProvider
 {
+    /// <summary>Defers autosave while an existing recovery snapshot awaits an explicit decision.</summary>
+    bool CanSaveWorkspaceSnapshot => true;
+
     WorkspaceSnapshot CreateSnapshot();
 
     void RestoreSnapshot(WorkspaceSnapshot snapshot);
@@ -185,6 +188,7 @@ public sealed class WorkspaceAutosaveService : IDisposable
     public bool SaveNow(string reason)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_snapshotProvider.CanSaveWorkspaceSnapshot) return false;
         try
         {
             WorkspaceSnapshot snapshot = _snapshotProvider.CreateSnapshot();

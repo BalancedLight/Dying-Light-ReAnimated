@@ -35,6 +35,8 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
     private const int SwpNoActivate = 0x0010;
     private const int SwpNoZOrder = 0x0004;
     private const int WmKillFocus = 0x0008;
+    private const int WmKeyDown = 0x0100;
+    private const int VkEscape = 0x001B;
     private const int WmEraseBackground = 0x0014;
     private const int WmCancelMode = 0x001F;
     private const int WmDisplayChange = 0x007E;
@@ -92,6 +94,7 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
     private IRenderTransformGizmoTarget? _transformGizmoTarget;
     private RenderTranslationGizmoDragSession? _translationGizmoDrag;
     private IRenderTranslationGizmoTarget? _translationGizmoTarget;
+    private RenderBrushDragSession? _brushDrag;
     private IntPtr _childWindow;
     private D3D11RenderLoop? _renderLoop;
     private IRenderSceneSource? _sceneSource;
@@ -198,6 +201,13 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
 
         switch (msg)
         {
+            case WmKeyDown when wParam.ToInt64() == VkEscape &&
+                HasActivePointerInteraction():
+                CancelPointerInteractions(
+                    hwnd,
+                    releaseCapture: true);
+                handled = true;
+                return IntPtr.Zero;
             case WmLeftButtonDown:
                 return BeginPrimaryPointerDrag(
                     hwnd,
@@ -246,6 +256,12 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
 
         return base.WndProc(hwnd, msg, wParam, lParam, ref handled);
     }
+
+    private bool HasActivePointerInteraction() =>
+        _transformGizmoDrag is not null ||
+        _translationGizmoDrag is not null ||
+        _brushDrag is not null ||
+        _cameraInput.IsDragging;
 
     private IntPtr BeginPrimaryPointerDrag(
         IntPtr hwnd,
@@ -322,6 +338,36 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
 
                 _translationGizmoDrag = session;
                 _translationGizmoTarget = gizmoTarget;
+                return IntPtr.Zero;
+            }
+        }
+
+        if (source is IRenderBrushSource { BrushTarget: { } brushTarget } &&
+            brushTarget.IsBrushEnabled)
+        {
+            (int x, int y) = UnpackPoint(packedPoint);
+            (int width, int height) = GetPixelSize();
+            RenderFrameSnapshot frame = source.CaptureFrame();
+            if (RenderBrushRay.TryCreate(
+                    frame.Camera,
+                    x,
+                    y,
+                    width,
+                    height,
+                    out RenderBrushPointerRay ray) &&
+                brushTarget.TryBeginBrush(ray))
+            {
+                handled = true;
+                var brushDrag = new RenderBrushDragSession(
+                    source,
+                    brushTarget);
+                if (!TryCapturePointer(hwnd))
+                {
+                    brushDrag.Complete(source, commit: false);
+                    return IntPtr.Zero;
+                }
+
+                _brushDrag = brushDrag;
                 return IntPtr.Zero;
             }
         }
@@ -413,6 +459,29 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
             return IntPtr.Zero;
         }
 
+        if (_brushDrag is { } brushDrag)
+        {
+            handled = true;
+            (int brushX, int brushY) = UnpackPoint(packedPoint);
+            (int width, int height) = GetPixelSize();
+            IRenderSceneSource? source =
+                Volatile.Read(ref _sceneSource);
+            if (source is not IRenderBrushSource ||
+                !RenderBrushRay.TryCreate(
+                    source.CaptureFrame().Camera,
+                    brushX,
+                    brushY,
+                    width,
+                    height,
+                    out RenderBrushPointerRay ray) ||
+                !brushDrag.TryUpdate(source, ray))
+            {
+                CompleteBrushDrag(hwnd, commit: false);
+            }
+
+            return IntPtr.Zero;
+        }
+
         return ContinueCameraDrag(
             packedPoint,
             ref handled);
@@ -473,6 +542,26 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
                 gizmoTarget.UpdateTranslationGizmoDrag(update) &&
                 gizmoDrag.HasMeaningfulMovement;
             CompleteTranslationGizmoDrag(hwnd, commit);
+            return IntPtr.Zero;
+        }
+
+        if (_brushDrag is { } brushDrag)
+        {
+            handled = true;
+            (int x, int y) = UnpackPoint(packedPoint);
+            (int width, int height) = GetPixelSize();
+            IRenderSceneSource? source =
+                Volatile.Read(ref _sceneSource);
+            bool update = source is IRenderBrushSource &&
+                RenderBrushRay.TryCreate(
+                    source.CaptureFrame().Camera,
+                    x,
+                    y,
+                    width,
+                    height,
+                    out RenderBrushPointerRay ray) &&
+                brushDrag.TryUpdate(source, ray);
+            CompleteBrushDrag(hwnd, update);
             return IntPtr.Zero;
         }
 
@@ -586,6 +675,23 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
         target?.CompleteTransformGizmoDrag(commit);
     }
 
+    private void CompleteBrushDrag(
+        IntPtr hwnd,
+        bool commit)
+    {
+        RenderBrushDragSession? brushDrag = _brushDrag;
+        _brushDrag = null;
+        if (hwnd != IntPtr.Zero &&
+            NativeMethods.GetCapture() == hwnd)
+        {
+            _ = NativeMethods.ReleaseCapture();
+        }
+
+        brushDrag?.Complete(
+            Volatile.Read(ref _sceneSource),
+            commit);
+    }
+
     private void CancelPointerInteractions(
         IntPtr hwnd,
         bool releaseCapture)
@@ -599,6 +705,8 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
             _translationGizmoTarget;
         _translationGizmoDrag = null;
         _translationGizmoTarget = null;
+        RenderBrushDragSession? brushDrag = _brushDrag;
+        _brushDrag = null;
         if (releaseCapture &&
             hwnd != IntPtr.Zero &&
             NativeMethods.GetCapture() == hwnd)
@@ -609,6 +717,9 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
         transformTarget?.CompleteTransformGizmoDrag(
             commit: false);
         target?.CompleteTranslationGizmoDrag(
+            commit: false);
+        brushDrag?.Complete(
+            Volatile.Read(ref _sceneSource),
             commit: false);
     }
 
@@ -628,6 +739,15 @@ public sealed class D3D11RenderHost : HwndHost, IEditorRenderer
         DependencyPropertyChangedEventArgs args)
     {
         D3D11RenderHost host = (D3D11RenderHost)dependencyObject;
+        if (!ReferenceEquals(
+                Volatile.Read(ref host._sceneSource),
+                args.NewValue))
+        {
+            host.CancelPointerInteractions(
+                host._childWindow,
+                releaseCapture: true);
+        }
+
         Volatile.Write(ref host._sceneSource, (IRenderSceneSource?)args.NewValue);
     }
 

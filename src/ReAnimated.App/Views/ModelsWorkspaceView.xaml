@@ -173,82 +173,7 @@
         <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
             <TabControl x:Name="AuthoringInspectorTabs">
                 <TabItem x:Name="AuthoringRigTab" Header="Rig">
-                    <Grid Margin="7">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Margin="2,0,2,6"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Weighted nodes are deform bones. Connected unweighted nodes remain helpers; custom names and exact bind matrices are preserved."
-                                   TextWrapping="Wrap" />
-                        <DataGrid Grid.Row="1"
-                                  AutoGenerateColumns="False"
-                                  CanUserAddRows="False"
-                                  IsReadOnly="True"
-                                  ItemsSource="{Binding Bones}"
-                                  SelectedItem="{Binding SelectedBone}">
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Width="42" Binding="{Binding Index}" Header="#" />
-                                <DataGridTextColumn Width="*" Binding="{Binding Name}" Header="Bone / helper" />
-                                <DataGridTextColumn Width="72" Binding="{Binding Role}" Header="Role" />
-                                <DataGridCheckBoxColumn Width="55"
-                                                        Binding="{Binding IsWeighted, Mode=OneWay}"
-                                                        Header="Skin" />
-                                <DataGridCheckBoxColumn Width="64"
-                                                        Binding="{Binding IsAuthored, Mode=OneWay}"
-                                                        Header="Authored" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-                        <StackPanel Grid.Row="2" Margin="0,7,0,0">
-                            <TextBlock FontWeight="SemiBold" Text="Helper and camera authoring" />
-                            <TextBlock Margin="0,2,0,5"
-                                       FontSize="10"
-                                       Foreground="{StaticResource MutedTextBrush}"
-                                       Text="Duplicate keeps imported deform hierarchy immutable. The new unweighted child begins at the selected node's global bind transform."
-                                       TextWrapping="Wrap" />
-                            <WrapPanel>
-                                <ComboBox Width="92"
-                                          ItemsSource="{Binding HelperKinds}"
-                                          SelectedItem="{Binding SelectedHelperKind}" />
-                                <TextBox Width="125"
-                                         Margin="4,0"
-                                         ToolTip="Optional helper name"
-                                         Text="{Binding NewHelperName, UpdateSourceTrigger=PropertyChanged}" />
-                                <Button Command="{Binding DuplicateSelectedAsHelperCommand}"
-                                        Content="Duplicate as Helper" />
-                            </WrapPanel>
-                            <WrapPanel Margin="0,5,0,0">
-                                <Button Command="{Binding SelectPreviewCameraCommand}"
-                                        Content="Use selected as camera..." />
-                                <Button Command="{Binding UndoHelperEditCommand}"
-                                        Content="Undo helper edit" />
-                            </WrapPanel>
-                            <TextBlock Margin="0,3,0,5"
-                                       FontSize="10"
-                                       Foreground="{StaticResource MutedTextBrush}"
-                                       Text="{Binding PreviewCameraStatus}"
-                                       TextWrapping="Wrap" />
-                            <StackPanel IsEnabled="{Binding CanEditSelectedHelper}">
-                                <TextBlock FontSize="10" Text="Local translation offset (X / Y / Z)" />
-                                <controls:ResponsiveUniformGrid PreferredColumns="3" Margin="0,2,0,4">
-                                    <TextBox Text="{Binding HelperTranslationX, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox Margin="3,0" Text="{Binding HelperTranslationY, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox Text="{Binding HelperTranslationZ, UpdateSourceTrigger=PropertyChanged}" />
-                                </controls:ResponsiveUniformGrid>
-                                <TextBlock FontSize="10" Text="Local rotation offset in degrees (X / Y / Z)" />
-                                <controls:ResponsiveUniformGrid PreferredColumns="3" Margin="0,2,0,4">
-                                    <TextBox Text="{Binding HelperRotationX, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox Margin="3,0" Text="{Binding HelperRotationY, UpdateSourceTrigger=PropertyChanged}" />
-                                    <TextBox Text="{Binding HelperRotationZ, UpdateSourceTrigger=PropertyChanged}" />
-                                </controls:ResponsiveUniformGrid>
-                                <Button HorizontalAlignment="Left"
-                                        Command="{Binding ApplyHelperTransformCommand}"
-                                        Content="Apply local offsets" />
-                            </StackPanel>
-                        </StackPanel>
-                    </Grid>
+                    <views:RigHierarchyEditorView xmlns:views="clr-namespace:ReAnimated.App.Views" />
                 </TabItem>
 
                 <TabItem x:Name="AuthoringConformTab"
@@ -304,93 +229,11 @@
 
                 <TabItem x:Name="AuthoringDiagnosticsTab"
                          Header="{Binding Diagnostics.Count, StringFormat=Diagnostics ({0})}">
-                    <Grid Margin="7">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Margin="2,0,2,6"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Import, texture, DL1-output, and repair diagnostics. Warnings remain visible until their underlying binding or build condition is resolved."
-                                   TextWrapping="Wrap" />
-                        <DataGrid Grid.Row="1"
-                                  AutoGenerateColumns="False"
-                                  CanUserAddRows="False"
-                                  IsReadOnly="True"
-                                  ItemsSource="{Binding Diagnostics}">
-                            <DataGrid.RowStyle>
-                                <Style TargetType="DataGridRow">
-                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Severity}" Value="Warning">
-                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding Severity}" Value="Error">
-                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </DataGrid.RowStyle>
-                            <DataGrid.Columns>
-                                <DataGridTextColumn Width="72" Binding="{Binding Severity}" Header="Severity" />
-                                <DataGridTextColumn Width="150" Binding="{Binding Code}" Header="Code" />
-                                <DataGridTextColumn Width="120" Binding="{Binding Subject}" Header="Subject" />
-                                <DataGridTextColumn Width="*" Binding="{Binding Message}" Header="Message" />
-                            </DataGrid.Columns>
-                        </DataGrid>
-                    </Grid>
+                    <views:ModelDiagnosticsView xmlns:views="clr-namespace:ReAnimated.App.Views" />
                 </TabItem>
 
                 <TabItem x:Name="AuthoringAnimationsTab" Header="Animation stacks">
-                    <Grid Margin="7">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                            <RowDefinition Height="Auto" />
-                        </Grid.RowDefinitions>
-                        <TextBlock Margin="2,0,2,6"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Every FBX animation stack is listed and selected by default. Names, cadence, root policy, and root bone are editable per stack."
-                                   TextWrapping="Wrap" />
-                        <DataGrid Grid.Row="1"
-                                  AutoGenerateColumns="False"
-                                  CanUserAddRows="False"
-                                  ItemsSource="{Binding Animations}"
-                                  SelectedItem="{Binding SelectedAnimation}">
-                            <DataGrid.Columns>
-                                <DataGridCheckBoxColumn Width="42" Binding="{Binding Included, UpdateSourceTrigger=PropertyChanged}" Header="Use" />
-                                <DataGridTextColumn Width="*" Binding="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" Header="DL1 name" />
-                                <DataGridTextColumn Width="58" Binding="{Binding FrameRateNumerator, UpdateSourceTrigger=PropertyChanged}" Header="FPS num" />
-                                <DataGridTextColumn Width="58" Binding="{Binding FrameRateDenominator, UpdateSourceTrigger=PropertyChanged}" Header="FPS den" />
-                                <DataGridTemplateColumn Width="100" Header="Root policy">
-                                    <DataGridTemplateColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox ItemsSource="{Binding DataContext.RootMotionModes, ElementName=WorkspaceRoot}"
-                                                      SelectedItem="{Binding RootMotionMode, UpdateSourceTrigger=PropertyChanged}" />
-                                        </DataTemplate>
-                                    </DataGridTemplateColumn.CellTemplate>
-                                </DataGridTemplateColumn>
-                                <DataGridTemplateColumn Width="100" Header="Root bone">
-                                    <DataGridTemplateColumn.CellTemplate>
-                                        <DataTemplate>
-                                            <ComboBox IsEditable="True"
-                                                      ItemsSource="{Binding DataContext.RootBoneNames, ElementName=WorkspaceRoot}"
-                                                      Text="{Binding RootBoneName, UpdateSourceTrigger=PropertyChanged}" />
-                                        </DataTemplate>
-                                    </DataGridTemplateColumn.CellTemplate>
-                                </DataGridTemplateColumn>
-                            </DataGrid.Columns>
-                        </DataGrid>
-                        <StackPanel Grid.Row="2" Margin="0,7,0,0">
-                            <TextBlock Foreground="{StaticResource MutedTextBrush}"
-                                       Text="{Binding SelectedAnimation.DecodeStatus}"
-                                       TextWrapping="Wrap" />
-                            <Button Margin="0,6,0,0"
-                                    HorizontalAlignment="Left"
-                                    Command="{Binding OpenSelectedAnimationInAnimateCommand}"
-                                    Content="Play selected in Playback" />
-                        </StackPanel>
-                    </Grid>
+                    <views:ModelAnimationStacksView xmlns:views="clr-namespace:ReAnimated.App.Views" />
                 </TabItem>
 
             </TabControl>

@@ -150,6 +150,13 @@ public static class HumanoidBoneSemanticClassifier
                segment is >= 1 and <= 4;
     }
 
+    /// <summary>Reuses the classifier's structural-name exclusion for geometry-assisted proposals.</summary>
+    public static bool IsStructuralName(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        return ContainsExcludedModifier(StripKnownRigPrefix(Compact(GetLocalName(value.Normalize(NormalizationForm.FormKC)))));
+    }
+
     private static HumanoidBoneSemanticMatch? ClassifyAxial(
         string compact,
         string evidence,

@@ -59,6 +59,9 @@ public sealed record Dl1OfficialModelCompilerRequest
     public string? ExistingMaterialDatabasePath { get; init; }
 
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>Optional private staging root for isolated compiler jobs; no machine path is embedded in the project.</summary>
+    public string? WorkingDirectoryRoot { get; init; }
 }
 
 public sealed record Dl1OfficialModelCompilerResult(
@@ -112,6 +115,8 @@ public sealed record Dl1OfficialModelCompilerEvidence
     public required int VerifiedMorphBindingCount { get; init; }
 
     public required CompiledMorphDeltaFormat? MorphDeltaFormat { get; init; }
+    public ImmutableArray<Dl1BoneScriptReadBack> BoneScriptReadBack { get; init; } = [];
+    public ImmutableArray<Dl1CompiledRigNodeReadBack> RigReadBack { get; init; } = [];
 }
 
 public sealed record Dl1OfficialAnimationCompilerRequest
@@ -149,7 +154,7 @@ public static class Dl1OfficialModelCompiler
     public const string MaterialExportWarning =
         "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-native-companions-v19";
+        "dl-reanimated-csharp-model-compiler-studio-rig-readback-v21";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -228,14 +233,21 @@ public static class Dl1OfficialModelCompiler
         ArgumentException.ThrowIfNullOrWhiteSpace(surfaceName);
         string canonicalResourceName = Dl1SourceModelWriter.SanitizeName(resourceName, 55);
         string canonicalSurfaceName = Dl1SourceModelWriter.SanitizeName(surfaceName, 63);
-        CustomModelPackage fingerprintPackage = new(
-            model.Package.Document with { LastBuildReceipt = null },
-            model.Package.SourceFbx,
-            model.Package.TexturePayloads);
+        // Navigation, review history and job epochs do not change emitted resources.
+        // Keep all source bytes, authored layers, recipes, masks and other build decisions in the hash.
+        CustomModelPackage fingerprintPackage = model.Package with {
+            Document = model.Package.Document with { LastBuildReceipt = null,
+                RiggingSession = model.Package.Document.RiggingSession is { } session ? session with {
+                    Stage = RigStudioStage.Import, Generation = session.Id, Revision = 0,
+                    Stages = Enum.GetValues<RigStudioStage>().Select(static stage => new RigStageState { Stage = stage }).ToImmutableArray(),
+                    ValidationHistory = [],
+                } : null,
+            },
+        };
         ImmutableArray<byte> packageBytes =
             CustomModelPackageSerializer.Serialize(fingerprintPackage);
         using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData("dl-reanimated-model-compiler-input-v2\0"u8);
+        hash.AppendData("dl-reanimated-model-compiler-input-v3\0"u8);
         hash.AppendData(packageBytes.AsSpan());
         hash.AppendData(Encoding.UTF8.GetBytes(
             $"\0resource={canonicalResourceName}\0surface={canonicalSurfaceName}\0animationAlias={animationScriptAlias?.Trim() ?? string.Empty}"));
@@ -279,7 +291,7 @@ public static class Dl1OfficialModelCompiler
         string materialCompilerFingerprint = await Sha256FileAsync(
             materialCompilerPath,
             cancellationToken).ConfigureAwait(false);
-        string jobContainer = Path.Combine(
+        string jobContainer = request.WorkingDirectoryRoot is { } workingRoot ? Path.GetFullPath(workingRoot) : Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "DLReAnimated",
             "ModelCompiler",
@@ -565,6 +577,8 @@ public static class Dl1OfficialModelCompiler
             int verifiedIndexCount;
             int verifiedMorphChannelCount;
             int verifiedMorphBindingCount;
+            ImmutableArray<Dl1BoneScriptReadBack> boneScriptReadBack = [];
+            ImmutableArray<Dl1CompiledRigNodeReadBack> rigReadBack = [];
             await using (var verificationCache = new Rp6lChunkCache(
                              new Rp6lChunkCacheOptions
                              {
@@ -585,6 +599,12 @@ public static class Dl1OfficialModelCompiler
                     throw new InvalidDataException(
                         $"The compiled mesh '{resourceName}' has an invalid compact hierarchy. " +
                         "No model RPack was published.");
+                }
+                if (!sourceBuild.BoneScriptPolicies.IsDefault)
+                {
+                    boneScriptReadBack = Dl1CompiledBoneScriptValidator.Validate(hierarchy, sourceBuild.BoneScriptPolicies);
+                    rigReadBack = Dl1CompiledRigValidator.Validate(sourceBuild.AuthoredRigContract
+                        ?? throw new InvalidDataException("Studio compilation requires the source writer's prepared contract."), hierarchy);
                 }
 
                 byte[] variantDefinitions = await archive.ReadItemBytesAsync(
@@ -778,6 +798,8 @@ public static class Dl1OfficialModelCompiler
                     }),
                     verification = new
                     {
+                        boneScriptReadBack,
+                        rigReadBack,
                         entities = verifiedEntityCount,
                         surfaces = verifiedSurfaceCount,
                         vertices = verifiedVertexCount,
@@ -840,6 +862,8 @@ public static class Dl1OfficialModelCompiler
                     MorphDeltaFormat = verifiedMorphBindingCount == 0
                         ? null
                         : CompiledMorphDeltaFormat.PcHalf4,
+                    BoneScriptReadBack = boneScriptReadBack,
+                    RigReadBack = rigReadBack,
                 },
             };
         }
@@ -1927,6 +1951,7 @@ public static class Dl1OfficialModelCompiler
         ArgumentException.ThrowIfNullOrWhiteSpace(request.CompilerExecutablePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputRpackPath);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResourceName);
+        if (request.WorkingDirectoryRoot is not null) ArgumentException.ThrowIfNullOrWhiteSpace(request.WorkingDirectoryRoot);
         if (!string.IsNullOrWhiteSpace(request.CharacterId))
         {
             _ = Dl1DeveloperToolsProjectDeployer.NormalizeCharacterId(request.CharacterId);

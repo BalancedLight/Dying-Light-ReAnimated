@@ -710,9 +710,13 @@ function Invoke-PackageSelfTest {
         Get-Content -LiteralPath $resultPath -Raw |
             ConvertFrom-Json
     if ($result.format -ne "dl-reanimated-package-self-test" -or
-        [int]$result.schemaVersion -ne 2 -or
+        [int]$result.schemaVersion -ne 3 -or
         $result.processArchitecture -ne "X64") {
         throw "The package self-test report has an invalid identity or process architecture."
+    }
+    if ($result.sqliteRoundTripVerified -ne $true -or
+        [string]::IsNullOrWhiteSpace([string]$result.sqliteVersion)) {
+        throw "The package self-test did not verify the native SQLite provider and data round-trip."
     }
     if (-not [bool]$result.provenanceVerified -or
         [string]$result.candidateSourceSha256 -ne

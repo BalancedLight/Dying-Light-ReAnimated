@@ -233,7 +233,7 @@ public sealed partial class RigConformanceWizardViewModel
             bindPositions[meshIndex] = CpuMeshDeformationEvaluator.Evaluate(
                 session.Meshes[meshIndex],
                 bindSkeleton,
-                []);
+                [], cancellationToken);
         }
 
         long frameCount = Math.Max(1, clip.FrameCount);
@@ -257,7 +257,7 @@ public sealed partial class RigConformanceWizardViewModel
                 CpuDeformedVertex[] animated = CpuMeshDeformationEvaluator.Evaluate(
                     session.Meshes[meshIndex],
                     posed,
-                    []);
+                    [], cancellationToken);
                 int count = Math.Min(bind.Length, animated.Length);
                 for (int vertex = 0; vertex < count; vertex++)
                 {

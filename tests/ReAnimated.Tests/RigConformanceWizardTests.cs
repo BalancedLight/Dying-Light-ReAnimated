@@ -20,6 +20,25 @@ namespace ReAnimated.Tests;
 public sealed class RigConformanceWizardTests
 {
     [Fact]
+    public void NewGeometryModePreservesProportionsWhileLegacyProjectsRetainTheirDecisions()
+    {
+        var wizard = CreateResolvedWizard();
+        Assert.True(wizard.UseGeometryCorrespondence);
+        Assert.Equal(0, wizard.ConformanceStrength);
+        var settings = Assert.IsType<CustomModelRigConformance>(wizard.CreateSettings());
+        Assert.Equal(CustomModelCorrespondenceMethod.GeometryHierarchyV1, settings.CorrespondenceMethod);
+        var original = CreateModel();
+        var legacy = original with { Package = original.Package with { Document = original.Package.Document with {
+            RigConformance = settings with { CorrespondenceMethod = CustomModelCorrespondenceMethod.LegacyNameRoles, ConformanceStrength = 0.7 } } } };
+        wizard.SetModel(legacy);
+        Assert.False(wizard.UseGeometryCorrespondence);
+        Assert.Equal(0.7, wizard.ConformanceStrength);
+        var fresh = original with { Package = original.Package with { Document = original.Package.Document with { ModelId = Guid.NewGuid() } } };
+        wizard.SetModel(fresh);
+        Assert.True(wizard.UseGeometryCorrespondence);
+        Assert.Equal(0, wizard.ConformanceStrength);
+    }
+    [Fact]
     public void WizardWithoutATemplateCannotAdvanceAndReportsWhy()
     {
         var statuses = new List<string>();
@@ -538,7 +557,7 @@ public sealed class RigConformanceWizardTests
         return wizard;
     }
 
-    private static Dl1RigTemplateResolution CreateResolution(string profile) =>
+    internal static Dl1RigTemplateResolution CreateResolution(string profile) =>
         new(CreateTemplate(), profile, "player_1_tpp", new string('b', 64), "ok");
 
     private static Dl1RigTemplate CreateTemplate()
@@ -636,7 +655,7 @@ public sealed class RigConformanceWizardTests
         return new RigDefinition("source:test", "synthetic", bones.MoveToImmutable());
     }
 
-    private static FbxModelAuthoringImportResult CreateModel()
+    internal static FbxModelAuthoringImportResult CreateModel()
     {
         RigDefinition source = CreateSourceRig();
         byte[] fbx = "Kaydara FBX Binary  synthetic-wizard-source"u8.ToArray();

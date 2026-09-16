@@ -1,0 +1,18 @@
+<UserControl x:Class="ReAnimated.App.Views.RigNativeScaleStudyView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="5">
+  <TextBlock Text="Prepare native size studies" FontWeight="SemiBold"/>
+  <TextBlock Text="Compare fixed body sizes while retaining a control actor's mesh, skin and other preset fields. This prepares source files for a later Player test." TextWrapping="Wrap" Margin="0,4,0,6"/>
+  <Button Content="Choose preset source…" Command="{Binding LoadSourceCommand}" HorizontalAlignment="Left"/>
+  <TextBlock Text="{Binding SourceLabel}" TextWrapping="Wrap" Margin="0,4,0,6"/>
+  <TextBlock Text="Control preset"/><ComboBox ItemsSource="{Binding Presets}" SelectedItem="{Binding SelectedPreset}" Margin="0,3,0,5"/>
+  <TextBlock Text="Trial name prefix"/><TextBox Text="{Binding TrialPrefix,UpdateSourceTrigger=PropertyChanged}"/>
+  <TextBlock Text="Three scale inputs" Margin="0,5,0,2"/>
+  <UniformGrid Columns="3"><TextBox Text="{Binding FirstScale,UpdateSourceTrigger=PropertyChanged}" Margin="0,0,4,0"/><TextBox Text="{Binding SecondScale,UpdateSourceTrigger=PropertyChanged}" Margin="0,0,4,0"/><TextBox Text="{Binding ThirdScale,UpdateSourceTrigger=PropertyChanged}"/></UniformGrid>
+  <TextBlock Text="These are experiment inputs. Native limits and post-spawn changes still need verification." Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" Margin="0,4,0,5"/>
+  <WrapPanel><Button Content="Prepare trials" Command="{Binding PrepareCommand}"/><Button Content="Cancel" Command="{Binding CancelCommand}"/><Button Content="Save separate source…" Command="{Binding SaveCommand}"/></WrapPanel>
+  <ItemsControl ItemsSource="{Binding Trials}" Margin="0,5,0,4"><ItemsControl.ItemTemplate><DataTemplate><DockPanel><TextBlock Text="{Binding BodyScale,StringFormat='Scale {0:G5}'}" DockPanel.Dock="Right" Margin="10,0,0,0"/><TextBlock Text="{Binding PresetName}" TextWrapping="Wrap"/></DockPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+  <Expander Header="Retained control fields"><ItemsControl ItemsSource="{Binding ControlFields}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock TextWrapping="Wrap"><Run Text="{Binding Name}"/><Run Text=": "/><Run Text="{Binding ArgumentText}"/></TextBlock></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></Expander>
+  <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+ </StackPanel>
+</UserControl>

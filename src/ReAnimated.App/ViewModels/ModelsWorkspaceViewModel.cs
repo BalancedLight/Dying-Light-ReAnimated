@@ -153,7 +153,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     private CustomModelAnimationClipItemViewModel? _selectedAnimation;
     private CustomModelMaterialItemViewModel? _selectedMaterial;
     private CustomModelBoneItemViewModel? _selectedBone;
-    private readonly Stack<CustomModelDocument> _helperUndo = new();
+    private readonly Stack<AuthoringSnapshot> _helperUndo = new();
+    private readonly Stack<AuthoringSnapshot> _helperRedo = new();
     private CustomModelAuthoredHelperKind _selectedHelperKind =
         CustomModelAuthoredHelperKind.Helper;
     private string _newHelperName = string.Empty;
@@ -164,6 +165,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     private double _helperRotationY;
     private double _helperRotationZ;
     private bool _disposed;
+    private readonly Func<FbxModelAuthoringImportResult, CancellationToken, FbxModelAuthoringImportResult> _captureAuthoredLayer;
 
     public ModelsWorkspaceViewModel(
         IProjectFileDialogService fileDialogs,
@@ -174,9 +176,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         Func<Task>? synchronizeProject = null,
         Action? returnToProjectModels = null,
         Func<string, CancellationToken, Task<Dl1RigTemplateResolution>>? resolveRigTemplate = null,
-        Func<CancellationToken, Task<Dl1RetailAnimationPayload?>>? pickRetailAnimation = null)
+        Func<CancellationToken, Task<Dl1RetailAnimationPayload?>>? pickRetailAnimation = null,
+        Func<FbxModelAuthoringImportResult, CancellationToken, FbxModelAuthoringImportResult>? captureAuthoredLayer = null)
     {
+        _captureAuthoredLayer = captureAuthoredLayer ?? FbxAuthoredModelLayer.Capture;
         _fileDialogs = fileDialogs ?? throw new ArgumentNullException(nameof(fileDialogs));
+        NativeScaleStudy = new NativeScaleStudyViewModel(_fileDialogs);
         _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
         _openInAnimate = openInAnimate ?? throw new ArgumentNullException(nameof(openInAnimate));
         _synchronizeProject = synchronizeProject ?? (() => Task.CompletedTask);
@@ -203,9 +208,40 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     "This workspace was created without access to an indexed Dying Light installation."))),
             value => _setStatus(value));
         Conformance.SetRetailClipPicker(pickRetailAnimation);
+        Conformance.SetDoctorRulePicker(_fileDialogs.ShowOpenRigDoctorRulesDialog);
+        Conformance.DoctorPreviewChanged += OnDoctorPreviewChanged;
+        Conformance.DoctorApplyRequested += OnBodyModelApplyRequested;
         Conformance.FitChanged += OnConformanceFitChanged;
         Conformance.ApplyRequested += OnConformanceApplyRequested;
         Conformance.PropertyChanged += OnConformancePropertyChanged;
+        Conformance.BodyDetectionChanged += OnBodyDetectionChanged;
+        Conformance.BodyGuidesApplyRequested += OnBodyGuidesApplyRequested;
+        Conformance.BodyGuidePreviewChanged += OnBodyGuidePreviewChanged;
+        Conformance.BodyGuideMoveRequested += OnBodyGuideMoveRequested;
+        Conformance.BodyGuideLockRequested += OnBodyGuideLockRequested;
+        Conformance.BodyComponentsApplyRequested += OnBodyComponentsApplyRequested;
+        Conformance.RigPoliciesApplyRequested += OnRigPoliciesApplyRequested;
+        Conformance.ContactModelApplyRequested += OnBodyModelApplyRequested;
+        Conformance.ContactPreviewChanged += OnContactPreviewChanged;
+        Conformance.HandModelApplyRequested += OnBodyModelApplyRequested;
+        Conformance.HandPreviewChanged += OnHandPreviewChanged;
+        Conformance.EyeModelApplyRequested += OnBodyModelApplyRequested;
+        Conformance.EyePreviewChanged += OnEyePreviewChanged;
+        Conformance.EyeBindingDisplayChanged += OnEyeBindingDisplayChanged;
+        Conformance.RestPoseApplyRequested += OnBodyModelApplyRequested;
+        Conformance.RestPosePreviewChanged += OnRestPosePreviewChanged;
+        Conformance.HierarchyApplyRequested += OnHierarchyApplyRequested;
+        Conformance.HierarchyPreviewChanged += OnHierarchyPreviewChanged;
+        Conformance.DerivedMotionPreviewChanged += OnDerivedMotionPreviewChanged;
+        Conformance.DerivedMotionApplyRequested += OnDerivedMotionApplyRequested;
+        Conformance.HandBindingDisplayChanged += OnHandBindingDisplayChanged;
+        Conformance.WeightDisplayChanged += OnWeightDisplayChanged;
+        Conformance.WeightBrushOverlayChanged += OnWeightBrushOverlayChanged;
+        Conformance.StressPreviewChanged += OnStressPreviewChanged;
+        Conformance.SetStressMeasurement(MeasureStressAsync);
+        Conformance.SetStudioWorkspace(this);
+        Conformance.StudioMetadataRequested += OnStudioMetadataRequested;
+        Conformance.BodyModelApplyRequested += OnBodyModelApplyRequested;
 
         ImportFbxCommand = new AsyncRelayCommand(ImportFbxAsync, () => !IsBusy);
         OpenPackageCommand = new AsyncRelayCommand(OpenPackageAsync, () => !IsBusy);
@@ -258,6 +294,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         UndoHelperEditCommand = new RelayCommand(
             UndoHelperEdit,
             () => _helperUndo.Count > 0 && !IsBusy);
+        RedoHelperEditCommand = new RelayCommand(
+            RedoHelperEdit,
+            () => _helperRedo.Count > 0 && !IsBusy);
+        Conformance.SetAuthoringHistoryCommands(UndoHelperEditCommand, RedoHelperEditCommand);
+        ApplyPreparedHelpersCommand = new RelayCommand(ApplyPreparedHelpers,
+            () => _model is { } model && model.Package.Document.RiggingSession is { } studio &&
+                studio.Recipe.Helpers.Any(h => h.OwnerAssetId == model.Package.Document.ModelId) && !IsBusy);
         CancelCommand = new RelayCommand(Cancel, () => IsBusy);
         InitializeAnimationRefreshCommands();
         RestoreLatestDeploymentActions();
@@ -352,6 +395,10 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     public IRelayCommand ApplyHelperTransformCommand { get; }
 
     public IRelayCommand UndoHelperEditCommand { get; }
+
+    public IRelayCommand RedoHelperEditCommand { get; }
+
+    public IRelayCommand ApplyPreparedHelpersCommand { get; }
 
     public IRelayCommand CancelCommand { get; }
 
@@ -1220,10 +1267,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     .Any(texture => string.Equals(texture.PackageEntryPath, pair.Key, StringComparison.Ordinal)))
                 .ToImmutableDictionary(static pair => pair.Key, static pair => pair.Value, StringComparer.Ordinal)
                 .SetItem(entryPath, bytes.ToImmutableArray());
+            AuthoringSnapshot before = CaptureAuthoringSnapshot();
             _model = _model with
             {
-                Package = new CustomModelPackage(document, _model.Package.SourceFbx, payloads),
+                Package = _model.Package with { Document = document, TexturePayloads = payloads },
             };
+            RecordAuthoringUndo(before);
             MarkAuthoringChanged();
             PopulateMaterials();
             SelectedMaterial = Materials.First(item => item.Contract.Id == material.Id);
@@ -1346,10 +1395,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 },
                 token);
             EnsureCurrentGeneration(generation);
-            bool currentDraftMatchesBuild =
-                ReferenceEquals(_model, buildModel) &&
-                buildRevision == Volatile.Read(ref _authoringRevision);
-            CustomModelDocument document = buildModel.Package.Document with
+            bool currentDraftMatchesBuild = BuildSnapshotStillCurrent(buildModel, buildRevision, resourceName);
+            CustomModelDocument document = (currentDraftMatchesBuild ? _model! : buildModel).Package.Document with
             {
                 LastBuildReceipt = currentDraftMatchesBuild
                     ? result.CompiledModel.BuildReceipt
@@ -1358,13 +1405,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             document.Validate();
             if (currentDraftMatchesBuild)
             {
-                _model = buildModel with
+                var previous = _model!;
+                _model = previous with
                 {
-                    Package = new CustomModelPackage(
-                        document,
-                        buildModel.Package.SourceFbx,
-                        buildModel.Package.TexturePayloads),
+                    Package = previous.Package with { Document = document },
                 };
+                Conformance.RefreshStudioMetadataSnapshot(previous, _model);
             }
             else
             {
@@ -1853,10 +1899,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 },
                 token);
             EnsureCurrent(generation, token);
-            bool currentDraftMatchesBuild =
-                ReferenceEquals(_model, buildModel) &&
-                buildRevision == Volatile.Read(ref _authoringRevision);
-            CustomModelDocument document = buildModel.Package.Document with
+            bool currentDraftMatchesBuild = BuildSnapshotStillCurrent(buildModel, buildRevision, resourceName);
+            CustomModelDocument document = (currentDraftMatchesBuild ? _model! : buildModel).Package.Document with
             {
                 LastBuildReceipt = currentDraftMatchesBuild
                     ? result.BuildReceipt
@@ -1865,13 +1909,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             document.Validate();
             if (currentDraftMatchesBuild)
             {
-                _model = buildModel with
+                var previous = _model!;
+                _model = previous with
                 {
-                    Package = new CustomModelPackage(
-                        document,
-                        buildModel.Package.SourceFbx,
-                        buildModel.Package.TexturePayloads),
+                    Package = previous.Package with { Document = document },
                 };
+                Conformance.RefreshStudioMetadataSnapshot(previous, _model);
             }
             else
             {
@@ -2173,6 +2216,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             Conformance.SetModel(null);
             _previewSession = null;
             _helperUndo.Clear();
+            _helperRedo.Clear();
             _sourcePath = null;
             _packagePath = null;
             _modelName = "No custom model loaded";
@@ -2273,8 +2317,10 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         FbxModelAuthoringImportResult imported,
         string? sourcePath,
         string? packagePath,
-        bool markAuthoringChanged = true)
+        bool markAuthoringChanged = true,
+        bool preserveAuthoringHistory = false)
     {
+        imported = FbxDerivedMotionAuthoring.RestoreAvailability(imported);
         imported = NormalizeBuildReceipt(imported, out string buildStatus);
         bool previousPersistenceSuppression = _suppressPersistenceNotifications;
         _suppressPersistenceNotifications = true;
@@ -2282,7 +2328,11 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         try
         {
             _previewSession = null;
-            _helperUndo.Clear();
+            if (!preserveAuthoringHistory)
+            {
+                _helperUndo.Clear();
+                _helperRedo.Clear();
+            }
             _model = imported;
             // A cached conformance preview belongs to the model it was built
             // from; keeping it across a load pairs the new model's meshes with
@@ -2493,10 +2543,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         buildStatus = message;
         return imported with
         {
-            Package = new CustomModelPackage(
-                document,
-                imported.Package.SourceFbx,
-                imported.Package.TexturePayloads),
+            Package = imported.Package with { Document = document },
         };
     }
 
@@ -2528,6 +2575,11 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             !string.Equals(current.Name, ModelName, StringComparison.Ordinal) ||
             !current.AnimationClips.SequenceEqual(selections) ||
             current.BuildSettings != buildSettings;
+        if (!invalidatesBuildReceipt) return;
+        CustomModelBuildSettings comparableSettings = _characterIdWasExplicitlyEdited ? current.BuildSettings
+            : current.BuildSettings with { CharacterId = buildSettings.CharacterId };
+        bool recordsEdit = !_suppressPersistenceNotifications &&
+            (!string.Equals(current.Name, ModelName, StringComparison.Ordinal) || !current.AnimationClips.SequenceEqual(selections) || comparableSettings != buildSettings);
         CustomModelDocument document = current with
         {
             Name = ModelName,
@@ -2536,13 +2588,14 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             LastBuildReceipt = invalidatesBuildReceipt ? null : current.LastBuildReceipt,
         };
         document.Validate();
+        AuthoringSnapshot? before = recordsEdit ? CaptureAuthoringSnapshot() : null;
+        var previous = _model;
         _model = _model with
         {
-            Package = new CustomModelPackage(
-                document,
-                _model.Package.SourceFbx,
-                _model.Package.TexturePayloads),
+            Package = _model.Package with { Document = document },
         };
+        Conformance.RefreshMetadataSnapshot(previous, _model);
+        if (before is not null) RecordAuthoringUndo(before);
     }
 
     private void RefreshPreview()
@@ -2559,18 +2612,39 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
-        AnimationClip? clip = SelectedAnimation?.DecodedClip;
+        bool doctorReview = DoctorReviewActive;
+        bool derivedReview = !doctorReview && DerivedReviewActive;
+        bool hierarchyReview = !doctorReview && !derivedReview && HierarchyReviewActive;
+        if (hierarchyReview != _hierarchyPreviewActive) { _hierarchyPreviewActive = hierarchyReview; _previewSession = null; }
+        bool restReview = !doctorReview && !derivedReview && !hierarchyReview && RestReviewActive;
+        var displayModel = doctorReview ? Conformance.DoctorPreview!.Candidate! : derivedReview ? Conformance.DerivedMotionPreview!.PreviewModel! : hierarchyReview ? Conformance.HierarchyPreview!.PreviewModel : restReview ? Conformance.RestPosePreview!.PreviewModel : _model;
+        if (restReview != _restPreviewActive) { _restPreviewActive = restReview; _previewSession = null; }
+        bool paintingWeights = !doctorReview && !derivedReview && !hierarchyReview && !restReview && IsConformTabSelected && Conformance.WeightBrushEnabled;
+        bool stressReview = !doctorReview && !derivedReview && !hierarchyReview && !restReview && IsConformTabSelected && Conformance.StressPreviewEnabled;
+        bool contactReview = !doctorReview && !derivedReview && !hierarchyReview && !restReview && IsConformTabSelected && Conformance.IsStudioHelpers && Conformance.HasContactPreview;
+        bool handReview = !doctorReview && !derivedReview && !hierarchyReview && !restReview && HandReviewActive;
+        bool eyeReview = !doctorReview && !derivedReview && !hierarchyReview && !restReview && EyeReviewActive;
+        bool eyeMotion = !doctorReview && !derivedReview && !hierarchyReview && !restReview && EyeMotionActive;
+        if (eyeMotion != _eyeMotionActive) { _eyeMotionActive = eyeMotion; _previewSession = null; }
+        if (eyeReview != _eyePreviewActive) { _eyePreviewActive = eyeReview; _previewSession = null; }
+        if (handReview != _handPreviewActive) { _handPreviewActive = handReview; _previewSession = null; }
+        if (contactReview != _contactPreviewActive)
+        {
+            _contactPreviewActive = contactReview;
+            _previewSession = null;
+        }
+        AnimationClip? clip = doctorReview || paintingWeights || stressReview || contactReview || handReview || eyeReview || eyeMotion || restReview || hierarchyReview ? null : DisplayedAnimationClip;
         int frame = clip is null
             ? 0
             : Math.Clamp(Timeline.CurrentFrame, 0, checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)));
         bool replacePreparedScene;
         CustomModelPreviewSession session;
         if (_previewSession is null ||
-            !_previewSession.Matches(_model, SelectedPreviewMode.Mode))
+            !_previewSession.Matches(displayModel, doctorReview || derivedReview || paintingWeights || contactReview || handReview || eyeReview || eyeMotion || restReview || hierarchyReview ? CustomModelPreviewMode.SourceFbx : SelectedPreviewMode.Mode))
         {
             session = CustomModelPreviewAdapter.CreateSession(
-                _model,
-                SelectedPreviewMode.Mode);
+                displayModel,
+                doctorReview || derivedReview || paintingWeights || contactReview || handReview || eyeReview || eyeMotion || restReview || hierarchyReview ? CustomModelPreviewMode.SourceFbx : SelectedPreviewMode.Mode);
             _previewSession = session;
             replacePreparedScene = true;
         }
@@ -2584,11 +2658,30 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         // visibility is carried separately by SkeletonRenderData's role
         // flags and applied below.
         SkeletonRenderData? skeleton =
-            session.CreateSkeleton(clip, frame, SelectedBone?.Index);
+            session.CreateSkeleton(clip, frame, hierarchyReview && Conformance.HierarchyNode is { } hierarchyNode
+                ? Conformance.HierarchyPreview!.OldToNewBoneIndices[hierarchyNode.Index] : SelectedBone?.Index);
+        ImmutableArray<MorphWeight> stressMorphs = SampleAnimationMorphs(displayModel, clip, frame);
+        if (stressReview && Conformance.TryGetStressPreview(out var stressPose, out stressMorphs))
+            skeleton = session.CreateSkeleton(stressPose!, Conformance.SelectedStressJoint?.Index);
+        if (eyeMotion && Conformance.TryGetEyeMotion(out var eyePose))
+        {
+            skeleton = session.CreateSkeleton(eyePose!, null);
+            stressMorphs = Conformance.StressMorphOffsets.Select(m => new MorphWeight(m.Name, (float)m.Weight)).ToImmutableArray();
+        }
         if (replacePreparedScene)
         {
+            IReadOnlyList<MeshRenderData> previewMeshes = Conformance.WeightHeatmapBoneIndex is { } weightBone && IsConformTabSelected && !doctorReview && !derivedReview && !contactReview && !restReview && !hierarchyReview
+                ? SkinWeightHeatmapBuilder.Build(displayModel, session.Meshes, weightBone, stressReview ? null : Conformance.WeightPreview)
+                : session.Meshes;
+            if (handReview && Conformance.HandBindingHeatmapBoneIndex is { } handBone)
+                previewMeshes = SkinWeightHeatmapBuilder.Build(displayModel, session.Meshes, handBone, Conformance.HandBindingWeightPreview);
+            if (eyeReview && Conformance.EyeBindingHeatmapBoneIndex is { } eyeBone)
+                previewMeshes = SkinWeightHeatmapBuilder.Build(displayModel, session.Meshes, eyeBone, Conformance.EyeBindingWeightPreview);
+            // Picking is against original source points, including models with expert noncanonical inverse binds.
+            // Show that same unposed surface while painting instead of evaluating bind-pose skinning over it.
+            if (paintingWeights) previewMeshes = previewMeshes.Select(static mesh => mesh with { IsSkinned = false }).ToArray();
             Viewport.SceneSource.SetScene(
-                session.Meshes,
+                previewMeshes,
                 skeleton,
                 [],
                 generation: Interlocked.Increment(ref _previewGeneration));
@@ -2597,12 +2690,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         {
             Viewport.SceneSource.SetSkeleton(skeleton);
         }
+        Viewport.SceneSource.SetMorphWeights(stressMorphs);
 
         _cameraCoordinator.SetTargetPreviewCameraOverride(
-            session.CreatePreviewCamera(
+            doctorReview || stressReview || contactReview || handReview || eyeReview || eyeMotion || restReview || hierarchyReview ? null : session.CreatePreviewCamera(
                 clip,
                 frame,
-                _model.Package.Document.Camera.ActivePreviewNodeName));
+                displayModel.Package.Document.Camera.ActivePreviewNodeName));
 
         Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
         ApplySkeletonVisibility();
@@ -2617,11 +2711,31 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     : session.IsSourceFallback
                         ? "DL1 preparation failed; showing the unmodified source FBX hierarchy and texture coordinates"
                         : "Unmodified FBX bind hierarchy, skin palettes, and source textures"
-                : $"Animation stack: {SelectedAnimation!.DisplayName} | frame {frame:N0}" +
+                : $"Animation stack: {(derivedReview ? clip.Name : SelectedAnimation!.DisplayName)} | frame {frame:N0}" +
                     (session.IsSourceFallback ? " | Source FBX fallback" : string.Empty));
         Viewport.SetDiagnosticOverlay(session.Diagnostics.IsEmpty
             ? null
             : string.Join(Environment.NewLine, session.Diagnostics.Take(3)));
+        if (!hierarchyReview) PublishHierarchyOverlay();
+        if (!restReview) PublishRestPoseOverlay();
+        if (!eyeReview) PublishEyeOverlay();
+        PublishContactOverlay();
+        PublishHandOverlay();
+        PublishBodyDetectionOverlay();
+        if (eyeReview) PublishEyeOverlay();
+        if (restReview) PublishRestPoseOverlay();
+        if (hierarchyReview) PublishHierarchyOverlay();
+        Viewport.SceneSource.SetBrushTarget(paintingWeights && ShowMeshes ? Conformance.WeightBrushTarget : null);
+        if (paintingWeights) Viewport.SetPresentation("Weight painting — source rest view", "Each stroke applies once on release. Escape cancels. Blue 0 · yellow 0.5 · red 1.");
+        if (stressReview) Viewport.SetPresentation($"Stress review — {previewLabel}", "Transient local rotations and morph weights. Saved rig and clips are unchanged; native behavior remains unverified.");
+        if (eyeReview) Viewport.SetPresentation("Eye setup — source bind", "Orange globe outline; RGB axes; blue gaze direction. Source identity and native behavior require review.");
+        if (contactReview && !eyeReview) Viewport.SetPresentation("Contact review — source bind", "Cyan footprint · orange bounds · green bottom plane. Review placement before applying.");
+        if (eyeMotion) Viewport.SetPresentation("Eye motion review", "Transient local gaze with existing facial values. Saved rest frames and animation clips are unchanged.");
+        if (hierarchyReview) Viewport.SetPresentation("Hierarchy draft", "Rest placement is retained. Grey: previous parent link. Cyan: proposed parent link. Apply explicitly after review.");
+        if (restReview) Viewport.SetPresentation("Rest-pose draft", "Grey axes: previous frame. RGB axes: proposed frame. Apply explicitly after reviewing surface and helper behavior.");
+        if (handReview && !eyeMotion) Viewport.SetPresentation("Hand review — source bind", "Purple sampling box · colored branch proposals · yellow saved finger guides. Geometry requires review.");
+        if (derivedReview) Viewport.SetPresentation("Derived motion preview", $"{clip!.Name} | frame {frame:N0} | Recorded motion. Original source retained; native behavior unverified.");
+        PublishDoctorOverlay();
     }
 
     private void ApplySkeletonVisibility() =>
@@ -2633,8 +2747,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
     private void RefreshTimeline()
     {
-        AnimationClip? clip = SelectedAnimation?.DecodedClip;
-        if (clip is null || _model?.Rig is null)
+        AnimationClip? clip = DisplayedAnimationClip;
+        if (clip is null)
         {
             Timeline.EndFrame = 1;
             Timeline.CurrentFrame = 0;
@@ -2650,19 +2764,29 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         var curves = new List<TimelineCurveTrackViewModel>();
         foreach (TransformTrack track in clip.TransformTracks)
         {
-            string boneName = (uint)track.BoneIndex < (uint)_model.Rig.BoneCount
-                ? _model.Rig.Bones[track.BoneIndex].Name
+            string boneName = _model?.Rig is { } rig && (uint)track.BoneIndex < (uint)rig.BoneCount
+                ? rig.Bones[track.BoneIndex].Name
                 : $"Bone {track.BoneIndex}";
             string id = $"custom:{track.BoneIndex}";
             tracks.Add(new TimelineTrackViewModel(
                 id,
                 boneName,
                 "Transform",
-                "Source animation",
+                DerivedReviewActive ? "Derived preview" : SelectedAnimation?.OriginLabel == "Derived" ? "Derived animation" : "Source animation",
                 isReadOnly: true,
                 totalKeyCount: track.Keyframes.Length,
                 exactKeyFrames: track.Keyframes.Select(static key => checked((int)Math.Round(key.Frame)))));
             AddTransformCurves(curves, id, boneName, track.Keyframes);
+        }
+
+        foreach (ScalarTrack track in clip.ScalarTracks)
+        {
+            string id = $"custom:scalar:{track.ChannelName}";
+            tracks.Add(new TimelineTrackViewModel(id, track.ChannelName, "Scalar", "Animation", isReadOnly: true,
+                totalKeyCount: track.Keyframes.Length,
+                exactKeyFrames: track.Keyframes.Select(static key => checked((int)Math.Round(key.Frame)))));
+            curves.Add(new TimelineCurveTrackViewModel(track.ChannelName, "#D0BFFF",
+                track.Keyframes.Take(2048).Select(static key => new TimelineCurveKeyViewModel(key.Frame,key.Value)), id, track.ChannelName));
         }
 
         Timeline.ReplaceTracks(tracks);
@@ -2685,6 +2809,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         Add("Rotation Y", "#63E6BE", static value => value.Rotation.Y);
         Add("Rotation Z", "#74C0FC", static value => value.Rotation.Z);
         Add("Rotation W", "#D0BFFF", static value => value.Rotation.W);
+        Add("Scale X", "#FF6B6B", static value => value.Scale.X);
+        Add("Scale Y", "#51CF66", static value => value.Scale.Y);
+        Add("Scale Z", "#4DABF7", static value => value.Scale.Z);
 
         void Add(string name, string color, Func<ReAnimated.Core.Mathematics.TransformTRS, double> select) =>
             curves.Add(new TimelineCurveTrackViewModel(
@@ -2810,7 +2937,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     updated.Camera.ActivePreviewNodeName,
                     CustomModelHelperAuthoring.GameCameraName,
                     StringComparison.Ordinal)
-                    ? "Selected exact EyeCamera for preview and game-ready FPP export"
+                    ? "Selected EyeCamera for preview and FPP export"
                     : $"Selected '{selectedAfter}' as an editor-only preview camera");
         }
         catch (Exception exception) when (
@@ -2849,7 +2976,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     rotation.Y,
                     rotation.Z,
                     rotation.W),
-                ReAnimated.Core.Mathematics.Vector3D.One);
+                _model.Package.Document.AuthoredHelpers.Single(helper => helper.Id == helperId).LocalTransform.Scale);
             CustomModelDocument updated = CustomModelHelperAuthoring.SetLocalTransform(
                 _model.Package.Document,
                 helperId,
@@ -2872,18 +2999,30 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
     private void UndoHelperEdit()
     {
-        if (_model is null || _helperUndo.Count == 0)
-        {
-            return;
-        }
+        RestoreAuthoringHistory(_helperUndo, _helperRedo, "Undid the last model authoring edit");
+    }
 
-        string? selectedName = SelectedBone?.Name;
-        CustomModelDocument restored = _helperUndo.Pop();
-        ReplaceAuthoredDocument(restored, selectedName);
-        BuildStatus = "Undid the last helper/camera authoring edit";
-        _setStatus(BuildStatus);
-        UndoHelperEditCommand.NotifyCanExecuteChanged();
-        MarkAuthoringChanged();
+    private void RedoHelperEdit() => RestoreAuthoringHistory(_helperRedo, _helperUndo, "Redid the model authoring edit");
+
+    private void ApplyPreparedHelpers()
+    {
+        if (_model is null) return;
+        try
+        {
+            CustomModelDocument updated = RiggingHelperMaterializer.Apply(_model.Package.Document);
+            if (ReferenceEquals(updated, _model.Package.Document))
+            {
+                BuildStatus = "The prepared helpers are already applied";
+                _setStatus(BuildStatus);
+                return;
+            }
+            ApplyHelperMutation(updated, SelectedBone?.Name, "Applied the prepared helper hierarchy");
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or InvalidDataException)
+        {
+            BuildStatus = "Prepared helpers could not be applied: " + exception.Message;
+            _setStatus(BuildStatus);
+        }
     }
 
     private void ApplyHelperMutation(
@@ -2896,8 +3035,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
-        _helperUndo.Push(_model.Package.Document);
+        AuthoringSnapshot before = CaptureAuthoringSnapshot();
         ReplaceAuthoredDocument(updated, selectedName);
+        RecordAuthoringUndo(before);
         BuildStatus = status;
         _setStatus(status);
         UndoHelperEditCommand.NotifyCanExecuteChanged();
@@ -2916,15 +3056,14 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         document.Validate();
         _model = _model with
         {
-            Package = new CustomModelPackage(
-                document,
-                _model.Package.SourceFbx,
-                _model.Package.TexturePayloads),
+            Package = _model.Package with { Document = document },
             Rig = document.Bones.IsEmpty
                 ? null
                 : document.CreateRigDefinition(),
         };
         _previewSession = null;
+        InvalidateConformancePreview();
+        Conformance.SetModel(_model);
         PopulateHierarchyRows(selectedName);
         OnPropertyChanged(nameof(PreviewCameraStatus));
         NotifyCommands();
@@ -3034,10 +3173,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         document.Validate();
         _model = _model with
         {
-            Package = new CustomModelPackage(
-                document,
-                _model.Package.SourceFbx,
-                _model.Package.TexturePayloads),
+            Package = _model.Package with { Document = document },
         };
     }
 
@@ -3088,6 +3224,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         SelectPreviewCameraCommand.NotifyCanExecuteChanged();
         ApplyHelperTransformCommand.NotifyCanExecuteChanged();
         UndoHelperEditCommand.NotifyCanExecuteChanged();
+        RedoHelperEditCommand.NotifyCanExecuteChanged();
+        ApplyPreparedHelpersCommand.NotifyCanExecuteChanged();
         CancelCommand.NotifyCanExecuteChanged();
         NotifyAnimationRefreshCommands();
     }
@@ -3168,6 +3306,14 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         }
 
         _disposed = true;
+        NativeScaleStudy.Dispose();
+        Conformance.RunDoctorCommand.Cancel(); Conformance.LoadDoctorRulesCommand.Cancel();
+        Conformance.FitContactCommand.Cancel();
+        Conformance.DetectHandCommand.Cancel();
+        Conformance.BuildHandRigCommand.Cancel();
+        Conformance.PreviewHandBindingCommand.Cancel();
+        Conformance.ApplyHandBindingCommand.Cancel();
+        Conformance.StopStressReview();
         StopAnimationRefreshMonitor();
         Timeline.CurrentFrameChanged -= OnTimelineFrameChanged;
         _operationCancellation?.Cancel();
@@ -3210,7 +3356,11 @@ public sealed class CustomModelAnimationClipItemViewModel : ObservableObject
 
     public long FrameCount => Contract.FrameCount;
 
-    public string DecodeStatus => DecodedClip is null ? "Metadata only — blocked from export" : "Decoded";
+    public string OriginLabel => Contract.DerivedMotion is null ? "FBX source" : "Derived";
+
+    public string DecodeStatus => DecodedClip is null
+        ? Contract.DerivedMotion is null ? "Metadata only — blocked from export" : "Historical derived clip — source or rig changed; derive again before export"
+        : "Decoded";
 
     public string DisplayName { get => _displayName; set => SetProperty(ref _displayName, value ?? string.Empty); }
 

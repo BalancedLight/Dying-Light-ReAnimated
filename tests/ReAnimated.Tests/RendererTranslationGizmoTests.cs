@@ -54,6 +54,39 @@ public sealed class RendererTranslationGizmoTests
     }
 
     [Fact]
+    public void TargetBindingPreservesStableIdentityThroughHitAndDrag()
+    {
+        Guid targetId = Guid.Parse("4f22d3bb-42c0-4c8d-b4de-65d3f5aa6f10");
+        TranslationGizmoBinding binding = TranslationGizmoBinding.ForTarget(
+            targetId,
+            TranslationGizmoAxis.X,
+            RenderGizmoSpace.Global);
+        Assert.Equal(-1, binding.BoneIndex);
+        Assert.Equal(targetId, binding.TargetId);
+        Assert.True(binding.IsValid);
+
+        RenderFrameSnapshot frame = CreateFrame(
+            new GizmoRenderData(
+                GizmoKind.TranslationHandle,
+                Vector3.Zero,
+                Vector3.UnitX,
+                Vector4.UnitX,
+                1.5f,
+                binding));
+        Assert.True(RenderTranslationGizmoHitTest.TryBeginDrag(
+            frame,
+            450,
+            300,
+            800,
+            600,
+            out RenderTranslationGizmoDragSession? session));
+        Assert.NotNull(session);
+        Assert.Equal(binding, session.Binding);
+        Assert.True(session.TryUpdate(470, 300, out RenderTranslationGizmoDragUpdate update));
+        Assert.Equal(binding, update.Binding);
+    }
+
+    [Fact]
     public void UnboundAndDegenerateHandlesFailClosed()
     {
         RenderFrameSnapshot unbound = CreateFrame(
@@ -131,6 +164,45 @@ public sealed class RendererTranslationGizmoTests
             800,
             600,
             out _));
+    }
+
+    [Fact]
+    public void MalformedTargetIdentitiesFailClosed()
+    {
+        Guid targetId = Guid.Parse("4f22d3bb-42c0-4c8d-b4de-65d3f5aa6f11");
+        var malformed = new[]
+        {
+            new TranslationGizmoBinding(-1, TranslationGizmoAxis.X, RenderGizmoSpace.Local),
+            new TranslationGizmoBinding(2, TranslationGizmoAxis.X, RenderGizmoSpace.Local, targetId),
+            new TranslationGizmoBinding(-2, TranslationGizmoAxis.X, RenderGizmoSpace.Local, null),
+            new TranslationGizmoBinding(-1, TranslationGizmoAxis.X, RenderGizmoSpace.Local, Guid.Empty),
+        };
+
+        foreach (TranslationGizmoBinding binding in malformed)
+        {
+            Assert.False(binding.IsValid);
+            RenderFrameSnapshot frame = CreateFrame(
+                new GizmoRenderData(
+                    GizmoKind.TranslationHandle,
+                    Vector3.Zero,
+                    Vector3.UnitX,
+                    Vector4.UnitX,
+                    1.5f,
+                    binding));
+            Assert.False(RenderTranslationGizmoHitTest.TryBeginDrag(
+                frame,
+                450,
+                300,
+                800,
+                600,
+                out _));
+        }
+
+        Assert.Throws<ArgumentException>(() =>
+            TranslationGizmoBinding.ForTarget(
+                Guid.Empty,
+                TranslationGizmoAxis.X,
+                RenderGizmoSpace.Local));
     }
 
     [Fact]

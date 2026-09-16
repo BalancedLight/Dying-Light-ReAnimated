@@ -116,7 +116,7 @@ public sealed class CustomModelSchema4Tests
             string path = Path.Combine(directory, "schema-four.dlrmodel");
             File.WriteAllBytes(path, buffer.ToArray());
             var migrated = CustomModelPackageSerializer.Load(path);
-            Assert.Equal(5, migrated.Document.SchemaVersion);
+            Assert.Equal(CustomModelDocument.CurrentSchemaVersion, migrated.Document.SchemaVersion);
             Assert.False(migrated.Document.BuildSettings.ReferenceExistingAnimationLibrary);
             Assert.Equal(SecondaryMotionSetupSerializer.Serialize(original.Document.SecondaryMotion), SecondaryMotionSetupSerializer.Serialize(migrated.Document.SecondaryMotion));
             Assert.Equal("Bright", Assert.Single(migrated.Document.FacialPresets.Presets).Name);

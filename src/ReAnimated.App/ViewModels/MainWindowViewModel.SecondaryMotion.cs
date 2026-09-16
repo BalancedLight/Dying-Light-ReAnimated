@@ -286,7 +286,7 @@ public sealed partial class MainWindowViewModel
             CustomModelPackage package = preview.Package;
             CustomModelDocument document = package.Document with { SecondaryMotion = SecondaryMotion.Definition, FacialPresets = FacialFpp.FacialLibrary, LastBuildReceipt = null };
             document.Validate();
-            var updated = new CustomModelPackage(document, package.SourceFbx, package.TexturePayloads);
+            var updated = package with { Document = document };
             ImmutableArray<byte> bytes = CustomModelPackageSerializer.Serialize(updated);
             string hash = Convert.ToHexStringLower(SHA256.HashData(bytes.AsSpan()));
             string path = Path.Combine(Path.GetDirectoryName(dialog.FileName)!, Path.GetFileNameWithoutExtension(dialog.FileName) + "-" + hash[..16] + ".dlrmodel");

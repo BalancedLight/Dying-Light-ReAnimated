@@ -2681,6 +2681,8 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    public bool CanSaveWorkspaceSnapshot => !HasRecoverySnapshot;
+
     public bool HasRecoverySnapshot
     {
         get => _hasRecoverySnapshot;
@@ -19929,10 +19931,7 @@ public sealed partial class MainWindowViewModel :
         document.Validate();
         return source with
         {
-            Package = new CustomModelPackage(
-                document,
-                source.Package.SourceFbx,
-                source.Package.TexturePayloads),
+            Package = source.Package with { Document = document },
         };
     }
 
@@ -21921,12 +21920,10 @@ public sealed partial class MainWindowViewModel :
         catch (Exception exception)
         {
             job.Complete("Failed");
-            AddDiagnostic(
-                "Error",
+            ReportOperationFailure(
                 "Assets",
                 "Dying Light 1 asset catalog could not be loaded",
-                exception.Message);
-            StatusText = "Dying Light 1 asset catalog loading failed";
+                exception);
         }
         finally
         {

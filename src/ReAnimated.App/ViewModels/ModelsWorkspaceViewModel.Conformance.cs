@@ -73,7 +73,7 @@ public sealed partial class ModelsWorkspaceViewModel
     /// </remarks>
     private void OnConformanceFitChanged(object? sender, EventArgs e)
     {
-        if (_model is null || !IsConformTabSelected)
+        if (_model is null || !IsConformTabSelected || !Conformance.IsStudioFit)
         {
             return;
         }
@@ -133,6 +133,7 @@ public sealed partial class ModelsWorkspaceViewModel
         }
         catch (Exception exception) when (
             exception is InvalidDataException or
+            CustomModelFormatException or
             InvalidOperationException or
             ArgumentException)
         {
@@ -171,7 +172,7 @@ public sealed partial class ModelsWorkspaceViewModel
 
     private void OnConformancePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is not (nameof(RigConformanceWizardViewModel.Stage) or
+        if (e.PropertyName is not (nameof(RigConformanceWizardViewModel.Stage) or nameof(RigConformanceWizardViewModel.StudioStage) or
             nameof(RigConformanceWizardViewModel.SelectedLandmark)))
         {
             return;
@@ -187,13 +188,36 @@ public sealed partial class ModelsWorkspaceViewModel
     /// </summary>
     private void UpdateConformanceViewportBinding()
     {
+        if (HandReviewActive)
+        {
+            Viewport.SceneSource.SetBrushTarget(null);
+            Viewport.SceneSource.SetTranslationGizmoTarget(Conformance.CanEditBodyGuide ? Conformance.BodyGuideGizmoTarget : null);
+            InvalidateConformancePreview(); RefreshPreview(); return;
+        }
+        Viewport.SceneSource.SetBrushTarget(IsConformTabSelected && Conformance.WeightBrushEnabled && ShowMeshes ? Conformance.WeightBrushTarget : null);
+        if (IsConformTabSelected && (Conformance.WeightBrushEnabled || Conformance.StressPreviewEnabled))
+        {
+            Viewport.SceneSource.SetTranslationGizmoTarget(null);
+            InvalidateConformancePreview(); RefreshPreview(); return;
+        }
+        Conformance.CancelWeightBrush();
+        if (!IsConformTabSelected) Conformance.StopStressReview();
+        if (IsConformTabSelected && (Conformance.IsStudioDetect || Conformance.IsStudioFit) && _model is { Rig: null } && Conformance.BodyProposals.Count > 0)
+        {
+            Viewport.SceneSource.SetTranslationGizmoTarget(Conformance.CanEditBodyGuide ? Conformance.BodyGuideGizmoTarget : null);
+            InvalidateConformancePreview();
+            RefreshPreview();
+            return;
+        }
+        Conformance.CancelBodyGuideDrag();
         bool refining =
             IsConformTabSelected &&
+            Conformance.IsStudioFit &&
             Conformance.Stage == RigConformanceStage.Refine;
         Viewport.SceneSource.SetTranslationGizmoTarget(
             refining ? Conformance.GizmoTarget : null);
 
-        if (IsConformTabSelected)
+        if (IsConformTabSelected && Conformance.IsStudioFit)
         {
             OnConformanceFitChanged(this, EventArgs.Empty);
         }
@@ -231,10 +255,12 @@ public sealed partial class ModelsWorkspaceViewModel
             // imported model untouched.
             Dl1PreparedAuthoredRig prepared =
                 Dl1CustomModelRigPreparer.Prepare(conformed);
+            conformed = _captureAuthoredLayer(conformed, CancellationToken.None);
 
-            _helperUndo.Push(model.Package.Document);
+            AuthoringSnapshot before = CaptureAuthoringSnapshot();
             InvalidateConformancePreview();
-            CommitModel(conformed, _sourcePath, _packagePath);
+            CommitModel(conformed, _sourcePath, _packagePath, preserveAuthoringHistory: true);
+            RecordAuthoringUndo(before);
             PopulateHierarchyRows();
 
             string diagnostics = prepared.Diagnostics.IsEmpty

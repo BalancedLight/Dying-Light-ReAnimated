@@ -106,6 +106,68 @@ public sealed class Dl1RestPoseBakerTests
     }
 
     [Fact]
+    public void LegacyTransferBakerMatchesSharedAffineMorphNormalMath()
+    {
+        RigDefinition rig = CreateRig();
+        ImmutableArray<TransformMatrix> globals = rig.CreateBindPose().GlobalMatrices;
+        int hand = rig.GetBoneIndex("hand");
+        ImmutableArray<Vector3D?> targets = globals
+            .Select(static global => (Vector3D?)global.Translation)
+            .ToImmutableArray()
+            .SetItem(hand, globals[hand].Translation + new Vector3D(0.0, 0.3, 0.0));
+        RigRestPoseTransferResult transfer = RigRestPoseTransfer.Solve(rig, globals, targets);
+        FbxModelSurface surface = CreateSurface(rig) with
+        {
+            MorphTargets =
+            [
+                new FbxModelMorphTarget("signed-a", 11, 1, 2,
+                    Enumerable.Repeat(new Vector3D(.01, -.02, .03), 4).ToImmutableArray())
+                {
+                    NormalDeltas = Enumerable.Repeat(new Vector3D(.2, -.1, .05), 4).ToImmutableArray(),
+                },
+                new FbxModelMorphTarget("signed-b", 13, 1, 3,
+                    Enumerable.Repeat(new Vector3D(-.02, .01, -.01), 4).ToImmutableArray())
+                {
+                    NormalDeltas = Enumerable.Repeat(new Vector3D(-.1, .15, -.04), 4).ToImmutableArray(),
+                },
+            ],
+        };
+        FbxModelSurface legacy = Assert.Single(Dl1RestPoseBaker.Bake([surface], transfer).Surfaces);
+        TransformMatrix[] palette = surface.PaletteBoneIndices.Select(index => transfer.SkinningTransforms[index]).ToArray();
+        FbxModelSurface shared = FbxSurfacePoseBaker.Bake(surface, palette);
+        Assert.Equal(shared.Vertices.Select(static vertex => vertex.Position), legacy.Vertices.Select(static vertex => vertex.Position));
+        Assert.Equal(shared.Vertices.Select(static vertex => vertex.Normal), legacy.Vertices.Select(static vertex => vertex.Normal));
+        Assert.Equal(shared.MorphTargets.Length, legacy.MorphTargets.Length);
+        for (int index = 0; index < shared.MorphTargets.Length; index++)
+        {
+            Assert.Equal(shared.MorphTargets[index].PositionDeltas.ToArray(), legacy.MorphTargets[index].PositionDeltas.ToArray());
+            Assert.Equal(shared.MorphTargets[index].NormalDeltas.ToArray(), legacy.MorphTargets[index].NormalDeltas.ToArray());
+        }
+    }
+
+    [Fact]
+    public void LegacyBakerRetainsOverlongPositionDeltasWithValidNormalDeltas()
+    {
+        RigDefinition rig = CreateRig();
+        ImmutableArray<TransformMatrix> globals = rig.CreateBindPose().GlobalMatrices;
+        RigRestPoseTransferResult transfer = RigRestPoseTransfer.Solve(
+            rig,
+            globals,
+            globals.Select(static global => (Vector3D?)global.Translation).ToImmutableArray());
+        FbxModelSurface surface = CreateSurface(rig) with
+        {
+            MorphTargets = [new FbxModelMorphTarget("legacy-overlong", 19, 1, 2,
+                Enumerable.Repeat(new Vector3D(.01, 0, 0), 5).ToImmutableArray())
+            {
+                NormalDeltas = Enumerable.Repeat(new Vector3D(0, .01, 0), 4).ToImmutableArray(),
+            }],
+        };
+        FbxModelSurface baked = Assert.Single(Dl1RestPoseBaker.Bake([surface], transfer).Surfaces);
+        Assert.Equal(5, baked.MorphTargets[0].PositionDeltas.Length);
+        Assert.Equal(4, baked.MorphTargets[0].NormalDeltas.Length);
+    }
+
+    [Fact]
     public void EveryTransferTransformIsARotationAndTranslationOnly()
     {
         RigDefinition rig = CreateRig();

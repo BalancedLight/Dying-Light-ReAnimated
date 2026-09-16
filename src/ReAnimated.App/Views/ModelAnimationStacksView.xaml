@@ -1,0 +1,57 @@
+<UserControl x:Class="ReAnimated.App.Views.ModelAnimationStacksView"
+             x:Name="AnimationStacksRoot"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinWidth="0"
+             MinHeight="0">
+    <Grid Margin="7">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock Margin="2,0,2,6"
+                   Foreground="{StaticResource MutedTextBrush}"
+                   Text="Original FBX stacks and saved derived clips are listed here. New derived clips start with Use off. Names, cadence, root policy, and root bone are editable per clip."
+                   TextWrapping="Wrap" />
+        <DataGrid Grid.Row="1"
+                  AutoGenerateColumns="False"
+                  CanUserAddRows="False"
+                  ItemsSource="{Binding Animations}"
+                  SelectedItem="{Binding SelectedAnimation}">
+            <DataGrid.Columns>
+                <DataGridCheckBoxColumn Width="42" Binding="{Binding Included, UpdateSourceTrigger=PropertyChanged}" Header="Use" />
+                <DataGridTextColumn Width="80" Binding="{Binding OriginLabel}" IsReadOnly="True" Header="Origin" />
+                <DataGridTextColumn Width="*" MinWidth="140" Binding="{Binding DisplayName, UpdateSourceTrigger=PropertyChanged}" Header="DL1 name" />
+                <DataGridTextColumn Width="58" Binding="{Binding FrameRateNumerator, UpdateSourceTrigger=PropertyChanged}" Header="FPS num" />
+                <DataGridTextColumn Width="58" Binding="{Binding FrameRateDenominator, UpdateSourceTrigger=PropertyChanged}" Header="FPS den" />
+                <DataGridTemplateColumn Width="100" Header="Root policy">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox ItemsSource="{Binding DataContext.RootMotionModes, ElementName=AnimationStacksRoot}"
+                                      SelectedItem="{Binding RootMotionMode, UpdateSourceTrigger=PropertyChanged}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+                <DataGridTemplateColumn Width="100" Header="Root bone">
+                    <DataGridTemplateColumn.CellTemplate>
+                        <DataTemplate>
+                            <ComboBox IsEditable="True"
+                                      ItemsSource="{Binding DataContext.RootBoneNames, ElementName=AnimationStacksRoot}"
+                                      Text="{Binding RootBoneName, UpdateSourceTrigger=PropertyChanged}" />
+                        </DataTemplate>
+                    </DataGridTemplateColumn.CellTemplate>
+                </DataGridTemplateColumn>
+            </DataGrid.Columns>
+        </DataGrid>
+        <StackPanel Grid.Row="2" Margin="0,7,0,0">
+            <TextBlock Foreground="{StaticResource MutedTextBrush}"
+                       Text="{Binding SelectedAnimation.DecodeStatus}"
+                       TextWrapping="Wrap" />
+            <Button Margin="0,6,0,0"
+                    HorizontalAlignment="Left"
+                    Command="{Binding OpenSelectedAnimationInAnimateCommand}"
+                    Content="Play selected in Playback" />
+        </StackPanel>
+    </Grid>
+</UserControl>

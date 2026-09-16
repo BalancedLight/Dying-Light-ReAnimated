@@ -1,0 +1,22 @@
+<UserControl x:Class="ReAnimated.App.Views.RigDoctorView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="5">
+  <TextBlock Text="Rig Doctor — required contacts" FontWeight="SemiBold"/>
+  <TextBlock Text="Diagnose missing contacts using selected repair rules and weighted geometry. Existing helpers stay in place; conflicting rows require explicit review." TextWrapping="Wrap" Margin="0,4,0,6"/>
+  <Button Content="Load repair rules…" Command="{Binding LoadDoctorRulesCommand}" HorizontalAlignment="Left"/>
+  <TextBlock Text="{Binding DoctorRuleLabel}" TextWrapping="Wrap" Margin="0,4,0,6"/>
+  <WrapPanel><Button Content="Diagnose and preview" Command="{Binding RunDoctorCommand}"/><Button Content="Cancel" Command="{Binding CancelDoctorCommand}"/><Button Content="Clear preview" Command="{Binding ClearDoctorCommand}"/></WrapPanel>
+  <ListBox ScrollViewer.HorizontalScrollBarVisibility="Disabled" HorizontalContentAlignment="Stretch" ItemsSource="{Binding DoctorRows}" SelectedItem="{Binding DoctorSelectedRow}" Margin="0,5,0,5"><ListBox.ItemTemplate><DataTemplate><Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="6" Margin="0,0,0,4"><StackPanel>
+   <TextBlock Text="{Binding HelperName}" FontWeight="SemiBold"/><TextBlock Text="{Binding ParentName,StringFormat='Parent: {0}'}"/>
+   <TextBlock Text="{Binding Status}"/><TextBlock Text="{Binding Message}" TextWrapping="Wrap"/>
+   <TextBlock Text="{Binding ComponentId,StringFormat='Geometry: {0}'}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+   <TextBlock Text="{Binding SelectedPointCount,StringFormat='Selected source points: {0}'}" Foreground="{StaticResource MutedTextBrush}"/>
+  </StackPanel></Border></DataTemplate></ListBox.ItemTemplate></ListBox>
+  <TextBlock Text="Geometry for the selected requirement" Margin="0,3,0,2"/>
+  <ComboBox ItemsSource="{Binding DoctorComponents}" SelectedItem="{Binding DoctorComponent}" DisplayMemberPath="Name" IsEnabled="{Binding CanChooseDoctorGeometry}"/>
+  <Expander Header="Frame, bounds and component choices" Margin="0,5,0,5"><TextBlock Text="{Binding DoctorRuleDetails}" TextWrapping="Wrap"/></Expander>
+  <CheckBox Content="Show proposed contacts" IsChecked="{Binding DoctorPreviewEnabled}"/>
+  <CheckBox IsChecked="{Binding DoctorReviewed}" Margin="0,5,0,5"><TextBlock Text="I reviewed the contact placement, bounds and rule choices." TextWrapping="Wrap"/></CheckBox>
+  <Button Content="Apply reviewed repair" Command="{Binding ApplyDoctorCommand}" HorizontalAlignment="Left"/>
+  <TextBlock Text="{Binding DoctorStatus}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+ </StackPanel>
+</UserControl>

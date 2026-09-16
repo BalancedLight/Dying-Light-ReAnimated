@@ -86,6 +86,13 @@ public sealed class CliDispatchTests
                 PackageSelfTest.SchemaVersion,
                 root.GetProperty("schemaVersion")
                     .GetInt32());
+            Assert.True(root.GetProperty("sqliteRoundTripVerified").GetBoolean());
+            Assert.True(Version.TryParse(
+                root.GetProperty("sqliteVersion").GetString(), out _));
+            Assert.Equal(
+                new[] { PackageSelfTest.ResultFileName, "export_dl1_retail_anm2_fbx.py" },
+                Directory.GetFiles(directory).Select(Path.GetFileName)
+                    .Order(StringComparer.Ordinal));
             Assert.False(
                 string.IsNullOrWhiteSpace(
                     root.GetProperty(

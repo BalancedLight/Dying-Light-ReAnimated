@@ -18,7 +18,41 @@ public enum RenderGizmoSpace
 public readonly record struct TranslationGizmoBinding(
     int BoneIndex,
     TranslationGizmoAxis Axis,
-    RenderGizmoSpace Space);
+    RenderGizmoSpace Space,
+    Guid? TargetId = null)
+{
+    public static TranslationGizmoBinding ForTarget(
+        Guid targetId,
+        TranslationGizmoAxis axis,
+        RenderGizmoSpace space)
+    {
+        if (targetId == Guid.Empty)
+        {
+            throw new ArgumentException("A translation target ID must be non-empty.", nameof(targetId));
+        }
+
+        if (!Enum.IsDefined(axis))
+        {
+            throw new ArgumentOutOfRangeException(nameof(axis), axis, "The translation axis is undefined.");
+        }
+
+        if (!Enum.IsDefined(space))
+        {
+            throw new ArgumentOutOfRangeException(nameof(space), space, "The gizmo space is undefined.");
+        }
+
+        return new TranslationGizmoBinding(-1, axis, space, targetId);
+    }
+
+    public bool HasValidIdentity =>
+        (BoneIndex >= 0 && TargetId is null) ||
+        (BoneIndex == -1 && TargetId is { } targetId && targetId != Guid.Empty);
+
+    public bool IsValid =>
+        HasValidIdentity &&
+        Enum.IsDefined(Axis) &&
+        Enum.IsDefined(Space);
+}
 
 public readonly record struct RenderTranslationGizmoDragStart(
     TranslationGizmoBinding Binding,
@@ -60,6 +94,11 @@ public sealed class RenderTranslationGizmoDragSession
         float worldUnitsPerPixel,
         Vector2 pointerStart)
     {
+        if (!binding.IsValid)
+        {
+            throw new ArgumentException("The translation gizmo binding is invalid.", nameof(binding));
+        }
+
         Binding = binding;
         _worldAxis = worldAxis;
         _screenAxis = screenAxis;
@@ -148,9 +187,7 @@ public static class RenderTranslationGizmoHitTest
         {
             if (gizmo.Kind != GizmoKind.TranslationHandle ||
                 gizmo.TranslationBinding is not { } binding ||
-                !Enum.IsDefined(binding.Axis) ||
-                !Enum.IsDefined(binding.Space) ||
-                binding.BoneIndex < 0 ||
+                !binding.IsValid ||
                 !float.IsFinite(gizmo.Thickness))
             {
                 continue;

@@ -124,8 +124,11 @@ public static class Dl1RuntimeMeshObjectValidator
             hierarchy.AnimationEntityCountCandidate, true, expectedAlias is not null, itemHashes.ToImmutable());
     }
 
-    private static string? ReadAnimationScriptAlias(ReadOnlySpan<byte> metadata)
+    /// <summary>Reads the compact model's dedicated alias field, not arbitrary matching strings.</summary>
+    public static string? ReadAnimationScriptAlias(ReadOnlySpan<byte> metadata)
     {
+        if (metadata.Length < AnimationScriptPointerOffset + sizeof(ulong))
+            throw new InvalidDataException("The compact model is too short to contain its animation script field.");
         // DL1 compact model header: the ASCR alias is the fixup pointer at
         // +0x48. Like the hierarchy name pointers, it serializes offset + 1.
         // Reading only this field prevents a matching string elsewhere in the

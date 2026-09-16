@@ -1,0 +1,55 @@
+<UserControl x:Class="ReAnimated.App.Views.RigStressReviewView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="0">
+    <StackPanel Margin="4,7,4,4" IsEnabled="{Binding CanEditStressReview}">
+        <CheckBox Content="Show stress-pose preview" IsChecked="{Binding StressPreviewEnabled}" />
+        <TextBlock Text="Preview joint bends and morphs in orbit view using the applied model weights. Apply a pending weight correction to include it. This pauses clip playback and keeps saved rest transforms and animation tracks unchanged. Offsets are temporary and are not exported."
+                   TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,7" />
+        <TextBlock Text="Joint" />
+        <ComboBox ItemsSource="{Binding StressJoints}" SelectedItem="{Binding SelectedStressJoint}" DisplayMemberPath="Label" Margin="0,2,0,6" />
+        <TextBlock Text="Local rotation offsets: X, then Y, then Z (degrees)" TextWrapping="Wrap" />
+        <WrapPanel>
+            <StackPanel Width="95" Margin="0,0,6,4"><TextBlock Text="X" /><TextBox Text="{Binding StressAngleX, UpdateSourceTrigger=PropertyChanged}" /></StackPanel>
+            <StackPanel Width="95" Margin="0,0,6,4"><TextBlock Text="Y" /><TextBox Text="{Binding StressAngleY, UpdateSourceTrigger=PropertyChanged}" /></StackPanel>
+            <StackPanel Width="95" Margin="0,0,6,4"><TextBlock Text="Z" /><TextBox Text="{Binding StressAngleZ, UpdateSourceTrigger=PropertyChanged}" /></StackPanel>
+        </WrapPanel>
+        <WrapPanel>
+            <Button Content="Preview this joint" Command="{Binding SetJointStressCommand}" Margin="0,0,6,4" />
+            <Button Content="Remove joint offset" Command="{Binding RemoveJointStressCommand}" Margin="0,0,6,4" />
+        </WrapPanel>
+        <DataGrid ItemsSource="{Binding StressOffsets}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="150" Margin="0,3,0,7">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Joint" Binding="{Binding Name}" Width="*" />
+                <DataGridTextColumn Header="X°" Binding="{Binding X}" Width="50" />
+                <DataGridTextColumn Header="Y°" Binding="{Binding Y}" Width="50" />
+                <DataGridTextColumn Header="Z°" Binding="{Binding Z}" Width="50" />
+            </DataGrid.Columns>
+        </DataGrid>
+        <TextBlock Text="Pose amount" />
+        <Slider Minimum="0" Maximum="1" Value="{Binding StressAmount}" TickFrequency="0.1" Margin="0,3,0,4" />
+        <WrapPanel>
+            <TextBlock Text="Cycle seconds" VerticalAlignment="Center" Margin="0,0,7,4" />
+            <TextBox Width="65" Text="{Binding StressCycleSeconds, UpdateSourceTrigger=PropertyChanged}" Margin="0,0,7,4" />
+            <Button Content="Play / pause cycle" Command="{Binding ToggleStressCycleCommand}" Margin="0,0,6,4" />
+            <Button Content="Return to rest" Command="{Binding ReturnStressToRestCommand}" Margin="0,0,6,4" />
+        </WrapPanel>
+        <Expander Header="Morph blending during review" Margin="0,5,0,6">
+            <StackPanel Margin="4,5,4,4">
+                <ComboBox ItemsSource="{Binding StressMorphChoices}" SelectedItem="{Binding SelectedStressMorph}" />
+                <WrapPanel Margin="0,4,0,4">
+                    <TextBlock Text="Weight (-1 to 1)" VerticalAlignment="Center" Margin="0,0,7,0" />
+                    <TextBox Width="75" Text="{Binding StressMorphValue, UpdateSourceTrigger=PropertyChanged}" />
+                    <Button Content="Set morph weight" Command="{Binding SetStressMorphCommand}" />
+                </WrapPanel>
+                <CheckBox Content="Scale morphs with the pose amount / cycle" IsChecked="{Binding ScaleStressMorphsWithAmount}" />
+                <DataGrid ItemsSource="{Binding StressMorphOffsets}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" MaxHeight="130" Margin="0,4,0,0">
+                    <DataGrid.Columns><DataGridTextColumn Header="Morph" Binding="{Binding Name}" Width="*" /><DataGridTextColumn Header="Weight" Binding="{Binding Weight}" Width="70" /></DataGrid.Columns>
+                </DataGrid>
+            </StackPanel>
+        </Expander>
+        <Button Content="Clear all review offsets" Command="{Binding ClearStressOffsetsCommand}" HorizontalAlignment="Left" Margin="0,0,0,5" />
+        <TextBlock Text="{Binding StressReviewStatus}" TextWrapping="Wrap" />
+        <Button Content="Measure current deformation" Command="{Binding MeasureStressCommand}" HorizontalAlignment="Left" Margin="0,7,0,5" />
+        <TextBlock Text="{Binding StressMeasurementStatus}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
+    </StackPanel>
+</UserControl>

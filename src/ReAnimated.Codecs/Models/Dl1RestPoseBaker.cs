@@ -77,41 +77,29 @@ public static class Dl1RestPoseBaker
                 continue;
             }
 
-            var vertices = ImmutableArray.CreateBuilder<FbxModelVertex>(
-                surface.Vertices.Length);
+            TransformMatrix[] paletteTransforms = surface.PaletteBoneIndices
+                .Select(index => index >= 0 && index < transforms.Length
+                    ? transforms[index]
+                    : TransformMatrix.Identity)
+                .ToArray();
             foreach (FbxModelVertex vertex in surface.Vertices)
+                _ = HasUsableInfluence(vertex, surface.PaletteBoneIndices, transforms);
+            FbxModelSurface posed = FbxSurfacePoseBaker.BakeLegacy(surface, paletteTransforms, cancellationToken);
+            for (int index = 0; index < surface.Vertices.Length; index++)
             {
-                if (!TryBlend(
-                        vertex,
-                        surface.PaletteBoneIndices,
-                        transforms,
-                        out Vector3D position,
-                        out Vector3D normal))
+                cancellationToken.ThrowIfCancellationRequested();
+                FbxModelVertex vertex = surface.Vertices[index];
+                if (!HasUsableInfluence(vertex, surface.PaletteBoneIndices, transforms))
                 {
                     unweighted++;
-                    vertices.Add(vertex);
                     continue;
                 }
-
-                double moved = Vector3D.Distance(vertex.Position, position);
+                double moved = Vector3D.Distance(vertex.Position, posed.Vertices[index].Position);
                 maximum = Math.Max(maximum, moved);
                 total += moved;
                 transformed++;
-                vertices.Add(vertex with
-                {
-                    Position = position,
-                    Normal = normal,
-                });
             }
-
-            baked.Add(surface with
-            {
-                Vertices = vertices.MoveToImmutable(),
-                MorphTargets = BakeMorphTargets(
-                    surface,
-                    transforms,
-                    cancellationToken),
-            });
+            baked.Add(posed);
         }
 
         return new Dl1RestPoseBakeResult(
@@ -125,142 +113,22 @@ public static class Dl1RestPoseBaker
             });
     }
 
-    /// <summary>
-    /// Linear-blend skins one vertex through its influences. Normals use the
-    /// rotation alone and are renormalized, since blended rotations do not stay
-    /// unit length.
-    /// </summary>
-    private static bool TryBlend(
-        FbxModelVertex vertex,
-        ImmutableArray<int> palette,
-        ImmutableArray<TransformMatrix> transforms,
-        out Vector3D position,
-        out Vector3D normal)
-    {
-        position = Vector3D.Zero;
-        normal = Vector3D.Zero;
-        double totalWeight = 0.0;
-        int influences = Math.Min(
-            vertex.BoneIndices.Length,
-            vertex.BoneWeights.Length);
-
-        for (int influence = 0; influence < influences; influence++)
-        {
-            int slot = vertex.BoneIndices[influence];
-            double weight = vertex.BoneWeights[influence];
-            if (weight <= 0.0 || (uint)slot >= (uint)palette.Length)
-            {
-                continue;
-            }
-
-            int sourceBone = palette[slot];
-            if ((uint)sourceBone >= (uint)transforms.Length)
-            {
-                throw new InvalidDataException(
-                    $"A skin palette references unknown source bone {sourceBone}.");
-            }
-
-            TransformMatrix transform = transforms[sourceBone];
-            position += transform.TransformPoint(vertex.Position) * weight;
-            normal += transform.TransformDirection(vertex.Normal) * weight;
-            totalWeight += weight;
-        }
-
-        if (totalWeight <= 0.0 || !position.IsFinite)
-        {
-            return false;
-        }
-
-        position /= totalWeight;
-        normal = normal.TryNormalize(out Vector3D unit)
-            ? unit
-            : vertex.Normal;
-        return true;
-    }
-
-    /// <summary>
-    /// Morph deltas live in the bind frame, so they rotate with the bone that
-    /// drives their vertex. Translation is deliberately excluded - a delta is a
-    /// displacement, not a point.
-    /// </summary>
-    private static ImmutableArray<FbxModelMorphTarget> BakeMorphTargets(
-        FbxModelSurface surface,
-        ImmutableArray<TransformMatrix> transforms,
-        CancellationToken cancellationToken)
-    {
-        if (surface.MorphTargets.IsDefaultOrEmpty)
-        {
-            return surface.MorphTargets;
-        }
-
-        var baked = ImmutableArray.CreateBuilder<FbxModelMorphTarget>(
-            surface.MorphTargets.Length);
-        foreach (FbxModelMorphTarget morph in surface.MorphTargets)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var deltas = ImmutableArray.CreateBuilder<Vector3D>(
-                morph.PositionDeltas.Length);
-            var normalDeltas = ImmutableArray.CreateBuilder<Vector3D>(morph.NormalDeltas.Length);
-            if (!morph.NormalDeltas.IsDefaultOrEmpty && morph.NormalDeltas.Length != surface.Vertices.Length)
-                throw new InvalidDataException($"Morph '{morph.Name}' normal deltas do not match the surface vertex count.");
-            for (int index = 0; index < morph.PositionDeltas.Length; index++)
-            {
-                deltas.Add(RotateDelta(
-                    morph.PositionDeltas[index],
-                    index < surface.Vertices.Length
-                        ? surface.Vertices[index]
-                        : null,
-                    surface.PaletteBoneIndices,
-                    transforms));
-            }
-
-            for (int index = 0; index < morph.NormalDeltas.Length; index++)
-            {
-                FbxModelVertex vertex = surface.Vertices[index];
-                Vector3D baseNormal = RotateDelta(vertex.Normal, vertex, surface.PaletteBoneIndices, transforms);
-                Vector3D targetNormal = RotateDelta(vertex.Normal + morph.NormalDeltas[index], vertex, surface.PaletteBoneIndices, transforms);
-                if (!baseNormal.TryNormalize(out Vector3D normalizedBase) || !targetNormal.TryNormalize(out Vector3D normalizedTarget))
-                    throw new InvalidDataException($"Morph '{morph.Name}' has an invalid normal after rest-pose transfer.");
-                normalDeltas.Add(normalizedTarget - normalizedBase);
-            }
-
-            baked.Add(morph with { PositionDeltas = deltas.MoveToImmutable(), NormalDeltas = normalDeltas.MoveToImmutable() });
-        }
-
-        return baked.ToImmutable();
-    }
-
-    private static Vector3D RotateDelta(
-        Vector3D delta,
-        FbxModelVertex? vertex,
-        ImmutableArray<int> palette,
+    private static bool HasUsableInfluence(
+        FbxModelVertex vertex, ImmutableArray<int> palette,
         ImmutableArray<TransformMatrix> transforms)
     {
-        if (vertex is not { } source)
+        double total = 0;
+        int influences = Math.Min(vertex.BoneIndices.Length, vertex.BoneWeights.Length);
+        for (int index = 0; index < influences; index++)
         {
-            return delta;
+            int slot = vertex.BoneIndices[index];
+            double weight = vertex.BoneWeights[index];
+            if (weight <= 0 || (uint)slot >= (uint)palette.Length) continue;
+            int source = palette[slot];
+            if ((uint)source >= (uint)transforms.Length)
+                throw new InvalidDataException($"A skin palette references unknown source bone {source}.");
+            total += weight;
         }
-
-        Vector3D rotated = Vector3D.Zero;
-        double totalWeight = 0.0;
-        int influences = Math.Min(
-            source.BoneIndices.Length,
-            source.BoneWeights.Length);
-        for (int influence = 0; influence < influences; influence++)
-        {
-            int slot = source.BoneIndices[influence];
-            double weight = source.BoneWeights[influence];
-            if (weight <= 0.0 ||
-                (uint)slot >= (uint)palette.Length ||
-                (uint)palette[slot] >= (uint)transforms.Length)
-            {
-                continue;
-            }
-
-            rotated += transforms[palette[slot]].TransformDirection(delta) * weight;
-            totalWeight += weight;
-        }
-
-        return totalWeight > 0.0 && rotated.IsFinite ? rotated / totalWeight : delta;
+        return double.IsFinite(total) && total > 0;
     }
 }

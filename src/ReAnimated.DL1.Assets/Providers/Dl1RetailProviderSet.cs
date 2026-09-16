@@ -40,7 +40,8 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
         string installPath,
         Rp6lChunkCache? chunkCache = null,
         Rp6lLimits? limits = null,
-        IEnumerable<string>? additionalRpackRoots = null)
+        IEnumerable<string>? additionalRpackRoots = null,
+        IEnumerable<string>? additionalSourceExtensions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(installPath);
         string fullPath = Path.GetFullPath(installPath);
@@ -54,6 +55,8 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
             chunkCache ?? new Rp6lChunkCache();
         string installId =
             RetailAssetIdentity.CreateInstallId(fullPath);
+        string[] sourceExtensions = (additionalSourceExtensions ?? []).Prepend(".fed")
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
         bool ownsCache = chunkCache is null;
         DirectoryInfo root = new(fullPath);
         DirectoryInfo[] dataRoots = root
@@ -121,7 +124,7 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
                     System.Globalization.CultureInfo.InvariantCulture,
                     $"dl1-loose-{rootIndex}"),
                 dataRoot.FullName,
-                [".fed"],
+                sourceExtensions,
                 rootPriority + 5_000,
                 maximumFileBytes: 16 * 1024 * 1024,
                 installId: installId));
@@ -156,7 +159,7 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
             providers.Add(new ZipPakAssetProvider(
                 "dl1-fed-paks",
                 paks,
-                [".fed"],
+                sourceExtensions,
                 maximumEntryBytes: 16 * 1024 * 1024,
                 installId: installId));
         }

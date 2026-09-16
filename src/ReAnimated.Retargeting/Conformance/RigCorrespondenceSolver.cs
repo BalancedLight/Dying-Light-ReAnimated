@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Geometry;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Retargeting.Mapping;
 
@@ -11,6 +12,8 @@ namespace ReAnimated.Retargeting.Conformance;
 /// </summary>
 public sealed record RigCorrespondenceOptions
 {
+    /// <summary>When supplied, use current geometry and topology evidence with reviewable candidate scores.</summary>
+    public RigGeometryEvidence? GeometryEvidence { get; init; }
     /// <summary>
     /// When false (the default) source bones with no DL1 counterpart are kept
     /// as extra rows under their mapped ancestor, preserving facial, twist and
@@ -64,6 +67,9 @@ public static class RigCorrespondenceSolver
         ArgumentNullException.ThrowIfNull(template);
         ArgumentNullException.ThrowIfNull(sourceRig);
         options ??= new RigCorrespondenceOptions();
+
+        if (options.GeometryEvidence is not null)
+            return RigGeometryCorrespondenceSolver.Solve(template, sourceRig, options, cancellationToken);
 
         ImmutableArray<string?> sourceRoles = ClassifySource(sourceRig);
         Dictionary<string, List<int>> candidatesByRole = GroupByRole(sourceRoles);

@@ -266,9 +266,12 @@ public sealed class RigDefinition
 /// </summary>
 public sealed class SkeletonPose
 {
+    private readonly ImmutableArray<TransformMatrix> _exactLocalMatrices;
+
     public SkeletonPose(
         RigDefinition rig,
-        IEnumerable<TransformTRS> localTransforms)
+        IEnumerable<TransformTRS> localTransforms,
+        IEnumerable<TransformMatrix>? exactLocalMatrices = null)
     {
         ArgumentNullException.ThrowIfNull(rig);
         ArgumentNullException.ThrowIfNull(localTransforms);
@@ -290,12 +293,34 @@ public sealed class SkeletonPose
 
         Rig = rig;
         LocalTransforms = locals;
-        GlobalMatrices = rig.ComputeGlobalMatrices(locals);
+        HasAffineLocalMatrices = exactLocalMatrices is not null;
+        if (exactLocalMatrices is null)
+        {
+            GlobalMatrices = rig.ComputeGlobalMatrices(locals);
+            return;
+        }
+        _exactLocalMatrices = exactLocalMatrices.ToImmutableArray();
+        if (LocalMatrices.Length != rig.BoneCount || LocalMatrices.Any(static matrix => !matrix.IsFinite ||
+            matrix.M41 != 0 || matrix.M42 != 0 || matrix.M43 != 0 || matrix.M44 != 1))
+            throw new ArgumentException("Exact pose matrices must be finite affine transforms covering the rig.", nameof(exactLocalMatrices));
+        var globals = ImmutableArray.CreateBuilder<TransformMatrix>(rig.BoneCount);
+        for (int index = 0; index < rig.BoneCount; index++)
+        {
+            int parent = rig.Bones[index].ParentIndex;
+            globals.Add(parent < 0 ? LocalMatrices[index] : globals[parent] * LocalMatrices[index]);
+        }
+        GlobalMatrices = globals.MoveToImmutable();
     }
 
     public RigDefinition Rig { get; }
 
     public ImmutableArray<TransformTRS> LocalTransforms { get; }
+
+    /// <summary>Exact affine presentation data; TRS values remain editable projections when this is true.</summary>
+    public bool HasAffineLocalMatrices { get; }
+
+    public ImmutableArray<TransformMatrix> LocalMatrices => HasAffineLocalMatrices
+        ? _exactLocalMatrices : LocalTransforms.Select(static local => local.ToMatrix()).ToImmutableArray();
 
     public ImmutableArray<TransformMatrix> GlobalMatrices { get; }
 
@@ -306,6 +331,10 @@ public sealed class SkeletonPose
             throw new ArgumentOutOfRangeException(nameof(boneIndex));
         }
 
-        return new SkeletonPose(Rig, LocalTransforms.SetItem(boneIndex, transform));
+        ImmutableArray<TransformMatrix>? exact = HasAffineLocalMatrices
+            ? LocalMatrices.SetItem(boneIndex, transform.Normalized().ToMatrix() *
+                LocalTransforms[boneIndex].ToMatrix().InvertedAffine() * LocalMatrices[boneIndex])
+            : null;
+        return new SkeletonPose(Rig, LocalTransforms.SetItem(boneIndex, transform), exact);
     }
 }

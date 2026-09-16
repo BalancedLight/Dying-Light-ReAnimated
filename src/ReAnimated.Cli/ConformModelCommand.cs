@@ -28,16 +28,16 @@ public static class ConformModelCommand
                                           [--out <model.dlrmodel>]
                                           [--strength <0..1>] [--scale <value>]
                                           [--scale-region leg|torso|arm]
-                                          [--drop-extras] [--ignore-morphs]
+                                          [--drop-extras] [--ignore-morphs] [--legacy-correspondence]
 
           --fbx            The rigged source model to convert.
           --template-mesh  A decoded retail type-272 mesh resource whose skeleton
                            is the conversion target, for example an extracted
                            player_1_tpp payload.
           --out            Optional .dlrmodel destination for the conformed model.
-          --strength       Conformance strength. 1 (default) imposes DL1 rest
-                           proportions so stock clips play as authored; 0 keeps
-                           the source model's own segment lengths.
+          --strength       Conformance strength. 0 (default) keeps the source
+                           model's segment lengths; 1 explicitly imposes DL1
+                           rest proportions. Rest-pose conversion is separate.
           --scale          Overrides the solved uniform scale.
           --scale-region   Restricts the scale solve to one anatomical region.
                            'leg' is useful for locomotion, which plants feet at
@@ -47,6 +47,7 @@ public static class ConformModelCommand
           --ignore-morphs  Skips FBX blend shapes. Required for exports whose
                            morph channels are unusable, such as Character
                            Creator's duplicate empty 'V_None' channels.
+          --legacy-correspondence  Uses the original name-only mapping method.
         """;
 
     public static async Task<int> RunAsync(
@@ -75,7 +76,8 @@ public static class ConformModelCommand
         RigCorrespondence correspondence = RigCorrespondenceSolver.Solve(
             template,
             source,
-            new RigCorrespondenceOptions { DropExtraBones = options.DropExtras },
+            new RigCorrespondenceOptions { DropExtraBones = options.DropExtras,
+                GeometryEvidence = options.LegacyCorrespondence ? null : FbxRigGeometryEvidence.Build(model, cancellationToken) },
             cancellationToken);
         RigLandmarkSolution landmark = RigLandmarkSolver.Solve(
             template,
@@ -99,6 +101,7 @@ public static class ConformModelCommand
         // adjusted in the wizard instead of being a dead end.
         var settings = new CustomModelRigConformance
         {
+            CorrespondenceMethod = options.LegacyCorrespondence ? CustomModelCorrespondenceMethod.LegacyNameRoles : CustomModelCorrespondenceMethod.GeometryHierarchyV1,
             TemplateId = template.TemplateId,
             TemplateProfileName = template.ProfileName,
             TemplateSourceResourceName = template.SourceResourceName,
@@ -119,6 +122,7 @@ public static class ConformModelCommand
         };
         FbxModelAuthoringImportResult conformed =
             Dl1RigConformanceApplier.Apply(model, fit, settings, cancellationToken);
+        conformed = FbxAuthoredModelLayer.Capture(conformed, cancellationToken);
         Dl1PreparedAuthoredRig prepared =
             Dl1CustomModelRigPreparer.Prepare(conformed, cancellationToken);
 
@@ -149,6 +153,16 @@ public static class ConformModelCommand
             },
             correspondence = new
             {
+                method = settings.CorrespondenceMethod.ToString(),
+                reviewRequired = correspondence.Rows.Any(static row => row.WasAmbiguous),
+                candidateEvidence = correspondence.Rows.Where(static row => !row.Candidates.IsEmpty).Select(static row => new
+                {
+                    row.TemplateIndex,
+                    row.TemplateName,
+                    row.Role,
+                    row.SourceBoneIndex,
+                    row.Candidates,
+                }),
                 mapped = correspondence.MappedCount,
                 synthesized = correspondence.SynthesizedCount,
                 extra = correspondence.ExtraCount,
@@ -252,7 +266,9 @@ public static class ConformModelCommand
 
         public string? OutputPath { get; init; }
 
-        public double Strength { get; init; } = 1.0;
+        public double Strength { get; init; }
+
+        public bool LegacyCorrespondence { get; init; }
 
         public double? ScaleOverride { get; init; }
 
@@ -267,7 +283,8 @@ public static class ConformModelCommand
             string? fbx = null;
             string? templateMesh = null;
             string? output = null;
-            double strength = 1.0;
+            double strength = 0.0;
+            bool legacyCorrespondence = false;
             double? scale = null;
             RigScaleRegion? region = null;
             bool dropExtras = false;
@@ -298,6 +315,9 @@ public static class ConformModelCommand
                         break;
                     case "--drop-extras":
                         dropExtras = true;
+                        break;
+                    case "--legacy-correspondence":
+                        legacyCorrespondence = true;
                         break;
                     case "--ignore-morphs":
                         ignoreMorphs = true;
@@ -348,6 +368,7 @@ public static class ConformModelCommand
                 ScaleRegion = region,
                 DropExtras = dropExtras,
                 IgnoreMorphChannels = ignoreMorphs,
+                LegacyCorrespondence = legacyCorrespondence,
             };
         }
 

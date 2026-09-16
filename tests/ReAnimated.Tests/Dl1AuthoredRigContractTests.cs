@@ -15,6 +15,98 @@ public sealed class Dl1AuthoredRigContractTests
     private static readonly int[] DepthFirstSourceOrder = [0, 1, 3, 2];
 
     [Fact]
+    public async Task StudioPreservesAffineSourceAndPairsSerializedLocalsReferencesAndChr()
+    {
+        FbxModelAuthoringImportResult original = CreateSyntheticModel();
+        CustomModelDocument document = original.Package.Document;
+        document = document with { RiggingSession = Dl1BoneScriptPolicyTests.WithPolicies(RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig)) };
+        var model = original with { Package = original.Package with { Document = document } };
+        Dl1PreparedAuthoredRig prepared = Dl1CustomModelRigPreparer.Prepare(model);
+        Assert.Contains(prepared.Diagnostics, d => d.Code == "model_authored_bind_orthonormalized");
+        SkeletonPose presentation = prepared.RebasePose(model.Rig!.CreateBindPose());
+        Assert.True(presentation.HasAffineLocalMatrices);
+        foreach (Dl1AuthoredRigNode node in prepared.Contract.Nodes)
+        {
+            Assert.Equal(RigFramePolicy.PreserveSource, node.FramePolicy);
+            Assert.Equal(document.RiggingSession.Recipe.Entities[node.SourceBoneIndex].EntityId, node.SemanticEntityId);
+            AssertMatrixNear(document.Bones[node.SourceBoneIndex].ExactLocalBindMatrix, node.LocalBindMatrix, 1e-7);
+            AssertMatrixNear(node.GlobalBindMatrix, presentation.GlobalMatrices[node.PhysicalIndex], 1e-7);
+        }
+        Assert.Equal(prepared.Contract.BindFingerprint, Dl1CustomModelRigPreparer.Prepare(model).Contract.BindFingerprint);
+        var moved = presentation.WithLocalTransform(0, presentation.LocalTransforms[0] with { Translation = presentation.LocalTransforms[0].Translation + Vector3D.UnitX });
+        foreach (Dl1AuthoredRigNode node in prepared.Contract.Nodes)
+            AssertVectorNear(presentation.GlobalMatrices[node.PhysicalIndex].Translation + Vector3D.UnitX, moved.GlobalMatrices[node.PhysicalIndex].Translation, 1e-7);
+        Assert.True(original.Package.SourceFbx.AsSpan().SequenceEqual(model.Package.SourceFbx.AsSpan()));
+        string output = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var build = await Dl1SourceModelWriter.WriteAsync(new() { Model = model, ResourceName = "affine_source", OutputDirectory = output });
+            var nodes = ReadTopLevelNodes(await File.ReadAllBytesAsync(build.SourceMshPath));
+            var character = Dl1ChrV4Codec.Parse(await File.ReadAllBytesAsync(build.CharacterDefinitionPath));
+            var globals = new List<TransformMatrix>();
+            foreach (Dl1AuthoredRigNode node in prepared.Contract.Nodes)
+            {
+                var serialized = nodes[node.PhysicalIndex];
+                TransformMatrix global = node.ParentPhysicalIndex < 0 ? serialized.LocalMatrix : globals[node.ParentPhysicalIndex] * serialized.LocalMatrix;
+                globals.Add(global);
+                AssertMatrixNear(global, node.GlobalBindMatrix, 1e-10);
+                AssertMatrixNear(global * serialized.ReferenceMatrix, TransformMatrix.Identity, 1e-6);
+                Assert.Equal(serialized.LocalMatrix, character.Variants[0].ObjectTransforms[node.PhysicalIndex]);
+            }
+        }
+        finally { RpackTestData.DeleteTemporaryDirectory(output); }
+    }
+
+    [Theory]
+    [InlineData(RigFramePolicy.Contact)]
+    [InlineData(RigFramePolicy.Camera)]
+    [InlineData(RigFramePolicy.Socket)]
+    [InlineData(RigFramePolicy.Structural)]
+    public void GeneratedParentFramesCannotReplaceSolvedHelperFootprints(RigFramePolicy helperPolicy)
+    {
+        FbxModelAuthoringImportResult model = CreateSyntheticModel();
+        CustomModelDocument document = model.Package.Document;
+        RiggingSession session = RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig);
+        Guid helper = session.Recipe.Entities[3].EntityId;
+        Guid parent = session.Recipe.Entities[1].EntityId;
+        var footprint = new Dl1AuthoredBoneBounds(new(.02, -.01, .03), new(.06, .002, .1));
+        session = session with { Recipe = session.Recipe with
+        {
+            Entities = session.Recipe.Entities.Select(e => e with { Kind = RigNativeEntityKind.Bone }).ToImmutableArray(),
+            FramePolicies = [new() { EntityId = parent, FramePolicy = RigFramePolicy.GeneratedDeform }],
+            Helpers = [new() { EntityId = helper, OwnerAssetId = document.ModelId, ParentEntityId = parent, RoleId = "synthetic-helper",
+                FramePolicy = helperPolicy, LocalFrame = document.Bones[3].ExactLocalBindMatrix,
+                BoundsCenter = footprint.Center, BoundsHalfExtents = footprint.HalfExtents, UserApproved = true }],
+        } };
+        document = document with { RiggingSession = session };
+        model = model with { Package = model.Package with { Document = document } };
+        var prepared = Dl1CustomModelRigPreparer.Prepare(model);
+        var protectedNode = Assert.Single(prepared.Contract.Nodes, n => n.SemanticEntityId == helper);
+        TransformMatrix expected = document.Bones[0].ExactLocalBindMatrix * document.Bones[1].ExactLocalBindMatrix * document.Bones[3].ExactLocalBindMatrix;
+        AssertMatrixNear(expected, protectedNode.GlobalBindMatrix, 1e-6);
+        Assert.Equal(helperPolicy, protectedNode.FramePolicy);
+        Assert.Equal(RigBoundsPolicy.Solved, protectedNode.BoundsPolicy);
+        Assert.True((protectedNode.Bounds.Center - footprint.Center).Length < 1e-7);
+        Assert.True((protectedNode.Bounds.HalfExtents - footprint.HalfExtents).Length < 1e-7);
+    }
+
+    [Fact]
+    public void StudioRetainsExplicitZeroSourceBoundsAndRejectsMissingSolvedBounds()
+    {
+        var model = CreateSyntheticModel();
+        var document = model.Package.Document;
+        var session = RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig);
+        Guid entity = session.Recipe.Entities[1].EntityId;
+        var retained = new RigEntityFramePolicy { EntityId = entity, BoundsPolicy = RigBoundsPolicy.PreserveSource,
+            BoundsCenter = Vector3D.Zero, BoundsHalfExtents = Vector3D.Zero };
+        document = document with { RiggingSession = session with { Recipe = session.Recipe with { FramePolicies = [retained] } } };
+        var prepared = Dl1CustomModelRigPreparer.Prepare(model with { Package = model.Package with { Document = document } });
+        Assert.Equal(Vector3D.Zero, Assert.Single(prepared.Contract.Nodes, n => n.SemanticEntityId == entity).Bounds.HalfExtents);
+        Assert.Throws<ArgumentException>(() => (retained with { FramePolicy = RigFramePolicy.Contact, BoundsPolicy = RigBoundsPolicy.GenerateSegmentProxy,
+            BoundsCenter = null, BoundsHalfExtents = null }).Validate());
+    }
+
+    [Fact]
     public async Task SourceBuildPublishesNativeCompanionsAndHashesTheirExactBytes()
     {
         var original = CreateSyntheticModel();

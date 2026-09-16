@@ -1,0 +1,7 @@
+<UserControl x:Class="ReAnimated.App.Views.ContactVectorView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <Grid Margin="0,3,0,6"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition/><ColumnDefinition/></Grid.ColumnDefinitions>
+  <DockPanel Margin="0,0,4,0"><TextBlock Text="X" VerticalAlignment="Center" Margin="0,0,4,0"/><TextBox Text="{Binding X, StringFormat=G6, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/></DockPanel>
+  <DockPanel Grid.Column="1" Margin="0,0,4,0"><TextBlock Text="Y" VerticalAlignment="Center" Margin="0,0,4,0"/><TextBox Text="{Binding Y, StringFormat=G6, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/></DockPanel>
+  <DockPanel Grid.Column="2"><TextBlock Text="Z" VerticalAlignment="Center" Margin="0,0,4,0"/><TextBox Text="{Binding Z, StringFormat=G6, UpdateSourceTrigger=PropertyChanged, ValidatesOnExceptions=True}"/></DockPanel>
+ </Grid>
+</UserControl>

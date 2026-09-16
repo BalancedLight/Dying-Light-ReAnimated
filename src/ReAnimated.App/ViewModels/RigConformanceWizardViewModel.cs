@@ -8,6 +8,7 @@ using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Geometry;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Retargeting.Conformance;
@@ -257,7 +258,14 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     private double _manualScale = 1.0;
 
     [ObservableProperty]
-    private double _conformanceStrength = 1.0;
+    private double _conformanceStrength;
+
+    [ObservableProperty]
+    private bool _useGeometryCorrespondence = true;
+
+    private RigGeometryEvidence? _geometryEvidence;
+    private bool _geometryEvidenceCaptured;
+    private bool _settingModel;
 
     [ObservableProperty]
     private bool _mirrorEdits = true;
@@ -301,6 +309,19 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         ApplyConformanceCommand = new RelayCommand(
             () => ApplyRequested?.Invoke(this, EventArgs.Empty),
             () => CanApply && !IsBusy);
+        AcceptMappingProposalsCommand = new RelayCommand(AcceptMappingProposals, () => HasPendingMappingReview && !IsBusy);
+        InitializeBodyDetection();
+        InitializeChannelPolicies();
+        InitializeContacts();
+        InitializeHands();
+        InitializeEyes();
+        InitializeRestPose();
+        InitializeHierarchy();
+        InitializeDerivedMotion();
+        InitializeDoctor();
+        InitializeWeightEditing();
+        InitializeStressReview();
+        InitializeStudioWorkflow();
     }
 
     /// <summary>
@@ -321,6 +342,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public IAsyncRelayCommand ResolveTemplateCommand { get; }
 
     public IRelayCommand ResetBoneCommand { get; }
+
+    public IRelayCommand AcceptMappingProposalsCommand { get; }
 
     public IRelayCommand ResetAllCommand { get; }
 
@@ -360,8 +383,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public ImmutableArray<RigConformanceFitModeChoice> FitModeChoices { get; } =
     [
-        new(RigConformanceFitMode.MatchDl1Exactly, "Match DL1 exactly (best animation)"),
         new(RigConformanceFitMode.PreserveSourceProportions, "Keep this model's proportions"),
+        new(RigConformanceFitMode.MatchDl1Exactly, "Use DL1 proportions"),
     ];
 
     /// <summary>
@@ -402,7 +425,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public string MissingCoreRolesMessage => MissingCoreRoles.IsEmpty
         ? string.Empty
-        : $"{MissingCoreRoles.Length} core body role(s) could not be matched by name: " +
+        : $"{MissingCoreRoles.Length} core body role(s) have no correspondence: " +
           $"{string.Join(", ", MissingCoreRoles)}. Assign them on the Mapping stage, " +
           "or the conversion will not follow this model.";
 
@@ -420,7 +443,17 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public bool CanAdvance => HasTemplate && HasModel;
 
-    public bool CanApply => Fit is not null;
+    public bool HasPendingMappingReview => UseGeometryCorrespondence && _geometryEvidence is not null &&
+        Correspondence?.Rows.Any(static r => r.Disposition == RigBoneDisposition.Mapped && r.WasAmbiguous) == true;
+
+    public bool HasMissingAnatomicalCorrespondence => UseGeometryCorrespondence && _geometryEvidence is not null && _template is { } template &&
+        Correspondence?.Rows.Any(r => r.Disposition == RigBoneDisposition.Synthesized && r.Role is not null &&
+            CoreRoles.Contains(r.Role, StringComparer.Ordinal) && template[r.TemplateIndex].IsDeform) == true;
+
+    public string MappingReviewMessage => HasMissingAnatomicalCorrespondence ? "Some anatomical roles need a source bone. Choose them in the mapping table before applying." :
+        HasPendingMappingReview ? "Review the proposed mappings, then accept them or choose different source bones." : string.Empty;
+
+    public bool CanApply => Fit is not null && !HasPendingMappingReview && !HasMissingAnatomicalCorrespondence;
 
     public int MappedCount => Correspondence?.MappedCount ?? 0;
 
@@ -445,21 +478,54 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     /// </summary>
     public void SetModel(FbxModelAuthoringImportResult? model)
     {
-        _model = model;
-        if (model is null)
+        Guid? selectedGuide = model?.Package.Document.ModelId == _model?.Package.Document.ModelId ? SelectedBodyGuideId : null;
+        bool mirrorGuide = selectedGuide is not null && MirrorBodyGuide;
+        if (!ReferenceEquals(_model, model)) InvalidateBodyDetection();
+        bool freshModel = model is not null && _model?.Package.Document.ModelId != model.Package.Document.ModelId;
+        _settingModel = true;
+        try
         {
+            _model = model;
+            _geometryEvidence = null;
+            _geometryEvidenceCaptured = false;
             Correspondence = null;
             Landmark = null;
             Fit = null;
-            Mappings.Clear();
-            Warnings.Clear();
-            SolveStatus = "Import a model to begin.";
+            if (model is null)
+            {
+                Mappings.Clear();
+                Warnings.Clear();
+                SolveStatus = "Import a model to begin.";
+            }
+            else if (model.Package.Document.RigConformance is { } persisted)
+            {
+                RestoreSettings(persisted, model.Package.Document.Source.ContentSha256);
+            }
+            else if (freshModel)
+            {
+                _roleOverrides = ImmutableDictionary<string, string>.Empty;
+                _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
+                UseGeometryCorrespondence = true;
+                ConformanceStrength = 0;
+            }
         }
-        else if (model.Package.Document.RigConformance is { } persisted)
-        {
-            RestoreSettings(persisted, model.Package.Document.Source.ContentSha256);
-        }
-
+        finally { _settingModel = false; }
+        RestoreStoredBodyGuides();
+        RestoreBodyAuthoring();
+        RestoreChannelPolicies();
+        RestoreContacts();
+        RestoreHands();
+        RestoreEyes();
+        RestoreRestPose();
+        RestoreHierarchy();
+        RestoreDerivedMotion();
+        RestoreDoctor();
+        ResetWeightEditing();
+        RefreshStressReviewModel();
+        RestoreStudioWorkflow();
+        SelectBodyGuide(selectedGuide);
+        MirrorBodyGuide = mirrorGuide && CanMirrorBodyGuide;
+        Solve();
         NotifyStateChanged();
     }
 
@@ -476,6 +542,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         ScaleMode = settings.ScaleMode;
         ManualScale = settings.ManualScale ?? 1.0;
         ConformanceStrength = settings.ConformanceStrength;
+        UseGeometryCorrespondence = settings.CorrespondenceMethod == CustomModelCorrespondenceMethod.GeometryHierarchyV1;
         _roleOverrides = settings.RoleOverrides.ToImmutableDictionary(
             static row => row.Role,
             static row => row.SourceBoneName,
@@ -502,6 +569,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
         return new CustomModelRigConformance
         {
+            CorrespondenceMethod = UseGeometryCorrespondence ? CustomModelCorrespondenceMethod.GeometryHierarchyV1 : CustomModelCorrespondenceMethod.LegacyNameRoles,
             TemplateId = template.TemplateId,
             TemplateProfileName = template.ProfileName,
             TemplateSourceResourceName = template.SourceResourceName,
@@ -562,16 +630,25 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     /// </summary>
     public void Solve()
     {
+        if (_settingModel) return;
         if (_template is not { } template ||
             _model?.Rig is not { } source)
         {
             Fit = null;
+            if (HasUnriggedSource && _model!.Package.Document.RigConformance is null)
+                SolveStatus = "Unrigged model loaded. Review and edit its body guides.";
             NotifyStateChanged();
             return;
         }
 
         try
         {
+            if (UseGeometryCorrespondence && !_geometryEvidenceCaptured)
+            {
+                var captured = FbxRigGeometryEvidence.Build(_model);
+                _geometryEvidence = captured.Supports.Any(static s => s.SurfaceMass > 0) ? captured : null;
+                _geometryEvidenceCaptured = true;
+            }
             Correspondence = RigCorrespondenceSolver.Solve(
                 template,
                 source,
@@ -579,6 +656,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 {
                     DropExtraBones = !KeepExtraBones,
                     RoleOverrides = _roleOverrides,
+                    GeometryEvidence = UseGeometryCorrespondence ? _geometryEvidence : null,
                 });
             Landmark = RigLandmarkSolver.Solve(
                 template,
@@ -611,6 +689,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 CultureInfo.CurrentCulture,
                 $"{Fit.Bones.Length} bones - {MappedCount} mapped, {SynthesizedCount} synthesized, " +
                 $"{ExtraCount} retained, {DroppedCount} dropped. {Fit.Warnings.Length} proportion warnings.");
+            if (UseGeometryCorrespondence && _geometryEvidence is null)
+                SolveStatus += " No usable surface support; only name-based proposals are available.";
         }
         catch (Exception exception) when (
             exception is InvalidDataException or
@@ -618,6 +698,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             ArgumentException)
         {
             Fit = null;
+            Correspondence = null;
+            Landmark = null;
             SolveStatus = $"The conformance could not be solved: {exception.Message}";
         }
 
@@ -650,11 +732,23 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 candidatesByRole.TryGetValue(role, out ImmutableArray<string> options)
                     ? options
                     : row.SourceName is { } single ? [single] : [];
+            if (UseGeometryCorrespondence && _geometryEvidence is not null && row.TemplateIndex >= 0 && row.Role is not null && _model?.Rig is { } rig)
+                candidates = candidates.Concat(rig.Bones.Select(static b => b.Name)).Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
             Mappings.Add(new RigConformanceMappingItemViewModel(
                 row,
                 candidates,
                 ApplyRoleOverride));
         }
+    }
+
+    partial void OnUseGeometryCorrespondenceChanged(bool value) => Solve();
+
+    private void AcceptMappingProposals()
+    {
+        if (!HasPendingMappingReview || Correspondence is not { } correspondence) return;
+        foreach (var row in correspondence.Rows.Where(static r => r.Disposition == RigBoneDisposition.Mapped && r.Role is not null && r.SourceName is not null))
+            _roleOverrides = _roleOverrides.SetItem(row.Role!, row.SourceName!);
+        Solve();
     }
 
     private void RefreshLandmarks()
@@ -725,6 +819,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private void ApplyRoleOverride(string role, string sourceBoneName)
     {
+        if (UseGeometryCorrespondence)
+            _roleOverrides = _roleOverrides.Where(pair => pair.Key == role || !string.Equals(pair.Value, sourceBoneName, StringComparison.OrdinalIgnoreCase))
+                .ToImmutableDictionary(StringComparer.Ordinal);
         _roleOverrides = _roleOverrides.SetItem(role, sourceBoneName);
         Solve();
     }
@@ -818,7 +915,11 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         Solve();
     }
 
-    partial void OnStageChanged(RigConformanceStage value) => NotifyStateChanged();
+    partial void OnStageChanged(RigConformanceStage value)
+    {
+        if (!_settingModel && !_restoringStudio && StudioStage != RigStudioStage.Fit) StudioStage = RigStudioStage.Fit;
+        NotifyStateChanged();
+    }
 
     partial void OnSelectedLandmarkChanged(RigConformanceLandmarkViewModel? value) =>
         ResetBoneCommand.NotifyCanExecuteChanged();
@@ -831,6 +932,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(HasModel));
         OnPropertyChanged(nameof(CanAdvance));
         OnPropertyChanged(nameof(CanApply));
+        OnPropertyChanged(nameof(HasPendingMappingReview));
+        OnPropertyChanged(nameof(HasMissingAnatomicalCorrespondence));
+        OnPropertyChanged(nameof(MappingReviewMessage));
         OnPropertyChanged(nameof(MappedCount));
         OnPropertyChanged(nameof(SynthesizedCount));
         OnPropertyChanged(nameof(ExtraCount));
@@ -840,10 +944,23 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(CanVerifyWithRetailClip));
         ResolveTemplateCommand.NotifyCanExecuteChanged();
         ApplyConformanceCommand.NotifyCanExecuteChanged();
+        AcceptMappingProposalsCommand.NotifyCanExecuteChanged();
         VerifyWithRetailClipCommand.NotifyCanExecuteChanged();
         ResetBoneCommand.NotifyCanExecuteChanged();
         ResetAllCommand.NotifyCanExecuteChanged();
         NextStageCommand.NotifyCanExecuteChanged();
         PreviousStageCommand.NotifyCanExecuteChanged();
+        NotifyBodyDetectionCommands();
+        NotifyChannelPolicies();
+        NotifyContacts();
+        NotifyHands();
+        NotifyEyes();
+        NotifyRestPose();
+        NotifyHierarchy();
+        NotifyDerivedMotion();
+        NotifyDoctor();
+        NotifyWeightEditing();
+        NotifyStressReview();
+        NotifyStudioWorkflow();
     }
 }

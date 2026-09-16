@@ -1,0 +1,16 @@
+<UserControl x:Class="ReAnimated.App.Views.RigComponentSelectionView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="0">
+    <StackPanel Margin="4">
+        <TextBlock Text="Classify components and choose which geometry contributes to anatomy. Kind labels are separate from Use for anatomy. Process controls analysis and binding; it does not remove meshes." TextWrapping="Wrap" Margin="0,0,0,6" />
+        <ItemsControl ItemsSource="{Binding BodyComponents}" IsEnabled="{Binding CanEditBodyComponentChoices}">
+            <ItemsControl.ItemTemplate><DataTemplate>
+                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="6" Margin="0,0,0,5"><StackPanel>
+                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <WrapPanel Margin="0,4,0,4"><CheckBox Content="Process" IsChecked="{Binding Included}" Margin="0,0,12,0" /><CheckBox Content="Use for anatomy" IsChecked="{Binding UseForAnatomy}" /></WrapPanel>
+                    <ComboBox Width="160" HorizontalAlignment="Left" SelectedItem="{Binding Kind}" ItemsSource="{Binding DataContext.BodyComponentKinds, RelativeSource={RelativeSource AncestorType=UserControl}}" />
+                </StackPanel></Border>
+            </DataTemplate></ItemsControl.ItemTemplate>
+        </ItemsControl>
+        <Button Content="Save component choices" Command="{Binding SaveBodyComponentsCommand}" HorizontalAlignment="Left" Margin="0,4,0,4" />
+        <TextBlock Text="{Binding BodyAuthoringStatus}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
+    </StackPanel>
+</UserControl>

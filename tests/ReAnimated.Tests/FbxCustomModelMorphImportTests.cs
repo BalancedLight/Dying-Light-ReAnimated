@@ -326,7 +326,7 @@ public sealed class FbxCustomModelMorphImportTests
         Assert.Equal("Smile", Assert.Single(package.Document.FacialPresets.Presets).Name);
     }
 
-    private static byte[] CreateMorphFbx(
+    internal static byte[] CreateMorphFbx(
         IReadOnlyList<string> channelNames,
         bool addSecondShapeToFirstChannel = false,
         double firstShapeDeltaX = 0.5,
@@ -334,7 +334,9 @@ public sealed class FbxCustomModelMorphImportTests
         double[]? normalDeltas = null,
         double[]? baseNormals = null,
         bool scaleMesh = false,
-        bool splitCorners = false)
+        bool splitCorners = false,
+        double[]? meshVertices = null,
+        long[]? meshPolygons = null)
     {
         const long baseGeometryId = 10;
         const long blendShapeId = 40;
@@ -350,14 +352,14 @@ public sealed class FbxCustomModelMorphImportTests
                 [
                 Node(
                     "Vertices",
-                    [DoubleArray([
+                    [DoubleArray(meshVertices ?? [
                         0.0, 0.0, 0.0,
                         1.0, 0.0, 0.0,
                         0.0, 1.0, 0.0,
                     ])]),
                 Node(
                     "PolygonVertexIndex",
-                    [Int64Array(splitCorners ? [0,1,-3,0,2,-2] : [0, 1, -3])]),
+                    [Int64Array(meshPolygons ?? (splitCorners ? [0,1,-3,0,2,-2] : [0, 1, -3]))]),
                 ..(normalDeltas is null ? Array.Empty<FbxTreeNode>() : new[] { Node("LayerElementNormal", [ScalarInt64(0)],
                     Node("MappingInformationType", [ScalarString("ByPolygonVertex")]),
                     Node("ReferenceInformationType", [ScalarString("Direct")]),
@@ -520,17 +522,17 @@ public sealed class FbxCustomModelMorphImportTests
         return stream.ToArray();
     }
 
-    private static byte[] Int64Array(IReadOnlyList<long> values)
+    private static byte[] Int64Array(long[] values)
     {
-        byte[] raw = new byte[checked(values.Count * sizeof(long))];
-        for (int index = 0; index < values.Count; index++)
+        byte[] raw = new byte[checked(values.Length * sizeof(long))];
+        for (int index = 0; index < values.Length; index++)
         {
             BinaryPrimitives.WriteInt64LittleEndian(
                 raw.AsSpan(index * sizeof(long)),
                 values[index]);
         }
 
-        return ArrayProperty('l', values.Count, raw);
+        return ArrayProperty('l', values.Length, raw);
     }
 
     private static byte[] DoubleArray(double[] values)

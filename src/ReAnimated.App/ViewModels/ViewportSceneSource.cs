@@ -437,7 +437,8 @@ public sealed class ViewportSceneSource :
     IRenderSceneSource,
     IRenderCameraNavigationTarget,
     IRenderTransformGizmoTarget,
-    IRenderTranslationGizmoTarget
+    IRenderTranslationGizmoTarget,
+    IRenderBrushSource
 {
     private sealed record SkeletonVisibilityState(
         bool ShowDeformBones,
@@ -456,6 +457,13 @@ public sealed class ViewportSceneSource :
     private readonly RenderSceneBuffer _sceneBuffer;
     private IRenderTransformGizmoTarget? _transformGizmoTarget;
     private IRenderTranslationGizmoTarget? _translationGizmoTarget;
+    private IRenderBrushTarget? _brushTarget;
+    public IRenderBrushTarget? BrushTarget => Volatile.Read(ref _brushTarget);
+
+    public void SetBrushTarget(IRenderBrushTarget? target)
+    {
+        Volatile.Write(ref _brushTarget, target);
+    }
     private RenderFrameSnapshot? _externalPreviewScene;
     private int _preserveExternalFppProjection;
     private SkeletonVisibilityState? _skeletonVisibility;

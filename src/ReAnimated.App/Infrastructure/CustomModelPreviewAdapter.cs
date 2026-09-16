@@ -30,6 +30,8 @@ public sealed class CustomModelPreviewSession
     private readonly FbxModelAuthoringImportResult _model;
     private readonly Dl1PreparedAuthoredRig? _authoredRig;
     private readonly bool _configuredFlipTextureCoordinateV;
+    private readonly SkeletonPose? _sourceBindPose;
+    private readonly Dictionary<AnimationClip, HashSet<int>> _trackedBoneIndices = [];
 
     internal CustomModelPreviewSession(
         FbxModelAuthoringImportResult model,
@@ -49,6 +51,7 @@ public sealed class CustomModelPreviewSession
         AppliesTextureCoordinateVFlip = appliesTextureCoordinateVFlip;
         Meshes = meshes;
         Diagnostics = diagnostics;
+        _sourceBindPose = model.Rig is { } rig ? RigStressPose.Evaluate(model.Package.Document, rig, [], 0) : null;
     }
 
     public CustomModelPreviewMode RequestedMode { get; }
@@ -124,15 +127,8 @@ public sealed class CustomModelPreviewSession
         }
 
         SkeletonPose sourcePose = clip is null
-            ? rig.CreateBindPose()
-            : clip.SamplePose(
-                rig,
-                clip.FrameRate.SecondsForFrame(
-                    Math.Clamp(
-                        frame,
-                        0,
-                        checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))),
-                PlaybackMode.Clamp);
+            ? _sourceBindPose!
+            : SampleClipPose(clip, frame);
         return CreateSkeleton(sourcePose, selectedBoneIndex);
     }
 
@@ -147,15 +143,8 @@ public sealed class CustomModelPreviewSession
         }
 
         SkeletonPose sourcePose = clip is null
-            ? rig.CreateBindPose()
-            : clip.SamplePose(
-                rig,
-                clip.FrameRate.SecondsForFrame(
-                    Math.Clamp(
-                        frame,
-                        0,
-                        checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))),
-                PlaybackMode.Clamp);
+            ? _sourceBindPose!
+            : SampleClipPose(clip, frame);
         SkeletonPose previewPose = _authoredRig?.RebasePose(sourcePose) ?? sourcePose;
         int nodeIndex = previewPose.Rig.GetBoneIndex(nodeName);
         if (nodeIndex < 0)
@@ -197,6 +186,26 @@ public sealed class CustomModelPreviewSession
                 (uint)_authoredRig.Contract.SourceToPhysicalIndices.Length
                 ? _authoredRig.Contract.SourceToPhysicalIndices[sourceIndex]
                 : null;
+
+    private SkeletonPose SampleClipPose(AnimationClip clip, int frame)
+    {
+        var rig = _model.Rig!;
+        var pose = clip.SamplePose(rig, clip.FrameRate.SecondsForFrame(Math.Clamp(frame, 0,
+            checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)))), PlaybackMode.Clamp);
+        if (!_trackedBoneIndices.TryGetValue(clip, out var tracked))
+            _trackedBoneIndices.Add(clip, tracked = clip.TransformTracks.Select(t => t.BoneIndex).ToHashSet());
+        var exact = pose.LocalMatrices.ToBuilder();
+        bool changed = false;
+        for (int i = 0; i < exact.Count; i++)
+        {
+            if (tracked.Contains(i) || exact[i] == _sourceBindPose!.LocalMatrices[i]) continue;
+            exact[i] = _sourceBindPose.LocalMatrices[i]; changed = true;
+        }
+        // Untracked nodes inherit their exact authored rest matrix, including
+        // affine residuals created by a hierarchy edit. Tracked curves remain
+        // unchanged and still need review under the new parent relationship.
+        return changed ? new SkeletonPose(rig, pose.LocalTransforms, exact.ToImmutable()) : pose;
+    }
 
     private static Vector3 ToVector3(Vector3D value) => new(
         checked((float)value.X),

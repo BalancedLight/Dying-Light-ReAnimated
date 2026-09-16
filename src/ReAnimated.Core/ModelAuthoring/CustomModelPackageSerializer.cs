@@ -100,7 +100,45 @@ public static class CustomModelPackageSerializer
                 texturePayloads.Add(entryPath, payload);
             }
 
-            return new CustomModelPackage(document, sourceFbx, texturePayloads.ToImmutable());
+            ImmutableArray<byte> authoredPayload = [];
+            if (document.AuthoredLayer is { } authored)
+            {
+                ZipArchiveEntry entry = GetRequiredEntry(entries, authored.EntryPath);
+                if (entry.Length != authored.PayloadLength) throw new CustomModelFormatException("The authored layer length differs from its manifest reference.");
+                authoredPayload = ReadBoundedEntry(entry, AuthoredModelLayerCodec.MaximumPayloadBytes);
+            }
+            var derivedPayloads = ImmutableDictionary.CreateBuilder<Guid, ImmutableArray<byte>>();
+            var derivedClipIds = document.AnimationClips.Where(static clip => clip.DerivedMotion is not null)
+                .Select(static clip => clip.Id).ToHashSet();
+            foreach (CustomModelAnimationClip clip in document.AnimationClips.Where(static clip => clip.DerivedMotion is not null).OrderBy(static clip => clip.Id))
+            {
+                DerivedMotionReference reference = clip.DerivedMotion!;
+                string entryPath = DerivedAnimationDataCodec.EntryPath(clip.Id);
+                ZipArchiveEntry entry = GetRequiredEntry(entries, entryPath);
+                if (entry.Length != reference.PayloadLength)
+                    throw new CustomModelFormatException($"The derived animation length differs from its manifest reference for clip '{clip.Id}'.");
+                ImmutableArray<byte> payload = ReadBoundedEntry(entry, DerivedAnimationDataCodec.MaximumPayloadBytes);
+                VerifySha256(payload.AsSpan(), reference.PayloadSha256, entryPath);
+                DerivedAnimationData data = DerivedAnimationDataCodec.Deserialize(payload.AsSpan());
+                if (data.ClipId != clip.Id)
+                    throw new CustomModelFormatException($"The derived animation payload '{entryPath}' identifies another clip.");
+                derivedPayloads.Add(clip.Id, payload);
+            }
+            foreach (string entryPath in entries.Keys.Where(static path => path.StartsWith("animation/derived/", StringComparison.Ordinal)))
+            {
+                string fileName = entryPath["animation/derived/".Length..];
+                if (!fileName.EndsWith(".json", StringComparison.Ordinal) ||
+                    !Guid.TryParseExact(fileName[..^5], "N", out Guid clipId) || !derivedClipIds.Contains(clipId))
+                    throw new CustomModelFormatException($"The package contains an orphan or malformed derived animation entry '{entryPath}'.");
+            }
+            var package = new CustomModelPackage(document, sourceFbx, texturePayloads.ToImmutable())
+            {
+                AuthoredLayerPayload = authoredPayload,
+                DerivedAnimationPayloads = derivedPayloads.ToImmutable(),
+            };
+            ValidateAuthoredLayer(package);
+            ValidateDerivedAnimationPayloads(package);
+            return package;
         }
         catch (CustomModelFormatException)
         {
@@ -186,6 +224,10 @@ public static class CustomModelPackageSerializer
                 package.Document.Source.EmbeddedEntryPath,
                 package.SourceFbx.AsSpan(),
                 CompressionLevel.Optimal);
+            if (package.Document.AuthoredLayer is { } authored)
+                WriteEntry(archive, authored.EntryPath, package.AuthoredLayerPayload.AsSpan(), CompressionLevel.Optimal);
+            foreach ((Guid clipId, ImmutableArray<byte> payload) in package.DerivedAnimationPayloads.OrderBy(static item => item.Key))
+                WriteEntry(archive, DerivedAnimationDataCodec.EntryPath(clipId), payload.AsSpan(), CompressionLevel.Optimal);
             foreach ((string entryPath, ImmutableArray<byte> payload) in package.TexturePayloads
                          .OrderBy(static item => item.Key, StringComparer.Ordinal))
             {
@@ -219,6 +261,9 @@ public static class CustomModelPackageSerializer
                 $"Unsupported custom-model format '{document.Format}'.");
         }
 
+        if (document.SchemaVersion < CustomModelDocument.CurrentSchemaVersion)
+            document = document with { AuthoredLayer = null };
+
         return document.SchemaVersion switch
         {
             CustomModelDocument.CurrentSchemaVersion => document,
@@ -230,6 +275,7 @@ public static class CustomModelPackageSerializer
                 MorphChannels = [],
                 MorphSignature = CustomModelDocument.EmptyMorphSignature,
                 RigConformance = null,
+                RiggingSession = null,
                 SecondaryMotion = new(),
                 FacialPresets = new(),
             },
@@ -239,6 +285,7 @@ public static class CustomModelPackageSerializer
             {
                 SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
                 RigConformance = null,
+                RiggingSession = null,
                 SecondaryMotion = new(),
                 FacialPresets = new(),
             },
@@ -246,6 +293,7 @@ public static class CustomModelPackageSerializer
             3 => document with
             {
                 SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                RiggingSession = null,
                 SecondaryMotion = new(),
                 FacialPresets = new(),
             },
@@ -254,10 +302,19 @@ public static class CustomModelPackageSerializer
             4 => document with
             {
                 SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                RiggingSession = null,
                 BuildSettings = document.BuildSettings with { ReferenceExistingAnimationLibrary = false },
             },
+            // Existing conformance, stock-reference, facial and physics decisions
+            // retain their previous meanings. Studio participation is opt-in.
+            5 => document with
+            {
+                SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                RiggingSession = null,
+            },
+            6 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion, AuthoredLayer = null },
             _ => throw new CustomModelFormatException(
-                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1, 2, 3, 4, or {CustomModelDocument.CurrentSchemaVersion}."),
+                $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 through {CustomModelDocument.CurrentSchemaVersion}."),
         };
     }
 
@@ -326,6 +383,8 @@ public static class CustomModelPackageSerializer
 
     private static void ValidatePayloads(CustomModelPackage package)
     {
+        ValidateAuthoredLayer(package);
+        ValidateDerivedAnimationPayloads(package);
         if (package.SourceFbx.IsDefaultOrEmpty || package.SourceFbx.Length > MaximumSourceFbxBytes)
         {
             throw new ArgumentException("A model package must contain a bounded source FBX snapshot.", nameof(package));
@@ -339,6 +398,8 @@ public static class CustomModelPackageSerializer
             .ToHashSet(StringComparer.Ordinal);
         foreach ((string entryPath, ImmutableArray<byte> payload) in package.TexturePayloads)
         {
+            if (entryPath == AuthoredModelLayerReference.PayloadEntryPath)
+                throw new ArgumentException("A texture cannot use the reserved authored-layer path.", nameof(package));
             CustomModelSourceIdentity.ValidatePackageEntryPath(entryPath, nameof(package));
             if (!declaredPaths.Contains(entryPath))
             {
@@ -368,6 +429,66 @@ public static class CustomModelPackageSerializer
                     nameof(package));
             }
         }
+    }
+
+    private static void ValidateDerivedAnimationPayloads(CustomModelPackage package)
+    {
+        if (package.DerivedAnimationPayloads is null)
+            throw new CustomModelFormatException("Derived animation payload storage must be initialized.");
+        var clips = package.Document.AnimationClips.ToDictionary(static clip => clip.Id);
+        long totalBytes = 0;
+        foreach ((Guid clipId, ImmutableArray<byte> payload) in package.DerivedAnimationPayloads)
+        {
+            if (!clips.TryGetValue(clipId, out CustomModelAnimationClip? clip) || clip.DerivedMotion is not { } reference)
+                throw new CustomModelFormatException($"Derived animation payload '{clipId}' has no manifest reference.");
+            if (reference.SourceClipId == clipId)
+                throw new CustomModelFormatException($"Derived animation metadata for clip '{clipId}' must identify its original source clip separately from the derived clip.");
+            if (payload.IsDefaultOrEmpty || payload.Length > DerivedAnimationDataCodec.MaximumPayloadBytes ||
+                payload.Length != reference.PayloadLength)
+                throw new CustomModelFormatException($"Derived animation payload '{clipId}' is missing, oversized or has the wrong length.");
+            totalBytes = checked(totalBytes + payload.Length);
+            if (totalBytes > 512L * 1024L * 1024L)
+                throw new CustomModelFormatException("The aggregate derived animation payloads exceed the package bound.");
+            VerifySha256(payload.AsSpan(), reference.PayloadSha256, DerivedAnimationDataCodec.EntryPath(clipId));
+            DerivedAnimationData data = DerivedAnimationDataCodec.Deserialize(payload.AsSpan());
+            if (data.ClipId != clipId || data.FrameCount != clip.FrameCount)
+                throw new CustomModelFormatException($"Derived animation payload '{clipId}' identifies another clip.");
+        }
+        foreach (CustomModelAnimationClip clip in package.Document.AnimationClips)
+        {
+            if (clip.DerivedMotion is { } reference)
+            {
+                reference.Validate();
+                if (!package.DerivedAnimationPayloads.ContainsKey(clip.Id))
+                    throw new CustomModelFormatException($"Clip '{clip.Id}' declares derived motion without a payload.");
+            }
+        }
+    }
+
+    public static AuthoredModelLayer? ValidateAuthoredLayer(CustomModelPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        if (package.Document.AuthoredLayer is not { } reference)
+        {
+            if (!package.AuthoredLayerPayload.IsDefaultOrEmpty) throw new CustomModelFormatException("Authored bytes have no manifest reference.");
+            return null;
+        }
+        reference.Validate();
+        if (package.AuthoredLayerPayload.IsDefaultOrEmpty || package.AuthoredLayerPayload.Length != reference.PayloadLength)
+            throw new CustomModelFormatException("The authored-layer payload is missing or has the wrong length.");
+        VerifySha256(package.AuthoredLayerPayload.AsSpan(), reference.ContentSha256, reference.EntryPath);
+        var layer = AuthoredModelLayerCodec.Deserialize(package.AuthoredLayerPayload.AsSpan());
+        // The payload binds source-linked surface edits to the document's base
+        // bone table. Authored helpers live in the separate hierarchy layer and
+        // therefore make Document.RigSignature describe CreateEffectiveBones()
+        // without changing the payload's base-rig identity.
+        if (!string.Equals(layer.SourceSha256, package.Document.Source.ContentSha256, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(layer.TargetRigSignature, CustomModelContractSignatures.ComputeRig(package.Document.Bones), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(package.Document.RigSignature, CustomModelContractSignatures.ComputeRig(package.Document.CreateEffectiveBones()), StringComparison.OrdinalIgnoreCase) ||
+            layer.Bones.Length != package.Document.Bones.Length ||
+            !layer.Bones.Select(static b => b.Name).Order(StringComparer.Ordinal).SequenceEqual(package.Document.Bones.Select(static b => b.Name).Order(StringComparer.Ordinal)))
+            throw new CustomModelFormatException("The authored layer belongs to a different source or target rig.");
+        return layer;
     }
 
     private static void VerifySha256(ReadOnlySpan<byte> payload, string expectedHash, string subject)
@@ -419,7 +540,7 @@ public static class CustomModelPackageSerializer
         output.Write(payload);
     }
 
-    private static JsonSerializerOptions CreateSerializerOptions()
+    internal static JsonSerializerOptions CreateSerializerOptions()
     {
         var options = new JsonSerializerOptions
         {

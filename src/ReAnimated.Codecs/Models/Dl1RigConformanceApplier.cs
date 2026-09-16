@@ -69,11 +69,22 @@ public static class Dl1RigConformanceApplier
         };
         document.Validate();
 
+        // The weight mapper deliberately drops obsolete source inverse binds.
+        // Complete the authored surface contract from the new exact bind hierarchy;
+        // native +X frame preparation still derives its own final physical references.
+        var globals = new TransformMatrix[bones.Length];
+        foreach (var bone in bones)
+            globals[bone.Index] = bone.ParentIndex < 0 ? bone.ExactLocalBindMatrix : globals[bone.ParentIndex] * bone.ExactLocalBindMatrix;
+        var inverse = globals.Select(static matrix => matrix.InvertedAffine()).ToArray();
+        var boundSurfaces = skin.Surfaces.Select(surface => surface with {
+            InverseBindMatrices = surface.PaletteBoneIndices.Select(index => inverse[index]).ToImmutableArray(),
+        }).ToImmutableArray();
+
         return model with
         {
             Package = model.Package with { Document = document },
             Rig = document.CreateRigDefinition(),
-            Surfaces = skin.Surfaces,
+            Surfaces = boundSurfaces,
         };
     }
 

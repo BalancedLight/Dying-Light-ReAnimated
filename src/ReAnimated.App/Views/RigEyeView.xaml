@@ -1,0 +1,47 @@
+<UserControl x:Class="ReAnimated.App.Views.RigEyeView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:views="clr-namespace:ReAnimated.App.Views">
+ <StackPanel Margin="5">
+  <TextBlock Text="Eye setup" FontWeight="SemiBold"/>
+  <TextBlock Text="Review each eye independently. A fitted globe needs visual confirmation; painted eyes need an existing eye rig or a manual gaze reference." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,7"/>
+  <TextBlock Text="Side"/><ComboBox ItemsSource="{Binding EyeSides}" SelectedItem="{Binding EyeSide}" Margin="0,3,0,6"/>
+  <TextBlock Text="Setup"/><ComboBox ItemsSource="{Binding EyeModeChoices}" SelectedItem="{Binding EyeMode}" DisplayMemberPath="Label" Margin="0,3,0,6"/>
+  <CheckBox Content="Show eye axes and globe outline in the bind view" IsChecked="{Binding EyeReviewEnabled}"/>
+  <CheckBox Content="This eye is painted or a flat graphic" IsChecked="{Binding EyePainted}" Margin="0,4,0,6"/>
+  <StackPanel Visibility="{Binding IsSourceEyeMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+   <TextBlock Text="Existing eye node — exact name and frame are retained" TextWrapping="Wrap"/><ComboBox ItemsSource="{Binding EyeNodes}" SelectedItem="{Binding EyeSourceNode}" DisplayMemberPath="Name" Margin="0,3,0,6"/>
+  </StackPanel>
+  <StackPanel Visibility="{Binding IsGeometryEyeMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+   <TextBlock Text="Eye geometry component"/><ComboBox ItemsSource="{Binding EyeComponents}" SelectedItem="{Binding EyeComponent}" DisplayMemberPath="Name" Margin="0,3,0,6"/>
+   <TextBlock Text="Connected source island (starting at 0)"/><TextBox Text="{Binding EyeIslandIndex, UpdateSourceTrigger=PropertyChanged}"/>
+   <WrapPanel Margin="0,5,0,5"><Button Content="Fit globe pivot" Command="{Binding DetectEyeCommand}"/><Button Content="Cancel" Command="{Binding CancelEyeDetectionCommand}"/></WrapPanel>
+   <CheckBox Content="Use a manually reviewed pivot" IsChecked="{Binding EyeUseManualPivot}"/>
+  </StackPanel>
+  <StackPanel Visibility="{Binding IsPlacedEyeMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+   <TextBlock Text="Position in model coordinates (metres)" TextWrapping="Wrap" Margin="0,6,0,0"/><views:ContactVectorView DataContext="{Binding EyePosition}"/>
+   <TextBlock Text="Gaze direction (+Z)"/><views:ContactVectorView DataContext="{Binding EyeForward}"/>
+   <TextBlock Text="Up direction (+Y)"/><views:ContactVectorView DataContext="{Binding EyeUp}"/>
+   <TextBlock Text="Parent for an optional unweighted helper" TextWrapping="Wrap"/><ComboBox ItemsSource="{Binding EyeNodes}" SelectedItem="{Binding EyeParent}" DisplayMemberPath="Name" Margin="0,3,0,6"/>
+   <TextBlock Text="Helper name"/><TextBox Text="{Binding EyeHelperName, UpdateSourceTrigger=PropertyChanged}"/>
+   <TextBlock Text="The helper records a pivot or gaze reference. Eye deformation, facial animation and player cameras are separate setups." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,6"/>
+  </StackPanel>
+  <Expander Header="Existing facial controls" IsExpanded="{Binding IsMimicEyeMode, Mode=OneWay}" Margin="0,6,0,6"><StackPanel>
+   <TextBlock Text="{Binding EyeMorphSummary}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+   <ItemsControl ItemsSource="{Binding EyeMorphs}"><ItemsControl.ItemTemplate><DataTemplate><CheckBox Content="{Binding Name}" IsChecked="{Binding Selected}" Margin="0,3,0,0"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+  </StackPanel></Expander>
+  <TextBlock Text="{Binding EyeStatus}" TextWrapping="Wrap" Margin="0,5,0,7"/>
+  <CheckBox Content="I reviewed this eye setup" IsChecked="{Binding EyeReviewed}"/>
+  <WrapPanel Margin="0,5,0,0"><Button Content="Save eye setup" Command="{Binding SaveEyeSetupCommand}"/><Button Content="Save and create/update helper" Command="{Binding ApplyEyeHelperCommand}" Visibility="{Binding IsPlacedEyeMode, Converter={StaticResource BooleanToVisibilityConverter}}"/></WrapPanel>
+  <Expander Header="Eye bone and rigid binding" Margin="0,8,0,0" Visibility="{Binding IsGeometryEyeMode, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
+   <TextBlock Text="Save the reviewed pivot with a bone parent and inspected eye island. Creating the eye bone preserves existing weights. Binding assigns the selected island fully to that bone, after checking weight locks and rest transforms." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+   <TextBlock Text="Eye bone name" Margin="0,5,0,0"/><TextBox Text="{Binding EyeBoneName, UpdateSourceTrigger=PropertyChanged}"/>
+   <WrapPanel Margin="0,5,0,0"><Button Content="Create eye bone" Command="{Binding BuildEyeRigCommand}"/><Button Content="Preview eye binding" Command="{Binding PreviewEyeBindingCommand}"/><Button Content="Apply eye binding" Command="{Binding ApplyEyeBindingCommand}"/><Button Content="Cancel" Command="{Binding CancelEyeRigCommand}"/></WrapPanel>
+   <TextBlock Text="{Binding EyeRigStatus}" TextWrapping="Wrap" Margin="0,5,0,6"/>
+   <StackPanel IsEnabled="{Binding HasEyeDeformBone}">
+    <CheckBox Content="Preview eye motion" IsChecked="{Binding EyeMotionReviewEnabled}"/>
+    <TextBlock Text="Horizontal gaze (degrees)"/><Slider Minimum="-60" Maximum="60" Value="{Binding EyeYawDegrees}"/><TextBox Text="{Binding EyeYawDegrees, UpdateSourceTrigger=PropertyChanged}"/>
+    <TextBlock Text="Vertical gaze (degrees)"/><Slider Minimum="-60" Maximum="60" Value="{Binding EyePitchDegrees}"/><TextBox Text="{Binding EyePitchDegrees, UpdateSourceTrigger=PropertyChanged}"/>
+    <Button Content="Return eye to rest" Command="{Binding ResetEyeMotionCommand}" HorizontalAlignment="Left"/>
+    <TextBlock Text="Existing facial values from pose review also apply. Inspect eyelid contact and expressions before native acceptance." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0"/>
+   </StackPanel>
+  </StackPanel></Expander>
+ </StackPanel>
+</UserControl>

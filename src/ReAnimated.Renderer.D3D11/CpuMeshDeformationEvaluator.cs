@@ -14,10 +14,12 @@ public static class CpuMeshDeformationEvaluator
     public static CpuDeformedVertex[] Evaluate(
         MeshRenderData mesh,
         SkeletonRenderData? skeleton,
-        IReadOnlyList<MorphWeight> morphWeights)
+        IReadOnlyList<MorphWeight> morphWeights,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(mesh);
         ArgumentNullException.ThrowIfNull(morphWeights);
+        cancellationToken.ThrowIfCancellationRequested();
         if (!RenderMeshValidation.TryValidate(
                 mesh,
                 skeleton,
@@ -43,6 +45,7 @@ public static class CpuMeshDeformationEvaluator
              vertexIndex < sourceVertices.Length;
              vertexIndex++)
         {
+            if ((vertexIndex & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
             MeshVertex source = sourceVertices[vertexIndex];
             result[vertexIndex] = EvaluateVertex(
                 mesh,

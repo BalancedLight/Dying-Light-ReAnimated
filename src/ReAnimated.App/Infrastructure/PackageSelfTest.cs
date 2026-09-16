@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Microsoft.Data.Sqlite;
 using ReAnimated.Cli;
 
 namespace ReAnimated.App.Infrastructure;
@@ -17,7 +18,7 @@ public static class PackageSelfTest
         "DL_REANIMATED_PACKAGE_SELF_TEST.json";
     public const string Format =
         "dl-reanimated-package-self-test";
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
 
     private const string CandidateSha256Metadata =
         "DLReAnimatedCandidateSourceSha256";
@@ -137,6 +138,12 @@ public static class PackageSelfTest
                 provenanceExpectation);
         }
 
+        // Execute the native provider in the actual candidate process. Merely
+        // finding managed SQLite assemblies does not prove the native library
+        // was copied or extracted from a single-file package successfully.
+        string sqliteVersion = await VerifySqliteAsync(cancellationToken)
+            .ConfigureAwait(false);
+
         string[] resources =
             assembly.GetManifestResourceNames();
         foreach (string suffix in
@@ -210,7 +217,9 @@ public static class PackageSelfTest
                             suffix,
                             StringComparison.Ordinal)))
                 .Order(StringComparer.Ordinal)
-                .ToArray());
+                .ToArray(),
+            sqliteVersion,
+            true);
         string resultPath =
             Path.Combine(
                 outputDirectory,
@@ -239,6 +248,38 @@ public static class PackageSelfTest
         File.Move(
             temporaryResultPath,
             resultPath);
+    }
+
+    private static async Task<string> VerifySqliteAsync(
+        CancellationToken cancellationToken)
+    {
+        // In-memory, private and unpooled: package validation never opens the
+        // user's catalog and leaves no database or journal alongside the report.
+        await using var connection = new SqliteConnection(
+            "Data Source=:memory:;Pooling=False");
+        await connection.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = "CREATE TABLE probe (value TEXT NOT NULL);";
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        const string expected = "Native catalog round-trip: 'Unicode \u2713'";
+        command.CommandText = "INSERT INTO probe (value) VALUES ($value);";
+        command.Parameters.AddWithValue("$value", expected);
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        command.Parameters.Clear();
+        command.CommandText = "SELECT value FROM probe;";
+        object? actual = await command.ExecuteScalarAsync(cancellationToken)
+            .ConfigureAwait(false);
+        if (actual is not string value || value != expected)
+        {
+            throw new InvalidDataException("The packaged SQLite provider failed its data round-trip.");
+        }
+
+        command.CommandText = "SELECT sqlite_version();";
+        object? version = await command.ExecuteScalarAsync(cancellationToken)
+            .ConfigureAwait(false);
+        return version is string text && !string.IsNullOrWhiteSpace(text)
+            ? text
+            : throw new InvalidDataException("The packaged SQLite provider did not report its native version.");
     }
 
     public sealed record PackageSelfTestResult(
@@ -273,7 +314,11 @@ public static class PackageSelfTest
         [property: JsonPropertyName("sourceIdentity")]
         string? SourceIdentity,
         [property: JsonPropertyName("requiredResources")]
-        IReadOnlyList<string> RequiredResources);
+        IReadOnlyList<string> RequiredResources,
+        [property: JsonPropertyName("sqliteVersion")]
+        string SqliteVersion,
+        [property: JsonPropertyName("sqliteRoundTripVerified")]
+        bool SqliteRoundTripVerified);
 
     private static PackageProvenanceExpectation
         ParseProvenanceExpectation(

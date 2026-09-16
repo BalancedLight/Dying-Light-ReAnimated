@@ -21,6 +21,97 @@ public sealed class BlenderFbxStrictValidationTests :
     internal static byte[] CreateValidModelFixture() =>
         Serialize(BuildFixture(FixtureCorruption.None));
 
+    internal static byte[] CreateSourceWeightFixture()
+    {
+        var document = BuildFixture(FixtureCorruption.None);
+        var objects = document.Nodes.Single(n => n.Name == "Objects");
+        var connections = document.Nodes.Single(n => n.Name == "Connections");
+        var children = objects.Children.Select(n => n.Name == "Pose" ? BindPose(20, [1, 2, 3, 100, 101, 102, 103]) : n).ToImmutableArray();
+        var root = children.Single(n => n.Name == "Deformer" && n.Properties[0].Value is 31L);
+        var child = children.Single(n => n.Name == "Deformer" && n.Properties[0].Value is 32L);
+        children = children.Replace(root, Cluster(31, "FirstJoint", [0, 1], [0.5, 0.5]))
+            .Replace(child, Cluster(32, "SecondJoint", [0, 1, 2], [0.4, 0.5, 1]));
+        var links = connections.Children;
+        double[] additionalWeights = [0.3, 0.2, 0.1, 1e-15];
+        for (int i = 0; i < additionalWeights.Length; i++)
+        {
+            long bone = 100 + i, cluster = 110 + i;
+            children = children.Add(Model(bone, $"ExtraJoint{i}", "LimbNode"))
+                .Add(Cluster(cluster, $"ExtraCluster{i}", [0], [additionalWeights[i]]));
+            links = links.Add(Connection("OO", bone, 2)).Add(Connection("OO", cluster, 30)).Add(Connection("OO", bone, cluster));
+        }
+        children = children.Add(Deformer(120, "AdditionalSkin", "Skin")).Add(Cluster(121, "RepeatedJoint", [0], [0.1]));
+        links = links.Add(Connection("OO", 120, 10)).Add(Connection("OO", 121, 120)).Add(Connection("OO", 2, 121));
+        return Serialize(document with { Nodes = document.Nodes.Replace(objects, objects with { Children = children })
+            .Replace(connections, connections with { Children = links }) });
+    }
+
+    internal static byte[] CreateSourceCoordinateFixture()
+    {
+        var document = BuildFixture(FixtureCorruption.None);
+        var objects = document.Nodes.Single(n => n.Name == "Objects");
+        var model = objects.Children.Single(n => n.Name == "Model" && n.Properties[0].Value is 4L);
+        var properties = model.FindChild("Properties70")!;
+        var transformed = model with { Children = model.Children.Replace(properties, properties with { Children = properties.Children
+            .Add(Property70("GeometricTranslation", 2.0, 3.0, 4.0))
+            .Add(Property70("GeometricScaling", -2.0, 3.0, 1.0)) }) };
+        var globals = document.Nodes.Single(n => n.Name == "GlobalSettings");
+        return Serialize(document with { Nodes = document.Nodes.Replace(objects, objects with { Children = objects.Children.Replace(model, transformed) })
+            .Replace(globals, GlobalSettings(Property70("TimeMode", 6), Property70("UnitScaleFactor", 10.0))) });
+    }
+
+    internal static byte[] CreateSeparatedComponentFixture()
+    {
+        var document = BuildFixture(FixtureCorruption.None);
+        var objects = document.Nodes.Single(n => n.Name == "Objects");
+        var connections = document.Nodes.Single(n => n.Name == "Connections");
+        var geometry = objects.Children.Single(n => n.Name == "Geometry" && n.Properties[0].Value is 10L);
+        var model = Model(200, "DetachedComponent", "Mesh");
+        var properties = model.FindChild("Properties70")!;
+        model = model with { Children = model.Children.Replace(properties, properties with { Children = properties.Children
+            .Add(Property70("GeometricTranslation", 0.0, 0.0, 2.0)) }) };
+        geometry = geometry with { Properties = geometry.Properties.SetItem(0, new('L', 201L)).SetItem(1, new('S', "Geometry::DetachedGeometry")) };
+        return Serialize(document with { Nodes = document.Nodes.Replace(objects, objects with { Children = objects.Children.Add(model).Add(geometry) })
+            .Replace(connections, connections with { Children = connections.Children.Add(Connection("OO", 200, 0))
+                .Add(Connection("OO", 201, 200)).Add(Connection("OO", 40, 200)) }) });
+    }
+
+    internal static byte[] CreateSourceProvenanceFixture(bool quad, bool splitMaterials, bool coincidentIslands = false)
+    {
+        var document = BuildFixture(FixtureCorruption.None);
+        var objects = document.Nodes.Single(n => n.Name == "Objects");
+        var connections = document.Nodes.Single(n => n.Name == "Connections");
+        var original = objects.Children.Single(n => n.Name == "Geometry" &&
+            n.FindChild("PolygonVertexIndex")?.Properties[0].Value is ImmutableArray<long> indices && !indices.IsEmpty);
+        long geometryId = original.Properties[0].Get<long>();
+        var geometry = Geometry(geometryId, "Provenance",
+            coincidentIslands ? [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 1, 0] : [0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0],
+            coincidentIslands ? [0, 1, -3, 3, 4, -6] : quad ? [0, 1, 2, -4] : [0, 1, -3, 0, 2, -4], [], [], []);
+        var children = objects.Children.Replace(original, geometry);
+        var cluster = children.First(n => n.Name == "Deformer" && n.Properties[2].Value is "Cluster");
+        var indicesNode = cluster.FindChild("Indexes")!;
+        var weightsNode = cluster.FindChild("Weights")!;
+        long[] additionalPoints = coincidentIslands ? [3L, 4L, 5L] : [3L];
+        double[] additionalWeights = coincidentIslands ? [1.0, 1.0, 1.0] : [1.0];
+        children = children.Replace(cluster, cluster with { Children = cluster.Children
+            .Replace(indicesNode, Node("Indexes", [indicesNode.Properties[0].Get<ImmutableArray<long>>().AddRange(additionalPoints)]))
+            .Replace(weightsNode, Node("Weights", [weightsNode.Properties[0].Get<ImmutableArray<double>>().AddRange(additionalWeights)])) });
+        if (splitMaterials)
+        {
+            const long materialId = 100001;
+            var material = objects.Children.First(n => n.Name == "Material");
+            children = children.Add(material with { Properties = material.Properties.SetItem(0, new('L', materialId)).SetItem(1, new('S', "Material::Second")) });
+            geometry = geometry with { Children = geometry.Children.Add(Node("LayerElementMaterial", [0],
+                Node("MappingInformationType", ["ByPolygon"]), Node("ReferenceInformationType", ["IndexToDirect"]),
+                Node("Materials", [ImmutableArray.Create<long>(0, 1)]))) };
+            children = children.Replace(children.Single(n => n.Name == "Geometry" && n.Properties[0].Value is long id && id == geometryId), geometry);
+            long modelId = connections.Children.Single(n => n.Properties.Length >= 3 && n.Properties[1].Value is long id && id == geometryId).Properties[2].Get<long>();
+            connections = connections with { Children = connections.Children.Add(Connection("OO", materialId, modelId)) };
+        }
+        return Serialize(document with { Nodes = document.Nodes.Replace(objects, objects with { Children = children })
+            .Replace(document.Nodes.Single(n => n.Name == "Connections"), connections) });
+    }
+
     internal static byte[] CreateMultiRootModelFixture()
     {
         FbxBinaryDocument document = BuildFixture(FixtureCorruption.None);

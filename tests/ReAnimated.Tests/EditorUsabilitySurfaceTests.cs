@@ -499,10 +499,12 @@ public sealed class EditorUsabilitySurfaceTests
             "{Binding OpenSelectedAnimationInAnimateCommand}",
             "{Binding ReturnToProjectModelsCommand}",
         ];
+        XDocument animationStacks = XDocument.Load(FindRepositoryFile("src", "ReAnimated.App", "Views", "ModelAnimationStacksView.xaml"));
+        Assert.Contains(workspace.Descendants(), static element => element.Name.LocalName == "ModelAnimationStacksView");
         foreach (string command in requiredCommands)
         {
             Assert.Contains(
-                workspace.Descendants(Presentation + "Button"),
+                workspace.Descendants(Presentation + "Button").Concat(animationStacks.Descendants(Presentation + "Button")),
                 element => string.Equals(
                     (string?)element.Attribute("Command"),
                     command,
@@ -530,6 +532,7 @@ public sealed class EditorUsabilitySurfaceTests
         ];
         string[] attributeValues = workspace.Root!
             .DescendantsAndSelf()
+            .Concat(animationStacks.Root!.DescendantsAndSelf())
             .Attributes()
             .Select(static attribute => attribute.Value)
             .ToArray();
@@ -549,7 +552,7 @@ public sealed class EditorUsabilitySurfaceTests
                 "cannot replace an animation target",
                 StringComparison.OrdinalIgnoreCase) == true);
         Assert.Contains(
-            workspace.Descendants(Presentation + "Button"),
+            workspace.Descendants(Presentation + "Button").Concat(animationStacks.Descendants(Presentation + "Button")),
             static element => string.Equals(
                     (string?)element.Attribute("Command"),
                     "{Binding OpenSelectedAnimationInAnimateCommand}",

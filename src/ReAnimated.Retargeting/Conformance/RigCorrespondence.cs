@@ -72,7 +72,14 @@ public sealed record RigCorrespondenceRow
     /// solver had to choose. These rows are surfaced for explicit review.
     /// </summary>
     public bool WasAmbiguous { get; init; }
+
+    /// <summary>Heuristic candidate scores for explicit review; not calibrated probabilities.</summary>
+    public ImmutableArray<RigCorrespondenceCandidateEvidence> Candidates { get; init; } = [];
 }
+
+public sealed record RigCorrespondenceCandidateEvidence(int SourceBoneIndex, string SourceName,
+    double Score, double PositionAgreement, double HierarchyAgreement, double InfluenceSupport,
+    bool NameAgrees, bool UserSelected, string Evidence);
 
 /// <summary>
 /// An unresolved or resolved-by-tie-break role, retained so the wizard can ask

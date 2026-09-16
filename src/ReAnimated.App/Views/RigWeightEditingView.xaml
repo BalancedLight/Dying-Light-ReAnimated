@@ -1,0 +1,85 @@
+<UserControl x:Class="ReAnimated.App.Views.RigWeightEditingView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="0">
+    <StackPanel Margin="4,8,4,4">
+        <TextBlock Text="Review and correct weights on original source points. UV seams and material splits share the same point edits. Inspecting does not change the model."
+                   TextWrapping="Wrap" />
+        <WrapPanel Margin="0,5,0,6">
+            <Button Content="Inspect weights" Command="{Binding InspectWeightsCommand}" Margin="0,0,6,0" />
+            <Button Content="Cancel weight job" Command="{Binding CancelWeightJobCommand}" />
+        </WrapPanel>
+        <StackPanel IsEnabled="{Binding CanCorrectWeights}">
+            <TextBlock Text="Influence" />
+            <ComboBox ItemsSource="{Binding WeightInfluences}" SelectedItem="{Binding SelectedWeightInfluence}" DisplayMemberPath="Name" Margin="0,2,0,5" />
+            <CheckBox Content="Show influence heatmap" IsChecked="{Binding ShowWeightHeatmap}" />
+            <TextBlock Text="Blue = 0, yellow = 0.5, red = 1. The heatmap shows pending corrections after Preview."
+                       TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,8" />
+            <TextBlock Text="Component" />
+            <ComboBox ItemsSource="{Binding WeightComponents}" SelectedItem="{Binding SelectedWeightComponent}" DisplayMemberPath="Name" Margin="0,2,0,5" />
+            <TextBlock Text="Original source point numbers (for example: 0, 4, 10-20)" TextWrapping="Wrap" />
+            <TextBox Text="{Binding WeightSourcePoints, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,4" />
+            <CheckBox Content="Use every rendered point in this component" IsChecked="{Binding WholeWeightComponent}" Margin="0,0,0,5" />
+            <WrapPanel>
+                <Button Content="Lock influence on selection" Command="{Binding LockWeightInfluenceCommand}" Margin="0,0,6,4" />
+                <Button Content="Unlock influence on selection" Command="{Binding UnlockWeightInfluenceCommand}" Margin="0,0,6,4" />
+            </WrapPanel>
+            <TextBlock Text="Locks preserve each selected point's current fraction, including zero. Locks are saved with the model."
+                       TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,2,0,8" />
+            <TextBlock Text="Correction" />
+            <ComboBox ItemsSource="{Binding WeightOperations}" SelectedItem="{Binding WeightOperation}" DisplayMemberPath="Label" Margin="0,2,0,6" />
+            <WrapPanel>
+                <StackPanel Width="135" Margin="0,0,8,5"><TextBlock Text="Target weight (0–1)" /><TextBox Text="{Binding WeightTargetValue, UpdateSourceTrigger=PropertyChanged}" /></StackPanel>
+                <StackPanel Width="135" Margin="0,0,8,5"><TextBlock Text="Strength (0–1)" /><TextBox Text="{Binding WeightEditStrength, UpdateSourceTrigger=PropertyChanged}" /></StackPanel>
+                <StackPanel Width="135" Margin="0,0,8,5"><TextBlock Text="Smoothing iterations" /><TextBox Text="{Binding WeightSmoothIterations, UpdateSourceTrigger=PropertyChanged}" /></StackPanel>
+            </WrapPanel>
+            <TextBlock Text="Set weight redistributes unlocked influences. Set to 1 for rigid assignment. Smoothing follows mesh edges within the component. Corrections use a maximum of four influences; removed weight is reported below."
+                       TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,2,0,5" />
+            <Expander Header="Mirror plane and influence pairing" Margin="0,4,0,6">
+                <StackPanel Margin="4,5,4,4">
+                    <CheckBox Content="Mirror set-weight edits and brush strokes" IsChecked="{Binding MirrorWeightEdits}" />
+                    <TextBlock Text="Counterpart of the selected influence (choose the same bone for a central influence)" TextWrapping="Wrap" Margin="0,5,0,2" />
+                    <ComboBox ItemsSource="{Binding WeightInfluences}" SelectedItem="{Binding WeightMirrorInfluence}" DisplayMemberPath="Name" />
+                    <TextBlock Text="Plane origin in model metres" Margin="0,6,0,2" />
+                    <WrapPanel>
+                        <TextBox Width="80" Text="{Binding WeightMirrorOriginX, UpdateSourceTrigger=PropertyChanged}" ToolTip="Origin X" />
+                        <TextBox Width="80" Text="{Binding WeightMirrorOriginY, UpdateSourceTrigger=PropertyChanged}" ToolTip="Origin Y" />
+                        <TextBox Width="80" Text="{Binding WeightMirrorOriginZ, UpdateSourceTrigger=PropertyChanged}" ToolTip="Origin Z" />
+                    </WrapPanel>
+                    <TextBlock Text="Plane normal (X, Y, Z)" Margin="0,5,0,2" />
+                    <WrapPanel>
+                        <TextBox Width="80" Text="{Binding WeightMirrorNormalX, UpdateSourceTrigger=PropertyChanged}" ToolTip="Normal X" />
+                        <TextBox Width="80" Text="{Binding WeightMirrorNormalY, UpdateSourceTrigger=PropertyChanged}" ToolTip="Normal Y" />
+                        <TextBox Width="80" Text="{Binding WeightMirrorNormalZ, UpdateSourceTrigger=PropertyChanged}" ToolTip="Normal Z" />
+                    </WrapPanel>
+                    <TextBlock Text="Matching tolerance in metres" Margin="0,5,0,2" />
+                    <TextBox Width="100" HorizontalAlignment="Left" Text="{Binding WeightMirrorTolerance, UpdateSourceTrigger=PropertyChanged}" />
+                    <TextBlock Text="Matches must be reciprocal within the component. Saving replaces any prior pairings for these two influences and updates the shared model symmetry plane."
+                               TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,4" />
+                    <Button Content="Save mirror settings" Command="{Binding SaveWeightMirroringCommand}" HorizontalAlignment="Left" />
+                </StackPanel>
+            </Expander>
+            <CheckBox Content="Paint weights in the viewport" IsChecked="{Binding WeightBrushEnabled}" Margin="0,4,0,4" />
+            <WrapPanel><TextBlock Text="Brush radius (metres)" VerticalAlignment="Center" Margin="0,0,8,0" /><TextBox Width="90" Text="{Binding WeightBrushRadius, UpdateSourceTrigger=PropertyChanged}" /></WrapPanel>
+            <TextBlock Text="Painting uses the source rest view and the target weight above. Left-drag applies one stroke on release; Escape cancels. Strength is applied once per point using the strongest brush falloff in that stroke."
+                       TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,7" />
+            <WrapPanel>
+                <Button Content="Preview correction" Command="{Binding PreviewWeightCorrectionCommand}" Margin="0,0,6,5" />
+                <Button Content="Apply correction" Command="{Binding ApplyWeightCorrectionCommand}" Margin="0,0,6,5" />
+            </WrapPanel>
+        </StackPanel>
+        <TextBlock Text="{Binding WeightEditingStatus}" TextWrapping="Wrap" Margin="0,3,0,6" />
+        <DataGrid ItemsSource="{Binding WeightPointReviews}" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False"
+                  Height="160" ScrollViewer.HorizontalScrollBarVisibility="Auto">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Point" Binding="{Binding SourcePoint}" Width="55" />
+                <DataGridCheckBoxColumn Header="Locked" Binding="{Binding InfluenceLocked}" Width="60" />
+                <DataGridTextColumn Header="Before" Binding="{Binding Before}" Width="170" />
+                <DataGridTextColumn Header="After" Binding="{Binding After}" Width="170" />
+                <DataGridTextColumn Header="Removed weight" Binding="{Binding RemovedWeight, StringFormat=0.######}" Width="105" />
+                <DataGridTextColumn Header="Source rounding" Binding="{Binding SourceRoundingError, StringFormat=0.########}" Width="105" />
+            </DataGrid.Columns>
+        </DataGrid>
+        <TextBlock Text="Source rounding shows error from the source-MSH encoder; compiled packing can add rounding. The table shows up to 1,000 points. Use model Undo/Redo to restore a correction, lock change or brush stroke, then inspect applied weights under Joint stress poses and morph review."
+                   TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,6,0,0" />
+    </StackPanel>
+</UserControl>

@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 
 namespace ReAnimated.Tests;
@@ -197,17 +198,19 @@ internal sealed class ExternalCorpusManifest
         return value.GetString()!;
     }
 
-    private static string FindRepositoryRoot()
+    private static string FindRepositoryRoot([CallerFilePath] string sourceFile = "")
     {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
+        // Test artifacts may deliberately live outside the checkout. Use the
+        // working/source locations as fallbacks without a workstation-specific path.
+        foreach (string start in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory(), Path.GetDirectoryName(sourceFile) ?? string.Empty })
         {
-            if (File.Exists(Path.Combine(directory.FullName, "DLReAnimated.slnx")))
+            if (string.IsNullOrEmpty(start)) continue;
+            var directory = new DirectoryInfo(start);
+            while (directory is not null)
             {
-                return directory.FullName;
+                if (File.Exists(Path.Combine(directory.FullName, "DLReAnimated.slnx"))) return directory.FullName;
+                directory = directory.Parent;
             }
-
-            directory = directory.Parent;
         }
 
         throw new DirectoryNotFoundException(

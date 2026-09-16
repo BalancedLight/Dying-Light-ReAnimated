@@ -1,0 +1,29 @@
+<UserControl x:Class="ReAnimated.App.Views.BodyGuideFitView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="0"><StackPanel Margin="4">
+                            <DataGrid ItemsSource="{Binding BodyProposals}" SelectedItem="{Binding SelectedBodyProposal}"
+                                      AutoGenerateColumns="False" CanUserAddRows="False" IsReadOnly="True" MaxHeight="230">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Guide" Binding="{Binding Role}" Width="*" />
+                                    <DataGridTextColumn Header="X" Binding="{Binding Position.X, StringFormat=F3}" Width="65" />
+                                    <DataGridTextColumn Header="Y" Binding="{Binding Position.Y, StringFormat=F3}" Width="65" />
+                                    <DataGridTextColumn Header="Z" Binding="{Binding Position.Z, StringFormat=F3}" Width="65" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <TextBlock Text="{Binding BodyGuideEditStatus}" TextWrapping="Wrap" Margin="0,7,0,5" />
+                            <WrapPanel IsEnabled="{Binding CanEditBodyGuide}">
+                                <TextBlock Text="X" VerticalAlignment="Center" Margin="0,0,4,0" />
+                                <TextBox Width="75" Text="{Binding BodyGuideX, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}" />
+                                <TextBlock Text="Y" VerticalAlignment="Center" Margin="8,0,4,0" />
+                                <TextBox Width="75" Text="{Binding BodyGuideY, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}" />
+                                <TextBlock Text="Z" VerticalAlignment="Center" Margin="8,0,4,0" />
+                                <TextBox Width="75" Text="{Binding BodyGuideZ, UpdateSourceTrigger=LostFocus, ValidatesOnExceptions=True}" />
+                            </WrapPanel>
+                            <CheckBox Content="Mirror across the saved symmetry plane" IsChecked="{Binding MirrorBodyGuide}"
+                                      IsEnabled="{Binding CanMirrorBodyGuide}" Margin="0,5,0,5" />
+                            <WrapPanel>
+                                <Button Content="Apply position" Command="{Binding ApplyBodyGuidePositionCommand}" />
+                                <Button Content="{Binding BodyGuidePinLabel}" Command="{Binding ToggleBodyGuidePinCommand}" Margin="5,0,0,0" />
+                                <Button Content="Undo model edit" Command="{Binding UndoBodyGuideEditCommand}" Margin="5,0,0,0" />
+                                <Button Content="Redo model edit" Command="{Binding RedoBodyGuideEditCommand}" Margin="5,0,0,0" />
+                            </WrapPanel>
+
+</StackPanel></UserControl>
