@@ -73,6 +73,7 @@ public sealed class Dl1NativeCompanionWriterTests
     public void RenamingModelNamespacesPhysicsWithoutChangingCoefficientsOrFlags()
     {
         var model = new CustomModelDocument { SecondaryMotion = NativeSetup };
+        model = WithClothGridRole(model, "root");
         Dl1NativeCompanionBuild first = Dl1NativeCompanionWriter.Build(model, "first", ["root"]);
         Dl1NativeCompanionBuild second = Dl1NativeCompanionWriter.Build(model, "second", ["root"]);
         Assert.Equal(PhysicsText, Encoding.UTF8.GetString(first.Files["first_000.phx"]));
@@ -82,6 +83,7 @@ public sealed class Dl1NativeCompanionWriterTests
         NativeClothBinding binding = Assert.Single(Dl1ClothCodec.ReadMpCloth(wrapper, ["second_000.phx"]).Bindings);
         Assert.Equal(0, binding.Enabled);
         Assert.Equal(1, binding.Flag);
+        Assert.Contains(second.Notes, note => note.Contains("binding disabled", StringComparison.Ordinal));
         Assert.Contains(second.Notes, note => note.Contains("not re-fitted", StringComparison.Ordinal));
     }
 
@@ -91,7 +93,7 @@ public sealed class Dl1NativeCompanionWriterTests
         var setup = NativeSetup with { NativeSources = [NativeSetup.NativeSources[0],
             NativeSetup.NativeSources[0] with { ResourceName = "strand.phx" },
             NativeSetup.NativeSources[1] with { Text = "MeshPartCloth(\"panel.phx\", 1, 1)\nUnknown(2)\nMeshPartCloth(\"strand.phx\", 1, 0)" }] };
-        var built = Dl1NativeCompanionWriter.Build(new() { SecondaryMotion = setup }, "test_model", ["root"]);
+        var built = Dl1NativeCompanionWriter.Build(WithClothGridRole(new() { SecondaryMotion = setup }, "root"), "test_model", ["root"]);
         string text = Encoding.UTF8.GetString(built.Files["test_model.mpcloth"]);
         Assert.Contains("Unknown(2)", text, StringComparison.Ordinal);
         Assert.Equal(["test_model_000.phx", "test_model_001.phx"], Dl1ClothCodec.ReadMpCloth(text).Bindings.Select(binding => binding.ResourceName));
@@ -102,6 +104,7 @@ public sealed class Dl1NativeCompanionWriterTests
     [InlineData("missing_bone")]
     [InlineData("unpackaged_include")]
     [InlineData("duplicate_binding")]
+    [InlineData("unbound_resource")]
     [InlineData("missing_wrapper")]
     public void InvalidNativeClosureFails(string scenario)
     {
@@ -112,10 +115,11 @@ public sealed class Dl1NativeCompanionWriterTests
             "missing_bone" => sources.SetItem(0, sources[0] with { Text = PhysicsText.Replace("\"root\"", "\"missing\"", StringComparison.Ordinal) }),
             "unpackaged_include" => sources.SetItem(0, sources[0] with { Text = PhysicsText + "!include(\"external.phx\")" }),
             "duplicate_binding" => sources.SetItem(1, sources[1] with { Text = sources[1].Text + sources[1].Text }),
+            "unbound_resource" => [sources[0], sources[0] with { ResourceName = "unbound.phx" }, sources[1]],
             _ => [sources[0]],
         };
         Assert.Throws<InvalidDataException>(() => Dl1NativeCompanionWriter.Build(
-            new() { SecondaryMotion = NativeSetup with { NativeSources = sources } }, "test_model", ["root"]));
+            WithClothGridRole(new() { SecondaryMotion = NativeSetup with { NativeSources = sources } }, "root"), "test_model", ["root"]));
     }
 
     [Fact]
@@ -130,4 +134,26 @@ public sealed class Dl1NativeCompanionWriterTests
 
     private static ImmutableDictionary<string, double> Weights(params (string Name, double Value)[] entries) =>
         entries.ToImmutableDictionary(entry => entry.Name, entry => entry.Value);
+
+    private static CustomModelDocument WithClothGridRole(CustomModelDocument model, string boneName)
+    {
+        Guid entityId = Guid.NewGuid();
+        return model with
+        {
+            RiggingSession = new RiggingSession
+            {
+                OwnerModelId = model.ModelId,
+                Recipe = new RuntimeRigRecipe
+                {
+                    ProfileSnapshot = new RigCapabilityProfile
+                    {
+                        Roles = [new RigRuntimeRole { Id = "cloth.node", Category = RigRoleCategory.Cloth, EntityKind = RigNativeEntityKind.Bone }],
+                    },
+                    Entities = [new RigEntityBinding { EntityId = entityId, OwnerAssetId = model.ModelId,
+                        NativeName = boneName, Kind = RigNativeEntityKind.Bone, Imported = false }],
+                    Assignments = [new("cloth.node", entityId)],
+                },
+            },
+        };
+    }
 }

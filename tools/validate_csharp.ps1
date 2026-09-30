@@ -369,7 +369,8 @@ $rendererRoots = @(
 $testRoot = @("tests\ReAnimated.Tests")
 $testProjectInputs = @(
     "tests\ReAnimated.Tests\ReAnimated.Tests.csproj",
-    "tests\ReAnimated.Tests\RendererGlobalUsings.cs")
+    "tests\ReAnimated.Tests\RendererGlobalUsings.cs",
+    "tests\ReAnimated.Tests\PlaybackTestData.cs")
 
 function Select-TestInputFiles {
     param([Parameter(Mandatory = $true)][string]$NamePattern)
@@ -404,10 +405,11 @@ $hermeticCodecTests = @(Select-TestInputFiles (
     "(Anm2|AnimationScr|AnimationDocument|AuthoringPolicy|CoreAnimation|Evaluation|" +
     "Retarget|RootMotion|Mimic|Morph|IkConstraint|Fbx|CustomModel)"))
 $hermeticViewModelTests = @(Select-TestInputFiles (
-    "^(AnimationExplorerViewModel|ViewModel|EditorUsability|" +
-    "FppControlSurface|FacialPreviewPolicyViewModel|" +
-    "AttachmentAuthoring|AppPersistence|ComboBoxTemplate|" +
-    "TreeViewSelection)Tests$"))
+    "^(AnimationExplorerViewModel|ViewModel.*|EditorUsability.*|" +
+    "FppControlSurface.*|FacialPreviewPolicyViewModel.*|" +
+    "AttachmentAuthoring.*|AppPersistence.*|ComboBoxTemplate.*|" +
+    "TreeViewSelection.*|RigConformanceWizard|RigGeometryCorrespondenceWizard|" +
+    "StudioWorkflowNavigation|PlaybackReadiness|EditorDockLayout)Tests$"))
 $hermeticRendererTests = @(Select-TestInputFiles (
     "^(Renderer(?!AuthoringStageGolden)|" +
     "LinkedTargetExternalPreview)"))
@@ -527,7 +529,7 @@ $hermeticGates = @(
         -Name "hermetic-viewmodel-wpf" `
         -Category "ViewModel/WPF" `
         -Action "test" `
-        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModel|FullyQualifiedName~EditorUsability|FullyQualifiedName~FppControlSurface|FullyQualifiedName~FacialPreviewPolicy|FullyQualifiedName~AttachmentAuthoring|FullyQualifiedName~AppPersistence|FullyQualifiedName~ComboBoxTemplate|FullyQualifiedName~TreeViewSelection" `
+        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModel|FullyQualifiedName~EditorUsability|FullyQualifiedName~FppControlSurface|FullyQualifiedName~FacialPreviewPolicy|FullyQualifiedName~AttachmentAuthoring|FullyQualifiedName~AppPersistence|FullyQualifiedName~ComboBoxTemplate|FullyQualifiedName~TreeViewSelection|FullyQualifiedName~RigConformanceWizardTests|FullyQualifiedName~RigGeometryCorrespondenceWizardTests|FullyQualifiedName~StudioWorkflowNavigationTests|FullyQualifiedName~PlaybackReadinessTests|FullyQualifiedName~EditorDockLayoutTests" `
         -InputRoots @($viewModelRoots) `
         -InputFiles @($testProjectInputs + $hermeticViewModelTests)),
     (New-Gate `

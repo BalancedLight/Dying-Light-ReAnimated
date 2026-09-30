@@ -178,6 +178,187 @@ public sealed class CustomModelPreviewSessionTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelPreview")]
+    public void ReviewedComponentPreviewKeepsDisabledPositionAtBindWithoutChangingRawClip()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
+        CustomModelDocument document = model.Package.Document;
+        RiggingSession session = RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig);
+        var policies = session.Recipe.Entities.Select(entity =>
+            Dl1BoneScriptPolicyTests.Policy(entity.EntityId,
+                entity.NativeName == "tip" ? RigAnimationComponents.Rotation :
+                    RigAnimationComponents.Position | RigAnimationComponents.Rotation | RigAnimationComponents.Scale,
+                RigAnimationLod.Lod0)).ToImmutableArray();
+        session = session with { Recipe = session.Recipe with { ComponentPolicies = policies } };
+        document = document with { RiggingSession = session };
+        model = model with { Package = model.Package with { Document = document } };
+        var clip = new AnimationClip("synthetic_absolute_translation", new FrameRate(30, 1), 2,
+            transformTracks:
+            [
+                new TransformTrack(1,
+                [
+                    new TransformKeyframe(0, new TransformTRS(new Vector3D(1, 0, 0), QuaternionD.Identity, Vector3D.One)),
+                    new TransformKeyframe(1, new TransformTRS(new Vector3D(2, 0, 0),
+                        QuaternionD.FromAxisAngle(Vector3D.UnitZ, Math.PI / 2), Vector3D.One)),
+                ]),
+            ]);
+
+        CustomModelPreviewSession output = CustomModelPreviewAdapter.CreateSession(model, CustomModelPreviewMode.Dl1Output);
+        SkeletonRenderData raw = Assert.IsType<SkeletonRenderData>(output.CreateSkeleton(clip, 1));
+        SkeletonRenderData reviewed = output.CreateReviewedPolicySkeleton(clip, 1);
+        CustomModelPreviewPayload reviewedPayload = output.CreatePayload(clip, 1, reviewedPolicy: true);
+        SkeletonRenderData bind = Assert.IsType<SkeletonRenderData>(output.CreateSkeleton(null, 0));
+
+        Assert.True(raw.Bones[1].WorldTransform.M41 > bind.Bones[1].WorldTransform.M41 + 0.5f);
+        Assert.Equal(bind.Bones[1].WorldTransform.M41, reviewed.Bones[1].WorldTransform.M41, precision: 5);
+        Assert.Equal(raw.Bones[1].WorldTransform.M12, reviewed.Bones[1].WorldTransform.M12, precision: 5);
+        Assert.Equal(reviewed.Bones[1].WorldTransform.M41,
+            reviewedPayload.Skeleton!.Bones[1].WorldTransform.M41, precision: 5);
+        RenderCamera rawCamera = Assert.IsType<RenderCamera>(output.CreatePreviewCamera(clip, 1, "tip"));
+        RenderCamera reviewedCamera = Assert.IsType<RenderCamera>(output.CreatePreviewCamera(clip, 1, "tip", reviewedPolicy: true));
+        Assert.True(rawCamera.Eye.X > reviewedCamera.Eye.X + 0.5f);
+        Assert.Equal(reviewed.Bones[1].WorldTransform.M41, reviewedCamera.Eye.X, precision: 5);
+        Assert.Contains(reviewedPayload.Diagnostics,
+            static diagnostic => diagnostic.Contains("native blending", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(raw.Bones[1].WorldTransform.M41,
+            output.CreateSkeleton(clip, 1)!.Bones[1].WorldTransform.M41);
+        CustomModelPreviewSession source = CustomModelPreviewAdapter.CreateSession(model, CustomModelPreviewMode.SourceFbx);
+        Assert.Throws<InvalidOperationException>(() => source.CreateReviewedPolicySkeleton(clip, 1));
+        Assert.Throws<InvalidOperationException>(() => source.CreatePayload(clip, 1, reviewedPolicy: true));
+        Assert.True(source.CreateSkeleton(clip, 1)!.Bones[1].WorldTransform.M41 > 1.5f);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void ReviewedComponentPreviewRequiresCompleteSavedDecisions()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
+        var clip = new AnimationClip("synthetic", new FrameRate(30, 1), 1);
+        CustomModelPreviewSession session = CustomModelPreviewAdapter.CreateSession(model, CustomModelPreviewMode.Dl1Output);
+
+        InvalidOperationException error = Assert.Throws<InvalidOperationException>(() =>
+            session.CreatePayload(clip, 0, reviewedPolicy: true));
+
+        Assert.Contains("studio session", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(session.CreateSkeleton(clip, 0));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void ReviewedTargetComparisonMasksAnAlreadyEvaluatedPoseWithoutChangingIt()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
+        CustomModelDocument document = model.Package.Document;
+        RiggingSession studio = RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig);
+        studio = studio with
+        {
+            Recipe = studio.Recipe with
+            {
+                ComponentPolicies = studio.Recipe.Entities.Select(entity =>
+                    Dl1BoneScriptPolicyTests.Policy(
+                        entity.EntityId,
+                        entity.NativeName == "tip"
+                            ? RigAnimationComponents.Rotation
+                            : RigAnimationComponents.Position |
+                              RigAnimationComponents.Rotation |
+                              RigAnimationComponents.Scale,
+                        RigAnimationLod.Lod0)).ToImmutableArray(),
+            },
+        };
+        model = model with
+        {
+            Package = model.Package with
+            {
+                Document = document with { RiggingSession = studio },
+            },
+        };
+        RigDefinition rig = Assert.IsType<RigDefinition>(model.Rig);
+        QuaternionD evaluatedRotation = QuaternionD.FromAxisAngle(Vector3D.UnitZ, Math.PI / 3);
+        var evaluated = new SkeletonPose(rig,
+            rig.Bones.Select((bone, index) => index == 1
+                ? new TransformTRS(new Vector3D(3, 0, 0), evaluatedRotation,
+                    new Vector3D(1.5, 1.5, 1.5))
+                : bone.LocalBindPose));
+        CustomModelPreviewSession output = CustomModelPreviewAdapter.CreateSession(
+            model, CustomModelPreviewMode.Dl1Output);
+
+        SkeletonRenderData raw = output.CreateSkeleton(evaluated);
+        SkeletonRenderData reviewed = output.CreateSkeleton(
+            evaluated, reviewedPolicy: true);
+        SkeletonRenderData bind = output.CreateSkeleton(rig.CreateBindPose());
+
+        Assert.True(raw.Bones[1].WorldTransform.M41 >
+            bind.Bones[1].WorldTransform.M41 + 1);
+        Assert.Equal(bind.Bones[1].WorldTransform.M41,
+            reviewed.Bones[1].WorldTransform.M41, precision: 5);
+        static double AxisLength(SkeletonRenderData skeleton) => Math.Sqrt(
+            Math.Pow(skeleton.Bones[1].WorldTransform.M11, 2) +
+            Math.Pow(skeleton.Bones[1].WorldTransform.M12, 2) +
+            Math.Pow(skeleton.Bones[1].WorldTransform.M13, 2));
+        Assert.Equal(AxisLength(bind), AxisLength(reviewed), precision: 5);
+        Assert.True(AxisLength(raw) > AxisLength(reviewed) + 0.25);
+        Assert.NotEqual(bind.Bones[1].WorldTransform.M12,
+            reviewed.Bones[1].WorldTransform.M12);
+        Assert.Equal(new Vector3D(3, 0, 0),
+            evaluated.LocalTransforms[1].Translation);
+        Assert.Equal(raw.Bones[1].WorldTransform,
+            output.CreateSkeleton(evaluated).Bones[1].WorldTransform);
+
+        CustomModelPreviewSession source = CustomModelPreviewAdapter.CreateSession(
+            model, CustomModelPreviewMode.SourceFbx);
+        Assert.Throws<InvalidOperationException>(() =>
+            source.CreateSkeleton(evaluated, reviewedPolicy: true));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void EvaluatedPoseComparisonRequiresCompleteMatchingStudioPolicy()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
+        RigDefinition rig = Assert.IsType<RigDefinition>(model.Rig);
+        CustomModelPreviewSession output = CustomModelPreviewAdapter.CreateSession(
+            model, CustomModelPreviewMode.Dl1Output);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            output.CreateSkeleton(rig.CreateBindPose(), reviewedPolicy: true));
+        Assert.NotNull(output.CreateSkeleton(rig.CreateBindPose()));
+
+        CustomModelDocument document = model.Package.Document;
+        RiggingSession studio = RiggingSessions.Create(
+            document, RigStudioEntryPath.RepairExistingRig);
+        studio = studio with
+        {
+            Recipe = studio.Recipe with
+            {
+                ComponentPolicies = studio.Recipe.Entities
+                    .Take(1)
+                    .Select(entity => Dl1BoneScriptPolicyTests.Policy(
+                        entity.EntityId,
+                        RigAnimationComponents.Rotation,
+                        RigAnimationLod.Lod0))
+                    .ToImmutableArray(),
+            },
+        };
+        model = model with
+        {
+            Package = model.Package with
+            {
+                Document = document with { RiggingSession = studio },
+            },
+        };
+        output = CustomModelPreviewAdapter.CreateSession(
+            model, CustomModelPreviewMode.Dl1Output);
+
+        Assert.Throws<InvalidDataException>(() =>
+            output.CreateSkeleton(rig.CreateBindPose(), reviewedPolicy: true));
+        Assert.NotNull(output.CreateSkeleton(rig.CreateBindPose()));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
     public void Dl1PreparationFailureFallsBackToVisibleSourcePreviewWithoutWeakeningPreparation()
     {
         FbxModelAuthoringImportResult model = CreateModel(

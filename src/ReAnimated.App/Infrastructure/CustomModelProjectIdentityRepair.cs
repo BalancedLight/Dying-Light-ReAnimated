@@ -94,7 +94,7 @@ internal static class CustomModelProjectIdentityRepair
             !IsKnown(packageModels[0].RigSignature, authoring, runtime))
         {
             throw new InvalidDataException(
-                "The project-model rig signature matches neither the package authoring contract nor the reconstructed runtime rig; automatic repair is ambiguous.");
+                "The saved project rig signature matches neither the model package nor the reconstructed runtime rig. Automatic repair stopped without changing the project. Open a copy of the model package in a new project, re-import its source FBX, and review animation bindings before saving.");
         }
 
         bool repaired = false;

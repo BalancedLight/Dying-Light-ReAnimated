@@ -153,7 +153,11 @@ public sealed class RetailAnimationBrowserTests : IDisposable
         Assert.Same(animation, viewModel.AnimationBrowser.SelectedAsset);
         Assert.Equal("sprint", viewModel.AnimationBrowser.SearchText);
         Assert.Contains(
-            "exact fingerprinted source model",
+            "Select a base-game model to bind it and play",
+            viewModel.ExplorerSourceModelPickerPrompt,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "Use project model",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
     }

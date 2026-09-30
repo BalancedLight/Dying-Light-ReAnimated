@@ -1,0 +1,62 @@
+<UserControl x:Class="ReAnimated.App.Views.RigStructuralHelperView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="5">
+  <TextBlock Text="Structural helpers and joint protection" FontWeight="SemiBold"/>
+  <Button Content="Scan helpers and weights" Command="{Binding ScanStructuralCommand}" HorizontalAlignment="Left"/>
+  <Expander Header="Keep missing bones in compiled output" IsExpanded="True" Margin="0,6,0,5">
+   <StackPanel Margin="4">
+    <TextBlock Text="Enter missing bone names from compiled output, one per line. Preview the changes before applying."
+               TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,4"/>
+    <TextBox Text="{Binding StructuralRetentionBatchNames, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" Height="72" VerticalScrollBarVisibility="Auto"/>
+    <WrapPanel Margin="0,5,0,3">
+     <Button Content="Preview bones" Command="{Binding PreviewStructuralRetentionBatchCommand}" Margin="0,0,5,3"/>
+     <Button Content="Discard preview" Command="{Binding CancelStructuralCommand}" Margin="0,0,5,3"/>
+    </WrapPanel>
+    <CheckBox Content="I reviewed these changes" IsChecked="{Binding StructuralReviewed}" Margin="0,3,0,4"/>
+    <Button Content="Apply reviewed changes" Command="{Binding ApplyStructuralCommand}" HorizontalAlignment="Left"/>
+    <TextBlock Text="{Binding StructuralStatus}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+   </StackPanel>
+  </Expander>
+  <ComboBox ItemsSource="{Binding StructuralNodes}" SelectedItem="{Binding StructuralNode}" DisplayMemberPath="Name" IsTextSearchEnabled="True" Margin="0,5,0,5"/>
+  <TextBlock Text="{Binding StructuralUsage}" TextWrapping="Wrap"/>
+  <TextBlock Text="Parent" FontWeight="SemiBold" Margin="0,5,0,0"/>
+  <TextBlock Text="{Binding StructuralNode.ParentName, FallbackValue='-'}" TextWrapping="Wrap"/>
+  <Expander Header="Role, frame and channels" Margin="0,5,0,3"><StackPanel>
+  <TextBlock Text="{Binding StructuralNode.Roles, FallbackValue='-'}" TextWrapping="Wrap"/>
+  <TextBlock Text="{Binding StructuralNode.FrameRule, FallbackValue='-'}" TextWrapping="Wrap"/>
+  <TextBlock Text="{Binding StructuralNode.ChannelRule, FallbackValue='-'}" TextWrapping="Wrap"/>
+  </StackPanel></Expander>
+  <TextBlock Text="{Binding StructuralNode.Eligibility, FallbackValue='Select a node after scanning.'}" TextWrapping="Wrap" Margin="0,5,0,5"/>
+  <WrapPanel><Button Content="Open joint rest editor" Command="{Binding OpenStructuralRestCommand}"/><Button Content="Select channel policy" Command="{Binding SelectStructuralChannelsCommand}"/></WrapPanel>
+  <Expander Header="Keep an unused bone in compiled output" Margin="0,5,0,3"><StackPanel>
+   <TextBlock Text="{Binding StructuralNode.RetentionStatus, FallbackValue='Scan and select a node first.'}" TextWrapping="Wrap" Margin="0,3,0,5"/>
+   <TextBlock Text="Preview the helper change before applying. Rebuild the rig to check the compiled result." TextWrapping="Wrap" Margin="0,0,0,5"/>
+   <WrapPanel><Button Content="Preview retention helper" Command="{Binding PreviewStructuralRetentionCommand}"/><Button Content="Preview removal" Command="{Binding PreviewStructuralRetentionRemovalCommand}"/></WrapPanel>
+   <TextBlock Text="To keep several bones, enter their names below, one per line or separated by commas." TextWrapping="Wrap" Margin="0,7,0,4"/>
+   <TextBox Text="{Binding StructuralRetentionBatchNames, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" TextWrapping="Wrap" Height="72" VerticalScrollBarVisibility="Auto"/>
+   <Button Content="Preview bones" Command="{Binding PreviewStructuralRetentionBatchCommand}" HorizontalAlignment="Left" Margin="0,5,0,3"/>
+   <TextBlock Text="Removal is available only for an unused retention helper. Referenced or protected helpers are kept. Removing it may allow the compiler to omit its parent again." TextWrapping="Wrap" Margin="0,4,0,0"/>
+  </StackPanel></Expander>
+  <Expander Header="Protect or unlock saved decisions" Margin="0,5,0,3"><StackPanel>
+  <TextBlock Text="Protect saved decisions" FontWeight="SemiBold" Margin="0,7,0,3"/>
+  <WrapPanel>
+   <CheckBox Content="Name" IsChecked="{Binding StructuralLockName}" Margin="0,0,9,4"/>
+   <CheckBox Content="Parent" IsChecked="{Binding StructuralLockParent}" Margin="0,0,9,4"/>
+   <CheckBox Content="Position" IsChecked="{Binding StructuralLockPosition}" Margin="0,0,9,4"/>
+   <CheckBox Content="Orientation" IsChecked="{Binding StructuralLockOrientation}" Margin="0,0,9,4"/>
+   <CheckBox Content="Bounds" IsChecked="{Binding StructuralLockExtents}" Margin="0,0,9,4"/>
+   <CheckBox Content="Channels" IsChecked="{Binding StructuralLockChannels}" Margin="0,0,9,4"/>
+  </WrapPanel>
+  <TextBlock Text="Selected fields keep their current values. Clear a selection to unlock that field." TextWrapping="Wrap" Margin="0,2,0,4"/>
+  <Button Content="Preview protection changes" Command="{Binding PreviewStructuralProtectionCommand}" HorizontalAlignment="Left"/>
+  </StackPanel></Expander>
+  <TextBlock Text="Helper-local offset (metres): X / Y / Z" Margin="0,8,0,2"/>
+  <UniformGrid Columns="3"><TextBox Text="{Binding StructuralOffset.X,UpdateSourceTrigger=PropertyChanged}"/><TextBox Text="{Binding StructuralOffset.Y,UpdateSourceTrigger=PropertyChanged}"/><TextBox Text="{Binding StructuralOffset.Z,UpdateSourceTrigger=PropertyChanged}"/></UniformGrid>
+  <TextBlock Text="Helper-local rotation (degrees): X / Y / Z" Margin="0,4,0,2"/>
+  <UniformGrid Columns="3"><TextBox Text="{Binding StructuralRotation.X,UpdateSourceTrigger=PropertyChanged}"/><TextBox Text="{Binding StructuralRotation.Y,UpdateSourceTrigger=PropertyChanged}"/><TextBox Text="{Binding StructuralRotation.Z,UpdateSourceTrigger=PropertyChanged}"/></UniformGrid>
+  <WrapPanel Margin="0,5,0,4"><Button Content="Preview helper frame" Command="{Binding PreviewStructuralFrameCommand}"/><Button Content="Discard preview" Command="{Binding CancelStructuralCommand}"/></WrapPanel>
+  <CheckBox Content="Show preview" IsChecked="{Binding StructuralPreviewEnabled}"/>
+  <CheckBox Content="I reviewed these changes" IsChecked="{Binding StructuralReviewed}" Margin="0,4,0,4"/>
+  <Button Content="Apply reviewed changes" Command="{Binding ApplyStructuralCommand}" HorizontalAlignment="Left"/>
+  <TextBlock Text="{Binding StructuralStatus}" TextWrapping="Wrap" Margin="0,5,0,0"/>
+ </StackPanel>
+</UserControl>

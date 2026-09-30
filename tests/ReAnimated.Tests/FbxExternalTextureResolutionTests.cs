@@ -44,7 +44,60 @@ public sealed class FbxExternalTextureResolutionTests
     }
 
     [Fact]
-    public void RootedTraversalUnsupportedAndOversizedReferencesAreRefused()
+    public void ResolvesRootedReferenceFromSafeAdjacentBasenameCopy()
+    {
+        string root = Directory.CreateTempSubdirectory("dlr-texture-rooted-").FullName;
+        try
+        {
+            string stagedTexture = Path.Combine(root, "albedo.tga");
+            File.WriteAllBytes(stagedTexture, [7, 8, 9]);
+
+            var resolved = FbxModelAuthoringImporter.ResolveExternalTexture(
+                root,
+                "synthetic_model.fbx",
+                Path.Combine(Path.GetTempPath(), "source-only", "albedo.tga"),
+                1024,
+                CancellationToken.None);
+
+            Assert.Equal(Path.GetFullPath(stagedTexture), resolved.ResolvedPath);
+            Assert.Equal(new byte[] { 7, 8, 9 }, resolved.Content.ToArray());
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void RootedReferenceOutsideRootRemainsUnresolved()
+    {
+        string parent = Directory.CreateTempSubdirectory("dlr-texture-parent-").FullName;
+        string root = Path.Combine(parent, "model");
+        Directory.CreateDirectory(root);
+        try
+        {
+            string outside = Path.Combine(parent, "outside-only.tga");
+            File.WriteAllBytes(outside, [1, 2, 3]);
+
+            var unresolved = FbxModelAuthoringImporter.ResolveExternalTexture(
+                root,
+                "synthetic_model.fbx",
+                outside,
+                1024,
+                CancellationToken.None);
+
+            Assert.Null(unresolved.ResolvedPath);
+            Assert.Empty(unresolved.Content);
+            Assert.DoesNotContain(Path.GetFullPath(outside), unresolved.ProbedPaths);
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void TraversalUnsupportedAndOversizedReferencesAreRefused()
     {
         string parent = Directory.CreateTempSubdirectory("dlr-texture-parent-").FullName;
         string root = Path.Combine(parent, "model");
@@ -55,8 +108,6 @@ public sealed class FbxExternalTextureResolutionTests
             File.WriteAllBytes(outside, [1, 2, 3]);
             Assert.Null(FbxModelAuthoringImporter.ResolveExternalTexture(
                 root, "model.fbx", @"..\outside.tga", 1024, CancellationToken.None).ResolvedPath);
-            Assert.Null(FbxModelAuthoringImporter.ResolveExternalTexture(
-                root, "model.fbx", outside, 1024, CancellationToken.None).ResolvedPath);
             Assert.Null(FbxModelAuthoringImporter.ResolveExternalTexture(
                 root, "model.fbx", "outside.tiff", 1024, CancellationToken.None).ResolvedPath);
 

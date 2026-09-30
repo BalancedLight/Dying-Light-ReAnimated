@@ -22,6 +22,7 @@ public sealed class CliDispatchTests
         "export-project",
         "conform-model",
         "deploy-model",
+        "batch-models",
     ];
 
     [Fact]
@@ -60,6 +61,25 @@ public sealed class CliDispatchTests
         Assert.False(
             CliApplication.IsInvocation(
                 ["unrecognized-startup-argument"]));
+    }
+
+    [Fact]
+    public async Task MalformedRpackReturnsCliErrorInsteadOfThrowing()
+    {
+        string root = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string path = Path.Combine(root, "invalid.rpack");
+            await File.WriteAllBytesAsync(path, new byte[36]);
+
+            int exitCode = await CliApplication.RunAsync(["inspect-rpack", path]);
+
+            Assert.Equal(2, exitCode);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(root);
+        }
     }
 
     [Fact]

@@ -18,12 +18,22 @@ public static class RenderCameraFraming
         {
             AccumulateMesh(frame, mesh, ref bounds);
         }
+        bool hasMeshBounds = bounds.HasValue;
 
+        // A model may retain distant camera, physics, or helper locators that
+        // are useful for authoring but should not make its visible mesh tiny.
+        // Keep deform bones with the mesh, and include all visible roles when
+        // there is no mesh to frame.
         if (frame.Skeleton is { } skeleton)
         {
             foreach (BoneRenderData bone in skeleton.Bones)
             {
                 if (!skeleton.IsVisible(bone))
+                {
+                    continue;
+                }
+
+                if (hasMeshBounds && bone.Role != BoneRenderRole.Deform)
                 {
                     continue;
                 }

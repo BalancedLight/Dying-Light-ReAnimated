@@ -122,6 +122,7 @@ public sealed record RigNativeAlias
 
 public sealed record RigRuntimeRole
 {
+    public RigRoleValidationRules? ValidationRules { get; init; }
     public string Id { get; init; } = string.Empty;
     public RigRoleCategory Category { get; init; }
     public RigNativeEntityKind EntityKind { get; init; }
@@ -149,6 +150,7 @@ public sealed record RigRuntimeRole
     public void Validate()
     {
         RigContractRules.Text(Id, nameof(Id));
+        ValidationRules?.Validate();
         RigContractRules.Defined(Category, nameof(Category));
         RigContractRules.Defined(EntityKind, nameof(EntityKind));
         RigContractRules.Defined(Requirement, nameof(Requirement));
@@ -259,7 +261,7 @@ public sealed record RigCapabilityProfile
         var roleIds = Roles.Select(static r => r.Id).ToHashSet(StringComparer.Ordinal);
         var capabilityIds = Capabilities.Select(static c => c.Id).ToHashSet(StringComparer.Ordinal);
         if (Capabilities.Any(c => c.RoleIds.Any(id => !roleIds.Contains(id)) || c.PrerequisiteCapabilityIds.Any(id => !capabilityIds.Contains(id))) ||
-            Roles.Any(r => r.PrerequisiteRoleIds.Any(id => !roleIds.Contains(id)) || r.ParentRoleId is { } p && !roleIds.Contains(p) ||
+            Roles.Any(r => r.PrerequisiteRoleIds.Concat(r.ValidationRules?.Frame?.GetReferenceRoleIds() ?? []).Any(id => !roleIds.Contains(id)) || r.ParentRoleId is { } p && !roleIds.Contains(p) ||
                            r.ConditionCapabilityId is { } c && !capabilityIds.Contains(c)) ||
             Consumers.Any(c => c.DiscoveredRoleIds.Any(id => !roleIds.Contains(id)) || c.CapabilityIds.Any(id => !capabilityIds.Contains(id))))
             throw new ArgumentException("A profile dependency references an undeclared identity.");
@@ -330,11 +332,16 @@ public sealed record RigEntityFramePolicy
 
 public sealed record HelperRecipe
 {
+    public RigHelperTemplateOrigin? TemplateOrigin { get; init; }
+
     public Guid EntityId { get; init; }
     public Guid OwnerAssetId { get; init; }
     public string RoleId { get; init; } = string.Empty;
     public Guid ParentEntityId { get; init; }
     public TransformMatrix LocalFrame { get; init; } = TransformMatrix.Identity;
+    /// <summary>True composes this local frame against the prepared parent; false retains its source-parent frame basis.</summary>
+    public bool FollowPreparedParent { get; init; }
+
     public Vector3D? BoundsCenter { get; init; }
     public Vector3D? BoundsHalfExtents { get; init; }
     public RigFramePolicy FramePolicy { get; init; } = RigFramePolicy.PreserveSource;
@@ -348,10 +355,13 @@ public sealed record HelperRecipe
         RigContractRules.Identifier(EntityId, nameof(EntityId));
         RigContractRules.Identifier(OwnerAssetId, nameof(OwnerAssetId));
         RigContractRules.Identifier(ParentEntityId, nameof(ParentEntityId));
+        TemplateOrigin?.Validate();
         if (ParentEntityId == EntityId) throw new ArgumentException("A helper cannot parent itself.");
         RigContractRules.Text(RoleId, nameof(RoleId));
         RigRecipeRules.Affine(LocalFrame, nameof(LocalFrame));
         RigContractRules.Defined(FramePolicy, nameof(FramePolicy));
+        if (FollowPreparedParent && FramePolicy == RigFramePolicy.PreserveSource)
+            throw new ArgumentException("A helper must choose prepared-parent composition or source-frame preservation, not both.");
         RigContractRules.Defined(PlacementProvenance, nameof(PlacementProvenance));
         if ((BoundsCenter is null) != (BoundsHalfExtents is null)) throw new ArgumentException("Bounds require a center and half extents together.");
         if (BoundsCenter is { } center && !center.IsFinite || BoundsHalfExtents is { } half && (!half.IsFinite || half.X < 0 || half.Y < 0 || half.Z < 0))
@@ -368,6 +378,8 @@ public sealed record RuntimeRigRecipe
 {
     public Guid Id { get; init; } = Guid.NewGuid();
     public RigProfileReference? Profile { get; init; }
+    /// <summary>Portable reviewed definition; legacy reference-only recipes remain loadable.</summary>
+    public RigCapabilityProfile? ProfileSnapshot { get; init; }
     public ImmutableArray<string> SelectedCapabilityIds { get; init; } = [];
     public ImmutableArray<RigAssetRoleBinding> AssetRoles { get; init; } = [];
     public ImmutableArray<RigEntityBinding> Entities { get; init; } = [];
@@ -381,6 +393,11 @@ public sealed record RuntimeRigRecipe
     public void Validate()
     {
         RigContractRules.Identifier(Id, nameof(Id)); Profile?.Validate();
+        if (ProfileSnapshot is { } snapshot)
+        {
+            RigCapabilityProfileSerializer.Verify(snapshot);
+            if (Profile != snapshot.Identity) throw new ArgumentException("The saved profile reference and portable definition differ.");
+        }
         RigRecipeRules.Names(SelectedCapabilityIds, nameof(SelectedCapabilityIds));
         RigContractRules.Array(AssetRoles, nameof(AssetRoles));
         RigContractRules.Array(Entities, nameof(Entities));

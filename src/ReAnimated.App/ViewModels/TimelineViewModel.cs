@@ -29,6 +29,7 @@ public sealed class TimelineViewModel : ObservableObject
     private double _playbackFrameRemainder;
     private bool _isPlaying;
     private bool _isPlaybackEnabled = true;
+    private string _disabledPlaybackLabel = "Playback locked";
     private bool _isLooping = true;
     private bool _settingFrameFromPlayback;
     private DateTimeOffset? _lastTick;
@@ -292,8 +293,18 @@ public sealed class TimelineViewModel : ObservableObject
         set => SetProperty(ref _isLooping, value);
     }
 
+    public string DisabledPlaybackLabel
+    {
+        get => _disabledPlaybackLabel;
+        set
+        {
+            if (SetProperty(ref _disabledPlaybackLabel, value))
+                OnPropertyChanged(nameof(PlaybackLabel));
+        }
+    }
+
     public string PlaybackLabel => !IsPlaybackEnabled
-        ? "Playback locked"
+        ? DisabledPlaybackLabel
         : IsPlaying
             ? "Pause"
             : "Play";

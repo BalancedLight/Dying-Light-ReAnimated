@@ -38,6 +38,8 @@ public sealed record Dl1CustomModelPackageRequest
     internal Func<CustomModelAnimationLibraryRequest, CancellationToken, Task<CustomModelAnimationLibraryResult>>?
         AnimationExporterOverride { get; init; }
 
+    public string? CompilerWorkingDirectoryRoot { get; init; }
+
     public TimeSpan CompilerTimeout { get; init; } = TimeSpan.FromMinutes(10);
 }
 
@@ -157,6 +159,7 @@ public static class Dl1CustomModelPackageBuilder
                 SurfaceName = surfaceName,
                 AnimationScriptAlias = alias,
                 Timeout = request.CompilerTimeout,
+                WorkingDirectoryRoot = request.CompilerWorkingDirectoryRoot,
                 CharacterId = request.Model.Package.Document.BuildSettings.CharacterId,
             };
             Dl1OfficialModelCompilerResult compiled = await (

@@ -57,7 +57,7 @@ public sealed class AttachmentItemViewModel : ObservableObject
 /// UI-only state for rigid prop/weapon attachment authoring. Immutable project
 /// edits remain owned by <see cref="MainWindowViewModel"/>.
 /// </summary>
-public sealed class AttachmentEditorViewModel : ObservableObject
+public sealed partial class AttachmentEditorViewModel : ObservableObject
 {
     public const int MaximumVisibleCatalogAssets = 5_000;
 
@@ -386,6 +386,7 @@ public sealed class AttachmentEditorViewModel : ObservableObject
         ScaleZ = transform.Scale.Z;
         IsPreviewOnly =
             binding.Scope == AttachmentScope.PreviewOnly;
+        LoadGrip(binding.GripCalibration);
     }
 
     private void SetEulerDegrees(QuaternionD rotation)

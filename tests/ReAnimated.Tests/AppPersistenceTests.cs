@@ -86,6 +86,31 @@ public sealed class AppPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void ConditionalRecoveryDeleteRetainsAnotherWindowsNewerSnapshot()
+    {
+        string statePath = Path.Combine(_temporaryDirectory, "recovery", "shared.json");
+        JsonWorkspaceStateStore firstWindow = new(statePath);
+        JsonWorkspaceStateStore secondWindow = new(statePath);
+        firstWindow.Save(CreateSnapshot(12, "Models"));
+        WorkspaceSnapshotRead loaded = Assert.IsType<WorkspaceSnapshotRead>(
+            firstWindow.LoadWithFingerprint());
+
+        secondWindow.Save(CreateSnapshot(49, "Animate"));
+        string newerContents = File.ReadAllText(statePath);
+
+        IOException error = Assert.Throws<IOException>(() =>
+            firstWindow.DeleteIfUnchanged(loaded.ContentSha256));
+        Assert.Contains("changed in another window", error.Message);
+        Assert.Equal(newerContents, File.ReadAllText(statePath));
+
+        WorkspaceSnapshotRead latest = Assert.IsType<WorkspaceSnapshotRead>(
+            firstWindow.LoadWithFingerprint());
+        Assert.Equal(49, latest.Snapshot.CurrentFrame);
+        firstWindow.DeleteIfUnchanged(latest.ContentSha256);
+        Assert.False(firstWindow.Exists);
+    }
+
+    [Fact]
     public void CrashReporterRetainsExceptionAndRecoveryPath()
     {
         string crashDirectory = Path.Combine(_temporaryDirectory, "crashes");

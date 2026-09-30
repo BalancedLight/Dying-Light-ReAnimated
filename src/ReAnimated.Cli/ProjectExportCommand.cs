@@ -753,14 +753,23 @@ internal static class ProjectExportCommand
             FbxModelAuthoringImporter.ImportPackage(
                 package,
                 cancellationToken);
+        if (decoded.Rig is null)
+        {
+            throw new InvalidDataException(
+                "The custom-model target has no decodable rig.");
+        }
+
+        RigDefinition targetRig = decoded.Package.Document
+            .CreateDl1AnimationRigDefinition();
+        string targetRuntimeRigSignature = RigSignature.Compute(targetRig);
         if (model?.RigSignature is { } expectedContract &&
             !string.Equals(
-                decoded.Package.Document.RigSignature,
+                targetRuntimeRigSignature,
                 expectedContract,
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
-                "The custom-model rig contract differs from its saved project-model entry.");
+                "The custom-model runtime rig signature differs from its saved project-model entry.");
         }
         if (model?.MorphSignature is { } expectedMorphContract &&
             !string.Equals(
@@ -772,13 +781,7 @@ internal static class ProjectExportCommand
                 "The custom-model morph contract differs from its saved project-model entry.");
         }
 
-        if (decoded.Rig is null)
-        {
-            throw new InvalidDataException(
-                "The custom-model target has no decodable rig.");
-        }
-
-        return decoded.Package.Document.CreateDl1AnimationRigDefinition();
+        return targetRig;
     }
 
     private static async Task<DecodedEmbeddedCustomModelSource>
@@ -1706,6 +1709,11 @@ internal static class ProjectExportCommand
             TargetRigId = variant.TargetRigId,
             SourceRigSignature = source.SourceRigSignature,
             TargetRigSignature = variant.TargetRigSignature,
+            BindingMode = variant.BindingMode,
+            DirectBinding = variant.DirectBinding,
+            BindingEvidenceFingerprint =
+                variant.BindingEvidenceFingerprint,
+            BindingPolicyVersion = variant.BindingPolicyVersion,
             MappingFingerprint = variant.MappingFingerprint,
             MimicProfileId = variant.MimicProfileId,
             MimicMappingFingerprint =

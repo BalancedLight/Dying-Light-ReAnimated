@@ -111,6 +111,15 @@ public static class FbxGeneratedBodyBinding
         var rows = binding.Points.ToDictionary(static p => (p.ComponentId, p.ControlPointIndex));
         if (rows.Count != work.Points.Length || work.Points.Any(p => !rows.ContainsKey((p.ComponentId, p.ControlPointIndex))))
             throw new InvalidDataException("Binding results must cover exactly the selected original source points.");
+        if (binding.Points.Any(static row =>
+                !double.IsFinite(row.RemovedWeightBeforeRenormalization) ||
+                row.RemovedWeightBeforeRenormalization is < 0 or > 1))
+            throw new InvalidDataException("Binding review loss must be finite and within 0..1 for every source point.");
+        ImmutableArray<RigSkinBindingReviewPoint> bindingReview = binding.Points
+            .Where(static row => row.RemovedWeightBeforeRenormalization > 1e-6)
+            .Select(static row => new RigSkinBindingReviewPoint(
+                row.ComponentId, row.ControlPointIndex, row.RemovedWeightBeforeRenormalization))
+            .ToImmutableArray();
         var entityNames = session.Recipe.Entities.Where(e => e.OwnerAssetId == model.Package.Document.ModelId).ToDictionary(static e => e.EntityId, static e => e.NativeName);
         var boneByName = model.Package.Document.Bones.ToDictionary(static b => b.Name, static b => b.Index, StringComparer.Ordinal);
         var boneById = work.Handles.ToDictionary(static h => h.Id, h => boneByName[entityNames[h.Id]]);
@@ -145,7 +154,7 @@ public static class FbxGeneratedBodyBinding
         var updatedSession = RiggingSessions.Change(session, session with { BindingBackend = new() {
             Id = binding.Origin == SkinBindingOrigin.ExplicitFixed ? "explicit-fixed" : AutomaticSkinBindingResult.BackendId,
             Version = AutomaticSkinBindingResult.BackendVersion, SettingsSha256 = binding.InputFingerprint,
-        } }, RiggingEditKind.Skinning);
+        }, BindingReviewPoints = bindingReview }, RiggingEditKind.Skinning);
         var diagnostics = model.Package.Document.Diagnostics.Where(d => d.Code != UnboundDiagnostic && d.Code != "generated_binding_review").Append(new CustomModelImportDiagnostic {
             Code = "generated_binding_review", Severity = CustomModelImportSeverity.Warning,
             Message = $"Generated weights assigned. Review deformation and {binding.Diagnostics.Length} binding diagnostic(s); runtime capabilities remain unverified.",

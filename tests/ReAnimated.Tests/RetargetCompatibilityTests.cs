@@ -713,6 +713,9 @@ public sealed class RetargetCompatibilityTests
         "mixamorig:LeftHandThumb1",
         "finger.left.thumb.1")]
     [InlineData(
+        "mixamorig:LeftHandRing1",
+        "finger.left.ring.1")]
+    [InlineData(
         "l_finger01",
         "finger.left.thumb.1")]
     [InlineData(
@@ -736,6 +739,12 @@ public sealed class RetargetCompatibilityTests
     [InlineData(
         "CC_Base_Spine01",
         "body.spine.1")]
+    [InlineData("Bip001", "body.root")]
+    [InlineData("Bip001 Pelvis", "body.pelvis")]
+    [InlineData("Bip001 Spine1", "body.spine.1")]
+    [InlineData("Bip001 L Thigh", "leg.left.upper")]
+    [InlineData("Bip001 R Calf", "leg.right.lower")]
+    [InlineData("Bip001 L Toe0", "toe.left")]
     [InlineData(
         "CC_Base_NeckTwist02",
         "body.neck.1")]
@@ -783,6 +792,15 @@ public sealed class RetargetCompatibilityTests
         Assert.DoesNotContain(
             map.Entries,
             static entry => entry.TargetBoneIndex == 1);
+    }
+
+    [Theory]
+    [InlineData("mixamorig:LDrawstring1")]
+    [InlineData("mixamorig:RHoodieString2")]
+    public void HumanoidAliasesKeepGarmentStringsOutOfFingerRoles(string boneName)
+    {
+        Assert.Null(HumanoidBoneSemanticClassifier.Classify(boneName));
+        Assert.True(HumanoidBoneSemanticClassifier.IsNonAnatomicalBranchName(boneName));
     }
 
     [Fact]

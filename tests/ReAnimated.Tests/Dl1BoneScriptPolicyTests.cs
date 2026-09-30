@@ -121,6 +121,36 @@ public sealed class Dl1BoneScriptPolicyTests
     }
 
     [Fact]
+    public void PreflightListsEveryUnsetEmittedNodeInsteadOfOnlyTheFirst()
+    {
+        var model = Model(studio: true);
+        CustomModelDocument document = model.Package.Document;
+        Dl1AuthoredRigContract contract = Dl1CustomModelRigPreparer.Prepare(model).Contract;
+        Dl1AuthoredRigNode[] missing = contract.Nodes.TakeLast(2).ToArray();
+        var missingIds = missing.Select(node => node.SemanticEntityId!.Value).ToHashSet();
+        CustomModelDocument changed = document with
+        {
+            RiggingSession = document.RiggingSession! with
+            {
+                Recipe = document.RiggingSession.Recipe with
+                {
+                    ComponentPolicies = document.RiggingSession.Recipe.ComponentPolicies
+                        .Where(policy => !missingIds.Contains(policy.EntityId))
+                        .ToImmutableArray(),
+                },
+            },
+        };
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            Dl1BoneScriptPolicyResolver.Resolve(changed, contract));
+
+        Assert.Contains("2 emitted node(s)", error.Message, StringComparison.Ordinal);
+        Assert.Contains(missing[0].Name, error.Message, StringComparison.Ordinal);
+        Assert.Contains(missing[1].Name, error.Message, StringComparison.Ordinal);
+        Assert.Contains("only-unset scope", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task LegacyModelKeepsItsExistingBscrPolicy()
     {
         var model = Model(studio: false);
@@ -150,7 +180,14 @@ public sealed class Dl1BoneScriptPolicyTests
         Assert.Equal(0x4000u, result.LodBits);
         var altered = compiled with { Entities = compiled.Entities.Select(e => e.Index == node.Index ? e with { Flags = e.Flags | 0x100u } : e).ToArray() };
         Assert.Throws<InvalidDataException>(() => Dl1CompiledBoneScriptValidator.Validate(altered, [policy]));
-        Assert.Throws<InvalidDataException>(() => Dl1CompiledBoneScriptValidator.Validate(compiled, [policy with { Name = "absent_node" }]));
+        var missing = Assert.Throws<InvalidDataException>(() => Dl1CompiledBoneScriptValidator.Validate(compiled,
+        [
+            policy with { Name = "absent_one" },
+            policy with { EntityId = Guid.NewGuid(), Name = "absent_two" },
+        ]));
+        Assert.Contains("lacks 2 source policy node(s)", missing.Message, StringComparison.Ordinal);
+        Assert.Contains("'absent_one'", missing.Message, StringComparison.Ordinal);
+        Assert.Contains("'absent_two'", missing.Message, StringComparison.Ordinal);
         Assert.Throws<InvalidDataException>(() => Dl1CompiledBoneScriptValidator.Validate(compiled, [policy, policy]));
     }
 

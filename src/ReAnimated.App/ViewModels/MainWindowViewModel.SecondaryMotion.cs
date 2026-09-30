@@ -71,8 +71,8 @@ public sealed partial class MainWindowViewModel
         SecondaryMotion.Changed -= OnSecondaryMotionChanged;
         SecondaryMotion.Load(selection.Definition);
         SecondaryMotion.PersistenceStatus = selection.HasPendingEdits
-            ? "Restored pending settings for this exact model package. Save a model copy to persist them."
-            : "Model settings loaded. Save model copy creates a new package; open that copy in Models and save the project to retain edits.";
+            ? "Restored unsaved settings for this model. Save a model copy to keep them."
+            : "Model settings loaded. To keep changes, save a model copy, open it in Models, then save the project.";
         SecondaryMotion.Changed += OnSecondaryMotionChanged;
     }
 
@@ -139,9 +139,9 @@ public sealed partial class MainWindowViewModel
                 _secondaryGizmos = [];
             }
             else { _secondaryGizmos = BuildSecondaryGizmos(physicalSkeleton, simulated); _secondaryExternalGizmos = []; }
-            SecondaryMotion.Status = $"MPC preview approximation · {simulated.Particles.Length} particles · stable 120 Hz replay. " +
-                (fpp ? "Physics uses the authored model; FPP view corrections cannot drive cloth. Overlays are in external orbit. " : string.Empty) +
-                "Native and mesh-collision validation remain separate.";
+            SecondaryMotion.Status = $"Secondary motion preview · {simulated.Particles.Length} particles. " +
+                (fpp ? "Guides appear in external orbit. First-person view adjustments do not affect the motion. " : string.Empty) +
+                "Check native cloth and mesh collisions in game.";
             return ApplySecondaryMotionToExternalSkeleton(display);
         }
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
@@ -221,7 +221,7 @@ public sealed partial class MainWindowViewModel
         SecondaryOperation(() =>
         {
             SecondaryMotion.Load(SecondaryMotionSetupSerializer.Deserialize(ReadBounded(dialog.FileName), _targetRig?.Bones.Select(b => b.Name)));
-            SecondaryMotion.PersistenceStatus = "Setup loaded for preview. Save a model copy to include it in a model package.";
+            SecondaryMotion.PersistenceStatus = "Setup loaded. Save a model copy to keep it with the model.";
         });
     }
     private void SaveSecondarySetup()
@@ -252,8 +252,8 @@ public sealed partial class MainWindowViewModel
                 else sources.Add(source);
             }
             SecondaryMotion.Load(SecondaryMotion.Definition with { NativeSources = sources.ToImmutable() });
-            SecondaryMotion.Status = "Native text retained without creating a guessed preview setup. " + string.Join(" ", diagnostics.Distinct());
-            SecondaryMotion.PersistenceStatus = "Native sources are pending model edits; save a model copy to retain them.";
+            SecondaryMotion.Status = "Cloth files imported. Set up the preview manually. " + string.Join(" ", diagnostics.Distinct());
+            SecondaryMotion.PersistenceStatus = "Save a model copy to keep the imported cloth files.";
         });
     }
     private void ExportNativeCloth()
@@ -273,7 +273,7 @@ public sealed partial class MainWindowViewModel
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
                 File.WriteAllText(path, source.Text);
             }
-            SecondaryMotion.Status = "Native sources exported losslessly; this is not compiler or runtime validation.";
+            SecondaryMotion.Status = "Cloth files exported. Check them in Developer Tools and in game.";
         });
     }
     private void SaveSecondaryModelCopy()
@@ -295,7 +295,7 @@ public sealed partial class MainWindowViewModel
                 if (!SHA256.HashData(File.ReadAllBytes(path)).AsSpan().SequenceEqual(SHA256.HashData(bytes.AsSpan()))) throw new IOException("Content-addressed model path collision.");
             }
             else CustomModelPackageSerializer.SaveAtomic(updated, path);
-            SecondaryMotion.PersistenceStatus = "Saved immutable model copy: " + path + ". Open this copy in Models and save the project to retain the setup.";
+            SecondaryMotion.PersistenceStatus = "Saved model copy: " + path + ". Open it in Models and save the project to keep the setup.";
         });
     }
     private void SecondaryOperation(Action operation)

@@ -59,6 +59,52 @@ public sealed class Dl1DeveloperToolsBatchDeploymentTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelDeployment")]
+    public async Task TwoMountedAnimationBanksCannotShareTheConventionalProjectPath()
+    {
+        string projectRoot = RpackTestData.CreateTemporaryDirectory();
+        int deploymentCalls = 0;
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest first = CreateChildRequest(
+                projectRoot, "character_a", "ModelA", "LibraryA") with
+            {
+                InstallProjectDataAnimationRpack = true,
+            };
+            Dl1DeveloperToolsDeploymentRequest second = CreateChildRequest(
+                projectRoot, "character_b", "ModelB", "LibraryB") with
+            {
+                InstallProjectDataAnimationRpack = true,
+            };
+            var request = new Dl1DeveloperToolsBatchRequest
+            {
+                Deployments = [first, second],
+                PreflightOverride = (child, _) => Task.FromResult(CreatePlan(
+                    child,
+                    "data/common_anims_sp_PC.rpack",
+                    Dl1DeploymentArtifactRole.ProjectDataAnimationPack)),
+                DeploymentOverride = (child, _) =>
+                {
+                    deploymentCalls++;
+                    return Task.FromResult(CreateResult(child));
+                },
+            };
+
+            Dl1DeveloperToolsBatchConflictException error = await Assert.ThrowsAsync<
+                Dl1DeveloperToolsBatchConflictException>(() =>
+                Dl1DeveloperToolsProjectDeployer.DeployBatchAsync(request));
+            Assert.Equal(0, deploymentCalls);
+            Assert.Contains(error.Preflight.Conflicts, conflict =>
+                conflict.Message.Contains("data/common_anims_sp_PC.rpack", StringComparison.Ordinal));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(projectRoot);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
     public async Task FailedChildCommitRollsBackEarlierChildrenAndPersistsBatchReceipt()
     {
         string projectRoot = RpackTestData.CreateTemporaryDirectory();
@@ -196,7 +242,8 @@ public sealed class Dl1DeveloperToolsBatchDeploymentTests
 
     private static Dl1DeveloperToolsDeploymentPlan CreatePlan(
         Dl1DeveloperToolsDeploymentRequest request,
-        string artifactPath) => new(
+        string artifactPath,
+        Dl1DeploymentArtifactRole role = Dl1DeploymentArtifactRole.Source) => new(
             request.CharacterId,
             request.ModelResourceName,
             request.AnimationLibraryName,
@@ -204,7 +251,7 @@ public sealed class Dl1DeveloperToolsBatchDeploymentTests
             [
                 new Dl1DeveloperToolsDeploymentArtifact(
                     artifactPath,
-                    Dl1DeploymentArtifactRole.Source,
+                    role,
                     Dl1DeploymentArtifactDisposition.Create,
                     Required: true,
                     ExistingFileIsOwned: false,

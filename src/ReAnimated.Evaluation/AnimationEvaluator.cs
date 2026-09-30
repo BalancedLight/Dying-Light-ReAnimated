@@ -10,7 +10,7 @@ namespace ReAnimated.Evaluation;
 /// <summary>
 /// The authoritative pose evaluator shared by animation export and preview.
 /// </summary>
-public sealed class AnimationEvaluator : IAnimationEvaluator
+public sealed partial class AnimationEvaluator : IAnimationEvaluator
 {
     private readonly ImmutableArray<IPreviewProceduralStage> _previewProceduralStages;
 
@@ -125,8 +125,11 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
             allowImplicitIdentity:
                 request.DirectRigBinding is null);
         diagnostics.AddRange(evaluatedMorphs.Diagnostics);
+        var attachmentIkReports = ImmutableArray.CreateBuilder<AttachmentIkReport>();
+        SkeletonPose beforeAttachmentIk = authoredPose;
+        authoredPose = ApplyAttachmentIk(authoredPose, request.Attachments.Where(static a => a.Scope == AttachmentScope.AuthoredExportable), false, diagnostics, attachmentIkReports);
 
-        SkeletonPose displayPose = authoredPose;
+        SkeletonPose displayPose = request.Purpose == EvaluationPurpose.Preview ? beforeAttachmentIk : authoredPose;
         Dl1PreviewEvaluationResult? dl1Preview = null;
         if (request.Purpose == EvaluationPurpose.Preview)
         {
@@ -146,7 +149,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 sourcePose,
                 displayPose);
             displayPose = ApplyPreviewProceduralStages(
-                authoredPose,
+                beforeAttachmentIk,
                 displayPose,
                 sampleFrame,
                 request.PreviewProfile,
@@ -158,6 +161,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 request.Dl1PreviewInputs);
             displayPose = dl1Preview.DisplayPose;
             diagnostics.AddRange(dl1Preview.Diagnostics);
+            displayPose = ApplyAttachmentIk(displayPose, request.Attachments, true, diagnostics, attachmentIkReports);
         }
 
         ImmutableArray<EvaluatedAttachment> authoredAttachments =
@@ -175,7 +179,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                     diagnostics)
                 : authoredAttachments;
         EvaluatedCamera? evaluatedCamera = dl1Preview?.Camera is
-            { } relativeCamera
+        { } relativeCamera
                 ? relativeCamera with
                 {
                     WorldTransform = actorWorldTransform *
@@ -208,7 +212,8 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
             sourcePose,
             auxiliaryMotion,
             actorWorldTransform,
-            sampledMorphWeights);
+            sampledMorphWeights,
+            attachmentIkReports);
     }
 
     /// <summary>
@@ -279,6 +284,11 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 request,
                 sourcePose,
                 authoredPose);
+            var gripDiagnostics = ImmutableArray.CreateBuilder<EvaluationDiagnostic>();
+            authoredPose = ApplyAttachmentIk(authoredPose, request.Attachments.Where(static a => a.Scope == AttachmentScope.AuthoredExportable), false,
+                gripDiagnostics, ImmutableArray.CreateBuilder<AttachmentIkReport>());
+            if (gripDiagnostics.Any(static d => d.Severity == EvaluationDiagnosticSeverity.Error))
+                throw new InvalidOperationException(string.Join(" ", gripDiagnostics.Select(static d => d.Message)));
             acceptPose(index, authoredPose);
         }
     }
@@ -437,14 +447,36 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
                 continue;
             }
 
-            evaluated.Add(
-                new(
-                    binding.Id,
-                    binding.AssetId,
-                    binding.Name,
-                    pose.GlobalMatrices[binding.ParentBoneIndex] *
-                        binding.LocalOffset.ToMatrix(),
-                    binding.Scope));
+            TransformMatrix primary = pose.GlobalMatrices[binding.ParentBoneIndex] * binding.LocalOffset.ToMatrix();
+            TransformMatrix world = primary;
+            TransformMatrix? secondaryProp = null, secondaryCharacter = null;
+            if (binding.GripCalibration is { } grip)
+            {
+                world = primary * grip.PrimaryPropFrame.Matrix.InvertedAffine();
+                if (grip.Secondary is { } secondary)
+                {
+                    if ((uint)secondary.CharacterBoneIndex >= (uint)pose.Rig.BoneCount ||
+                        !string.Equals(pose.Rig.Bones[secondary.CharacterBoneIndex].Name, secondary.CharacterBoneName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        diagnostics.Add(new("attachment_secondary_parent_mismatch", EvaluationDiagnosticSeverity.Error,
+                            $"Attachment '{binding.Name}' has a missing or reordered secondary character frame. Rebind it explicitly."));
+                        continue;
+                    }
+                    secondaryProp = world * secondary.PropFrame.Matrix;
+                    secondaryCharacter = pose.GlobalMatrices[secondary.CharacterBoneIndex] * secondary.CharacterLocalOffset.ToMatrix();
+                }
+                if (binding.Scope == AttachmentScope.AuthoredExportable)
+                    diagnostics.Add(new("attachment_grip_native_configuration_unverified", EvaluationDiagnosticSeverity.Warning,
+                        $"Attachment '{binding.Name}' retains grip calibration for authoring. Native equipment configuration has not been emitted; any enabled hand driver belongs to authored evaluation."));
+            }
+            evaluated.Add(new(binding.Id, binding.AssetId, binding.Name, world, binding.Scope)
+            {
+                GripCalibration = binding.GripCalibration,
+                PrimaryGripWorldFrame = binding.GripCalibration is null ? null : primary,
+                SecondaryPropWorldFrame = secondaryProp,
+                SecondaryCharacterWorldFrame = secondaryCharacter,
+                SecondaryPositionError = secondaryProp is { } prop && secondaryCharacter is { } hand ? (prop.Translation - hand.Translation).Length : null,
+            });
         }
 
         return evaluated.ToImmutable();
@@ -467,8 +499,11 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
 
     private static SkeletonPose ApplyIkConstraint(
         SkeletonPose pose,
-        TwoBoneIkConstraint constraint)
+        TwoBoneIkConstraint constraint) => ApplyIkConstraint(pose, constraint, out _);
+
+    private static SkeletonPose ApplyIkConstraint(SkeletonPose pose, TwoBoneIkConstraint constraint, out TwoBoneIkSolution? resultSolution)
     {
+        resultSolution = null;
         ValidateIkChain(pose.Rig, constraint);
         if (constraint.Weight <= 0.0)
         {
@@ -488,6 +523,7 @@ public sealed class AnimationEvaluator : IAnimationEvaluator
             constraint.Target,
             constraint.Pole);
 
+        resultSolution = solution;
         TransformTRS rootGlobal =
             pose.GlobalMatrices[constraint.RootBoneIndex].Decompose();
         QuaternionD rootDelta = QuaternionD.FromToRotation(

@@ -26,7 +26,13 @@ public partial class MainWindow : Window
     private readonly MainWindowViewModel _viewModel;
     private readonly WorkspaceAutosaveService _autosave;
     private readonly WorkflowDockController _dockController;
+    private readonly DockLayoutUpdateScheduler _dockLayoutScheduler;
     private bool _isLoaded;
+    private bool _isClosing;
+    private bool _pendingWorkspaceSurfaceLayout;
+    private bool _pendingViewportLayout;
+    private bool _pendingDockLayout;
+    private bool _pendingDockReset;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -57,9 +63,11 @@ public partial class MainWindow : Window
         _dockController = InitializeWorkflowDocking(
             dockLayoutSettings ??
             EditorDockLayoutSettingsStore.CreateDefault());
+        _dockLayoutScheduler = new DockLayoutUpdateScheduler(
+            Dispatcher,
+            ApplyQueuedShellLayout);
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
         ApplyWorkspaceSurfaceLayout();
-        ApplyWorkflowDockLayout();
         Loaded += OnWindowLoaded;
         Closing += OnWindowClosing;
         Closed += OnWindowClosed;
@@ -76,6 +84,10 @@ public partial class MainWindow : Window
         }
 
         _isLoaded = true;
+        QueueShellLayout(
+            workspaceSurfaceChanged: false,
+            viewportLayoutChanged: false,
+            dockLayoutChanged: true);
         _autosave.Start();
         CompositionTarget.Rendering += OnCompositionRendering;
     }
@@ -84,6 +96,8 @@ public partial class MainWindow : Window
         object? sender,
         CancelEventArgs args)
     {
+        _isClosing = true;
+        _dockLayoutScheduler.Stop();
         _dockController.SaveCurrentLayout();
         _autosave.Stop();
         _ = _autosave.SaveNow("window-closing");
@@ -93,6 +107,7 @@ public partial class MainWindow : Window
         object? sender,
         EventArgs args)
     {
+        _isLoaded = false;
         CompositionTarget.Rendering -= OnCompositionRendering;
         _autosave.AutosaveCompleted -= OnAutosaveCompleted;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
@@ -176,17 +191,49 @@ public partial class MainWindow : Window
         if (!Dispatcher.CheckAccess())
         {
             _ = Dispatcher.BeginInvoke(
-                () => ApplyShellLayout(
+                () => QueueShellLayout(
                     workspaceSurfaceChanged,
                     viewportLayoutChanged,
                     dockLayoutChanged));
             return;
         }
 
-        ApplyShellLayout(
+        QueueShellLayout(
             workspaceSurfaceChanged,
             viewportLayoutChanged,
             dockLayoutChanged);
+    }
+
+    private void QueueShellLayout(
+        bool workspaceSurfaceChanged,
+        bool viewportLayoutChanged,
+        bool dockLayoutChanged,
+        bool resetDockLayout = false)
+    {
+        if (_isClosing) return;
+        _pendingWorkspaceSurfaceLayout |= workspaceSurfaceChanged;
+        _pendingViewportLayout |= viewportLayoutChanged;
+        _pendingDockLayout |= dockLayoutChanged;
+        _pendingDockReset |= resetDockLayout;
+        if (_isLoaded) _dockLayoutScheduler.Request();
+    }
+
+    private void ApplyQueuedShellLayout()
+    {
+        if (_isClosing || !_isLoaded) return;
+        bool workspaceSurfaceChanged = _pendingWorkspaceSurfaceLayout;
+        bool viewportLayoutChanged = _pendingViewportLayout;
+        bool dockLayoutChanged = _pendingDockLayout;
+        bool resetDockLayout = _pendingDockReset;
+        _pendingWorkspaceSurfaceLayout = false;
+        _pendingViewportLayout = false;
+        _pendingDockLayout = false;
+        _pendingDockReset = false;
+        if (resetDockLayout) _dockController.ResetCurrentLayout();
+        ApplyShellLayout(
+            workspaceSurfaceChanged,
+            viewportLayoutChanged,
+            dockLayoutChanged || resetDockLayout);
     }
 
     private void ApplyShellLayout(
@@ -244,7 +291,7 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.Animations, "animations.browser", "Base-game animations", Detach(RetailAnimationBrowserPane), 260, 220),
             Pane(EditorDockWorkflow.Animations, "animations.library", "Animation library", Detach(AnimationsLibraryPane), 360, 220),
 
-            Pane(EditorDockWorkflow.Playback, "playback.context", "Playback context", Detach(PlaybackContextPane), 300, 80),
+            Pane(EditorDockWorkflow.Playback, "playback.context", "Playback context", Detach(PlaybackContextPane), 300, 120),
             Pane(EditorDockWorkflow.Playback, "playback.fpp-camera", "FPP camera", Detach(PlaybackFppViewportPane), 280, 220, _viewModel.SourceViewport),
             Pane(EditorDockWorkflow.Playback, "playback.target-camera", "DL1 target camera", Detach(PlaybackTargetViewportPane), 320, 240, _viewModel.TargetViewport),
             Pane(EditorDockWorkflow.Playback, "playback.timeline", "Timeline / curves", Detach(PlaybackTimelinePane), 340, 180, _viewModel.Timeline),
@@ -271,6 +318,7 @@ public partial class MainWindow : Window
 
             Pane(EditorDockWorkflow.Export, "export.files", "Files", DetachTabContent(ExportFilesTab), 420, 300),
             Pane(EditorDockWorkflow.Export, "export.developer-tools", "Developer Tools", DetachTabContent(ExportDeveloperToolsTab), 420, 300),
+            Pane(EditorDockWorkflow.Export, "export.animation-script", "Animation script", DetachTabContent(ExportAnimationScriptTab), 420, 300),
         };
 
         panes.Add(Pane(
@@ -307,6 +355,8 @@ public partial class MainWindow : Window
             {
                 _dockController.SetPaneVisible(id, authoring);
             }
+
+            _dockController.SetModelsAuthoringFocus(authoring);
         }
 
         if (workflow == EditorDockWorkflow.Animations)
@@ -468,9 +518,38 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs args)
     {
-        _dockController.ResetCurrentLayout();
-        ApplyWorkflowDockLayout();
+        QueueShellLayout(false, false, true, resetDockLayout: true);
     }
+
+    private void OnOpenExportFilesPaneClick(
+        object sender,
+        RoutedEventArgs args) =>
+        _dockController.SetPaneVisible("export.files", visible: true);
+
+    private void OnOpenExportScriptPaneClick(
+        object sender,
+        RoutedEventArgs args) =>
+        _dockController.SetPaneVisible("export.animation-script", visible: true);
+
+    private void OnOpenDeveloperToolsPaneClick(
+        object sender,
+        RoutedEventArgs args) =>
+        _dockController.SetPaneVisible("export.developer-tools", visible: true);
+
+    private void OnOpenRetargetToolClick(
+        object sender,
+        RoutedEventArgs args)
+    {
+        if (sender is MenuItem { Tag: string paneId })
+        {
+            _dockController.SetPaneVisible(paneId, visible: true);
+        }
+    }
+
+    private void OnOpenMappingPaneClick(
+        object sender,
+        RoutedEventArgs args) =>
+        _dockController.SetPaneVisible("retarget.mapping", visible: true);
 
     internal bool FloatTargetViewportForSmoke() =>
         _dockController.FloatPane(
@@ -598,7 +677,6 @@ public partial class MainWindow : Window
         object sender,
         RoutedEventArgs args)
     {
-        _dockController.ResetCurrentLayout();
-        ApplyWorkflowDockLayout();
+        QueueShellLayout(false, false, true, resetDockLayout: true);
     }
 }

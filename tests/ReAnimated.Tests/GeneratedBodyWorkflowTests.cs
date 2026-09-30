@@ -43,12 +43,24 @@ public sealed class GeneratedBodyWorkflowTests : IDisposable
         Assert.All(bound.Surfaces, s => Assert.True(s.IsSkinned));
         Assert.DoesNotContain(bound.Package.Document.Diagnostics, d => d.Code == FbxGeneratedBodyBinding.UnboundDiagnostic);
         Assert.NotNull(bound.Package.Document.RiggingSession!.BindingBackend);
+        var expectedBindingLoss = binding.Points
+            .Where(static point => point.RemovedWeightBeforeRenormalization > 1e-6)
+            .Select(static point => new RigSkinBindingReviewPoint(
+                point.ComponentId, point.ControlPointIndex, point.RemovedWeightBeforeRenormalization))
+            .ToArray();
+        Assert.NotEmpty(expectedBindingLoss);
+        Assert.Equal<RigSkinBindingReviewPoint>(
+            expectedBindingLoss,
+            bound.Package.Document.RiggingSession.BindingReviewPoints);
         var before = SurfaceWeights(bound);
         string path = Path.Combine(_directory, "bound.dlrmodel");
         CustomModelPackageSerializer.SaveAtomic(bound.Package, path);
         var reopened = FbxModelAuthoringImporter.ImportPackage(CustomModelPackageSerializer.Load(path));
         Assert.True(GeneratedBodyRig.IsGenerated(reopened.Package.Document));
         Assert.Equal(before, SurfaceWeights(reopened));
+        Assert.Equal<RigSkinBindingReviewPoint>(
+            expectedBindingLoss,
+            reopened.Package.Document.RiggingSession!.BindingReviewPoints);
         Assert.True(source.Package.SourceFbx.AsSpan().SequenceEqual(reopened.Package.SourceFbx.AsSpan()));
         Assert.All(source.Surfaces.SelectMany(s => s.Vertices), v => Assert.Empty(v.BoneWeights));
         Assert.Equal(source.Surfaces.SelectMany(s => s.Vertices).Select(v => v.Position), bound.Surfaces.SelectMany(s => s.Vertices).Select(v => v.Position));

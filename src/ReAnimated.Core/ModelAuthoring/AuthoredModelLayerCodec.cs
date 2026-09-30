@@ -19,7 +19,7 @@ public static class AuthoredModelLayerCodec
         layer.Validate();
         using var stream = new MemoryStream();
         stream.Write(Signature);
-        WriteInt32(stream, AuthoredModelLayer.CurrentVersion);
+        WriteInt32(stream, layer.Version);
         WriteString(stream, layer.SourceSha256);
         WriteString(stream, layer.SourceGeometryFingerprint);
         WriteString(stream, layer.TargetRigSignature);
@@ -113,7 +113,7 @@ public static class AuthoredModelLayerCodec
         }
 
         int version = reader.ReadInt32();
-        if (version != AuthoredModelLayer.CurrentVersion)
+        if (version is < 1 or > AuthoredModelLayer.CurrentVersion)
         {
             throw new InvalidDataException($"Authored model layer version {version} is unsupported.");
         }

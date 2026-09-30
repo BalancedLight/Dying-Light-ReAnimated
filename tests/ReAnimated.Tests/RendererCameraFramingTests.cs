@@ -138,6 +138,39 @@ public sealed class RendererCameraFramingTests
     }
 
     [Fact]
+    public void VisibleRemoteCameraHelperDoesNotShrinkMeshFraming()
+    {
+        MeshRenderData mesh = CreateMesh(
+            Matrix4x4.Identity,
+            isSkinned: false);
+        BoneRenderData remoteCamera = new(
+            "remote-camera",
+            -1,
+            Matrix4x4.CreateTranslation(0.0f, -10.0f, 0.0f),
+            Matrix4x4.CreateTranslation(0.0f, -10.0f, 0.0f),
+            false)
+        {
+            Role = BoneRenderRole.Camera,
+        };
+        RenderFrameSnapshot frame = RenderFrameSnapshot.Empty() with
+        {
+            Meshes = [mesh],
+            Skeleton = new SkeletonRenderData(
+                [remoteCamera],
+                Matrix4x4.Identity),
+        };
+
+        Assert.True(RenderCameraFraming.TryFrame(
+            frame,
+            out RenderCamera framed));
+        Assert.InRange(framed.Target.Y, 0.49f, 0.51f);
+        Assert.InRange(
+            Vector3.Distance(framed.Eye, framed.Target),
+            0.25f,
+            3.0f);
+    }
+
+    [Fact]
     public void ExplicitWideLensAspectFitsHorizontalExtent()
     {
         MeshRenderData mesh = CreateMesh(

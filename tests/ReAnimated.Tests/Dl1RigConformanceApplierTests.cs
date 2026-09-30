@@ -129,11 +129,11 @@ public sealed class Dl1RigConformanceApplierTests
     }
 
     [Fact]
-    public void ConformanceClearsAHelperAuthoredAgainstTheOldBoneIndexes()
+    public void ConformanceWithoutAuthoredHelpersDoesNotCreateAny()
     {
         (FbxModelAuthoringImportResult conformed, _) = Conform(dropExtras: false);
 
-        // Old helper rows referenced source row indexes that no longer exist.
+        // This baseline source has no authored helper layer.
         Assert.Empty(conformed.Package.Document.AuthoredHelpers);
         Assert.Null(conformed.Package.Document.LastBuildReceipt);
     }
@@ -159,7 +159,7 @@ public sealed class Dl1RigConformanceApplierTests
         return (conformed, Dl1CustomModelRigPreparer.Prepare(conformed));
     }
 
-    private static (FbxModelAuthoringImportResult Model, RigConformanceResult Fit)
+    internal static (FbxModelAuthoringImportResult Model, RigConformanceResult Fit)
         BuildModel(bool dropExtras)
     {
         Dl1RigTemplate template = CreateTemplate();
@@ -289,7 +289,7 @@ public sealed class Dl1RigConformanceApplierTests
         ImmutableArray<double> weights) =>
         new(position, Vector3D.UnitY, 0.0, 0.0, indices, weights);
 
-    private static Dl1RigTemplate CreateTemplate()
+    internal static Dl1RigTemplate CreateTemplate()
     {
         var entities = new List<(string Name, int Parent, Vector3D Offset, BoneKind Kind, bool Deform)>
         {

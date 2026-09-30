@@ -33,8 +33,14 @@ public static class FbxAuthoredModelLayer
                 throw new InvalidDataException("The previous authored layer belongs to another source.");
             previousIds = previous.Bones.ToDictionary(static b => b.Name, static b => b.Id, StringComparer.Ordinal);
         }
-        var boneIds = model.Package.Document.Bones.Select(b => new AuthoredBoneIdentity(
-            previousIds is not null && previousIds.TryGetValue(b.Name, out var id) ? id : StableBoneId(model.Package.Document.ModelId, b.Name), b.Name)).ToImmutableArray();
+        var effectiveBones = model.Package.Document.CreateEffectiveBones();
+        var usedNames = current.Components.Values.SelectMany(c => c.InverseBinds.Keys).ToHashSet(StringComparer.Ordinal);
+        // Version 2 adds only helpers that actually own surface weights/binds. An
+        // unweighted helper edit must not rewrite otherwise unchanged surface data.
+        var boneIds = effectiveBones.Where(b => b.Index < model.Package.Document.Bones.Length || usedNames.Contains(b.Name))
+            .Select(b => new AuthoredBoneIdentity(b.Index >= model.Package.Document.Bones.Length
+                ? model.Package.Document.AuthoredHelpers[b.Index - model.Package.Document.Bones.Length].Id
+                : previousIds is not null && previousIds.TryGetValue(b.Name, out var id) ? id : StableBoneId(model.Package.Document.ModelId, b.Name), b.Name)).ToImmutableArray();
         var idByName = boneIds.ToDictionary(static b => b.Name, static b => b.Id, StringComparer.Ordinal);
         var components = ImmutableArray.CreateBuilder<AuthoredComponentEdits>();
         foreach (var (id, component) in current.Components.OrderBy(static c => c.Key, StringComparer.Ordinal))
@@ -104,10 +110,11 @@ public static class FbxAuthoredModelLayer
                 edit.Morphs.Any(m => !component.Morphs.ContainsKey(m.DescriptorHash) || m.PositionDeltas.Any(d => !component.Points.ContainsKey(d.Index)) || m.NormalDeltas.Any(d => !component.Normals.ContainsKey(d.Index))))
                 throw new InvalidDataException("An authored edit references a missing source point, corner or morph.");
         }
-        var targetByName = saved.Document.Bones.ToDictionary(static b => b.Name, static b => b.Index, StringComparer.Ordinal);
+        var effectiveBones = saved.Document.CreateEffectiveBones();
+        var targetByName = effectiveBones.ToDictionary(static b => b.Name, static b => b.Index, StringComparer.Ordinal);
         var targetById = layer.Bones.ToDictionary(static b => b.Id, b => targetByName[b.Name]);
-        var globals = new TransformMatrix[saved.Document.Bones.Length];
-        foreach (var bone in saved.Document.Bones)
+        var globals = new TransformMatrix[effectiveBones.Length];
+        foreach (var bone in effectiveBones)
             globals[bone.Index] = bone.ParentIndex < 0 ? bone.ExactLocalBindMatrix : globals[bone.ParentIndex] * bone.ExactLocalBindMatrix;
         var inverse = globals.Select(static g => g.InvertedAffine()).ToImmutableArray();
         var surfaces = ImmutableArray.CreateBuilder<FbxModelSurface>();
@@ -154,9 +161,8 @@ public static class FbxAuthoredModelLayer
             };
             surfaces.AddRange(FbxAuthoredSurfacePartitioner.Partition(authored, cancellationToken));
         }
-        var clips = saved.Document.RiggingSession?.ParentDecisions.IsEmpty == false
-            ? FbxAnimationTrackReindexer.ReindexByName(source.AnimationClips, source.Package.Document.CreateEffectiveBones(), saved.Document.CreateEffectiveBones(), cancellationToken)
-            : source.AnimationClips;
+        var clips = FbxAnimationTrackReindexer.ReindexByIdentity(source.AnimationClips,
+            source.Package.Document.CreateEffectiveBones(), saved.Document.CreateEffectiveBones(), cancellationToken);
         return source with { Package = saved, Rig = saved.Document.Bones.IsEmpty ? null : saved.Document.CreateRigDefinition(), Surfaces = surfaces.ToImmutable(), AnimationClips = clips };
     }
 
@@ -200,6 +206,7 @@ public static class FbxAuthoredModelLayer
         public static Inventory Build(FbxModelAuthoringImportResult model, CancellationToken cancellationToken)
         {
             var result = new Inventory();
+            var effectiveBones = model.Package.Document.CreateEffectiveBones();
             foreach (var surface in model.Surfaces)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -223,11 +230,11 @@ public static class FbxAuthoredModelLayer
                     {
                         int slot = vertex.BoneIndices[w]; double weight = vertex.BoneWeights[w];
                         if (!double.IsFinite(weight) || weight < 0 || (uint)slot >= (uint)surface.PaletteBoneIndices.Length ||
-                            (uint)surface.PaletteBoneIndices[slot] >= (uint)model.Package.Document.Bones.Length)
+                            (uint)surface.PaletteBoneIndices[slot] >= (uint)effectiveBones.Length)
                             throw new InvalidDataException("An authored weight or bone reference is invalid.");
                         if (weight > 0)
                         {
-                            string name = model.Package.Document.Bones[surface.PaletteBoneIndices[slot]].Name;
+                            string name = effectiveBones[surface.PaletteBoneIndices[slot]].Name;
                             var matrix = surface.InverseBindMatrices[slot];
                             if (!matrix.IsFinite || component.InverseBinds.TryGetValue(name, out var previousMatrix) && previousMatrix != matrix)
                                 throw new InvalidDataException("A source component has conflicting or non-finite inverse bind references.");

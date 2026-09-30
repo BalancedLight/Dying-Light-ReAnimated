@@ -5,14 +5,9 @@
              MinHeight="0">
     <Grid Margin="7">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
-        <TextBlock Margin="2,0,2,6"
-                   Foreground="{StaticResource MutedTextBrush}"
-                   Text="Import, texture, DL1-output, and repair diagnostics. Warnings remain visible until their underlying binding or build condition is resolved."
-                   TextWrapping="Wrap" />
-        <DataGrid Grid.Row="1"
+        <DataGrid Grid.Row="0"
                   AutoGenerateColumns="False"
                   CanUserAddRows="False"
                   IsReadOnly="True"

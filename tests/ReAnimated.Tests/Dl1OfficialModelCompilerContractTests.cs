@@ -230,6 +230,96 @@ public sealed class Dl1OfficialModelCompilerContractTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelCompilerContract")]
+    public async Task FullMaterialSourceStagePreservesExistingSourcesAndReplacesCurrentName()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string existing = Path.Combine(directory, "data", "characters", "first");
+            string current = Path.Combine(directory, "current");
+            string staged = Path.Combine(directory, "staged");
+            Directory.CreateDirectory(existing);
+            Directory.CreateDirectory(current);
+            await File.WriteAllTextAsync(Path.Combine(existing, "shared.dmt"), "old");
+            await File.WriteAllTextAsync(Path.Combine(existing, "existing.dmt"), "existing");
+            await File.WriteAllTextAsync(Path.Combine(current, "shared.dmt"), "new");
+
+            int count = await Dl1OfficialModelCompiler.StageCompleteMaterialSourcesAsync(
+                directory, current, staged, CancellationToken.None);
+
+            Assert.Equal(2, count);
+            Assert.Equal("new", await File.ReadAllTextAsync(Path.Combine(staged, "shared.dmt")));
+            Assert.Equal("existing", await File.ReadAllTextAsync(Path.Combine(staged, "existing.dmt")));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public async Task FullMaterialSourceStageIncludesInstalledStockSourcesForNewProject()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string stock = Path.Combine(directory, "installed", "data");
+            string project = Path.Combine(directory, "project");
+            string current = Path.Combine(directory, "current");
+            string staged = Path.Combine(directory, "staged");
+            Directory.CreateDirectory(Path.Combine(stock, "defaults"));
+            Directory.CreateDirectory(Path.Combine(project, "data"));
+            Directory.CreateDirectory(current);
+            await File.WriteAllTextAsync(Path.Combine(stock, "defaults", "default_material.dmt"), "installed stock");
+            await File.WriteAllTextAsync(Path.Combine(current, "new_model.dmt"), "new model");
+
+            int count = await Dl1OfficialModelCompiler.StageCompleteMaterialSourcesAsync(
+                project, current, staged, CancellationToken.None, stockMaterialRoot: stock);
+
+            Assert.Equal(2, count);
+            Assert.Equal("installed stock", await File.ReadAllTextAsync(Path.Combine(staged, "default_material.dmt")));
+            Assert.Equal("new model", await File.ReadAllTextAsync(Path.Combine(staged, "new_model.dmt")));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public async Task FullMaterialSourceStageRejectsConflictingProjectNames()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string first = Path.Combine(directory, "data", "characters", "first");
+            string second = Path.Combine(directory, "data", "characters", "second");
+            string current = Path.Combine(directory, "current");
+            string staged = Path.Combine(directory, "staged");
+            Directory.CreateDirectory(first);
+            Directory.CreateDirectory(second);
+            Directory.CreateDirectory(current);
+            await File.WriteAllTextAsync(Path.Combine(first, "shared.dmt"), "one");
+            await File.WriteAllTextAsync(Path.Combine(second, "shared.dmt"), "two");
+
+            await Assert.ThrowsAsync<InvalidDataException>(() =>
+                Dl1OfficialModelCompiler.StageCompleteMaterialSourcesAsync(
+                    directory, current, staged, CancellationToken.None));
+            Assert.False(Directory.Exists(staged));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
     public void MaterialDatabasePreservationChecksTheWholeMaterialPayload()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();

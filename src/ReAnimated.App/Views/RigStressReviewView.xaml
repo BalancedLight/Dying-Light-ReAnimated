@@ -2,8 +2,8 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" MinWidth="0">
     <StackPanel Margin="4,7,4,4" IsEnabled="{Binding CanEditStressReview}">
-        <CheckBox Content="Show stress-pose preview" IsChecked="{Binding StressPreviewEnabled}" />
-        <TextBlock Text="Preview joint bends and morphs in orbit view using the applied model weights. Apply a pending weight correction to include it. This pauses clip playback and keeps saved rest transforms and animation tracks unchanged. Offsets are temporary and are not exported."
+        <CheckBox Content="Show stress-pose preview" IsChecked="{Binding StressPreviewEnabled}" ToolTip="Uses applied model weights. Apply pending weight corrections to include them; preview offsets are not exported." />
+        <TextBlock Text="Temporary preview offsets; clip playback pauses and saved rest transforms and animation stay unchanged."
                    TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,7" />
         <TextBlock Text="Joint" />
         <ComboBox ItemsSource="{Binding StressJoints}" SelectedItem="{Binding SelectedStressJoint}" DisplayMemberPath="Label" Margin="0,2,0,6" />

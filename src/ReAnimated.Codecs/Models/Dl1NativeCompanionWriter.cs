@@ -75,6 +75,7 @@ public static class Dl1NativeCompanionWriter
             NativeClothSource source = physics[index];
             NativePhxDocument parsed = Dl1ClothCodec.ReadPhx(source.Text, bones);
             RequireValid(source.ResourceName, parsed.Diagnostics);
+            ValidateNativeGridBoneRoles(model, source.ResourceName, parsed, notes);
             foreach (NativeClothCommand include in parsed.Syntax.Commands.Where(call => call.Name == "!include"))
             {
                 // These are standalone source documents. Do not claim a portable closure when
@@ -93,8 +94,8 @@ public static class Dl1NativeCompanionWriter
         if (binding.Syntax.Commands.Any(call => call.Name == "!include"))
             throw new InvalidDataException("Native MPCloth includes must be inlined before exporting this model.");
         var usedResources = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        NativeClothSyntax rewritten = binding.Syntax;
-        // Replace calls backwards so source offsets stay valid and unrelated text stays exact.
+        var replacements = new Dictionary<NativeClothQuotedArgument, string>();
+        // Change only resource-name tokens; preserve inline comments and authored flag syntax.
         for (int index = binding.Syntax.Commands.Length - 1; index >= 0; index--)
         {
             NativeClothCommand call = binding.Syntax.Commands[index];
@@ -105,10 +106,15 @@ public static class Dl1NativeCompanionWriter
                 throw new InvalidDataException($"Native PHX '{sourceName}' is missing from this model's saved sources.");
             if (!usedResources.Add(sourceName))
                 throw new InvalidDataException($"Native PHX '{sourceName}' is bound more than once in the model.");
-            string replacement = Dl1ClothCodec.WriteMpCloth([entry with { ResourceName = targetName }]).TrimEnd('\r', '\n');
-            rewritten = rewritten.ReplaceCommand(index, replacement);
+            if (entry.Enabled == 0)
+                notes.Add($"Native PHX '{sourceName}' is exported with its MPCloth binding disabled. It will not provide active garment physics until that authored binding is enabled.");
+            replacements.Add(call.QuotedArguments.Single(a => a.ArgumentIndex == 0), targetName);
         }
-        files.Add(resourceName + ".mpcloth", Encoding.UTF8.GetBytes(rewritten.Write()));
+        string[] unboundResources = renamed.Keys.Except(usedResources, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToArray();
+        if (unboundResources.Length != 0)
+            throw new InvalidDataException($"Native PHX source(s) have no MPCloth binding: {string.Join(", ", unboundResources)}.");
+        files.Add(resourceName + ".mpcloth", Encoding.UTF8.GetBytes(binding.Syntax.ReplaceQuotedArguments(replacements).Write()));
         notes.Add($"Native cloth exports {physics.Length} PHX source(s) and a matching-basename MPCloth wrapper. " +
             "Native coefficients and binding flags are preserved; preview tuning does not modify them. " +
             "Imported scripts are not re-fitted to compiled bone frames or collision bounds. Check those against the current compiled model and validate physics in Player.");
@@ -122,5 +128,60 @@ public static class Dl1NativeCompanionWriter
             notes.AddRange(diagnostics.Where(diagnostic => !diagnostic.IsError)
                 .Select(diagnostic => $"Native cloth '{name}': {diagnostic.Message}"));
         }
+    }
+
+    private static void ValidateNativeGridBoneRoles(
+        CustomModelDocument model, string resourceName, NativePhxDocument phx, ImmutableArray<string>.Builder notes)
+    {
+        NativeClothNode[] namedGridNodes = phx.Nodes.Where(node => node.BoneName.Length > 0).ToArray();
+        if (namedGridNodes.Length == 0) return;
+
+        if (model.RiggingSession?.Recipe is not { } recipe || recipe.ProfileSnapshot is not { } profile ||
+            recipe.Assignments.IsEmpty || recipe.Entities.IsEmpty)
+        {
+            notes.Add($"Native cloth '{resourceName}' has {namedGridNodes.Length} named PHX grid node(s) without saved semantic role assignments. Core-body grid safety is unverified; review these nodes before using the exported model in Player.");
+            return;
+        }
+
+        // Use the saved role graph rather than guessing from imported bone spellings. PHX grid
+        // Bone rows of either type affect the cloth/rig relationship, so core body bones are
+        // rejected even when fixed. Collider references are separate declarations and allowed.
+        var boneRolesById = profile.Roles
+            .Where(role => role.Category != RigRoleCategory.Unknown &&
+                role.EntityKind is RigNativeEntityKind.Bone or RigNativeEntityKind.Helper)
+            .GroupBy(role => role.Id, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Select(role => role.Category).ToHashSet(), StringComparer.Ordinal);
+
+        var entitiesById = recipe.Entities
+            .Where(entity => entity.OwnerAssetId == model.ModelId &&
+                entity.Kind is RigNativeEntityKind.Bone or RigNativeEntityKind.Helper or RigNativeEntityKind.Unknown)
+            .GroupBy(entity => entity.EntityId)
+            .ToDictionary(group => group.Key, group => group.Select(entity => entity.NativeName).Distinct(StringComparer.Ordinal).ToArray());
+        var categoriesByBoneName = new Dictionary<string, HashSet<RigRoleCategory>>(StringComparer.Ordinal);
+        foreach (RigRoleAssignment assignment in recipe.Assignments)
+        {
+            if (!boneRolesById.TryGetValue(assignment.RoleId, out HashSet<RigRoleCategory>? categories) ||
+                !entitiesById.TryGetValue(assignment.EntityId, out string[]? names)) continue;
+            foreach (string name in names)
+            {
+                if (!categoriesByBoneName.TryGetValue(name, out HashSet<RigRoleCategory>? assignedCategories))
+                    categoriesByBoneName.Add(name, assignedCategories = []);
+                assignedCategories.UnionWith(categories);
+            }
+        }
+
+        int unclassifiedNodes = 0;
+        foreach (NativeClothNode node in namedGridNodes)
+        {
+            if (!categoriesByBoneName.TryGetValue(node.BoneName, out HashSet<RigRoleCategory>? categories))
+            {
+                unclassifiedNodes++;
+                continue;
+            }
+            if (categories.Contains(RigRoleCategory.Body))
+                throw new InvalidDataException($"Native cloth '{resourceName}' uses core body bone '{node.BoneName}' as a PHX grid node (type {node.Type}). Keep core body bones as collider references and use explicitly classified extra-bone roots for the grid.");
+        }
+        if (unclassifiedNodes > 0)
+            notes.Add($"Native cloth '{resourceName}' has {unclassifiedNodes} named PHX grid node(s) without a saved semantic role assignment. Core-body grid safety is unverified; review these nodes before using the exported model in Player.");
     }
 }

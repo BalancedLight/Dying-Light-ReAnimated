@@ -1,0 +1,21 @@
+<UserControl x:Class="ReAnimated.App.Views.ModelBatchSetupView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="6">
+  <TextBlock Text="{Binding SelectedItem.Name, FallbackValue='Select a package'}" FontWeight="SemiBold" TextWrapping="Wrap"/>
+  <TextBlock Text="Attach a setup to this package. Review file revisions and destination mapping before approval." TextWrapping="Wrap" Margin="0,4,0,6"/>
+  <TextBlock Text="{Binding SelectedItem.SetupSummary}" TextWrapping="Wrap" Margin="0,0,0,5"/>
+  <WrapPanel><Button Content="Choose setup…" Command="{Binding ChooseSetupCommand}"/><Button Content="Review linked setup" Command="{Binding ReviewLinkedSetupCommand}"/><Button Content="Remove setup" Command="{Binding RemoveSetupCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding SetupIdentity}" TextWrapping="Wrap" Margin="0,5,0,6"/>
+  <ListBox ItemsSource="{Binding SetupMappings}" MaxHeight="300" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+   <ListBox.ItemTemplate><DataTemplate><StackPanel Margin="4">
+    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="{Binding Details}" TextWrapping="Wrap" Margin="0,3,0,4"/>
+    <ComboBox ItemsSource="{Binding DataContext.SetupDestinations, RelativeSource={RelativeSource AncestorType=UserControl}}" SelectedItem="{Binding Destination, Mode=TwoWay}" DisplayMemberPath="NativeName"/>
+   </StackPanel></DataTemplate></ListBox.ItemTemplate>
+  </ListBox>
+  <Button Content="Preview setup for this package" Command="{Binding PreviewSetupCommand}" HorizontalAlignment="Left" Margin="0,5,0,4"/>
+  <TextBlock Text="{Binding SetupStatus}" TextWrapping="Wrap"/>
+  <TextBlock Text="{Binding SetupReview}" TextWrapping="Wrap" Margin="0,5,0,5"/>
+  <CheckBox IsChecked="{Binding SetupReviewed}"><TextBlock Text="I reviewed the mapping and unresolved requirements for this package revision." TextWrapping="Wrap"/></CheckBox>
+  <Button Content="Attach reviewed setup" Command="{Binding AttachSetupCommand}" HorizontalAlignment="Left" Margin="0,5,0,0" ToolTip="The runner applies the setup to a private snapshot and preserves the saved input file."/>
+ </StackPanel>
+</UserControl>

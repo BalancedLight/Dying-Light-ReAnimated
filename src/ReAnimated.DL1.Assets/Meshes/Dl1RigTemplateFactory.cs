@@ -19,9 +19,9 @@ namespace ReAnimated.DL1.Assets.Meshes;
 /// <para>
 /// Entity selection reuses the same animation-entity boundary the authoring
 /// rig factory uses, so a template covers exactly the rows a DL1 animation can
-/// address. On the validated Windows 1.55 build, both <c>player_1_tpp</c> and
-/// <c>player_1_fpp</c> yield the identical 87-entity skeleton; the two
-/// resources differ only in their skinned-mesh rows, which are excluded here.
+/// address. Each reference retains its own entity order, frame values and
+/// fingerprint. Shared humanoid naming does not establish identical camera
+/// data or native behavior across perspectives.
 /// </para>
 /// </remarks>
 public static class Dl1RigTemplateFactory
@@ -31,9 +31,13 @@ public static class Dl1RigTemplateFactory
 
     /// <summary>
     /// The retail resource the <see cref="PlayerProfileName"/> profile is
-    /// extracted from. The FPP resource shares this skeleton exactly.
+    /// extracted from. The FPP reference is resolved independently.
     /// </summary>
     public const string PlayerSourceResourceName = "player_1_tpp";
+
+    public const string PlayerFppProfileName = "player_fpp";
+
+    public const string PlayerFppSourceResourceName = "player_1_fpp";
 
     private const int MaximumTemplateEntities = 4_096;
 

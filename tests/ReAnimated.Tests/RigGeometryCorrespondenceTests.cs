@@ -4,6 +4,7 @@ using ReAnimated.Core.Geometry;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Retargeting.Conformance;
+using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.Tests;
 
@@ -79,17 +80,75 @@ public sealed class RigGeometryCorrespondenceTests
     }
 
     [Fact]
-    public void StrongGeometryAndHierarchyCanContradictSwappedAnatomicalLabelsForReview()
+    public void ConflictingAnatomicalLabelsRequireAnExplicitOverride()
     {
         var (template, rig, geometry) = Fixture();
         var renamed = new RigDefinition("misleading", "Misleading labels", rig.Bones.Select(b => new BoneDefinition(b.Index,
             b.Index switch { 3 => "LFoot", 12 => "Head", 16 => "Marker", _ => b.Name }, b.ParentIndex, b.LocalBindPose, b.Kind)));
         var evidence = geometry with { BoneNames = renamed.Bones.Select(static b => b.Name).ToImmutableArray() };
         var result = RigCorrespondenceSolver.Solve(template, renamed, new() { GeometryEvidence = evidence });
-        Assert.Equal(3, result.Rows.Single(r => r.TemplateIndex == 3).SourceBoneIndex);
-        Assert.Equal(12, result.Rows.Single(r => r.TemplateIndex == 12).SourceBoneIndex);
-        Assert.True(result.Rows.Single(r => r.TemplateIndex == 3).WasAmbiguous);
-        Assert.Contains("foot.left", result.Rows.Single(r => r.TemplateIndex == 3).Evidence);
+        Assert.Equal(RigBoneDisposition.Synthesized, result.Rows.Single(r => r.TemplateIndex == 3).Disposition);
+        Assert.Equal(RigBoneDisposition.Extra, result.Rows.Single(r => r.SourceBoneIndex == 3).Disposition);
+        Assert.Equal(RigBoneDisposition.Extra, result.Rows.Single(r => r.SourceBoneIndex == 12).Disposition);
+        var reviewed = RigCorrespondenceSolver.Solve(template, renamed, new() {
+            GeometryEvidence = evidence,
+            RoleOverrides = ImmutableDictionary<string, string>.Empty.Add("body.head", "LFoot").Add("foot.left", "Head") });
+        Assert.Equal(3, reviewed.Rows.Single(r => r.TemplateIndex == 3).SourceBoneIndex);
+        Assert.Equal(12, reviewed.Rows.Single(r => r.TemplateIndex == 12).SourceBoneIndex);
+        Assert.True(reviewed.Rows.Single(r => r.TemplateIndex == 3).Candidates[0].UserSelected);
+    }
+
+    [Fact]
+    public void DecorativeRootSiblingCannotReplaceTheSupportedBipedRoot()
+    {
+        var (template, originalRig, originalGeometry) = Fixture();
+        var names = new Dictionary<int, string>
+        {
+            [0] = "Bip001",
+            [1] = "Bip001 Pelvis",
+            [3] = "Bip001 Head",
+            [10] = "Bip001 L Thigh",
+            [13] = "Bip001 R Thigh",
+        };
+        var bones = originalRig.Bones.Select(bone => new BoneDefinition(
+            bone.Index,
+            names.GetValueOrDefault(bone.Index, bone.Name),
+            bone.ParentIndex,
+            bone.LocalBindPose,
+            bone.Kind)).ToList();
+        Vector3D rootPosition = originalGeometry.GlobalBindMatrices[0].Translation;
+        Vector3D decorativePosition = originalGeometry.GlobalBindMatrices[1].Translation;
+        bones.Add(new BoneDefinition(
+            bones.Count,
+            "Root",
+            0,
+            new TransformTRS(
+                decorativePosition - rootPosition,
+                QuaternionD.Identity,
+                Vector3D.One),
+            BoneKind.Helper));
+        var rig = new RigDefinition("two-roots", "Biped with decoration", bones);
+        var geometry = new RigGeometryEvidence(
+            new string('a', 64),
+            "synthetic-current-binding",
+            rig.Bones.Select(static bone => bone.Name).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.ParentIndex).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.LocalBindPose).ToImmutableArray(),
+            originalGeometry.GlobalBindMatrices.Add(
+                TransformMatrix.CreateTranslation(decorativePosition)),
+            originalGeometry.Supports);
+
+        RigCorrespondence result = RigCorrespondenceSolver.Solve(
+            template,
+            rig,
+            new RigCorrespondenceOptions { GeometryEvidence = geometry });
+
+        Assert.Equal("Bip001", result.Rows.Single(row =>
+            row.TemplateIndex >= 0 && row.Role == "body.root").SourceName);
+        Assert.Equal("Bip001 Pelvis", result.Rows.Single(row =>
+            row.TemplateIndex >= 0 && row.Role == "body.pelvis").SourceName);
+        Assert.Equal(RigBoneDisposition.Extra, result.Rows.Single(row =>
+            row.SourceName == "Root").Disposition);
     }
 
     [Fact]
@@ -129,12 +188,312 @@ public sealed class RigGeometryCorrespondenceTests
         }
         var template = new Dl1RigTemplate("synthetic", "synthetic", new string('b', 64), entities);
         var result = RigCorrespondenceSolver.Solve(template, rig, new() { GeometryEvidence = geometry });
-        Assert.Equal("spine", result.Rows.Single(r => r.TemplateIndex >= 0 && r.Role == "body.pelvis").SourceName);
-        Assert.Equal("spine_001", result.Rows.Single(r => r.TemplateIndex >= 0 && r.Role == "body.spine.0").SourceName);
+        Assert.Equal(RigBoneDisposition.Synthesized, result.Rows.Single(r => r.TemplateIndex >= 0 && r.Role == "body.pelvis").Disposition);
+        Assert.DoesNotContain(result.Rows.Where(r => r.TemplateIndex >= 0 && r.SourceName is not null), row =>
+            HumanoidBoneSemanticClassifier.Classify(row.SourceName)?.Role is { } namedRole && namedRole != row.Role);
         Assert.Equal("Head", result.Rows.Single(r => r.TemplateIndex >= 0 && r.Role == "body.head").SourceName);
         foreach (string role in new[] { "body.root", "body.spine.base", "body.neck.1" })
             Assert.Equal(RigBoneDisposition.Synthesized, result.Rows.Single(r => r.TemplateIndex >= 0 && r.Role == role).Disposition);
         Assert.Equal(RigBoneDisposition.Extra, result.Rows.Single(r => r.SourceName == "Jaw").Disposition);
+    }
+
+    [Fact]
+    public void NamedLimbAnchorsConstrainAxialMappingAndWeightedGarmentsRemainExtra()
+    {
+        var (template, originalRig, originalGeometry) = Fixture();
+        var roleNames = new Dictionary<int, string> {
+            [3] = "Head", [4] = "topArm.L", [5] = "bottomArm.L", [6] = "Hand.L",
+            [7] = "topArm.R", [8] = "bottomArm.R", [9] = "Hand.R",
+            [10] = "legTop.L", [11] = "legBottom.L", [12] = "footFront.L",
+            [13] = "legTop.R", [14] = "legBottom.R", [15] = "footFront.R" };
+        var bones = originalRig.Bones.Select(bone => new BoneDefinition(bone.Index,
+            roleNames.GetValueOrDefault(bone.Index, bone.Name), bone.ParentIndex, bone.LocalBindPose, bone.Kind)).ToList();
+        var globals = originalGeometry.GlobalBindMatrices.ToList();
+        var supports = originalGeometry.Supports.ToList();
+        foreach ((string name, int parent, int coincident) in new[] {
+            ("Hair.L", 2, 3), ("Skirt_01", 0, 1), ("ClothPanel.R", 2, 2),
+            ("Tassel.L", 2, 4), ("mixamorig:F_skirt1", 0, 1),
+            ("HatCrown", 3, 4), ("Ornament", 3, 4) })
+        {
+            int index = bones.Count;
+            Vector3D point = globals[coincident].Translation +
+                (name == "HatCrown" ? new Vector3D(0, 3, 0) : Vector3D.Zero);
+            bones.Add(new BoneDefinition(index, name, parent,
+                new TransformTRS(point - globals[parent].Translation, QuaternionD.Identity, Vector3D.One)));
+            globals.Add(TransformMatrix.CreateTranslation(point));
+            supports.Add(new RigBoneGeometrySupport(index, 3, 1, point, point, point));
+        }
+        var rig = new RigDefinition("named-limbs", "Named limb and garment controls", bones);
+        var geometry = new RigGeometryEvidence(new string('a', 64), "synthetic-current-binding",
+            rig.Bones.Select(static bone => bone.Name).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.ParentIndex).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.LocalBindPose).ToImmutableArray(),
+            globals.ToImmutableArray(), supports.ToImmutableArray());
+
+        var result = RigCorrespondenceSolver.Solve(template, rig, new() { GeometryEvidence = geometry });
+        foreach ((string role, string name) in new[] {
+            ("arm.left.upper", "topArm.L"), ("arm.left.lower", "bottomArm.L"),
+            ("arm.right.upper", "topArm.R"), ("arm.right.lower", "bottomArm.R"),
+            ("leg.left.upper", "legTop.L"), ("leg.left.lower", "legBottom.L"), ("foot.left", "footFront.L"),
+            ("leg.right.upper", "legTop.R"), ("leg.right.lower", "legBottom.R"), ("foot.right", "footFront.R") })
+            Assert.Equal(name, result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == role).SourceName);
+        Assert.Equal("node_1", result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == "body.pelvis").SourceName);
+        Assert.Equal("Head", result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == "body.head").SourceName);
+        foreach (string name in new[] { "Hair.L", "Skirt_01", "ClothPanel.R", "Tassel.L", "mixamorig:F_skirt1", "HatCrown", "Ornament" })
+        {
+            Assert.Equal(RigBoneDisposition.Extra, result.Rows.Single(row => row.SourceName == name).Disposition);
+            Assert.DoesNotContain(result.Rows.Where(row => row.TemplateIndex >= 0).SelectMany(row => row.Candidates),
+                candidate => candidate.SourceName == name);
+        }
+
+        var manuallySelected = RigCorrespondenceSolver.Solve(template, rig, new() {
+            GeometryEvidence = geometry,
+            RoleOverrides = ImmutableDictionary<string, string>.Empty.Add("body.pelvis", "Skirt_01") });
+        Assert.Equal("Skirt_01", manuallySelected.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == "body.pelvis").SourceName);
+    }
+
+    [Fact]
+    public void NamedPelvisCanMapWhenSourceRootStartsAtFeetAndTargetRootSharesPelvisPosition()
+    {
+        var (originalTemplate, originalRig, originalGeometry) = Fixture();
+        Dl1RigTemplateEntity[] entities = originalTemplate.Entities.ToArray();
+        Vector3D pelvisPoint = entities[1].GlobalRestMatrix.Translation;
+        entities[0] = entities[0] with {
+            GlobalRestMatrix = TransformMatrix.CreateTranslation(pelvisPoint),
+            LocalRestMatrix = TransformMatrix.CreateTranslation(pelvisPoint) };
+        entities[1] = entities[1] with { LocalRestMatrix = TransformMatrix.Identity };
+        var template = new Dl1RigTemplate("coincident-root", "synthetic", new string('b', 64), entities);
+        var roleNames = new Dictionary<int, string> {
+            [0] = "root", [1] = "pelvis", [3] = "Head", [10] = "thigh_l", [13] = "thigh_r" };
+        var rig = new RigDefinition("pelvis-at-feet-root", "Named pelvis", originalRig.Bones.Select(bone =>
+            new BoneDefinition(bone.Index, roleNames.GetValueOrDefault(bone.Index, bone.Name),
+                bone.ParentIndex, bone.LocalBindPose, bone.Kind)));
+        var geometry = originalGeometry with { BoneNames = rig.Bones.Select(static bone => bone.Name).ToImmutableArray() };
+
+        var result = RigCorrespondenceSolver.Solve(template, rig, new() { GeometryEvidence = geometry });
+        Assert.Equal("root", result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == "body.root").SourceName);
+        Assert.Equal("pelvis", result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == "body.pelvis").SourceName);
+    }
+
+    [Fact]
+    public void SiblingShoulderAndUpperArmKeepShoulderExtraWhileUpperArmMaps()
+    {
+        var (originalTemplate, originalRig, originalGeometry) = Fixture();
+        var targetEntities = new List<Dl1RigTemplateEntity>();
+        var indexMap = new Dictionary<int, int>();
+        foreach (Dl1RigTemplateEntity entity in originalTemplate.Entities)
+        {
+            int parent = entity.ParentIndex < 0 ? -1 : indexMap[entity.ParentIndex];
+            if (entity.SemanticRole is "arm.left.upper" or "arm.right.upper")
+            {
+                string role = entity.SemanticRole == "arm.left.upper" ? "arm.left.clavicle" : "arm.right.clavicle";
+                Vector3D point = entity.GlobalRestMatrix.Translation;
+                point = new Vector3D(point.X * 0.5, point.Y, point.Z);
+                int clavicle = targetEntities.Count;
+                targetEntities.Add(new Dl1RigTemplateEntity {
+                    Index = clavicle, Name = role, SemanticRole = role, ParentIndex = parent,
+                    Kind = BoneKind.Deform, IsDeform = true,
+                    GlobalRestMatrix = TransformMatrix.CreateTranslation(point),
+                    LocalRestMatrix = TransformMatrix.CreateTranslation(point - targetEntities[parent].GlobalRestMatrix.Translation) });
+                parent = clavicle;
+            }
+            indexMap.Add(entity.Index, targetEntities.Count);
+            targetEntities.Add(entity with {
+                Index = targetEntities.Count, ParentIndex = parent,
+                LocalRestMatrix = parent < 0 ? entity.GlobalRestMatrix :
+                    TransformMatrix.CreateTranslation(entity.GlobalRestMatrix.Translation - targetEntities[parent].GlobalRestMatrix.Translation) });
+        }
+        var template = new Dl1RigTemplate("sibling-shoulder", "synthetic", new string('b', 64), targetEntities);
+        var names = new Dictionary<int, string> {
+            [3] = "Head", [4] = "topArm.L", [5] = "bottomArm.L", [6] = "Hand.L",
+            [7] = "topArm.R", [8] = "bottomArm.R", [9] = "Hand.R",
+            [10] = "legTop.L", [11] = "legBottom.L", [12] = "footFront.L",
+            [13] = "legTop.R", [14] = "legBottom.R", [15] = "footFront.R",
+            [16] = "FaceMarker" };
+        var bones = originalRig.Bones.Select(bone => new BoneDefinition(bone.Index,
+            names.GetValueOrDefault(bone.Index, bone.Name), bone.ParentIndex, bone.LocalBindPose, bone.Kind)).ToList();
+        var globals = originalGeometry.GlobalBindMatrices.ToList();
+        var supports = originalGeometry.Supports.ToList();
+        foreach ((string name, int upperArm) in new[] { ("shoulder.L", 4), ("shoulder.R", 7) })
+        {
+            int index = bones.Count;
+            Vector3D upper = globals[upperArm].Translation;
+            Vector3D point = new(upper.X * 0.5, upper.Y, upper.Z);
+            bones.Add(new BoneDefinition(index, name, 2,
+                new TransformTRS(point - globals[2].Translation, QuaternionD.Identity, Vector3D.One)));
+            globals.Add(TransformMatrix.CreateTranslation(point));
+            supports.Add(new RigBoneGeometrySupport(index, 3, 1, point, point, point));
+        }
+        var rig = new RigDefinition("sibling-shoulder-source", "Sibling shoulder", bones);
+        var geometry = new RigGeometryEvidence(new string('a', 64), "synthetic-current-binding",
+            rig.Bones.Select(static bone => bone.Name).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.ParentIndex).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.LocalBindPose).ToImmutableArray(),
+            globals.ToImmutableArray(), supports.ToImmutableArray());
+
+        RigCorrespondence result = RigCorrespondenceSolver.Solve(template, rig, new() { GeometryEvidence = geometry });
+        foreach ((string side, string shoulder, string upperArm) in new[] {
+            ("left", "shoulder.L", "topArm.L"), ("right", "shoulder.R", "topArm.R") })
+        {
+            Assert.Equal(RigBoneDisposition.Synthesized,
+                result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == $"arm.{side}.clavicle").Disposition);
+            Assert.Equal(upperArm,
+                result.Rows.Single(row => row.TemplateIndex >= 0 && row.Role == $"arm.{side}.upper").SourceName);
+            Assert.Equal(RigBoneDisposition.Extra, result.Rows.Single(row => row.SourceName == shoulder).Disposition);
+        }
+    }
+
+    [Fact]
+    public void NamedUnweightedFingerIntermediatesMapWhenTheirDistalChainHasSkinSupport()
+    {
+        var (baseTemplate, baseRig, baseGeometry) = Fixture();
+        var targetEntities = baseTemplate.Entities.ToList();
+        var sourceBones = baseRig.Bones.ToList();
+        var sourceGlobals = baseGeometry.GlobalBindMatrices.ToList();
+        Vector3D sourceOffset = sourceGlobals[0].Translation;
+        int targetParent = 6;
+        int sourceParent = 6;
+        for (int segment = 1; segment <= 3; segment++)
+        {
+            string role = $"finger.left.index.{segment}";
+            Vector3D targetPoint = new(.9 + (.08 * segment), 1.4, .15);
+            Vector3D sourcePoint = (targetPoint * 1.4) + sourceOffset;
+            int targetIndex = targetEntities.Count;
+            int sourceIndex = sourceBones.Count;
+            targetEntities.Add(new Dl1RigTemplateEntity
+            {
+                Index = targetIndex,
+                Name = $"l_finger1{segment}",
+                SemanticRole = role,
+                ParentIndex = targetParent,
+                Kind = BoneKind.Deform,
+                IsDeform = true,
+                GlobalRestMatrix = TransformMatrix.CreateTranslation(targetPoint),
+                LocalRestMatrix = TransformMatrix.CreateTranslation(
+                    targetPoint - targetEntities[targetParent].GlobalRestMatrix.Translation),
+            });
+            sourceBones.Add(new BoneDefinition(
+                sourceIndex,
+                $"mixamorig:LeftHandIndex{segment}",
+                sourceParent,
+                new TransformTRS(
+                    sourcePoint - sourceGlobals[sourceParent].Translation,
+                    QuaternionD.Identity,
+                    Vector3D.One),
+                segment < 3 ? BoneKind.Helper : BoneKind.Deform));
+            sourceGlobals.Add(TransformMatrix.CreateTranslation(sourcePoint));
+            targetParent = targetIndex;
+            sourceParent = sourceIndex;
+        }
+
+        var template = new Dl1RigTemplate("synthetic", "synthetic", new string('b', 64), targetEntities);
+        var rig = new RigDefinition("source-with-finger", "Named intermediate fingers", sourceBones);
+        Vector3D distalPoint = sourceGlobals[sourceParent].Translation;
+        var supports = baseGeometry.Supports.Add(new RigBoneGeometrySupport(
+            sourceParent, 3, 1, distalPoint, distalPoint, distalPoint));
+        var geometry = new RigGeometryEvidence(
+            new string('a', 64),
+            "synthetic-current-binding",
+            rig.Bones.Select(static bone => bone.Name).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.ParentIndex).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.LocalBindPose).ToImmutableArray(),
+            sourceGlobals.ToImmutableArray(),
+            supports);
+
+        RigCorrespondence result = RigCorrespondenceSolver.Solve(
+            template, rig, new() { GeometryEvidence = geometry });
+        for (int segment = 1; segment <= 3; segment++)
+        {
+            RigCorrespondenceRow row = result.Rows.Single(candidate =>
+                candidate.Role == $"finger.left.index.{segment}" &&
+                candidate.TemplateIndex >= 0);
+            Assert.Equal(RigBoneDisposition.Mapped, row.Disposition);
+            Assert.Equal($"mixamorig:LeftHandIndex{segment}", row.SourceName);
+        }
+        Assert.Equal(BoneKind.Helper, rig.Bones[rig.BoneCount - 3].Kind);
+        Assert.Equal(BoneKind.Helper, rig.Bones[rig.BoneCount - 2].Kind);
+
+        TransformMatrix[] displacedGlobals = sourceGlobals.ToArray();
+        for (int index = rig.BoneCount - 3; index < rig.BoneCount - 1; index++)
+        {
+            displacedGlobals[index] = TransformMatrix.CreateTranslation(
+                displacedGlobals[index].Translation + new Vector3D(0, 0, .8));
+        }
+        var displacedRig = new RigDefinition(
+            "source-with-displaced-finger",
+            "Named intermediate fingers with changed rest",
+            rig.Bones.Select(bone => new BoneDefinition(
+                bone.Index,
+                bone.Name,
+                bone.ParentIndex,
+                new TransformTRS(
+                    bone.ParentIndex < 0
+                        ? displacedGlobals[bone.Index].Translation
+                        : displacedGlobals[bone.Index].Translation -
+                          displacedGlobals[bone.ParentIndex].Translation,
+                    QuaternionD.Identity,
+                    Vector3D.One),
+                bone.Index >= rig.BoneCount - 3 && bone.Index < rig.BoneCount - 1
+                    ? BoneKind.Deform
+                    : bone.Kind)));
+        var displacedEvidence = new RigGeometryEvidence(
+            new string('a', 64),
+            "synthetic-current-binding",
+            displacedRig.Bones.Select(static bone => bone.Name).ToImmutableArray(),
+            displacedRig.Bones.Select(static bone => bone.ParentIndex).ToImmutableArray(),
+            displacedRig.Bones.Select(static bone => bone.LocalBindPose).ToImmutableArray(),
+            displacedGlobals.ToImmutableArray(),
+            supports);
+        RigCorrespondence lowScore = RigCorrespondenceSolver.Solve(
+            template, displacedRig, new()
+            {
+                GeometryEvidence = displacedEvidence,
+            });
+        RigCorrespondenceRow proposed = lowScore.Rows.Single(row =>
+            row.Role == "finger.left.index.1" && row.TemplateIndex >= 0);
+        Assert.Equal(RigBoneDisposition.Mapped, proposed.Disposition);
+        Assert.Equal(BoneKind.Deform, displacedRig.Bones[displacedRig.BoneCount - 3].Kind);
+        Assert.True(proposed.Candidates[0].Score < 0.58, proposed.Evidence);
+        Assert.False(proposed.WasAmbiguous, proposed.Evidence);
+        Assert.Contains("unique canonical finger candidate", proposed.Evidence);
+
+        var directlyWeighted = displacedEvidence with
+        {
+            Supports = displacedEvidence.Supports
+                .Add(new RigBoneGeometrySupport(
+                    displacedRig.BoneCount - 3, 3, 1,
+                    displacedGlobals[displacedRig.BoneCount - 3].Translation,
+                    displacedGlobals[displacedRig.BoneCount - 3].Translation,
+                    displacedGlobals[displacedRig.BoneCount - 3].Translation))
+                .Add(new RigBoneGeometrySupport(
+                    displacedRig.BoneCount - 2, 3, 1,
+                    displacedGlobals[displacedRig.BoneCount - 2].Translation,
+                    displacedGlobals[displacedRig.BoneCount - 2].Translation,
+                    displacedGlobals[displacedRig.BoneCount - 2].Translation)),
+        };
+        Dl1RigTemplateEntity[] rotatedEntities = template.Entities.ToArray();
+        for (int segment = 1; segment <= 3; segment++)
+        {
+            int index = Array.FindIndex(rotatedEntities, entity =>
+                entity.SemanticRole == $"finger.left.index.{segment}");
+            Vector3D point = new(.9, 1.4 - (.08 * segment), .15);
+            int parent = rotatedEntities[index].ParentIndex;
+            rotatedEntities[index] = rotatedEntities[index] with
+            {
+                GlobalRestMatrix = TransformMatrix.CreateTranslation(point),
+                LocalRestMatrix = TransformMatrix.CreateTranslation(
+                    point - rotatedEntities[parent].GlobalRestMatrix.Translation),
+            };
+        }
+        var rotatedTemplate = new Dl1RigTemplate(
+            "synthetic-rotated-finger", "synthetic", new string('b', 64), rotatedEntities);
+        RigCorrespondence weightedLowScore = RigCorrespondenceSolver.Solve(
+            rotatedTemplate, displacedRig, new() { GeometryEvidence = directlyWeighted });
+        RigCorrespondenceRow weightedProposal = weightedLowScore.Rows.Single(row =>
+            row.Role == "finger.left.index.1" && row.TemplateIndex >= 0);
+        Assert.Equal(RigBoneDisposition.Mapped, weightedProposal.Disposition);
+        Assert.False(weightedProposal.WasAmbiguous, weightedProposal.Evidence);
+        Assert.Equal("mixamorig:LeftHandIndex1", weightedProposal.SourceName);
     }
 
     internal static (Dl1RigTemplate Template, RigDefinition Rig, RigGeometryEvidence Geometry) Fixture()

@@ -26,6 +26,7 @@ public static class ConformModelCommand
         """
         Usage: DLReAnimated conform-model --fbx <model.fbx> --template-mesh <resource>
                                           [--out <model.dlrmodel>]
+                                          [--model-id <guid>]
                                           [--strength <0..1>] [--scale <value>]
                                           [--scale-region leg|torso|arm]
                                           [--drop-extras] [--ignore-morphs] [--legacy-correspondence]
@@ -34,7 +35,10 @@ public static class ConformModelCommand
           --template-mesh  A decoded retail type-272 mesh resource whose skeleton
                            is the conversion target, for example an extracted
                            player_1_tpp payload.
-          --out            Optional .dlrmodel destination for the conformed model.
+          --out            Optional .dlrmodel destination. Ambiguous geometry mappings
+                           must first be reviewed and accepted in Rig Studio.
+          --model-id       Optional stable identity for an intentional separate model
+                           variant of the same FBX. Reuse the GUID when rebuilding it.
           --strength       Conformance strength. 0 (default) keeps the source
                            model's segment lengths; 1 explicitly imposes DL1
                            rest proportions. Rest-pose conversion is separate.
@@ -66,6 +70,7 @@ public static class ConformModelCommand
                 options.FbxPath,
                 new FbxModelAuthoringImportOptions
                 {
+                    ModelIdentityOverride = options.ModelIdOverride,
                     IgnoreMorphChannels = options.IgnoreMorphChannels,
                     DecodeAnimationClips = false,
                 },
@@ -79,6 +84,15 @@ public static class ConformModelCommand
             new RigCorrespondenceOptions { DropExtraBones = options.DropExtras,
                 GeometryEvidence = options.LegacyCorrespondence ? null : FbxRigGeometryEvidence.Build(model, cancellationToken) },
             cancellationToken);
+        if (options.OutputPath is not null &&
+            correspondence.Rows.Any(static row => row.Disposition == RigBoneDisposition.Mapped && row.WasAmbiguous))
+        {
+            int pending = correspondence.Rows.Count(static row =>
+                row.Disposition == RigBoneDisposition.Mapped && row.WasAmbiguous);
+            throw new InvalidDataException(
+                $"Conformance has {pending:N0} mapping proposal(s) requiring review; no model was written. " +
+                "Run without --out to inspect candidate evidence, then accept or change the rows in Rig Studio before saving.");
+        }
         RigLandmarkSolution landmark = RigLandmarkSolver.Solve(
             template,
             source,
@@ -266,6 +280,8 @@ public static class ConformModelCommand
 
         public string? OutputPath { get; init; }
 
+        public Guid? ModelIdOverride { get; init; }
+
         public double Strength { get; init; }
 
         public bool LegacyCorrespondence { get; init; }
@@ -283,6 +299,7 @@ public static class ConformModelCommand
             string? fbx = null;
             string? templateMesh = null;
             string? output = null;
+            Guid? modelIdOverride = null;
             double strength = 0.0;
             bool legacyCorrespondence = false;
             double? scale = null;
@@ -303,6 +320,16 @@ public static class ConformModelCommand
                         break;
                     case "--out":
                         output = RequireValue(args, ref index, argument);
+                        break;
+                    case "--model-id":
+                        if (modelIdOverride is not null ||
+                            !Guid.TryParse(RequireValue(args, ref index, argument), out Guid parsedModelId) ||
+                            parsedModelId == Guid.Empty)
+                        {
+                            throw new ArgumentException("--model-id must be one nonempty GUID supplied once.");
+                        }
+
+                        modelIdOverride = parsedModelId;
                         break;
                     case "--strength":
                         strength = ParseDouble(RequireValue(args, ref index, argument), argument);
@@ -363,6 +390,7 @@ public static class ConformModelCommand
                 FbxPath = fullFbx,
                 TemplateMeshPath = fullTemplate,
                 OutputPath = output is null ? null : Path.GetFullPath(output),
+                ModelIdOverride = modelIdOverride,
                 Strength = strength,
                 ScaleOverride = scale,
                 ScaleRegion = region,

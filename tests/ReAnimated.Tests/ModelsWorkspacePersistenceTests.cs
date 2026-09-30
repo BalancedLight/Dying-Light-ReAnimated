@@ -13,6 +13,65 @@ namespace ReAnimated.Tests;
 public sealed class ModelsWorkspacePersistenceTests
 {
     [Fact]
+    [Trait("Gate", "ViewModelWpf")]
+    public void ModelNameKeepsWordSeparatorsDuringPropertyChangedTyping()
+    {
+        using var viewModel = new ModelsWorkspaceViewModel(
+            new NullProjectFileDialogs(),
+            static _ => { },
+            static _ => Task.CompletedTask,
+            static () => null);
+
+        viewModel.ModelName = "Rig ";
+        viewModel.ModelName += "fit";
+
+        Assert.Equal("Rig fit", viewModel.ModelName);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task ProjectModelsImportFbxAddsTwoIndependentModelsToOneSavedProject()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string projectPath = Path.Combine(directory, "multi-model.dlraproj");
+            string firstPath = Path.Combine(directory, "generic-first.fbx");
+            string secondPath = Path.Combine(directory, "generic-second.fbx");
+            byte[] sameSource = BlenderFbxStrictValidationTests.CreateValidModelFixture();
+            await File.WriteAllBytesAsync(firstPath, sameSource);
+            await File.WriteAllBytesAsync(secondPath, sameSource);
+            await using var assets = new Dl1AssetWorkspace(
+                Path.Combine(directory, "assets.sqlite3"),
+                Path.Combine(directory, "cache"));
+            await using var viewModel = new MainWindowViewModel(
+                new JsonWorkspaceStateStore(Path.Combine(directory, "recovery.json")),
+                new ProjectPathDialogs(projectPath, secondPath),
+                assets);
+
+            await viewModel.Models.ImportPathAsync(
+                firstPath,
+                CustomModelRigMode.Auto);
+            Assert.Single(viewModel.CurrentProject.Models);
+
+            await viewModel.ImportCustomModelCommand.ExecuteAsync(null);
+            Assert.Equal(2, viewModel.CurrentProject.Models.Length);
+            Assert.Equal(2, viewModel.CurrentProject.Models
+                .Select(static model => model.AssetId).Distinct().Count());
+
+            await viewModel.SaveWorkspaceCommand.ExecuteAsync(null);
+            DlraProject saved = ProjectSerializer.Load(projectPath);
+            Assert.Equal(2, saved.Models.Length);
+            Assert.NotNull(saved.ModelsWorkspace);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "ProjectPersistence")]
     public async Task DifferentCustomModelAddsLibraryEntryWithoutReplacingExistingVariant()
@@ -571,6 +630,180 @@ public sealed class ModelsWorkspacePersistenceTests
 
     [Fact]
     [Trait("Gate", "ViewModelWpf")]
+    public async Task AppliedConformanceKeepsSourceDecisionsWithoutResolvingAgainstOutputRig()
+    {
+        using var viewModel = new ModelsWorkspaceViewModel(
+            new NullProjectFileDialogs(),
+            static _ => { },
+            static _ => Task.CompletedTask,
+            static () => null,
+            resolveRigTemplate: (profile, _) =>
+                Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)),
+            captureAuthoredLayer: static (model, _) => model);
+        FbxModelAuthoringImportResult sourceModel =
+            RigConformanceWizardTests.CreateModel();
+        FbxModelSurface originalSurface = sourceModel.Surfaces[0];
+        FbxModelVertex vertex = originalSurface.Vertices[0];
+        RigDefinition sourceRig = sourceModel.Rig!;
+        SkeletonPose bind = sourceRig.CreateBindPose();
+        var vertices = ImmutableArray.CreateBuilder<FbxModelVertex>();
+        var triangles = ImmutableArray.CreateBuilder<uint>();
+        for (int index = 0; index < sourceRig.BoneCount; index++)
+        {
+            Vector3D point = bind.GlobalMatrices[index].Translation;
+            uint first = (uint)vertices.Count;
+            vertices.Add(vertex with
+            {
+                Position = point,
+                BoneIndices = [index],
+                BoneWeights = [1.0],
+            });
+            vertices.Add(vertex with
+            {
+                Position = point + new Vector3D(0.01, 0, 0),
+                BoneIndices = [index],
+                BoneWeights = [1.0],
+            });
+            vertices.Add(vertex with
+            {
+                Position = point + new Vector3D(0, 0.01, 0),
+                BoneIndices = [index],
+                BoneWeights = [1.0],
+            });
+            triangles.Add(first);
+            triangles.Add(first + 1);
+            triangles.Add(first + 2);
+        }
+
+        CustomModelDocument sourceDocument = sourceModel.Package.Document;
+        sourceModel = sourceModel with
+        {
+            Package = sourceModel.Package with
+            {
+                Document = sourceDocument with
+                {
+                    Meshes =
+                    [
+                        sourceDocument.Meshes[0] with
+                        {
+                            ControlPointCount = vertices.Count,
+                            PolygonCount = sourceRig.BoneCount,
+                            TriangleCount = sourceRig.BoneCount,
+                            ExpandedVertexCount = vertices.Count,
+                        },
+                    ],
+                },
+            },
+            Surfaces =
+            [
+                originalSurface with
+                {
+                    Vertices = vertices.ToImmutable(),
+                    Indices = triangles.ToImmutable(),
+                    PaletteBoneIndices = Enumerable.Range(0, sourceRig.BoneCount)
+                        .ToImmutableArray(),
+                    InverseBindMatrices = bind.GlobalMatrices
+                        .Select(static matrix => matrix.InvertedAffine())
+                        .ToImmutableArray(),
+                },
+            ],
+        };
+        viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+            sourceModel,
+            "generic-source.dlrmodel",
+            new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        FbxModelAuthoringImportResult original = viewModel.CaptureProjectSession().Model!;
+        await viewModel.Conformance.ResolveTemplateCommand.ExecuteAsync(null);
+        viewModel.Conformance.Mappings.Single(row => row.Name == "pelvis")
+            .SelectedSourceName = "CC_Base_Pelvis";
+        if (viewModel.Conformance.HasPendingMappingReview)
+        {
+            viewModel.Conformance.AcceptMappingProposalsCommand.Execute(null);
+        }
+        foreach ((string role, string sourceName) in new[]
+        {
+            ("leg.left.upper", "CC_Base_L_Thigh"),
+            ("leg.left.lower", "CC_Base_L_Calf"),
+            ("foot.left", "CC_Base_L_Foot"),
+            ("leg.right.upper", "CC_Base_R_Thigh"),
+            ("leg.right.lower", "CC_Base_R_Calf"),
+            ("foot.right", "CC_Base_R_Foot"),
+        })
+        {
+            RigConformanceMappingItemViewModel row =
+                viewModel.Conformance.Mappings.First(item =>
+                    item.Role == role && item.Row.TemplateIndex >= 0);
+            Assert.Contains(sourceName, row.Candidates);
+            row.SelectedSourceName = sourceName;
+        }
+        Assert.True(
+            viewModel.Conformance.ApplyConformanceCommand.CanExecute(null),
+            $"status={viewModel.Conformance.SolveStatus}; pending={viewModel.Conformance.HasPendingMappingReview}; missing={viewModel.Conformance.HasMissingAnatomicalCorrespondence}; roles={string.Join(',', viewModel.Conformance.MissingCoreRoles)}");
+
+        viewModel.Conformance.ApplyConformanceCommand.Execute(null);
+
+        FbxModelAuthoringImportResult applied = viewModel.CaptureProjectSession().Model!;
+        Assert.NotEqual(original.Package.Document.RigSignature,
+            applied.Package.Document.RigSignature);
+        Assert.Equal(-1, applied.Rig!.GetBoneIndex("CC_Base_Pelvis"));
+        Assert.Contains(applied.Package.Document.RigConformance!.RoleOverrides,
+            row => row.Role == "body.pelvis" &&
+                row.SourceBoneName == "CC_Base_Pelvis");
+        Assert.True(applied.Package.Document.RigConformance.MatchesAppliedOutputRig(
+            applied.Rig!,
+            applied.Package.Document.Source.ContentSha256));
+        Assert.True(original.Package.SourceFbx.AsSpan().SequenceEqual(
+            applied.Package.SourceFbx.AsSpan()));
+        string packageDirectory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string packagePath = Path.Combine(packageDirectory, "generic-applied.dlrmodel");
+            CustomModelPackageSerializer.SaveAtomic(applied.Package, packagePath);
+            CustomModelPackage reopened = CustomModelPackageSerializer.Load(packagePath);
+            Assert.Equal(
+                applied.Package.Document.RigConformance.AppliedOutputRigSignature,
+                reopened.Document.RigConformance!.AppliedOutputRigSignature);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(packageDirectory);
+        }
+        Assert.DoesNotContain("could not be solved",
+            viewModel.Conformance.SolveStatus,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.False(viewModel.Conformance.ApplyConformanceCommand.CanExecute(null));
+        Assert.True(viewModel.UndoHelperEditCommand.CanExecute(null));
+
+        viewModel.UndoHelperEditCommand.Execute(null);
+        Assert.Equal(original.Package.Document.RigSignature,
+            viewModel.CaptureProjectSession().Model!.Package.Document.RigSignature);
+
+        // A marker that does not match the displayed rig must not suppress a
+        // genuinely stale source-bone override failure.
+        FbxModelAuthoringImportResult invalidMarker = applied with
+        {
+            Package = applied.Package with
+            {
+                Document = applied.Package.Document with
+                {
+                    RigConformance = applied.Package.Document.RigConformance with
+                    {
+                        AppliedOutputRigSignature = new string('a', 64),
+                    },
+                },
+            },
+        };
+        viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+            invalidMarker,
+            "generic-invalid-marker.dlrmodel",
+            new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        Assert.Contains("could not be solved",
+            viewModel.Conformance.SolveStatus,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("Gate", "ViewModelWpf")]
     public void StudioHelperHistoryRestoresDecisionsWithoutRevivingStaleJobs()
     {
         using var viewModel = new ModelsWorkspaceViewModel(new EyeCameraProjectDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
@@ -701,6 +934,47 @@ public sealed class ModelsWorkspacePersistenceTests
             Assert.Equal("generic_prop_anchor",
                 Assert.Single(confirmed.AuthoredHelpers).Name);
             Assert.Equal(2, dialogs.ReimportConfirmationCalls);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task AddFbxAsNewModelKeepsASeparateIdentityWithoutReimportConfirmation()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            byte[] fbx = BlenderFbxStrictValidationTests.CreateValidModelFixture();
+            string path = Path.Combine(directory, "generic-second.fbx");
+            await File.WriteAllBytesAsync(path, fbx);
+            FbxModelAuthoringImportResult first = WithModelIdentity(
+                FbxModelAuthoringImporter.Import(fbx, "generic-first.fbx"),
+                Guid.NewGuid(),
+                "Generic first model");
+            var dialogs = new ReimportProjectDialogs { ConfirmReimport = false };
+            using var viewModel = new ModelsWorkspaceViewModel(
+                dialogs,
+                static _ => { },
+                static _ => Task.CompletedTask,
+                static () => null);
+            viewModel.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+                first,
+                "generic-first.dlrmodel",
+                new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+
+            await viewModel.ImportPathAsNewModelAsync(path, first.Package.Document.RigMode);
+
+            CustomModelDocument second = viewModel.CaptureProjectSession()
+                .Model!.Package.Document;
+            Assert.NotEqual(first.Package.Document.ModelId, second.ModelId);
+            Assert.Equal("generic-second", second.Name);
+            Assert.Equal(0, dialogs.ReimportConfirmationCalls);
+            Assert.Equal("Reimport current FBX...", viewModel.ImportFbxActionLabel);
         }
         finally
         {
@@ -853,7 +1127,9 @@ public sealed class ModelsWorkspacePersistenceTests
         }
     }
 
-    private sealed class ProjectPathDialogs(string projectPath) :
+    private sealed class ProjectPathDialogs(
+        string projectPath,
+        string? modelPath = null) :
         IProjectFileDialogService
     {
         public string? ShowOpenProjectDialog(string? initialPath) =>
@@ -863,5 +1139,8 @@ public sealed class ModelsWorkspacePersistenceTests
             string suggestedName,
             string? currentPath) =>
             projectPath;
+
+        public string? ShowOpenCustomModelFbxDialog(string? initialPath) =>
+            modelPath;
     }
 }

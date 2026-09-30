@@ -4,14 +4,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:ReAnimated.App.Views"
              MinWidth="0"
-             MinHeight="0">
+             MinHeight="0"
+             Background="#191E27"
+             Foreground="{StaticResource TextBrush}">
     <UserControl.Resources>
-        <Style x:Key="StageChipStyle" TargetType="{x:Type Border}">
-            <Setter Property="Margin" Value="0,0,4,0" />
-            <Setter Property="Padding" Value="7,3" />
-            <Setter Property="CornerRadius" Value="9" />
-            <Setter Property="Background" Value="{StaticResource PanelRaisedBrush}" />
-        </Style>
         <Style x:Key="SeverityTextStyle" TargetType="{x:Type TextBlock}">
             <Setter Property="Foreground" Value="{StaticResource SuccessBrush}" />
             <Style.Triggers>
@@ -28,64 +24,15 @@
         </Style>
     </UserControl.Resources>
 
-    <Grid Margin="7">
+    <Grid Margin="7" Background="#191E27">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-
-        <TextBlock Margin="2,0,2,6"
-                   Foreground="{StaticResource MutedTextBrush}"
-                   TextWrapping="Wrap"
-                   Text="Fit an existing rig to the selected reference. Review mappings and placements before applying anatomical changes." />
-
-        <!-- Stage strip -->
-        <StackPanel Grid.Row="1" Margin="0,0,0,7">
-        <WrapPanel>
-            <Border Style="{StaticResource StageChipStyle}">
-                <TextBlock FontSize="10" Text="Template" />
-            </Border>
-            <Border Style="{StaticResource StageChipStyle}">
-                <TextBlock FontSize="10" Text="Mapping" />
-            </Border>
-            <Border Style="{StaticResource StageChipStyle}">
-                <TextBlock FontSize="10" Text="Scale" />
-            </Border>
-            <Border Style="{StaticResource StageChipStyle}">
-                <TextBlock FontSize="10" Text="Refine" />
-            </Border>
-            <Border Style="{StaticResource StageChipStyle}">
-                <TextBlock FontSize="10" Text="Check" />
-            </Border>
-            <StackPanel Orientation="Horizontal">
-            <Button
-                    Margin="0,0,4,0"
-                    Command="{Binding PreviousStageCommand}"
-                    Content="&#x2039; Back" />
-            <Button Command="{Binding NextStageCommand}" Content="Next &#x203A;" />
-            </StackPanel>
-        </WrapPanel>
-
-        <Border Margin="0,5,0,0"
-                Padding="8"
-                Background="#33301A"
-                BorderBrush="{StaticResource WarningBrush}"
-                BorderThickness="1"
-                CornerRadius="3"
-                Visibility="{Binding HasMissingCoreRoles, Converter={StaticResource BooleanToVisibilityConverter}}">
-            <TextBlock Foreground="{StaticResource WarningBrush}"
-                       FontSize="10"
-                       Text="{Binding MissingCoreRolesMessage}"
-                       TextWrapping="Wrap" />
-        </Border>
-        </StackPanel>
-
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="0">
 
             <!-- 1: Target -->
-            <Grid>
+            <Grid Background="#191E27">
                 <Grid.Style>
                     <Style TargetType="{x:Type Grid}">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -96,17 +43,17 @@
                         </Style.Triggers>
                     </Style>
                 </Grid.Style>
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Background="#191E27" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                 <StackPanel>
                     <TextBlock FontWeight="SemiBold" Text="Target skeleton" />
                     <TextBlock Margin="0,2,0,6"
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
-                               Text="Read from your own installed game. Nothing retail is bundled with this tool; the skeleton is resolved on demand and cached for this session only." />
+                               Text="Choose a skeleton from your installed game." />
                     <TextBlock Margin="0,4,0,2" Text="Profile" />
                     <TextBox Text="{Binding TemplateProfileName, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="The bounded template profile. 'player' resolves player_1_tpp; the FPP resource shares that skeleton exactly." />
+                             ToolTip="The player profile uses the third-person skeleton; the first-person resource shares it." />
                     <Button Margin="0,8,0,0"
                             HorizontalAlignment="Left"
                             Command="{Binding ResolveTemplateCommand}"
@@ -124,7 +71,7 @@
             </Grid>
 
             <!-- 2: Mapping -->
-            <Grid>
+            <Grid Background="#191E27">
                 <Grid.Style>
                     <Style TargetType="{x:Type Grid}">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -140,14 +87,28 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
                 <StackPanel Margin="0,0,0,6">
-                    <CheckBox Content="Use geometry and hierarchy when proposing mappings"
+                    <TextBlock Margin="0,0,0,5" FontWeight="SemiBold" Text="Map source bones to the target" />
+                    <Button Content="{Binding AutomaticMatchingLabel}"
+                            Command="{Binding RerunAutomaticMatchingCommand}"
+                            HorizontalAlignment="Left" Margin="0,0,0,6"
+                            ToolTip="Replace manual bone choices with automatic suggestions. Undo restores the previous choices." />
+                    <StackPanel Margin="0,0,0,5">
+                        <Button Content="Undo last mapping change"
+                                Command="{Binding UndoLastMappingChangeCommand}"
+                                HorizontalAlignment="Left" />
+                        <TextBlock Text="{Binding MappingEditStatus}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+                    <CheckBox Content="Use body shape to suggest matches"
                               IsChecked="{Binding UseGeometryCorrespondence}"
-                              ToolTip="Combines current skin support, joint positions and ancestry with names. Review inferred mappings before applying. Existing saved projects retain their original mapping method." />
-                    <CheckBox Content="Keep source bones with no DL1 counterpart"
+                              ToolTip="Use skin weights, joint positions, and hierarchy alongside names when proposing mappings."
+                              Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                    <CheckBox Content="Keep unmatched FBX bones"
                               IsChecked="{Binding KeepExtraBones}"
-                              ToolTip="Kept bones retain their skin weights and simply rest at bind, since stock clips carry no descriptor for them. Unchecking folds their weights into the nearest surviving ancestor." />
+                              ToolTip="Stock clips do not move these bones. Kept bones retain their weights; removing them folds weights into the nearest parent." />
                     <TextBlock Text="{Binding MappingReviewMessage}" TextWrapping="Wrap" Margin="0,4,0,0" />
-                    <Button Content="Accept reviewed mapping proposals" Command="{Binding AcceptMappingProposalsCommand}"
+                    <Button Content="Accept suggested matches" Command="{Binding AcceptMappingProposalsCommand}"
                             HorizontalAlignment="Left" Margin="0,4,0,0" />
                     <TextBlock Margin="0,5,0,0"
                                FontSize="10"
@@ -158,30 +119,36 @@
                         <Run Text=" · retained " /><Run Text="{Binding ExtraCount, Mode=OneWay}" />
                         <Run Text=" · dropped " /><Run Text="{Binding DroppedCount, Mode=OneWay}" />
                     </TextBlock>
+                    <TextBlock Margin="0,4,0,0"
+                               Text="Motion root moves the whole rig. Map pelvis and limbs separately."
+                               ToolTip="Changing the motion root alone will not resolve missing pelvis or limb mappings."
+                               TextWrapping="Wrap" />
                 </StackPanel>
                 <DataGrid Grid.Row="1"
                           AutoGenerateColumns="False"
                           CanUserAddRows="False"
-                          ItemsSource="{Binding Mappings}">
+                          FrozenColumnCount="1"
+                          HeadersVisibility="Column"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                          ItemsSource="{Binding VisibleMappings}">
                     <DataGrid.RowStyle>
                         <Style TargetType="DataGridRow">
                             <Style.Triggers>
                                 <DataTrigger Binding="{Binding IsAmbiguous}" Value="True">
                                     <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
                                 </DataTrigger>
+                                <DataTrigger Binding="{Binding NeedsSourceMatch}" Value="True">
+                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}" />
+                                </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </DataGrid.RowStyle>
                     <DataGrid.Columns>
-                        <DataGridTextColumn Width="*"
-                                            Binding="{Binding Name}"
-                                            Header="DL1 name"
+                        <DataGridTextColumn Width="155"
+                                            Binding="{Binding DisplayName}"
+                                            Header="Target bone"
                                             IsReadOnly="True" />
-                        <DataGridTextColumn Width="88"
-                                            Binding="{Binding Disposition}"
-                                            Header="Disposition"
-                                            IsReadOnly="True" />
-                        <DataGridTemplateColumn Width="150" Header="Source bone">
+                        <DataGridTemplateColumn Width="155" Header="FBX bone">
                             <DataGridTemplateColumn.CellTemplate>
                                 <DataTemplate>
                                     <Grid>
@@ -199,15 +166,21 @@
                                             </TextBlock.Style>
                                         </TextBlock>
                                         <ComboBox ItemsSource="{Binding Candidates}"
-                                                  SelectedItem="{Binding SelectedSourceName, UpdateSourceTrigger=PropertyChanged}"
+                                                  SelectedItem="{Binding SelectedSourceName, Mode=OneWay}"
+                                                  SelectionChanged="OnMappingSourceSelectionChanged"
+                                                  ToolTip="{Binding SelectedSourceName}"
                                                   Visibility="{Binding CanChooseSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                     </Grid>
                                 </DataTemplate>
                             </DataGridTemplateColumn.CellTemplate>
                         </DataGridTemplateColumn>
-                        <DataGridTextColumn Width="52"
+                        <DataGridTextColumn Width="85"
+                                            Binding="{Binding Disposition}"
+                                            Header="Result"
+                                            IsReadOnly="True" />
+                        <DataGridTextColumn Width="58"
                                             Binding="{Binding Confidence}"
-                                            Header="Conf."
+                                            Header="Score"
                                             IsReadOnly="True" />
                     </DataGrid.Columns>
                     <DataGrid.RowDetailsTemplate>
@@ -216,14 +189,15 @@
                                        FontSize="10"
                                        Foreground="{StaticResource MutedTextBrush}"
                                        Text="{Binding Evidence}"
-                                       TextWrapping="Wrap" />
+                                       TextWrapping="Wrap"
+                                       Visibility="{Binding DataContext.IsAdvancedSetupMode, RelativeSource={RelativeSource AncestorType={x:Type UserControl}}, Converter={StaticResource BooleanToVisibilityConverter}}" />
                         </DataTemplate>
                     </DataGrid.RowDetailsTemplate>
                 </DataGrid>
             </Grid>
 
             <!-- 3: Scale -->
-            <Grid>
+            <Grid Background="#191E27">
                 <Grid.Style>
                     <Style TargetType="{x:Type Grid}">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -245,17 +219,18 @@
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
-                               Text="DL1 clips key absolute bone translation, so conforming to DL1 proportions is what keeps a stock animation from stretching the mesh. Where your model genuinely differs, that shows up below rather than being hidden." />
+                               Text="Fitting changes the rest pose. Preview a stock clip or derive motion for this rig to check the result." />
+                    <StackPanel Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <TextBlock Margin="0,4,0,2" Text="Limb proportions" />
                     <ComboBox DisplayMemberPath="Label"
                               ItemsSource="{Binding FitModeChoices}"
                               SelectedItem="{Binding SelectedFitModeChoice}"
-                              ToolTip="Bone directions always come from DL1's rest pose - that is what makes stock clips play correctly. This chooses whether segment lengths come from DL1 too." />
+                              ToolTip="This chooses source or DL1-reference segment lengths. Stock motion still needs a separate compatibility check." />
                     <TextBlock Margin="0,4,0,8"
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
-                               Text="Matching DL1 exactly plays stock animations undistorted but shifts the character's limb proportions toward Crane's. Keeping this model's proportions preserves its silhouette, but clips key per-bone translation so limbs still stretch during playback." />
+                               Text="DL1 proportions can change the silhouette. Check animation playback after choosing either option." />
                     <TextBlock Margin="0,4,0,2" Text="Solve scale from" />
                     <ComboBox DisplayMemberPath="Label"
                               ItemsSource="{Binding ScaleModeChoices}"
@@ -272,7 +247,9 @@
                     <TextBlock FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
-                               Text="1 imposes DL1 rest proportions so stock clips play as authored. 0 keeps your model's own segment lengths, which binds more cleanly but lets stock clips stretch the character." />
+                               Text="0 keeps this model's limb lengths; 1 matches the DL1 reference at the chosen scale." />
+                    </StackPanel>
+                    <TextBlock Margin="0,5,0,0" Text="Review the fitted proportions before placing joints." TextWrapping="Wrap" />
                 </StackPanel>
                 <Border Grid.Row="1"
                         Margin="0,10,0,0"
@@ -288,7 +265,8 @@
                           AutoGenerateColumns="False"
                           CanUserAddRows="False"
                           IsReadOnly="True"
-                          ItemsSource="{Binding RegionFits}">
+                          ItemsSource="{Binding RegionFits}"
+                          Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <DataGrid.Columns>
                         <DataGridTextColumn Width="*" Binding="{Binding Region}" Header="Region" />
                         <DataGridTextColumn Width="52" Binding="{Binding SampleCount}" Header="Samples" />
@@ -299,7 +277,7 @@
             </Grid>
 
             <!-- 4: Refine -->
-            <Grid>
+            <Grid Background="#191E27">
                 <Grid.Style>
                     <Style TargetType="{x:Type Grid}">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -313,7 +291,6 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
-                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
                 <StackPanel Margin="0,0,0,6">
                     <TextBlock FontWeight="SemiBold" Text="Place the joints" />
@@ -321,14 +298,28 @@
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
-                               Text="Pick a step, then drag its axis gizmo in the viewport. Children follow the joint you move. Structural DL1 helpers are placed from the template and cannot be dragged." />
+                               Text="Select a joint, then drag a colored axis in the viewport. Children follow the joint." />
                     <CheckBox Content="Mirror edits to the opposite side"
-                              IsChecked="{Binding MirrorEdits}" />
+                              IsChecked="{Binding MirrorEdits}"
+                              Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     <TextBlock Margin="0,5,0,0"
                                FontSize="10"
                                Foreground="{StaticResource AccentBrush}"
                                TextWrapping="Wrap"
                                Text="{Binding SelectedLandmark.Instruction}" />
+                    <Button Command="{Binding StudioWorkspace.FrameSelectedConformanceJointCommand}"
+                            Content="Zoom to joint"
+                            HorizontalAlignment="Left"
+                            Margin="0,5,0,0" />
+                    <WrapPanel Margin="0,5,0,0">
+                        <Button Command="{Binding UndoLastJointPlacementCommand}"
+                                Content="Undo last move"
+                                ToolTip="Ctrl+Z also undoes the last joint move while Place joints is open." />
+                        <Button Command="{Binding ResetBoneCommand}" Content="Reset this joint" />
+                        <Button Margin="4,0,0,0"
+                                Command="{Binding ResetAllCommand}"
+                                Content="Reset all" />
+                    </WrapPanel>
                 </StackPanel>
                 <DataGrid Grid.Row="1"
                           AutoGenerateColumns="False"
@@ -352,16 +343,10 @@
                         <DataGridTextColumn Width="150" Binding="{Binding Summary}" Header="Detail" />
                     </DataGrid.Columns>
                 </DataGrid>
-                <WrapPanel Grid.Row="2" Margin="0,7,0,0">
-                    <Button Command="{Binding ResetBoneCommand}" Content="Reset this joint" />
-                    <Button Margin="4,0,0,0"
-                            Command="{Binding ResetAllCommand}"
-                            Content="Reset all" />
-                </WrapPanel>
             </Grid>
 
             <!-- 5: Verify -->
-            <Grid>
+            <Grid Background="#191E27">
                 <Grid.Style>
                     <Style TargetType="{x:Type Grid}">
                         <Setter Property="Visibility" Value="Collapsed" />
@@ -384,21 +369,23 @@
                                FontSize="10"
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
-                               Text="Chrome resolves animation tracks by name hash, so an unresolved descriptor is a bone the game will not drive. Coverage is the check that catches a broken conversion; displacement then says whether the mesh survives the pose." />
-                    <Button HorizontalAlignment="Left"
-                            Command="{Binding VerifyWithRetailClipCommand}"
-                            Content="Choose a DL1 animation and verify..." />
+                               Text="Unmatched bones will not receive motion from the stock clip. Review the channel settings and check proportions in Editor and Player." />
+                    <WrapPanel>
+                        <Button HorizontalAlignment="Left"
+                                Command="{Binding VerifyWithRetailClipCommand}"
+                                Content="Check a DL1 animation..." />
+                        <Button Margin="6,0,0,0"
+                                HorizontalAlignment="Left"
+                                Command="{Binding ApplyConformanceCommand}"
+                                Content="Apply fit to model" />
+                    </WrapPanel>
                 </StackPanel>
-                <Border Grid.Row="1"
-                        Margin="0,10,0,0"
-                        Padding="8"
-                        Background="{StaticResource PanelRaisedBrush}"
-                        BorderBrush="{StaticResource BorderBrush}"
-                        BorderThickness="1"
-                        CornerRadius="3">
-                    <TextBlock Text="{Binding Verification.Summary, FallbackValue='No clip verified yet.', TargetNullValue='No clip verified yet.'}"
-                               TextWrapping="Wrap" />
-                </Border>
+                <StackPanel Grid.Row="1" Margin="0,10,0,0">
+                    <TextBlock Text="{Binding VerificationHeadline}" TextWrapping="Wrap" />
+                    <Expander Header="Motion details" Margin="0,6,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="{Binding Verification.Summary}" TextWrapping="Wrap" Margin="5" />
+                    </Expander>
+                </StackPanel>
                 <ListBox Grid.Row="2"
                          Margin="0,8,0,0"
                          ItemsSource="{Binding Warnings}">
@@ -411,15 +398,10 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
-                <Button Grid.Row="3"
-                        Margin="0,8,0,0"
-                        HorizontalAlignment="Left"
-                        Command="{Binding ApplyConformanceCommand}"
-                        Content="Apply conformance to this model" />
             </Grid>
         </Grid>
 
-        <Border Grid.Row="3"
+        <Border Grid.Row="1"
                 Margin="0,8,0,0"
                 Padding="8"
                 Background="{StaticResource PanelRaisedBrush}"

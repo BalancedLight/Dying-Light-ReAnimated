@@ -33,6 +33,34 @@ internal static class FbxAnimationTrackReindexer
         return changed?result.ToImmutable():clips;
     }
 
+    public static ImmutableDictionary<Guid, AnimationClip> ReindexAvailable(ImmutableDictionary<Guid, AnimationClip> clips,
+        IReadOnlyList<int> oldToNew, CancellationToken token = default)
+    {
+        if (oldToNew.Any(i => i < -1) || oldToNew.Where(i => i >= 0).Distinct().Count() != oldToNew.Count(i => i >= 0))
+            throw new InvalidDataException("Conformance animation ownership needs an unambiguous direct map.");
+        var result = clips.ToBuilder(); bool changed = false;
+        foreach (var (id, clip) in clips)
+        {
+            token.ThrowIfCancellationRequested();
+            if (clip.TransformTracks.Any(t => (uint)t.BoneIndex >= (uint)oldToNew.Count)) throw new InvalidDataException("An animation track is outside its source rig.");
+            if (clip.TransformTracks.Any(t => oldToNew[t.BoneIndex] < 0)) { result.Remove(id); changed = true; continue; }
+            if (clip.TransformTracks.All(t => oldToNew[t.BoneIndex] == t.BoneIndex)) continue;
+            changed = true;
+            result[id] = new AnimationClip(clip.Name, clip.FrameRate, clip.FrameCount,
+                clip.TransformTracks.Select(t => new TransformTrack(oldToNew[t.BoneIndex], t.Keyframes)), clip.ScalarTracks, clip.AuxiliaryTransformTracks);
+        }
+        return changed ? result.ToImmutable() : clips;
+    }
+
+    public static ImmutableDictionary<Guid, AnimationClip> ReindexByIdentity(ImmutableDictionary<Guid, AnimationClip> clips,
+        IReadOnlyList<CustomModelBone> source, IReadOnlyList<CustomModelBone> target, CancellationToken token = default)
+    {
+        var byId = target.Where(b => b.FbxObjectId != 0).ToDictionary(b => b.FbxObjectId, b => b.Index);
+        var byName = target.ToDictionary(b => b.Name, b => b.Index, StringComparer.Ordinal);
+        return ReindexAvailable(clips, source.Select(b => b.FbxObjectId != 0 && byId.TryGetValue(b.FbxObjectId, out int index)
+            ? index : b.FbxObjectId != 0 && byId.Count > 0 ? -1 : byName.GetValueOrDefault(b.Name, -1)).ToArray(), token);
+    }
+
     public static ImmutableDictionary<Guid,AnimationClip> ReindexByName(ImmutableDictionary<Guid,AnimationClip> clips,
         IReadOnlyList<CustomModelBone> source,IReadOnlyList<CustomModelBone> target,CancellationToken cancellationToken=default)
     {

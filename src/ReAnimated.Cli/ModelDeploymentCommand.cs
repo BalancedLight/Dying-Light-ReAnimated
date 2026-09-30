@@ -10,8 +10,9 @@ internal static class ModelDeploymentCommand
 {
     public static async Task<int> RunAsync(string[] args, JsonSerializerOptions options, CancellationToken token)
     {
-        if (args.Length < 7 || args.Skip(7).Any(arg => arg is not ("--stock-bank" or "--preflight")))
-            throw new ArgumentException("Usage: DLReAnimated deploy-model <model.dlrmodel> <project-root> <compiler.exe> <retail-Data0.pak> <character-id> <resource-name> <animation-bank> [--stock-bank] [--preflight]");
+        if (args.Length < 7 || args.Skip(7).Any(arg =>
+                arg is not ("--stock-bank" or "--preflight" or "--mount-editor-animation-pack")))
+            throw new ArgumentException("Usage: DLReAnimated deploy-model <model.dlrmodel> <project-root> <compiler.exe> <retail-Data0.pak> <character-id> <resource-name> <animation-bank> [--stock-bank] [--preflight] [--mount-editor-animation-pack]");
         var package = CustomModelPackageSerializer.Load(args[0]);
         var model = FbxModelAuthoringImporter.ImportPackage(package, token);
         bool stock = args.Contains("--stock-bank", StringComparer.Ordinal) || package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
@@ -23,6 +24,7 @@ internal static class ModelDeploymentCommand
             ReferenceExistingAnimationLibrary = stock, DeployWithoutAnimations = stock,
             AnimationSelections = stock ? [] : package.Document.AnimationClips,
             InstallLooseAnm2 = !stock, ExportPortableAnimationRpack = !stock,
+            InstallProjectDataAnimationRpack = args.Contains("--mount-editor-animation-pack", StringComparer.Ordinal),
         };
         if (args.Contains("--preflight", StringComparer.Ordinal))
         {

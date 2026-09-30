@@ -259,7 +259,7 @@ public sealed partial class RigConformanceWizardViewModel
                 doc = RigEyeHelperAuthoring.Apply(doc, doc.RiggingSession!.CreateJobToken(), setup!, EyeHelperName);
                 saved = saved with { Package = saved.Package with { Document = doc }, Rig = doc.CreateRigDefinition() };
             }
-            EyeModelApplyRequested?.Invoke(this, new(model, saved, createHelper ? "Saved an unweighted eye helper and its reviewed setup." : "Saved eye setup without changing source nodes or morph controls."));
+            if (!RequestBodyChange(EyeModelApplyRequested, new(model, saved, createHelper ? "Saved an unweighted eye helper and its reviewed setup." : "Saved eye setup without changing source nodes or morph controls."))) return;
             EyeStatus = createHelper ? "Eye helper saved. Skin binding and native gaze behavior require separate review." : "Eye setup saved. Facial controls and source transforms were preserved.";
         }
         catch (Exception error) when (EyeError(error)) { EyeStatus = "Eye setup was not saved: " + error.Message; }

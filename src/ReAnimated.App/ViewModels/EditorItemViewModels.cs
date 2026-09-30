@@ -497,7 +497,8 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
         string? outputName = null,
         string? bindingState = null,
         string? scriptMode = null,
-        Guid? animationLibraryId = null)
+        Guid? animationLibraryId = null,
+        string? sourceRoles = null)
     {
         AnimationId = animationId;
         _name = name ?? string.Empty;
@@ -513,6 +514,7 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
             : outputName.Trim();
         BindingState = bindingState ?? string.Empty;
         ScriptMode = scriptMode ?? string.Empty;
+        SourceRoles = sourceRoles ?? string.Empty;
         AnimationLibraryId = animationLibraryId;
     }
 
@@ -533,6 +535,8 @@ public sealed class ExportVariantSelectionViewModel : ObservableObject
     }
 
     public string Readiness { get; }
+
+    public string SourceRoles { get; }
 
     public string OriginModel { get; }
 
@@ -934,6 +938,7 @@ public sealed class AssetBrowserViewModel : ObservableObject
     private string _profileScanStatus =
         "Profiles are decoded lazily; unknown rows never satisfy evidence filters.";
     private int _filteredAssetCount;
+    private int _filteredModelCount;
 
     public AssetBrowserViewModel()
     {
@@ -1056,6 +1061,13 @@ public sealed class AssetBrowserViewModel : ObservableObject
     public event EventHandler? ProfileScanCancellationRequested;
 
     public ObservableCollection<AssetItemViewModel> VisibleAssets { get; } = [];
+
+    public ObservableCollection<AssetItemViewModel> VisibleModels { get; } = [];
+
+    public string ModelResultSummary =>
+        _filteredModelCount > VisibleModels.Count
+            ? $"Showing {VisibleModels.Count:N0} of {_filteredModelCount:N0} models"
+            : $"{_filteredModelCount:N0} matching models";
 
     public ObservableCollection<string> KindFilters { get; } =
         [AllKinds, .. Enum.GetNames<AssetKind>()];
@@ -1393,23 +1405,36 @@ public sealed class AssetBrowserViewModel : ObservableObject
         _filteredAssetCount = matches.Length;
 
         SynchronizeVisibleAssets(
+            VisibleAssets,
             matches.Take(MaximumVisibleAssets).ToArray());
+
+        AssetItemViewModel[] models = ApplyGeneralFilters(
+                _allAssets.Where(static item => item.Kind == AssetKind.Mesh),
+                ignoreKindFilter: true)
+            .Where(MatchesProfileFilters)
+            .ToArray();
+        _filteredModelCount = models.Length;
+        SynchronizeVisibleAssets(
+            VisibleModels,
+            models.Take(MaximumVisibleAssets).ToArray());
 
         OnPropertyChanged(nameof(FilteredAssetCount));
         OnPropertyChanged(nameof(HasFilteredAssets));
         OnPropertyChanged(nameof(EmptyResultMessage));
         OnPropertyChanged(nameof(IsResultTruncated));
         OnPropertyChanged(nameof(ResultSummary));
+        OnPropertyChanged(nameof(ModelResultSummary));
         OnPropertyChanged(nameof(PendingProfileCount));
         ClassifyFilteredMeshesCommand.NotifyCanExecuteChanged();
     }
 
     private IEnumerable<AssetItemViewModel> ApplyGeneralFilters(
-        IEnumerable<AssetItemViewModel> assets)
+        IEnumerable<AssetItemViewModel> assets,
+        bool ignoreKindFilter = false)
     {
         string filter = SearchText.Trim();
         IEnumerable<AssetItemViewModel> matches = assets;
-        if (!string.Equals(
+        if (!ignoreKindFilter && !string.Equals(
                 SelectedKindFilter,
                 AllKinds,
                 StringComparison.OrdinalIgnoreCase) &&
@@ -1793,32 +1818,33 @@ public sealed class AssetBrowserViewModel : ObservableObject
         }
     }
 
-    private void SynchronizeVisibleAssets(
+    private static void SynchronizeVisibleAssets(
+        ObservableCollection<AssetItemViewModel> destination,
         AssetItemViewModel[] requested)
     {
         for (int index = 0; index < requested.Length; index++)
         {
             AssetItemViewModel item = requested[index];
-            if (index < VisibleAssets.Count &&
-                ReferenceEquals(VisibleAssets[index], item))
+            if (index < destination.Count &&
+                ReferenceEquals(destination[index], item))
             {
                 continue;
             }
 
-            int existingIndex = VisibleAssets.IndexOf(item);
+            int existingIndex = destination.IndexOf(item);
             if (existingIndex >= 0)
             {
-                VisibleAssets.Move(existingIndex, index);
+                destination.Move(existingIndex, index);
             }
             else
             {
-                VisibleAssets.Insert(index, item);
+                destination.Insert(index, item);
             }
         }
 
-        while (VisibleAssets.Count > requested.Length)
+        while (destination.Count > requested.Length)
         {
-            VisibleAssets.RemoveAt(VisibleAssets.Count - 1);
+            destination.RemoveAt(destination.Count - 1);
         }
     }
 

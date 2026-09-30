@@ -2124,6 +2124,9 @@
             "authoredExportable",
             "previewOnly"
           ]
+        },
+        "gripCalibration": {
+          "$ref": "#/$defs/attachmentGripCalibration"
         }
       },
       "additionalProperties": false
@@ -2359,6 +2362,153 @@
         },
         "isFinite": {
           "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "attachmentGripFrame": {
+      "type": "object",
+      "required": [
+        "nodeIndex",
+        "nodeName",
+        "elements"
+      ],
+      "properties": {
+        "nodeIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "nodeName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "elements": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "type": "number"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "attachmentSecondaryGrip": {
+      "type": "object",
+      "required": [
+        "characterBoneIndex",
+        "characterBoneName",
+        "characterLocalOffset",
+        "propFrame"
+      ],
+      "properties": {
+        "characterBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "characterBoneName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "characterLocalOffset": {
+          "$ref": "#/$defs/transform"
+        },
+        "propFrame": {
+          "$ref": "#/$defs/attachmentGripFrame"
+        },
+        "ik": {
+          "$ref": "#/$defs/attachmentSecondaryIk"
+        }
+      },
+      "additionalProperties": false
+    },
+    "attachmentSecondaryIk": {
+      "type": "object",
+      "required": [
+        "rootBoneIndex",
+        "rootBoneName",
+        "jointBoneIndex",
+        "jointBoneName",
+        "endBoneIndex",
+        "endBoneName",
+        "pole",
+        "poleInPrimaryGripSpace",
+        "matchOrientation",
+        "weight"
+      ],
+      "properties": {
+        "rootBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rootBoneName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "jointBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "jointBoneName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "endBoneIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "endBoneName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "pole": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "number"
+          }
+        },
+        "poleInPrimaryGripSpace": {
+          "type": "boolean"
+        },
+        "matchOrientation": {
+          "type": "boolean"
+        },
+        "weight": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "attachmentGripCalibration": {
+      "type": "object",
+      "required": [
+        "propAssetId",
+        "propContentSha256",
+        "primaryPropFrame"
+      ],
+      "properties": {
+        "propAssetId": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "propContentSha256": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{64}$"
+        },
+        "primaryPropFrame": {
+          "$ref": "#/$defs/attachmentGripFrame"
+        },
+        "secondary": {
+          "$ref": "#/$defs/attachmentSecondaryGrip"
         }
       },
       "additionalProperties": false

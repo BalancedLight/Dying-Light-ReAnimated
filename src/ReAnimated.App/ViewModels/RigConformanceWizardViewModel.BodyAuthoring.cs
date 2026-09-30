@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Collections.ObjectModel;
+using System.Globalization;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
@@ -57,7 +58,7 @@ public sealed partial class RigConformanceWizardViewModel
     public bool HasGeneratedBodyRig => _model is { } model && GeneratedBodyRig.IsGenerated(model.Package.Document);
     public bool CanEditBodyComponentChoices => HasModel && !IsBusy;
     public bool HasUnsavedBodyComponents => HasModel && _model is { } model &&
-        !(ComponentSession(model).Components)
+        !CurrentBodyComponents(model)
             .SequenceEqual(BodyComponents.Select(static c => c.ToContract()));
     public IRelayCommand SaveBodyComponentsCommand { get; private set; } = null!;
     public IAsyncRelayCommand BuildBodyRigCommand { get; private set; } = null!;
@@ -80,9 +81,15 @@ public sealed partial class RigConformanceWizardViewModel
     private void SaveBodyComponents()
     {
         if (_model is not { } model) return;
+        if (!model.Package.Document.Bones.IsEmpty && model.Package.Document.RiggingSession is null && SelectedStudioEntry?.Path is not (RigStudioEntryPath.RepairExistingRig or RigStudioEntryPath.AdaptExistingRig))
+        {
+            BodyAuthoringStatus = "Choose Repair or Adapt in the studio workflow before saving component choices.";
+            return;
+        }
         try
         {
             var session = ComponentSession(model);
+            if (session is null) return;
             var components = BodyComponents.Select(static c => c.ToContract()).ToImmutableArray();
             foreach (var component in components) component.Validate();
             BodyComponentsApplyRequested?.Invoke(this, new(model, session, components));
@@ -98,13 +105,13 @@ public sealed partial class RigConformanceWizardViewModel
         BodyComponents.Clear();
         if (_model is not { } model) { _restoringBodyComponents = false; NotifyBodyAuthoring(); return; }
         var session = ComponentSession(model);
-        foreach (var component in session.Components)
+        foreach (var component in session?.Components ?? DefaultBodyComponents(model.Package.Document))
         {
             var choice = new BodyComponentChoice(component); choice.PropertyChanged += OnBodyComponentChanged; BodyComponents.Add(choice);
         }
         _restoringBodyComponents = false;
         BodyAuthoringStatus = !HasBodyAuthoringSource ? "Component classification is separate from the existing rig and weights; save choices to use them in analysis."
-            : HasGeneratedBodyRig ? session.BindingBackend is null
+            : HasGeneratedBodyRig ? session?.BindingBackend is null
             ? "Draft body skeleton restored. Choose component binding modes, then bind geometry."
             : "Generated binding restored. Deformation, hands, helpers and native behavior still require review."
             : "Build a draft skeleton after saving and placing the body guides.";
@@ -172,7 +179,7 @@ public sealed partial class RigConformanceWizardViewModel
             }, cancellationToken).ConfigureAwait(true);
             cancellationToken.ThrowIfCancellationRequested();
             if (generation != _bodyAuthoringGeneration || !ReferenceEquals(_model, source)) return;
-            BodyModelApplyRequested?.Invoke(this, new(source, result.Model, result.Status));
+            if (!RequestBodyChange(BodyModelApplyRequested, new(source, result.Model, result.Status))) return;
             BodyAuthoringStatus = result.Status;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -182,7 +189,24 @@ public sealed partial class RigConformanceWizardViewModel
         finally { IsBusy = false; NotifyStateChanged(); NotifyBodyAuthoring(); }
     }
 
-    private RiggingSession ComponentSession(FbxModelAuthoringImportResult model) => model.Package.Document.RiggingSession ??
-        RiggingSessions.Create(model.Package.Document, model.Rig is null ? RigStudioEntryPath.AutoRigBiped :
-            SelectedStudioEntry?.Path == RigStudioEntryPath.AdaptExistingRig ? RigStudioEntryPath.AdaptExistingRig : RigStudioEntryPath.RepairExistingRig);
+    private RiggingSession? ComponentSession(FbxModelAuthoringImportResult model)
+    {
+        if (model.Package.Document.RiggingSession is { } saved) return saved;
+        if (model.Package.Document.Bones.IsEmpty) return RiggingSessions.Create(model.Package.Document, RigStudioEntryPath.AutoRigBiped);
+        RigStudioEntryPath? selectedPath = SelectedStudioEntry?.Path;
+        return selectedPath is RigStudioEntryPath.RepairExistingRig or RigStudioEntryPath.AdaptExistingRig
+            ? RiggingSessions.Create(model.Package.Document, selectedPath.Value)
+            : null;
+    }
+
+    private ImmutableArray<RigGeometryComponent> CurrentBodyComponents(FbxModelAuthoringImportResult model) =>
+        ComponentSession(model)?.Components ?? DefaultBodyComponents(model.Package.Document);
+
+    private static ImmutableArray<RigGeometryComponent> DefaultBodyComponents(CustomModelDocument document) =>
+        document.Meshes.Select(mesh => new RigGeometryComponent
+        {
+            Id = "fbx:" + mesh.ModelObjectId.ToString(CultureInfo.InvariantCulture) + ":" + mesh.GeometryObjectId.ToString(CultureInfo.InvariantCulture),
+            DisplayName = mesh.Name,
+            BindingMode = document.Bones.IsEmpty ? RigComponentBindingMode.Automatic : RigComponentBindingMode.KeepSource,
+        }).ToImmutableArray();
 }

@@ -11,30 +11,29 @@ internal sealed record DesktopStartupOptions(
     bool SoftwareUi)
 {
     public const string Usage =
-        "Usage: DLReAnimated [--project <file.dlraproj> | <file.dlraproj>] [--software-ui]";
+        "Usage: DLReAnimated [--project <file.dlraproj> | <file.dlraproj>] [--software-ui | --hardware-ui]";
 
     public static DesktopStartupOptions Parse(
         IReadOnlyList<string> arguments)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         string? projectPath = null;
-        bool softwareUi = false;
+        // WPF's software compositor is the reliable default for mixed WPF and
+        // native D3D viewport hosts. The viewport renderer remains on D3D11.
+        bool? requestedSoftwareUi = null;
         for (int index = 0; index < arguments.Count; index++)
         {
             string argument = arguments[index];
-            if (string.Equals(
-                    argument,
-                    "--software-ui",
-                    StringComparison.Ordinal))
+            if (argument is "--software-ui" or "--hardware-ui")
             {
-                if (softwareUi)
+                if (requestedSoftwareUi is not null)
                 {
                     throw new ArgumentException(
-                        "Specify --software-ui only once.",
+                        "Specify only one UI renderer override.",
                         nameof(arguments));
                 }
 
-                softwareUi = true;
+                requestedSoftwareUi = argument == "--software-ui";
                 continue;
             }
 
@@ -86,6 +85,6 @@ internal sealed record DesktopStartupOptions(
             projectPath = Path.GetFullPath(argument);
         }
 
-        return new DesktopStartupOptions(projectPath, softwareUi);
+        return new DesktopStartupOptions(projectPath, requestedSoftwareUi ?? true);
     }
 }

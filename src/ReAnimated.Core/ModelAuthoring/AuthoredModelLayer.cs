@@ -11,7 +11,7 @@ namespace ReAnimated.Core.ModelAuthoring;
 /// </summary>
 public sealed record AuthoredModelLayer
 {
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
     public const int MaximumSourceControlPoints = 4_000_000;
     public const int MaximumPolygonVertices = 8_000_000;
     public const int MaximumLayerEdits = 8_000_000;
@@ -29,9 +29,9 @@ public sealed record AuthoredModelLayer
 
     public void Validate()
     {
-        if (Version != CurrentVersion)
+        if (Version is < 1 or > CurrentVersion)
         {
-            throw new ArgumentException($"Only authored model layer version {CurrentVersion} is supported.", nameof(Version));
+            throw new ArgumentException($"Authored model layer versions 1 through {CurrentVersion} are supported.", nameof(Version));
         }
 
         ValidateHash(SourceSha256, nameof(SourceSha256));

@@ -1,8 +1,11 @@
 using System.Collections.Immutable;
+using System.Buffers.Binary;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.Models;
+using ReAnimated.Codecs.Rp6l;
 
 namespace ReAnimated.Tests;
 
@@ -21,6 +24,9 @@ public sealed class DeveloperToolsAnimationRefreshReceiptTests
             byte[] runtimePackBytes = "generic animation runtime pack"u8.ToArray();
             string runtimePackSha256 =
                 Convert.ToHexStringLower(SHA256.HashData(runtimePackBytes));
+            byte[] aliasScriptBytes =
+                Encoding.UTF8.GetBytes("AnimScriptAlias(\"generic_library.scr\")\n");
+            byte[] compiledMeshBytes = CreateCompiledMesh("generic_library.scr");
             Dl1AnimationContentManifestBytes manifest =
                 Dl1DeveloperToolsProjectDeployer.CreateAnimationContentManifest(
                     DeploymentId,
@@ -28,7 +34,9 @@ public sealed class DeveloperToolsAnimationRefreshReceiptTests
                     "generic_model",
                     "generic_library",
                     new DateTimeOffset(2026, 8, 13, 20, 0, 0, TimeSpan.Zero),
-                    CreateArtifacts(runtimePackSha256));
+                    CreateArtifacts(
+                        runtimePackSha256,
+                        Convert.ToHexStringLower(SHA256.HashData(aliasScriptBytes))));
             string manifestPath = Path.Combine(
                 root,
                 manifest.ManifestRelativePath.Replace('/', Path.DirectorySeparatorChar));
@@ -41,6 +49,22 @@ public sealed class DeveloperToolsAnimationRefreshReceiptTests
                     .RelativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(runtimePackPath)!);
             File.WriteAllBytes(runtimePackPath, runtimePackBytes);
+            string deployedAliasScriptPath = Path.Combine(
+                root,
+                "data",
+                "characters",
+                "generic_character",
+                "generic_model.ascr");
+            Directory.CreateDirectory(Path.GetDirectoryName(deployedAliasScriptPath)!);
+            File.WriteAllBytes(deployedAliasScriptPath, aliasScriptBytes);
+            string deployedCompiledMeshPath = Path.Combine(
+                root,
+                "assets_pc",
+                "characters",
+                "generic_character",
+                "generic_model.msh_obj");
+            Directory.CreateDirectory(Path.GetDirectoryName(deployedCompiledMeshPath)!);
+            File.WriteAllBytes(deployedCompiledMeshPath, compiledMeshBytes);
             Dl1DeveloperToolsDeploymentReceipt receipt = CreateReceipt(manifest);
 
             DateTimeOffset now = new(2026, 8, 13, 20, 30, 40, TimeSpan.Zero);
@@ -106,6 +130,91 @@ public sealed class DeveloperToolsAnimationRefreshReceiptTests
                     DeveloperToolsAnimationRefreshHost.Editor,
                     DeveloperToolsAnimationRefreshRoute.ProjectRPack));
 
+            Dl1DeveloperToolsDeploymentReceipt compiledOutputDrift = receipt with
+            {
+                Artifacts =
+                [
+                    new("assets_pc/characters/generic_character/generic_model.msh_obj", Dl1DeploymentArtifactRole.Compiled, new string('d', 64), null, null, true, true),
+                    new("assets_pc/characters/generic_character/generic_texture.dds_obj", Dl1DeploymentArtifactRole.Compiled, new string('e', 64), null, null, true, true),
+                    new("assets_pc/local_dx11.mp", Dl1DeploymentArtifactRole.Shared, new string('f', 64), null, null, false, false),
+                    new("assets_pc/characters/animations/generic_idle.anm2_obj", Dl1DeploymentArtifactRole.Compiled, new string('9', 64), null, null, true, true),
+                    new("data/characters/generic_character/generic_model.ascr", Dl1DeploymentArtifactRole.Source, new string('a', 64), null, null, true, true),
+                    new("data/characters/generic_character/generic_model.msh", Dl1DeploymentArtifactRole.Source, new string('1', 64), null, null, true, true),
+                    new("data/characters/generic_character/generic_model.chr", Dl1DeploymentArtifactRole.Source, new string('2', 64), null, null, true, true),
+                    new("data/characters/generic_character/generic_model.bscr", Dl1DeploymentArtifactRole.Source, new string('3', 64), null, null, true, true),
+                    new("data/characters/animations/animscripts/generic_library.scr", Dl1DeploymentArtifactRole.Source, new string('b', 64), null, null, true, true),
+                    new("data/characters/animations/generic_idle.anm2", Dl1DeploymentArtifactRole.Source, new string('c', 64), null, null, true, true),
+                    new(".dl-reanimated/animation-refresh/packages/" + receipt.EffectiveAnimationRuntimePackSha256 + ".rpack", Dl1DeploymentArtifactRole.ManifestOwned, receipt.EffectiveAnimationRuntimePackSha256!, null, null, true, true),
+                    new(".dl-reanimated/animation-refresh/manifests/" + DeploymentId + ".json", Dl1DeploymentArtifactRole.ManifestOwned, receipt.AnimationContentManifestSha256!, null, null, true, true),
+                ],
+                StaleArtifactPaths =
+                [
+                    "assets_pc/characters/generic_character/generic_model.msh_obj",
+                    "assets_pc/characters/generic_character/generic_texture.dds_obj",
+                    "assets_pc/local_dx11.mp",
+                ],
+            };
+            Assert.True(File.Exists(DeveloperToolsAnimationRefreshService.WriteRequest(
+                root,
+                compiledOutputDrift,
+                DeveloperToolsAnimationRefreshHost.Editor,
+                DeveloperToolsAnimationRefreshRoute.ProjectRPack,
+                now).RequestPath));
+
+            string requestDirectory = Path.Combine(
+                root,
+                DeveloperToolsAnimationRefreshService.RefreshRootRelativePath,
+                "requests");
+            byte[] wrongAliasScriptBytes =
+                Encoding.UTF8.GetBytes("AnimScriptAlias(\"generic_other_library.scr\")\n");
+            File.WriteAllBytes(deployedAliasScriptPath, wrongAliasScriptBytes);
+            int requestsBeforeAliasFailure = Directory.GetFiles(requestDirectory, "*.json").Length;
+            Assert.Throws<InvalidDataException>(() =>
+                DeveloperToolsAnimationRefreshService.WriteRequest(
+                    root,
+                    compiledOutputDrift,
+                    DeveloperToolsAnimationRefreshHost.Editor,
+                    DeveloperToolsAnimationRefreshRoute.ProjectRPack,
+                    now));
+            Assert.Equal(requestsBeforeAliasFailure, Directory.GetFiles(requestDirectory, "*.json").Length);
+            File.WriteAllBytes(deployedAliasScriptPath, aliasScriptBytes);
+
+            File.WriteAllBytes(
+                deployedCompiledMeshPath,
+                CreateCompiledMesh("generic_other_library.scr"));
+            int requestsBeforeMeshFailure = Directory.GetFiles(requestDirectory, "*.json").Length;
+            Assert.Throws<InvalidDataException>(() =>
+                DeveloperToolsAnimationRefreshService.WriteRequest(
+                    root,
+                    compiledOutputDrift,
+                    DeveloperToolsAnimationRefreshHost.Editor,
+                    DeveloperToolsAnimationRefreshRoute.ProjectRPack,
+                    now));
+            Assert.Equal(requestsBeforeMeshFailure, Directory.GetFiles(requestDirectory, "*.json").Length);
+            File.WriteAllBytes(deployedCompiledMeshPath, compiledMeshBytes);
+
+            foreach (string blockingPath in new[]
+            {
+                "assets_pc/characters/animations/generic_idle.anm2_obj",
+                "data/characters/generic_character/generic_model.ascr",
+                "data/characters/generic_character/generic_model.msh",
+                "data/characters/generic_character/generic_model.chr",
+                "data/characters/generic_character/generic_model.bscr",
+                "data/characters/animations/animscripts/generic_library.scr",
+                "data/characters/animations/generic_idle.anm2",
+                ".dl-reanimated/animation-refresh/packages/" + receipt.EffectiveAnimationRuntimePackSha256 + ".rpack",
+                ".dl-reanimated/animation-refresh/manifests/" + DeploymentId + ".json",
+                "assets_pc/characters/unknown_model/unknown_model.msh_obj",
+            })
+            {
+                Assert.Throws<InvalidDataException>(() =>
+                    DeveloperToolsAnimationRefreshService.WriteRequest(
+                        root,
+                        compiledOutputDrift with { StaleArtifactPaths = [blockingPath] },
+                        DeveloperToolsAnimationRefreshHost.Editor,
+                        DeveloperToolsAnimationRefreshRoute.ProjectRPack,
+                        now));
+            }
             File.WriteAllText(runtimePackPath, "tampered runtime pack");
             Assert.Throws<InvalidDataException>(() =>
                 DeveloperToolsAnimationRefreshService.WriteRequest(
@@ -121,12 +230,13 @@ public sealed class DeveloperToolsAnimationRefreshReceiptTests
     }
 
     private static ImmutableArray<Dl1AnimationContentArtifact> CreateArtifacts(
-        string runtimePackSha256) =>
+        string runtimePackSha256,
+        string aliasScriptSha256) =>
         [
             new(
                 Dl1AnimationContentArtifactRole.AliasScript,
                 "data/characters/generic_character/generic_model.ascr",
-                new string('a', 64),
+                aliasScriptSha256,
                 "generic_model"),
             new(
                 Dl1AnimationContentArtifactRole.AnimationScript,
@@ -146,6 +256,20 @@ public sealed class DeveloperToolsAnimationRefreshReceiptTests
                 runtimePackSha256,
                 "generic_library"),
         ];
+
+    private static byte[] CreateCompiledMesh(string animationScriptAlias)
+    {
+        byte[] original = RpackTestData.BuildCompactMeshPayload();
+        byte[] metadata = [.. original, .. Encoding.UTF8.GetBytes(animationScriptAlias + '\0')];
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            metadata.AsSpan(0x48),
+            checked((ulong)original.Length + 1));
+        return RpackTestData.BuildArchive(
+            "generic_model",
+            Rp6lResourceTypes.Mesh,
+            [new(0, metadata)],
+            RpackTestCompression.None);
+    }
 
     private static Dl1DeveloperToolsDeploymentReceipt CreateReceipt(
         Dl1AnimationContentManifestBytes manifest) =>

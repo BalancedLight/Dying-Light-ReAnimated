@@ -49,6 +49,27 @@ internal static class Dl1StudioRigPolicies
         return result.MoveToImmutable();
     }
 
+    public static ImmutableArray<TransformMatrix> ComposeParentLocalHelpers(CustomModelDocument document,
+        ImmutableArray<TransformMatrix> globals, ImmutableArray<int> physicalToSource, ImmutableArray<int> sourceToPhysical)
+    {
+        if (document.RiggingSession is not { } session || session.Recipe.Helpers.IsEmpty) return globals;
+        var observed = RiggingSessions.ObserveSourceHierarchy(document);
+        var bones = document.CreateEffectiveBones();
+        var helpers = session.Recipe.Helpers.Where(h => h.OwnerAssetId == document.ModelId && h.FollowPreparedParent && h.FramePolicy != RigFramePolicy.PreserveSource)
+            .ToDictionary(h => h.EntityId);
+        var result = globals.ToBuilder();
+        for (int physical = 0; physical < physicalToSource.Length; physical++)
+        {
+            int source = physicalToSource[physical];
+            if (!helpers.TryGetValue(observed[source].EntityId, out HelperRecipe? helper)) continue;
+            int parent = bones[source].ParentIndex;
+            if (parent < 0 || observed[parent].EntityId != helper.ParentEntityId)
+                throw new InvalidDataException("A parent-local helper requires its observed parent before preparation.");
+            result[physical] = result[sourceToPhysical[parent]] * helper.LocalFrame;
+        }
+        return result.ToImmutable();
+    }
+
     public static TransformMatrix RoundMatrix(TransformMatrix value)
     {
         var result = new TransformMatrix(

@@ -32,6 +32,7 @@ public sealed class CustomModelPreviewSession
     private readonly bool _configuredFlipTextureCoordinateV;
     private readonly SkeletonPose? _sourceBindPose;
     private readonly Dictionary<AnimationClip, HashSet<int>> _trackedBoneIndices = [];
+    private ImmutableArray<Dl1ResolvedBoneScriptPolicy> _reviewedPolicies;
 
     internal CustomModelPreviewSession(
         FbxModelAuthoringImportResult model,
@@ -95,9 +96,15 @@ public sealed class CustomModelPreviewSession
     public SkeletonRenderData CreateSkeleton(
         SkeletonPose runtimePose,
         int? selectedBoneIndex = null,
-        TransformMatrix? actorWorldTransform = null)
+        TransformMatrix? actorWorldTransform = null,
+        bool reviewedPolicy = false)
     {
+        if (reviewedPolicy &&
+            (_authoredRig is null || EffectiveMode != CustomModelPreviewMode.Dl1Output))
+            throw new InvalidOperationException("Reviewed BSCR comparison requires a prepared DL1 Output preview.");
         SkeletonPose previewPose = CreatePresentationPose(runtimePose);
+        if (reviewedPolicy)
+            previewPose = ApplyReviewedComponentMasks(previewPose);
         int? previewSelectedBone = MapSourceBoneIndex(selectedBoneIndex);
         return CorePreviewAdapter.ToRenderSkeleton(
             previewPose,
@@ -119,33 +126,101 @@ public sealed class CustomModelPreviewSession
     public SkeletonRenderData? CreateSkeleton(
         AnimationClip? clip,
         int frame,
-        int? selectedBoneIndex = null)
+        int? selectedBoneIndex = null,
+        bool reviewedPolicy = false)
     {
-        if (_model.Rig is not { } rig)
+        if (_model.Rig is null)
         {
+            if (reviewedPolicy)
+                throw new InvalidOperationException("Reviewed BSCR comparison requires a prepared DL1 Output preview.");
             return null;
         }
+        SkeletonPose pose = CreateClipPresentationPose(clip, frame, reviewedPolicy);
+        return CorePreviewAdapter.ToRenderSkeleton(pose, MapSourceBoneIndex(selectedBoneIndex));
+    }
 
-        SkeletonPose sourcePose = clip is null
-            ? _sourceBindPose!
-            : SampleClipPose(clip, frame);
-        return CreateSkeleton(sourcePose, selectedBoneIndex);
+    /// <summary>
+    /// Diagnostic DL1 Output comparison using the reviewed BSCR component
+    /// masks. This is an authoring approximation: native LOD selection,
+    /// animation blending and engine composition are not simulated. The
+    /// CreateSkeleton and CreatePayload default to the raw clip.
+    /// </summary>
+    public SkeletonRenderData CreateReviewedPolicySkeleton(
+        AnimationClip clip,
+        int frame,
+        int? selectedBoneIndex = null)
+    {
+        ArgumentNullException.ThrowIfNull(clip);
+        SkeletonPose posed = CreateClipPresentationPose(clip, frame, reviewedPolicy: true);
+        return CorePreviewAdapter.ToRenderSkeleton(posed, MapSourceBoneIndex(selectedBoneIndex));
+    }
+
+    private SkeletonPose CreateClipPresentationPose(AnimationClip? clip, int frame, bool reviewedPolicy)
+    {
+        if (reviewedPolicy)
+        {
+            if (_authoredRig is null || EffectiveMode != CustomModelPreviewMode.Dl1Output)
+                throw new InvalidOperationException("Reviewed BSCR comparison requires a prepared DL1 Output preview.");
+            _ = ResolveReviewedPolicies();
+        }
+        SkeletonPose source = clip is null ? _sourceBindPose! : SampleClipPose(clip, frame);
+        SkeletonPose output = CreatePresentationPose(source);
+        return reviewedPolicy && clip is not null ? ApplyReviewedComponentMasks(output) : output;
+    }
+
+    private SkeletonPose ApplyReviewedComponentMasks(SkeletonPose raw)
+    {
+        Dl1PreparedAuthoredRig prepared = _authoredRig!;
+        ImmutableArray<Dl1ResolvedBoneScriptPolicy> policies = ResolveReviewedPolicies();
+        SkeletonPose bind = CreatePresentationPose(_sourceBindPose!);
+        var locals = raw.LocalTransforms.ToBuilder();
+        var exact = raw.LocalMatrices.ToBuilder();
+        foreach (Dl1ResolvedBoneScriptPolicy policy in policies)
+        {
+            int index = policy.PhysicalIndex;
+            RigAnimationComponents mask = policy.Mask;
+            if (mask == (RigAnimationComponents.Position | RigAnimationComponents.Rotation | RigAnimationComponents.Scale))
+                continue;
+            TransformTRS rest = bind.LocalTransforms[index];
+            if (mask == RigAnimationComponents.None)
+            {
+                locals[index] = rest;
+                exact[index] = bind.LocalMatrices[index];
+                continue;
+            }
+            TransformTRS animated = raw.LocalTransforms[index];
+            TransformTRS selected = new(
+                mask.HasFlag(RigAnimationComponents.Position) ? animated.Translation : rest.Translation,
+                mask.HasFlag(RigAnimationComponents.Rotation) ? animated.Rotation : rest.Rotation,
+                mask.HasFlag(RigAnimationComponents.Scale) ? animated.Scale : rest.Scale);
+            locals[index] = selected;
+            // Keep the bind frame's affine residual when a channel is omitted.
+            // This composition is deliberately a preview approximation; native
+            // blending/LOD still needs separate Player verification.
+            exact[index] = selected.ToMatrix() * rest.ToMatrix().InvertedAffine() * bind.LocalMatrices[index];
+        }
+        return new SkeletonPose(prepared.PreviewRig, locals.MoveToImmutable(), exact.MoveToImmutable());
+    }
+
+    private ImmutableArray<Dl1ResolvedBoneScriptPolicy> ResolveReviewedPolicies()
+    {
+        if (_reviewedPolicies.IsDefault)
+            _reviewedPolicies = Dl1BoneScriptPolicyResolver.Resolve(Document, _authoredRig!.Contract);
+        return _reviewedPolicies;
     }
 
     public RenderCamera? CreatePreviewCamera(
         AnimationClip? clip,
         int frame,
-        string? nodeName)
+        string? nodeName,
+        bool reviewedPolicy = false)
     {
-        if (_model.Rig is not { } rig || string.IsNullOrWhiteSpace(nodeName))
+        if (_model.Rig is null || string.IsNullOrWhiteSpace(nodeName))
         {
             return null;
         }
 
-        SkeletonPose sourcePose = clip is null
-            ? _sourceBindPose!
-            : SampleClipPose(clip, frame);
-        SkeletonPose previewPose = _authoredRig?.RebasePose(sourcePose) ?? sourcePose;
+        SkeletonPose previewPose = CreateClipPresentationPose(clip, frame, reviewedPolicy);
         int nodeIndex = previewPose.Rig.GetBoneIndex(nodeName);
         if (nodeIndex < 0)
         {
@@ -173,11 +248,14 @@ public sealed class CustomModelPreviewSession
     public CustomModelPreviewPayload CreatePayload(
         AnimationClip? clip,
         int frame,
-        int? selectedBoneIndex = null) =>
+        int? selectedBoneIndex = null,
+        bool reviewedPolicy = false) =>
         new(
             Meshes,
-            CreateSkeleton(clip, frame, selectedBoneIndex),
-            Diagnostics);
+            CreateSkeleton(clip, frame, selectedBoneIndex, reviewedPolicy),
+            reviewedPolicy
+                ? Diagnostics.Add("Reviewed BSCR-mask preview holds omitted POS/ROT/SCL channels at bind. This is an authoring approximation; native blending, LOD and runtime binding remain unverified.")
+                : Diagnostics);
 
     private int? MapSourceBoneIndex(int? selectedBoneIndex) =>
         _authoredRig is null || selectedBoneIndex is not { } sourceIndex
@@ -231,10 +309,11 @@ public static class CustomModelPreviewAdapter
         AnimationClip? clip,
         int frame,
         int? selectedBoneIndex = null,
-        CustomModelPreviewMode mode = CustomModelPreviewMode.SourceFbx)
+        CustomModelPreviewMode mode = CustomModelPreviewMode.SourceFbx,
+        bool reviewedPolicy = false)
     {
         CustomModelPreviewSession session = CreateSession(imported, mode);
-        return session.CreatePayload(clip, frame, selectedBoneIndex);
+        return session.CreatePayload(clip, frame, selectedBoneIndex, reviewedPolicy);
     }
 
     public static CustomModelPreviewSession CreateSession(
@@ -298,7 +377,7 @@ public static class CustomModelPreviewAdapter
         {
             diagnostics.Add(imported.Rig is null
                 ? "DL1 Output preview uses the static source geometry and DL1 build-boundary texture coordinates."
-                : "DL1 Output preview uses the emitted Chrome hierarchy, +X bone frames, inverse references, and segment bounds.");
+                : "DL1 Output preview uses the emitted Chrome hierarchy, +X bone frames, inverse references, and segment bounds. Stock clip playback is raw unless the reviewed BSCR comparison is explicitly requested; neither mode verifies native runtime composition.");
         }
         else if (mode == CustomModelPreviewMode.SourceFbx)
         {

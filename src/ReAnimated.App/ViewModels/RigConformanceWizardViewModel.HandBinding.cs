@@ -72,7 +72,7 @@ public sealed partial class RigConformanceWizardViewModel
             var result = await Task.Run(() => FbxRegionalHandBinding.TryApply(model, preview, out var updated, token) ? updated : null, token);
             if (generation != _handBindingGeneration || !ReferenceEquals(_model, model)) return;
             if (result is null) { HandBindingStatus = "The source or rig changed; preview current hand weights again."; return; }
-            if (!ReferenceEquals(result, model)) HandModelApplyRequested?.Invoke(this, new(model, result, "Applied regional hand weights. Outside-point weights and locked fractions were retained."));
+            if (!ReferenceEquals(result, model)) if (!RequestBodyChange(HandModelApplyRequested, new(model, result, "Applied regional hand weights. Outside-point weights and locked fractions were retained."))) return;
             HandBindingStatus = "Regional hand weights saved. Review open, curled and wrist poses before acceptance.";
         }
         catch (OperationCanceledException) { HandBindingStatus = "Hand weight application cancelled."; }

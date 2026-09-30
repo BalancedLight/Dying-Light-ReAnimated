@@ -1857,6 +1857,11 @@ public sealed class ViewModelWorkspaceTests : IDisposable
                 "common/anims/idle"),
         ]);
 
+        Assert.Equal(2, browser.VisibleModels.Count);
+        browser.SelectedKindFilter = nameof(AssetKind.Animation);
+        Assert.Equal("idle", Assert.Single(browser.VisibleAssets).Name);
+        Assert.Equal(2, browser.VisibleModels.Count);
+
         browser.SelectedKindFilter = nameof(AssetKind.Mesh);
         browser.SelectedProviderFilter = "dl1-rpack:base";
         browser.SearchText = "player";
@@ -3747,5 +3752,49 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         model.IsSelected = true;
 
         Assert.True(variant.IsSelected);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "Export")]
+    public void DeveloperToolsExportRequiresTheSelectedRowsForItsMode()
+    {
+        MainWindowViewModel workspace = new(CreateStore());
+        var variant = new ExportVariantSelectionViewModel(
+            Guid.NewGuid(),
+            "clip",
+            readiness: "Ready",
+            isEnabled: true,
+            isSelected: false);
+        var blockedVariant = new ExportVariantSelectionViewModel(
+            Guid.NewGuid(),
+            "draft clip",
+            readiness: "Bone review required",
+            isEnabled: false,
+            isSelected: false);
+        var model = new ExportModelSelectionViewModel(
+            Guid.NewGuid(),
+            "character",
+            [variant, blockedVariant]);
+        workspace.ExportModelSelections.Add(model);
+        workspace.CharacterExportSelections.Add(model);
+
+        workspace.SelectDeveloperToolsExportModeCommand.Execute("Full");
+        Assert.False(workspace.DeployCurrentSelectionCommand.CanExecute(null));
+        Assert.Equal("Select a character to export.", workspace.DeveloperToolsSelectionHint);
+
+        model.IsSelected = true;
+        Assert.True(workspace.DeployCurrentSelectionCommand.CanExecute(null));
+        Assert.True(workspace.HasSelectedModelBlockedVariants);
+        Assert.Contains("1 animation needs review", workspace.ExportSelectionSummary);
+        Assert.Equal(
+            "Some animations need review and will be skipped. Open Files to review them.",
+            workspace.DeveloperToolsSelectionHint);
+
+        model.IsSelected = false;
+        workspace.SelectDeveloperToolsExportModeCommand.Execute("AnimationsOnly");
+        Assert.False(workspace.DeployCurrentSelectionCommand.CanExecute(null));
+        variant.IsSelected = true;
+        Assert.True(workspace.DeployCurrentSelectionCommand.CanExecute(null));
     }
 }

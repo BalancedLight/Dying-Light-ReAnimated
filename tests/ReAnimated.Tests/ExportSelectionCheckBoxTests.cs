@@ -228,23 +228,8 @@ public sealed class ExportSelectionCheckBoxTests
         return null;
     }
 
-    private static string FindRepositoryFile(params string[] segments)
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine([directory.FullName, .. segments]);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate {string.Join('/', segments)}.");
-    }
+    private static string FindRepositoryFile(params string[] relativeSegments) =>
+        TestRepositoryPaths.FindRepositoryFile(relativeSegments);
 
     private static void RunOnStaThread(Action action)
     {

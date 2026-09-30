@@ -10,6 +10,42 @@ public sealed partial class RigConformanceWizardViewModel
 {
     private WizardGizmoTarget? _gizmoTarget;
     private ActiveDrag? _drag;
+    private int[]? _effectiveToFitBone;
+
+    public void SetGizmoBoneIndexMap(ImmutableArray<int> fitToEffective)
+    {
+        if (fitToEffective.IsDefaultOrEmpty)
+        {
+            _effectiveToFitBone = null;
+            return;
+        }
+
+        int maximum = fitToEffective.Max();
+        if (maximum < 0)
+        {
+            _effectiveToFitBone = null;
+            return;
+        }
+        var effectiveToFit = new int[maximum + 1];
+        Array.Fill(effectiveToFit, -1);
+        for (int fitIndex = 0; fitIndex < fitToEffective.Length; fitIndex++)
+        {
+            int effectiveIndex = fitToEffective[fitIndex];
+            if (effectiveIndex >= 0)
+            {
+                effectiveToFit[effectiveIndex] = fitIndex;
+            }
+        }
+
+        _effectiveToFitBone = effectiveToFit;
+    }
+
+    private int ToFitBoneIndex(int effectiveBoneIndex) =>
+        _effectiveToFitBone is { } map
+            ? (uint)effectiveBoneIndex < (uint)map.Length
+                ? map[effectiveBoneIndex]
+                : -1
+            : effectiveBoneIndex;
 
     /// <summary>
     /// The scene-source gizmo target for the refine stage. Register it while
@@ -43,6 +79,7 @@ public sealed partial class RigConformanceWizardViewModel
 
     private bool TryBeginGizmoDrag(int boneIndex)
     {
+        boneIndex = ToFitBoneIndex(boneIndex);
         if (IsBusy ||
             _drag is not null ||
             Fit is not { } fit ||
@@ -52,6 +89,11 @@ public sealed partial class RigConformanceWizardViewModel
         }
 
         RigConformedBone bone = fit.Bones[boneIndex];
+        if (SelectedLandmark is { } selected &&
+            !string.Equals(selected.BoneName, bone.Name, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
 
         // Only the guided sequence's joints are draggable. A synthesized DL1
         // helper takes its placement from the template by construction, and
@@ -68,6 +110,7 @@ public sealed partial class RigConformanceWizardViewModel
 
     private bool UpdateGizmoDrag(int boneIndex, Vector3 worldDelta)
     {
+        boneIndex = ToFitBoneIndex(boneIndex);
         if (_drag is not { } drag ||
             Fit is not { } fit ||
             (uint)boneIndex >= (uint)fit.Bones.Length ||
@@ -107,6 +150,7 @@ public sealed partial class RigConformanceWizardViewModel
         _drag = null;
         if (commit)
         {
+            _previousPositionOverrides = drag.OriginalOverrides;
             Solve();
             return;
         }

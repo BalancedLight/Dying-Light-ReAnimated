@@ -871,25 +871,8 @@ public sealed class InstalledDl1MeshCorpusAcceptanceTests
             : Path.GetFullPath(configured);
     }
 
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory =
-            new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(
-                    directory.FullName,
-                    "DLReAnimated.slnx")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            "DLReAnimated.slnx was not found above the test output directory.");
-    }
+    private static string FindRepositoryRoot() =>
+        TestRepositoryPaths.FindRepositoryRoot();
 
     private static string BuildFailureMessage(
         InstalledMeshCorpusReport report)

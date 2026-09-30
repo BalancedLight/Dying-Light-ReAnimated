@@ -276,7 +276,6 @@ public sealed partial class MainWindowViewModel :
         TargetBindingStatus TargetBindingStatus,
         int Frame,
         bool IsPlaying,
-        bool IsPlaybackEnabled,
         EditorWorkspaceMode Workspace,
         string LegacyWorkspace,
         ViewportOrbitCameraPair OrbitCameras,
@@ -572,6 +571,7 @@ public sealed partial class MainWindowViewModel :
     private bool _isDirty;
     private bool _disposed;
     private WorkspaceSnapshot? _recoverySnapshot;
+    private string? _recoverySnapshotContentSha256;
     private string _statusText =
         "Ready - loading the saved Dying Light 1 asset catalog";
     private string _animationRpackFileName = "animation-library_pc.rpack";
@@ -609,6 +609,10 @@ public sealed partial class MainWindowViewModel :
     private bool _customTargetUsesSourcePreviewFallback;
     private string? _customTargetPreviewDiagnostic;
     private CustomModelPreviewSession? _customTargetPreviewSession;
+    private bool _reviewedBscrTargetPreview;
+    private bool _reviewedBscrTargetPreviewApplied;
+    private string _reviewedBscrTargetPreviewStatus =
+        "Off: target skeleton uses the evaluated pose.";
     private DecodedProjectModelSession? _sourceModelContext;
     private TargetBindingStatus _targetBindingStatus =
         TargetBindingStatus.Invalid;
@@ -673,6 +677,8 @@ public sealed partial class MainWindowViewModel :
     private ViewportOrbitCameraPair? _authoringOrbitCameras;
     private ViewportOrbitCameraPair? _browseOrbitCameras;
     private string? _lastComparisonFramingKey;
+    private string? _lastPlaybackFramingKey;
+    private Guid? _lastAnimationSourceFramingId;
     private static readonly TimeSpan KeepFramedMinimumInterval =
         TimeSpan.FromMilliseconds(60.0);
     private bool _keepFramed;
@@ -680,6 +686,8 @@ public sealed partial class MainWindowViewModel :
     private DateTimeOffset _lastKeepFramedAt;
     private DeveloperToolsExportMode _developerToolsExportMode =
         DeveloperToolsExportMode.AnimationsOnly;
+    private bool _developerToolsExportModeChosenByUser;
+    private bool _mountAuthoredAnimationPackInEditor;
 
     public MainWindowViewModel(JsonWorkspaceStateStore recoveryStore)
         : this(
@@ -806,7 +814,14 @@ public sealed partial class MainWindowViewModel :
             synchronizeProject: SynchronizeModelsWorkspaceProjectAsync,
             returnToProjectModels: OpenRetailModelBrowser,
             resolveRigTemplate: ResolveConformanceRigTemplateAsync,
-            pickRetailAnimation: PickConformanceRetailAnimationAsync);
+            pickRetailAnimation: PickConformanceRetailAnimationAsync,
+            openExportWorkspace: () => SetWorkspace(
+                EditorWorkspaceMode.Export,
+                preserveLegacyCutscene: false),
+            pickStockPolicySource: DecodeConformanceStockPolicySourceAsync,
+            getRetentionRemovalBlockers: GetRetentionRemovalBlockers,
+            confirmPackageIdentityReplacement: ConfirmPackageIdentityReplacement);
+        Models.Conformance.SetRetailReferencePicker(PickConformanceRetailReferenceAsync);
         Models.PersistenceStateChanged += OnModelsPersistenceStateChanged;
         _savedModelsRevision = Models.PersistenceRevision;
         _integratedModelsRevision = Models.PersistenceRevision;
@@ -996,7 +1011,7 @@ public sealed partial class MainWindowViewModel :
             new RelayCommand<string>(SelectDeveloperToolsExportMode);
         DeployCurrentSelectionCommand = new AsyncRelayCommand(
             DeployCurrentSelectionAsync,
-            CanRunCheckedExportWorkflow);
+            CanDeployCurrentSelection);
         DeployCheckedToDeveloperToolsCommand = new AsyncRelayCommand(
             DeployCheckedToDeveloperToolsAsync,
             CanRunCheckedExportWorkflow);
@@ -1033,8 +1048,29 @@ public sealed partial class MainWindowViewModel :
             CanRemoveAttachment);
         ResetAttachmentOffsetCommand = new RelayCommand(
             AttachmentEditor.ResetOffset);
-        UndoCommand = new RelayCommand(Undo, () => _undoProjects.Count > 0);
-        RedoCommand = new RelayCommand(Redo, () => _redoProjects.Count > 0);
+        UndoCommand = new RelayCommand(Undo, CanUndoCurrentContext);
+        RedoCommand = new RelayCommand(
+            Redo,
+            () => !IsJointPlacementUndoContext && _redoProjects.Count > 0);
+        Models.Conformance.UndoLastJointPlacementCommand.CanExecuteChanged +=
+            (_, _) => UndoCommand.NotifyCanExecuteChanged();
+        Models.Conformance.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName is nameof(RigConformanceWizardViewModel.Stage) or
+                nameof(RigConformanceWizardViewModel.StudioStage))
+            {
+                UndoCommand.NotifyCanExecuteChanged();
+                RedoCommand.NotifyCanExecuteChanged();
+            }
+        };
+        Models.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(ModelsWorkspaceViewModel.IsConformTabSelected))
+            {
+                UndoCommand.NotifyCanExecuteChanged();
+                RedoCommand.NotifyCanExecuteChanged();
+            }
+        };
         RestoreRecoveryCommand = new AsyncRelayCommand(
             RestoreRecoveryAsync,
             () => HasRecoverySnapshot);
@@ -1305,7 +1341,11 @@ public sealed partial class MainWindowViewModel :
 
     public BoneTransformEditorViewModel BoneEditor { get; } = new();
 
-    public TimelineViewModel Timeline { get; } = new();
+    public TimelineViewModel Timeline { get; } = new()
+    {
+        IsPlaybackEnabled = false,
+        DisabledPlaybackLabel = "Play",
+    };
 
     public FacialFppViewModel FacialFpp { get; } = new();
 
@@ -1331,6 +1371,26 @@ public sealed partial class MainWindowViewModel :
 
     public IReadOnlyList<string> PreviewModes { get; } =
         [RawPreviewModeLabel, Dl1ProfilePreviewModeLabel];
+
+    public bool ReviewedBscrTargetPreview
+    {
+        get => _reviewedBscrTargetPreview;
+        set
+        {
+            if (!SetProperty(ref _reviewedBscrTargetPreview, value))
+                return;
+            ReviewedBscrTargetPreviewStatus = value
+                ? "Checking saved bone masks..."
+                : string.Empty;
+            RefreshAnimationPreview();
+        }
+    }
+
+    public string ReviewedBscrTargetPreviewStatus
+    {
+        get => _reviewedBscrTargetPreviewStatus;
+        private set => SetProperty(ref _reviewedBscrTargetPreviewStatus, value);
+    }
 
     public IReadOnlyList<Dl1RootMotionMode> RootMotionModes { get; } =
         Enum.GetValues<Dl1RootMotionMode>();
@@ -1403,9 +1463,9 @@ public sealed partial class MainWindowViewModel :
 
     public string ExplorerSourceModelPickerPrompt =>
         _pendingExplorerAnimationSourceChoice is { } animation
-            ? $"Choose the exact fingerprinted source model for '{animation.Name}'. Use a base-game mesh or a rigged project model; the clip is bound to that immutable model before playback."
+            ? $"Choose the source model for '{animation.Name}'. Select a base-game model to bind it and play, or choose a rigged project model and press Use project model."
             : _pendingLocalAnm2ImportPath is { } localPath
-                ? $"Choose the exact fingerprinted source model for '{Path.GetFileName(localPath)}'. Use a base-game mesh or rigged project model; descriptor coverage is shown before anything changes."
+                ? $"Choose the source model for '{Path.GetFileName(localPath)}'. Select a base-game model to bind and import, or choose a rigged project model and press Use project model. Review track coverage before adding it."
             : string.Empty;
 
     public ObservableCollection<Dl1RetailAnimationTiming>
@@ -1514,6 +1574,16 @@ public sealed partial class MainWindowViewModel :
         _developerToolsExportMode ==
         DeveloperToolsExportMode.AnimationsOnly;
 
+    /// <summary>
+    /// An explicit project-local Editor mount for the unified authored pack.
+    /// Portable output remains available without changing this setting.
+    /// </summary>
+    public bool MountAuthoredAnimationPackInEditor
+    {
+        get => _mountAuthoredAnimationPackInEditor;
+        set => SetProperty(ref _mountAuthoredAnimationPackInEditor, value);
+    }
+
     public bool IsDeveloperToolsCharactersOnlySelected =>
         _developerToolsExportMode ==
         DeveloperToolsExportMode.CharactersOnly;
@@ -1543,15 +1613,15 @@ public sealed partial class MainWindowViewModel :
         _developerToolsExportMode switch
         {
             DeveloperToolsExportMode.AnimationsOnly =>
-                "Writes ANM2 files and the animation RPack under data/characters/animations.",
+                "Animation files and a pack for the selected Developer Tools project.",
             DeveloperToolsExportMode.CharactersOnly =>
-                "Stages Developer Tools source: data/characters/<id>/<name>.msh, .chr, .bscr and .ascr, the loose animscripts SCR, and assets_pc placeholders. Developer Tools compiles it from there.",
+                "Character source files for the Editor to compile.",
             DeveloperToolsExportMode.Anm2Only =>
-                "Writes loose ANM2 files only, with no animation RPack.",
+                "Loose ANM2 files only.",
             DeveloperToolsExportMode.CharacterRpack =>
-                "Builds a prebuilt character RPack with Techland's compiler and writes it to out/ReAnimated/<project>/characters. Not raw source.",
+                "Compiled character pack in out/ReAnimated/<project>/characters.",
             _ =>
-                "Full export: animations, animation RPack and compiled characters.",
+                "Character files and animation pack for the selected Developer Tools project.",
         };
 
     /// <summary>
@@ -2062,8 +2132,7 @@ public sealed partial class MainWindowViewModel :
             EditorWorkspaceMode.Animate or
             EditorWorkspaceMode.RetargetEdit or
             EditorWorkspaceMode.Face or
-            EditorWorkspaceMode.Fpp or
-            EditorWorkspaceMode.Export;
+            EditorWorkspaceMode.Fpp;
 
     public bool IsFaceOrFppWorkspace =>
         IsRetargetWorkspace;
@@ -2296,8 +2365,8 @@ public sealed partial class MainWindowViewModel :
             Kind: AssetKind.Mesh,
             RetailAsset: not null,
         }
-            ? "The selected model is shown in bind pose without changing the project. Use it as the source for the next retail ANM2, or load an animation first and then choose its target."
-            : "Select a skinned model in Assets. Then preview it, bind it as the source for a retail ANM2, or import an animation. Retarget mapping needs both a source animation and target rig.";
+            ? "Use this model as an animation source, or load a clip and assign it as the target."
+            : "Select a skinned model, then load an animation. Mapping needs a source clip and target rig.";
 
     public bool IsLinkedCameraControlVisible =>
         PreviewLayout is PreviewLayoutMode.RetargetComparison or
@@ -2376,14 +2445,14 @@ public sealed partial class MainWindowViewModel :
         };
 
     public string TargetPlaybackMessage => IsTargetSwitching
-        ? "The last valid frame is frozen while the selected target is decoded."
+        ? "Loading target..."
         : ActiveTargetBindingStatus == TargetBindingStatus.NeedsReview
-            ? "Draft preview uses the proposed map. Unmapped target nodes remain at bind pose, and export stays blocked until every required row is reviewed."
+            ? "Draft preview. Open Mapping, review required rows, then accept before export."
             : ActiveTargetBindingStatus == TargetBindingStatus.Invalid
                 ? GetActiveAnimation()?.TargetAssetId is not null
-                    ? "The project already identifies an exact target. It is being restored from the saved catalog, or its failure is recorded in Diagnostics. Do not select a replacement mesh."
-                    : "Choose an explicit source and target before target playback."
-                : "The target is admitted to the authoritative preview pipeline.";
+                    ? "Saved target unavailable. Check Diagnostics."
+                    : "Choose a source clip and target model to play the result."
+                : string.Empty;
 
     public bool IsTargetPlaybackBlocked =>
         ActiveTargetBindingStatus == TargetBindingStatus.Invalid;
@@ -2402,6 +2471,9 @@ public sealed partial class MainWindowViewModel :
         }
 
         OnPropertyChanged(nameof(ExportSelectionSummary));
+        OnPropertyChanged(nameof(HasSelectedModelBlockedVariants));
+        OnPropertyChanged(nameof(DeveloperToolsSelectionHint));
+        OnPropertyChanged(nameof(HasDeveloperToolsSelectionHint));
         DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
         DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
     }
@@ -2415,9 +2487,46 @@ public sealed partial class MainWindowViewModel :
             int variants = ExportModelSelections.Sum(static model =>
                 model.Variants.Count(static variant =>
                     variant.IsSelected));
-            return $"{models:N0} model(s), {variants:N0} ready variant(s) selected";
+            int blocked = SelectedModelBlockedVariantCount;
+            string summary =
+                $"{models:N0} {(models == 1 ? "character" : "characters")}, " +
+                $"{variants:N0} ready {(variants == 1 ? "animation" : "animations")} selected";
+            return blocked == 0
+                ? summary
+                : $"{summary}; {blocked:N0} " +
+                  $"{(blocked == 1 ? "animation needs" : "animations need")} review and will be skipped";
         }
     }
+
+    private int SelectedModelBlockedVariantCount => ExportModelSelections
+        .Where(static model => model.IsSelected)
+        .Sum(static model => model.Variants.Count(static variant =>
+            !variant.IsEnabled));
+
+    public bool HasSelectedModelBlockedVariants =>
+        SelectedModelBlockedVariantCount > 0;
+
+    public string DeveloperToolsSelectionHint => _developerToolsExportMode switch
+    {
+        DeveloperToolsExportMode.Full when !HasSelectedCharacter() =>
+            "Select a character to export.",
+        DeveloperToolsExportMode.Full when !HasSelectedReadyVariant() =>
+            "Select a ready animation in Files.",
+        DeveloperToolsExportMode.CharactersOnly or
+            DeveloperToolsExportMode.CharacterRpack when !HasSelectedCharacter() =>
+            "Select a character to export.",
+        DeveloperToolsExportMode.AnimationsOnly or
+            DeveloperToolsExportMode.Anm2Only when !HasSelectedReadyVariant() =>
+            "Select a ready animation in Files.",
+        DeveloperToolsExportMode.Full or
+            DeveloperToolsExportMode.AnimationsOnly or
+            DeveloperToolsExportMode.Anm2Only when SelectedModelBlockedVariantCount > 0 =>
+            "Some animations need review and will be skipped. Open Files to review them.",
+        _ => string.Empty,
+    };
+
+    public bool HasDeveloperToolsSelectionHint =>
+        DeveloperToolsSelectionHint.Length > 0;
 
     public string AnimationRpackFileName
     {
@@ -2456,6 +2565,14 @@ public sealed partial class MainWindowViewModel :
 
     public string ActiveAnimationLabel =>
         GetActiveAnimation()?.Name ?? "No animation";
+
+    public bool HasPlaybackAnimation => GetActiveAnimation() is not null;
+
+    public bool NeedsPlaybackAnimation => !HasPlaybackAnimation;
+
+    public bool HasPlaybackSource => HasPlaybackAnimation && _sourceAnimation is not null;
+
+    public bool NeedsPlaybackSource => HasPlaybackAnimation && !HasPlaybackSource;
 
     public string AnimateWorkspaceHint => GetActiveAnimation() is not null
         ? "Open the active animation and its authoritative target preview."
@@ -2763,7 +2880,7 @@ public sealed partial class MainWindowViewModel :
     private async Task ImportCustomModelAsync()
     {
         OpenCustomModelAuthoring();
-        await Models.ImportFbxCommand.ExecuteAsync(null);
+        await Models.ImportNewFbxCommand.ExecuteAsync(null);
     }
 
     private async Task OpenCustomModelPackageAsync()
@@ -2842,6 +2959,13 @@ public sealed partial class MainWindowViewModel :
         EditorWorkspaceMode workspace,
         bool preserveLegacyCutscene)
     {
+        if (workspace == EditorWorkspaceMode.Export &&
+            !_developerToolsExportModeChosenByUser &&
+            HasCharacterExportSelections)
+        {
+            ApplyDeveloperToolsExportMode(DeveloperToolsExportMode.Full);
+        }
+
         string previousLegacyName = _activeWorkspaceMode;
         if (workspace is not (
                 EditorWorkspaceMode.Models or
@@ -3090,6 +3214,10 @@ public sealed partial class MainWindowViewModel :
                 // camera can never leave the raw FBX skeleton off-screen.
                 FrameComparisonPanes(force: true);
             }
+            else if (workspace == EditorWorkspaceMode.Animate)
+            {
+                FramePlaybackTargetIfNeeded();
+            }
             if (_sourceAnimation is null)
             {
                 UpdateUnevaluatedPreviewStatus(
@@ -3097,6 +3225,8 @@ public sealed partial class MainWindowViewModel :
                         ? "Retarget setup is waiting for an animation; the selected model preview remains isolated."
                         : "Load or activate an animation to evaluate this workspace.");
             }
+            UndoCommand.NotifyCanExecuteChanged();
+            RedoCommand.NotifyCanExecuteChanged();
         }
     }
 
@@ -3166,7 +3296,7 @@ public sealed partial class MainWindowViewModel :
                 : isAnimationSetup
                     ? "Bind-pose retail model ready; import or play an animation to begin authoring"
                 : _isolatedBrowsePreviewFidelity ??
-                    "Isolated retail asset; project state unchanged");
+                    "Base-game model preview");
     }
 
     private void ClearIsolatedBrowsePreview()
@@ -3180,11 +3310,21 @@ public sealed partial class MainWindowViewModel :
         _browseOrbitCameras = null;
     }
 
+    private void RefreshTimelinePlaybackAvailability(TargetBindingStatus status)
+    {
+        bool hasSource = HasPlaybackSource;
+        Timeline.DisabledPlaybackLabel = hasSource ? "Playback locked" : "Play";
+        Timeline.IsPlaybackEnabled = hasSource && status != TargetBindingStatus.Invalid;
+        OnPropertyChanged(nameof(HasPlaybackAnimation));
+        OnPropertyChanged(nameof(NeedsPlaybackAnimation));
+        OnPropertyChanged(nameof(HasPlaybackSource));
+        OnPropertyChanged(nameof(NeedsPlaybackSource));
+    }
+
     private void SetTargetBindingStatus(TargetBindingStatus status)
     {
         _editorSessionCoordinator.UpdateTargetStatus(status);
-        Timeline.IsPlaybackEnabled =
-            status != TargetBindingStatus.Invalid;
+        RefreshTimelinePlaybackAvailability(status);
         if (_targetBindingStatus == status)
         {
             return;
@@ -3891,7 +4031,7 @@ public sealed partial class MainWindowViewModel :
             installedBadge = new FidelityBadgeViewModel(
                 InstalledBuildBadgeLabel,
                 "Not found",
-                "No complete Steam installation was detected. This does not affect Raw or DL1 profile authoring, but Game validated profiles remain downgraded.");
+                "Dying Light 1 was not found. Game-validated profiles are unavailable until its installation is selected.");
         }
 
         ReplaceFidelityBadge(InstalledBuildBadgeLabel, installedBadge);
@@ -3927,7 +4067,9 @@ public sealed partial class MainWindowViewModel :
     {
         try
         {
-            _recoverySnapshot = _recoveryStore.Load();
+            WorkspaceSnapshotRead? read = _recoveryStore.LoadWithFingerprint();
+            _recoverySnapshot = read?.Snapshot;
+            _recoverySnapshotContentSha256 = read?.ContentSha256;
             HasRecoverySnapshot = _recoverySnapshot is not null;
         }
         catch (Exception exception)
@@ -3942,7 +4084,7 @@ public sealed partial class MainWindowViewModel :
 
     private async Task RestoreRecoveryAsync()
     {
-        if (_recoverySnapshot is null)
+        if (_recoverySnapshot is null || _recoverySnapshotContentSha256 is null)
         {
             return;
         }
@@ -3958,6 +4100,7 @@ public sealed partial class MainWindowViewModel :
         string? previousProjectPath = ProjectPath;
         try
         {
+            _recoveryStore.RequireContentHash(_recoverySnapshotContentSha256);
             WorkspaceSnapshot snapshot = _recoverySnapshot;
             AdoptPendingProjectAssetReceipts(snapshot.PendingAssets);
             ProjectVariantRecoveryNormalizationResult? normalization =
@@ -3985,6 +4128,8 @@ public sealed partial class MainWindowViewModel :
                         snapshot.ProjectPath,
                         CancellationToken.None);
 
+            _recoveryStore.RequireContentHash(_recoverySnapshotContentSha256);
+
             RestoreSnapshot(snapshot);
             CommitModelsWorkspaceRestore(preparedModels);
             _savedModelsRevision = snapshot.IsProjectDirty
@@ -4000,11 +4145,7 @@ public sealed partial class MainWindowViewModel :
                         _project.Assets,
                         _indexedAssetItems))
                 {
-                    await ActivateAnimationAsync(
-                        activeAnimation.Id,
-                        beginPlayback: false,
-                        persistActivation: false,
-                        switchWorkspace: false);
+                    await RestoreSavedAnimationAsync(activeAnimation.Id);
                 }
                 else
                 {
@@ -4039,6 +4180,8 @@ public sealed partial class MainWindowViewModel :
             }
 
             HasRecoverySnapshot = false;
+            _recoverySnapshot = null;
+            _recoverySnapshotContentSha256 = null;
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -4070,10 +4213,20 @@ public sealed partial class MainWindowViewModel :
     {
         try
         {
-            _recoveryStore.Delete();
+            if (_recoverySnapshotContentSha256 is null)
+            {
+                throw new InvalidOperationException(
+                    "The loaded recovery snapshot has no content fingerprint.");
+            }
+
+            _recoveryStore.RequireContentHash(_recoverySnapshotContentSha256);
+            string backupPath = _recoveryStore.BackupCurrent();
+            _recoveryStore.DeleteIfUnchanged(_recoverySnapshotContentSha256);
             _recoverySnapshot = null;
+            _recoverySnapshotContentSha256 = null;
             HasRecoverySnapshot = false;
-            StatusText = "Recovery snapshot dismissed";
+            StatusText =
+                $"Recovery snapshot dismissed; backed up as {Path.GetFileName(backupPath)}";
         }
         catch (Exception exception)
         {
@@ -4082,6 +4235,7 @@ public sealed partial class MainWindowViewModel :
                 "Recovery",
                 "Unable to dismiss recovery snapshot",
                 exception.Message);
+            StatusText = "Recovery was not dismissed; it may have changed in another window";
         }
     }
 
@@ -4290,11 +4444,7 @@ public sealed partial class MainWindowViewModel :
 
                 // SetProject has already restored the workspace saved with the
                 // project; activating the stored animation must not override it.
-                await ActivateAnimationAsync(
-                    activeAnimation.Id,
-                    beginPlayback: false,
-                    persistActivation: false,
-                    switchWorkspace: false);
+                await RestoreSavedAnimationAsync(activeAnimation.Id);
                 if (_sourceAnimation is null)
                 {
                     throw new InvalidOperationException(
@@ -4400,7 +4550,7 @@ public sealed partial class MainWindowViewModel :
             AddDiagnostic(
                 "Error",
                 "ANM2 source binding",
-                "The active document has no provable immutable source binding",
+                "The clip's saved source model could not be verified",
                 "Playback is blocked. Select an exact-signature fingerprinted model and use Rebind Source; the existing authored document will not be mutated.");
             StatusText = "Animation source needs an explicit rebind";
             return;
@@ -4420,10 +4570,7 @@ public sealed partial class MainWindowViewModel :
                  out _,
                  out _)))
         {
-            await ActivateAnimationAsync(
-                animation.Id,
-                beginPlayback: false,
-                persistActivation: false);
+            await RestoreSavedAnimationAsync(animation.Id);
             return;
         }
 
@@ -4665,7 +4812,7 @@ public sealed partial class MainWindowViewModel :
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException(
-                    "The saved external FBX stack source rig no longer matches its immutable binding.");
+                    "The FBX clip's source rig no longer matches its saved model.");
             }
 
             _pendingAnm2SourcePath = null;
@@ -4876,7 +5023,7 @@ public sealed partial class MainWindowViewModel :
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
-                "The custom-model rig differs from its immutable saved source signature.");
+                "The custom-model rig differs from the saved source rig.");
         }
 
         CustomModelAnimationClip selection = package.Document.AnimationClips
@@ -5132,7 +5279,7 @@ public sealed partial class MainWindowViewModel :
             })
         {
             throw new InvalidOperationException(
-                "The immutable retail source model is not available in the indexed DL1 installation.");
+                "The saved base-game source model was not found in the indexed Dying Light installation.");
         }
 
         Dl1MeshPreviewPayload payload =
@@ -5162,7 +5309,7 @@ public sealed partial class MainWindowViewModel :
     {
         ProjectAnimationSourceBinding binding = animation.SourceBinding
             ?? throw new InvalidDataException(
-                "The animation has no immutable source binding.");
+                "The animation has no verified source model.");
         if (binding.Kind == AnimationSourceKind.RetailAnm2)
         {
             AssetItemViewModel? row = FindRetailCatalogAsset(
@@ -5252,7 +5399,7 @@ public sealed partial class MainWindowViewModel :
     {
         ProjectAnimationSourceBinding binding = animation.SourceBinding
             ?? throw new InvalidDataException(
-                "The facial animation has no immutable source binding.");
+                "The facial animation has no verified source model.");
         if (binding.Kind == AnimationSourceKind.LocalFbx)
         {
             throw new InvalidOperationException(
@@ -5294,7 +5441,7 @@ public sealed partial class MainWindowViewModel :
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
-                "The facial ANM2 partition no longer matches its immutable source binding.");
+                "The facial ANM2 tracks no longer match the saved source model.");
         }
 
         return partitioned.FacialClip;
@@ -5537,6 +5684,63 @@ public sealed partial class MainWindowViewModel :
 
     private Task SynchronizeModelsWorkspaceProjectAsync() =>
         SynchronizeModelsWorkspaceProjectAsync(CancellationToken.None);
+
+    private CustomModelPackageOpenDecision ConfirmPackageIdentityReplacement(
+        CustomModelPackage incoming,
+        string incomingPath,
+        bool activeSameIdentity)
+    {
+        bool activeHasPendingEdits = activeSameIdentity &&
+            Models.PersistenceRevision != _integratedModelsRevision;
+        ProjectModelEntry? existing = FindCustomModelEntry(
+            _project,
+            incoming.Document.ModelId);
+        if (existing is null && !activeHasPendingEdits)
+        {
+            return CustomModelPackageOpenDecision.Open;
+        }
+
+        ProjectAssetReference? asset = existing is null
+            ? null
+            : _project.Assets.Single(candidate => candidate.Id == existing.AssetId);
+        if (asset is not null && string.IsNullOrWhiteSpace(asset.ContentSha256))
+        {
+            throw new InvalidDataException(
+                "The project-owned custom model has no recorded package hash; review it before replacement.");
+        }
+        using FileStream incomingStream = File.OpenRead(incomingPath);
+        string incomingSha256 = Convert.ToHexString(
+            SHA256.HashData(incomingStream)).ToLowerInvariant();
+        if (!NeedsPackageReplacementReview(
+                asset?.ContentSha256,
+                incomingSha256,
+                activeHasPendingEdits))
+        {
+            return activeSameIdentity
+                ? CustomModelPackageOpenDecision.KeepCurrent
+                : CustomModelPackageOpenDecision.Open;
+        }
+
+        return _fileDialogs.ConfirmCustomModelPackageReplacement(
+            existing?.Name ?? Models.ModelName,
+            Path.GetFileName(incomingPath),
+            asset?.ContentSha256,
+            incomingSha256,
+            activeHasPendingEdits)
+            ? CustomModelPackageOpenDecision.Open
+            : CustomModelPackageOpenDecision.Cancel;
+    }
+
+    internal static bool NeedsPackageReplacementReview(
+        string? projectPackageSha256,
+        string incomingSha256,
+        bool activeSameIdentityWithPendingEdits) =>
+        activeSameIdentityWithPendingEdits ||
+        (projectPackageSha256 is not null &&
+         !string.Equals(
+             projectPackageSha256,
+             incomingSha256,
+             StringComparison.OrdinalIgnoreCase));
 
     private async Task SynchronizeModelsWorkspaceProjectAsync(
         CancellationToken cancellationToken)
@@ -6422,7 +6626,7 @@ public sealed partial class MainWindowViewModel :
             EditorWorkspaceMode.Animate,
             preserveLegacyCutscene: false);
         StatusText =
-            $"Playing {variant.Name} in Playback; its immutable source and direct target already existed in the project";
+            $"Playing {variant.Name} with its saved source and target";
     }
     private static AnimationClip ApplyCustomModelClipSettings(
         AnimationClip source,
@@ -7008,7 +7212,7 @@ public sealed partial class MainWindowViewModel :
         StatusText =
             addedCount == 0
                 ? $"The {imported.Length:N0} checked FBX stack(s) already exist in Animations"
-                : $"Added {addedCount:N0} immutable FBX animation source(s); assign project models from Animations";
+                : $"Added {addedCount:N0} FBX clip(s). Choose target models in Animations.";
         AddDiagnostic(
             "Info",
             "Animation",
@@ -7603,21 +7807,29 @@ public sealed partial class MainWindowViewModel :
             profileName,
             cancellationToken);
 
+    private async Task<Dl1MeshPreviewPayload?> DecodeConformanceStockPolicySourceAsync(
+        Dl1RigTemplate template,
+        CancellationToken cancellationToken) =>
+        await Dl1RigTemplateProvider.DecodeExactTemplateSourceAsync(
+            _assetWorkspace,
+            template,
+            cancellationToken).ConfigureAwait(true);
+
     /// <summary>
-    /// Supplies the retail clip the conformance wizard verifies against, taken
-    /// from the current asset-browser selection.
+    /// Supplies a selected retail clip to the conformance review.
     /// </summary>
     private async Task<Dl1RetailAnimationPayload?> PickConformanceRetailAnimationAsync(
         CancellationToken cancellationToken)
     {
-        if (AnimationBrowser.SelectedAsset is not
+        AssetItemViewModel? selection =
+            _fileDialogs.SelectRetailAnimation(AnimationBrowser);
+        if (selection is not
             {
                 Kind: AssetKind.Animation,
                 RetailAsset: { } asset,
             })
         {
-            StatusText =
-                "Select a Dying Light animation in the asset browser, then verify the conformance against it.";
+            StatusText = "No stock animation selected.";
             return null;
         }
 
@@ -8092,9 +8304,27 @@ public sealed partial class MainWindowViewModel :
             job.Complete("Canceled");
             StatusText = "Retail animation playback canceled";
         }
+        catch (InvalidDataException exception)
+        {
+            job.Complete("Could not read animation");
+            AddDiagnostic(
+                "Error",
+                "Animation explorer",
+                $"Could not read {selected.Name}",
+                exception.Message,
+                showErrorPopup: false);
+            ShowErrorPopup(
+                "Animation explorer",
+                $"Could not read {selected.Name}. Try another clip.",
+                "The technical reason is in Diagnostics.");
+            IsRetailAnimationBrowserVisible = true;
+            SetWorkspace(
+                EditorWorkspaceMode.Animations,
+                preserveLegacyCutscene: false);
+            StatusText = $"Could not read {selected.Name}";
+        }
         catch (Exception exception) when (
             exception is ArgumentException or
-            InvalidDataException or
             InvalidOperationException or
             IOException or
             OverflowException)
@@ -8193,7 +8423,7 @@ public sealed partial class MainWindowViewModel :
             "Info",
             "Animation explorer",
             $"Choose the exact source model for {animation.Name}",
-            "Use a retail mesh's Use as Source action, or explicitly bind a rigged project model from the animation-source prompt. Preview selection remains isolated; the pending animation is only bound after that explicit action.");
+            "Select a retail mesh to bind it and play immediately, or explicitly choose a rigged project model in the source prompt. Selecting a source does not add it to the project model library.");
         StatusText = $"Choose the source model for {animation.Name}";
     }
 
@@ -8310,6 +8540,11 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        // Conformance commits to the Models workspace before its debounced
+        // project-library integration. Decode targets only after that pending
+        // model revision has become the project-owned immutable package.
+        await SynchronizeModelsWorkspaceProjectAsync(CancellationToken.None);
+
         ProjectAnimationSource source = _project.AnimationSources
                 .FirstOrDefault(candidate =>
                     candidate.Id == selected.VariantGroupId)
@@ -8362,7 +8597,7 @@ public sealed partial class MainWindowViewModel :
         JobViewModel job = AddJob(
             $"Add targets for {source.Name}",
             "Animation targets",
-            "Decoding immutable source and checked project models");
+            "Loading the clip and selected models");
         try
         {
             ImportedAnimationSession runtimeSource =
@@ -8437,7 +8672,9 @@ public sealed partial class MainWindowViewModel :
                             mapping),
                     RootMotionMode = template?.RootMotionMode ??
                         Dl1RootMotionMode.Recorded,
-                    RootBoneName = template?.RootBoneName,
+                    RootBoneName = ReconcileTargetRootBoneName(
+                        template?.RootBoneName,
+                        target.Rig),
                     BoneMappings = mapping is null
                         ? []
                         : ToProjectMappings(
@@ -8678,7 +8915,7 @@ public sealed partial class MainWindowViewModel :
                 binding.RetailSourceModelAssetId is { } sourceModelAssetId
                     ? FindProjectAsset(sourceModelAssetId) ??
                       throw new InvalidDataException(
-                          "The immutable ANM2 source model is missing.")
+                          "The saved ANM2 source model is missing.")
                     : throw new InvalidDataException(
                         "The ANM2 source has no explicitly bound model skeleton.");
             if (sourceModelAsset.Kind ==
@@ -8730,7 +8967,7 @@ public sealed partial class MainWindowViewModel :
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidDataException(
-                    "The ANM2 descriptor partition differs from its immutable source binding.");
+                    "The ANM2 tracks do not match the saved source model.");
             }
 
             clipResult = partitioned.CombinedClip;
@@ -8750,7 +8987,7 @@ public sealed partial class MainWindowViewModel :
             clipResult.FrameCount != source.FrameCount)
         {
             throw new InvalidDataException(
-                "The decoded source rig or frame count differs from its immutable project contract.");
+                "The source rig or frame count differs from the saved clip.");
         }
 
         return new ImportedAnimationSession(
@@ -8880,6 +9117,7 @@ public sealed partial class MainWindowViewModel :
             SourceViewport.SetPresentation(
                 "Skeleton-only source",
                 $"{source.Presentation?.OriginName ?? session.Rig.Id} | original imported hierarchy | {session.Rig.BoneCount:N0} nodes");
+            FrameAnimationSourceIfNeeded(selectedRowId);
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -8962,12 +9200,14 @@ public sealed partial class MainWindowViewModel :
                 target.PreviewDiagnostics.IsDefaultOrEmpty
                     ? "DL1-output preparation failed; the source presentation is shown explicitly."
                     : string.Join("; ", target.PreviewDiagnostics));
+            FrameAnimationSourceIfNeeded(selectedRowId);
             return true;
         }
 
         SourceViewport.SetPresentation(
             "Animation preview / DL1 output",
             $"{targetModel!.Name} | target UVs, materials, embedded textures, and authored hierarchy");
+        FrameAnimationSourceIfNeeded(selectedRowId);
         return true;
     }
 
@@ -9085,6 +9325,22 @@ public sealed partial class MainWindowViewModel :
         ProjectAnimationSource source,
         ProjectAnimationVariant variant) =>
         CreateRuntimeAnimation(_project, source, variant);
+
+    /// <summary>
+    /// A root override belongs to the target rig. An imported source root may be valid
+    /// for its owning model but absent after another target is fitted or selected.
+    /// Clearing only that invalid override lets the DL1 policy choose its reviewed
+    /// semantic/default root, while keeping valid target choices canonical.
+    /// </summary>
+    internal static string? ReconcileTargetRootBoneName(
+        string? requestedRoot,
+        RigDefinition targetRig)
+    {
+        ArgumentNullException.ThrowIfNull(targetRig);
+        if (string.IsNullOrWhiteSpace(requestedRoot)) return null;
+        int index = targetRig.GetBoneIndex(requestedRoot.Trim());
+        return index >= 0 ? targetRig.Bones[index].Name : null;
+    }
 
     internal static ProjectAnimation CreateRuntimeAnimation(
         DlraProject project,
@@ -9220,6 +9476,7 @@ public sealed partial class MainWindowViewModel :
                 animation.BindingEvidenceFingerprint,
             BindingPolicyVersion = animation.BindingPolicyVersion,
             MappingFingerprint = animation.MappingFingerprint,
+            RootBoneName = animation.RootBoneName,
             BoneMappings = animation.BoneMappings,
             TargetBindReviews = animation.TargetBindReviews,
         };
@@ -9257,11 +9514,22 @@ public sealed partial class MainWindowViewModel :
         };
     }
 
+    // Project open, recovery, and catalog completion all restore saved state.
+    // Their mapping errors remain in Diagnostics without interrupting startup.
+    internal Task RestoreSavedAnimationAsync(Guid animationId) =>
+        ActivateAnimationAsync(
+            animationId,
+            beginPlayback: false,
+            persistActivation: false,
+            switchWorkspace: false,
+            showMappingErrorPopup: false);
+
     private async Task ActivateAnimationAsync(
         Guid animationId,
         bool beginPlayback,
         bool persistActivation = true,
-        bool switchWorkspace = true)
+        bool switchWorkspace = true,
+        bool showMappingErrorPopup = false)
     {
         AnimationRuntimeSnapshot previous =
             CaptureAnimationRuntimeSnapshot();
@@ -9271,7 +9539,8 @@ public sealed partial class MainWindowViewModel :
                 animationId,
                 beginPlayback,
                 persistActivation,
-                switchWorkspace);
+                switchWorkspace,
+                showMappingErrorPopup);
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -9298,7 +9567,8 @@ public sealed partial class MainWindowViewModel :
         Guid animationId,
         bool beginPlayback,
         bool persistActivation,
-        bool switchWorkspace = true)
+        bool switchWorkspace = true,
+        bool showMappingErrorPopup = false)
     {
         ProjectEmbeddedAnimationStackIdentity? embeddedStack = null;
         ProjectAnimation? animation = _project.Animations.FirstOrDefault(
@@ -9344,7 +9614,7 @@ public sealed partial class MainWindowViewModel :
         JobViewModel job = AddJob(
             $"Activate {animation.Name}",
             "Animation library",
-            "Resolving immutable source binding");
+            "Finding the saved source model");
         try
         {
             Dl1MeshPreviewPayload? sourceModelPayload = null;
@@ -9457,7 +9727,7 @@ public sealed partial class MainWindowViewModel :
                         StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException(
-                        "The local FBX rig differs from its immutable saved source signature.");
+                        "The local FBX rig differs from the saved source rig.");
                 }
                 session = new ImportedAnimationSession(
                     importedRig,
@@ -9480,7 +9750,7 @@ public sealed partial class MainWindowViewModel :
                     binding.RetailSourceModelAssetId is { } modelId
                         ? FindProjectAsset(modelId)
                             ?? throw new InvalidDataException(
-                                "The immutable ANM2 source-model asset is missing.")
+                                "The saved ANM2 source model is missing.")
                         : throw new InvalidDataException(
                             "The ANM2 source binding does not identify an exact fingerprinted model.");
                 if (sourceModelAsset.Kind ==
@@ -9529,7 +9799,7 @@ public sealed partial class MainWindowViewModel :
                         StringComparison.OrdinalIgnoreCase))
                 {
                     throw new InvalidDataException(
-                        "The ANM2 descriptor partition differs from its immutable saved source binding.");
+                        "The ANM2 tracks do not match the saved source model.");
                 }
 
                 if (partitioned.CombinedClip.FrameCount !=
@@ -9732,6 +10002,16 @@ public sealed partial class MainWindowViewModel :
                     RigSignature.Compute(session.Rig);
                 string targetRuntimeSignature =
                     RigSignature.Compute(targetRig);
+                string? compatibleRootBoneName = ReconcileTargetRootBoneName(
+                    animation.RootBoneName,
+                    targetRig);
+                if (animation.RootBoneName is not null &&
+                    compatibleRootBoneName is null)
+                    AddDiagnostic(
+                        "Warning",
+                        "Animation root",
+                        "Saved root override is absent from this target rig",
+                        $"The previous root '{animation.RootBoneName}' was cleared for this activation. Review the target root selection if the default is not intended.");
                 bool resolvedRetargetMap =
                     bindingMode == ProjectAnimationBindingMode.Retarget &&
                     mapping is not null;
@@ -9761,6 +10041,7 @@ public sealed partial class MainWindowViewModel :
                         directBinding?.EvidenceFingerprint,
                     BindingPolicyVersion = directBinding?.Policy,
                     MappingFingerprint = mappingFingerprint,
+                    RootBoneName = compatibleRootBoneName,
                     // A saved project stores map rows by bone names while the
                     // runtime map carries the exact current rig indices and
                     // canonical fingerprint inputs. Persisting both together
@@ -9816,7 +10097,8 @@ public sealed partial class MainWindowViewModel :
                 preparedProject,
                 beginPlayback,
                 persistActivation,
-                switchWorkspace);
+                switchWorkspace,
+                showMappingErrorPopup);
             job.Progress = 100.0;
             job.Complete("Complete");
             ClearAnimationOperationFailure();
@@ -10065,7 +10347,7 @@ public sealed partial class MainWindowViewModel :
         JobViewModel job = AddJob(
             $"Rebind {original.Name}",
             "Source model",
-            "Decoding a clean immutable source document");
+            "Loading the saved source clip");
         try
         {
             (Anm2Clip raw, AnimationTimingProvenance provenance,
@@ -10248,7 +10530,7 @@ public sealed partial class MainWindowViewModel :
         Timeline.IsPlaying = false;
         RefreshAnimationPreview();
         StatusText = sourceIsOrphaned
-            ? $"Removed {selected.Name} and its immutable source"
+            ? $"Removed {selected.Name} and its source clip"
             : $"Removed target {selected.Name}; the source keeps its other targets";
     }
 
@@ -10573,7 +10855,7 @@ public sealed partial class MainWindowViewModel :
                 "Error",
                 "Facial attachment",
                 $"{facial.Name} has no exact facial descriptor partition",
-                "Mixed retail files are supported, but the selected source must contain exact morph descriptors for its immutable source model.");
+                "The selected source needs matching morph tracks for its saved model.");
             return;
         }
 
@@ -11009,7 +11291,7 @@ public sealed partial class MainWindowViewModel :
             AddDiagnostic(
                 "Info",
                 "Facial FBX",
-                "Facial curves and mapping suggestions were added to the authoritative preview/export pipeline",
+                "Added facial curves and mapping suggestions to the clip",
                 $"{sourceValueUnit} source values; {result.UnmappedAnimatedChannels.Length:N0} animated channel(s) unmapped; project-relative SHA-256 {projectSource.Sha256}. Mimic ANM2 is generated only at export after enabled mappings are reviewed and locked.");
         }
         catch (OperationCanceledException)
@@ -11975,7 +12257,7 @@ public sealed partial class MainWindowViewModel :
             "Info",
             "Facial editor",
             $"Stored {FacialFpp.Morphs.Count:N0} authored morph values at frame {frame:N0}",
-            $"The final immutable '{FacialEditorLayerName}' override layer stores absolute authored totals and is included in mimic export.");
+            $"The '{FacialEditorLayerName}' layer stores the final facial edits for mimic export.");
         FacialFpp.ReleasePreviewOverrides();
         RefreshAnimationPreview();
         StatusText = $"Keyed facial pose at frame {frame:N0}";
@@ -12976,7 +13258,9 @@ public sealed partial class MainWindowViewModel :
             : $"Assisted review locked {approvedBody:N0} body/helper and {approvedFacial:N0} facial row(s); all remaining rows still require explicit review";
     }
 
-    private void PublishMappingProposal(RetargetMap proposal)
+    private void PublishMappingProposal(
+        RetargetMap proposal,
+        bool showErrorPopup = true)
     {
         RigDefinition source = _sourceAnimation!.Rig;
         RigDefinition target = _targetRig!;
@@ -12990,7 +13274,8 @@ public sealed partial class MainWindowViewModel :
                 entry => entry.TargetBoneIndex != bone.Index));
         PublishCompatibilityDiagnostics(
             "Retargeting",
-            review.Diagnostics);
+            review.Diagnostics,
+            showErrorPopup);
 
         MappingReviewStatus = FormatMappingReviewStatus(review);
         StatusText =
@@ -13331,7 +13616,8 @@ public sealed partial class MainWindowViewModel :
 
     internal void PublishCompatibilityDiagnostics(
         string area,
-        IReadOnlyList<CompatibilityDiagnostic> diagnostics)
+        IReadOnlyList<CompatibilityDiagnostic> diagnostics,
+        bool showErrorPopup = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(area);
         ArgumentNullException.ThrowIfNull(diagnostics);
@@ -13355,7 +13641,7 @@ public sealed partial class MainWindowViewModel :
                 diagnostic.Severity ==
                     CompatibilityDiagnosticSeverity.Error)
             .ToArray();
-        if (errors.Length == 0)
+        if (errors.Length == 0 || !showErrorPopup)
         {
             return;
         }
@@ -13852,7 +14138,6 @@ public sealed partial class MainWindowViewModel :
             _targetBindingStatus,
             Timeline.CurrentFrame,
             Timeline.IsPlaying,
-            Timeline.IsPlaybackEnabled,
             ActiveWorkspace,
             ActiveWorkspaceMode,
             _viewportCoordinator.CaptureOrbitCameras(),
@@ -13909,7 +14194,6 @@ public sealed partial class MainWindowViewModel :
                     "Cutscene",
                     StringComparison.Ordinal));
         Timeline.CurrentFrame = snapshot.Frame;
-        Timeline.IsPlaybackEnabled = snapshot.IsPlaybackEnabled;
         Timeline.IsPlaying = snapshot.IsPlaying;
         _editorSessionCoordinator.Reset(
             snapshot.ActiveAnimationId,
@@ -13934,12 +14218,17 @@ public sealed partial class MainWindowViewModel :
     /// export preparation and project restore - pass false so the author's
     /// current workspace is left alone.
     /// </param>
+    /// <param name="showMappingErrorPopup">
+    /// Passive project restore records mapping errors in Diagnostics without
+    /// interrupting the user with an error dialog.
+    /// </param>
     private void CommitPreparedAnimationTransition(
         PreparedAnimationTransition prepared,
         DlraProject preparedProject,
         bool beginPlayback,
         bool persistProject,
-        bool switchWorkspace = true)
+        bool switchWorkspace = true,
+        bool showMappingErrorPopup = true)
     {
         ArgumentNullException.ThrowIfNull(prepared);
         ArgumentNullException.ThrowIfNull(preparedProject);
@@ -14062,7 +14351,9 @@ public sealed partial class MainWindowViewModel :
         }
         if (prepared.Mapping is not null)
         {
-            PublishMappingProposal(prepared.Mapping);
+            PublishMappingProposal(
+                prepared.Mapping,
+                showErrorPopup: showMappingErrorPopup);
         }
     }
 
@@ -14561,8 +14852,29 @@ public sealed partial class MainWindowViewModel :
         value is { Length: 64 } &&
         value.All(static character => Uri.IsHexDigit(character));
 
+    private bool IsJointPlacementUndoContext =>
+        ActiveWorkspace == EditorWorkspaceMode.Models &&
+        Models.IsConformTabSelected &&
+        Models.Conformance.IsStudioFit &&
+        Models.Conformance.Stage == RigConformanceStage.Refine;
+
+    private bool CanUndoCurrentContext() =>
+        IsJointPlacementUndoContext
+            ? Models.Conformance.UndoLastJointPlacementCommand.CanExecute(null)
+            : _undoProjects.Count > 0;
+
     private void Undo()
     {
+        if (IsJointPlacementUndoContext)
+        {
+            if (Models.Conformance.UndoLastJointPlacementCommand.CanExecute(null))
+            {
+                Models.Conformance.UndoLastJointPlacementCommand.Execute(null);
+                StatusText = "Undid the last joint move";
+            }
+            return;
+        }
+
         if (_undoProjects.Count == 0)
         {
             return;
@@ -14575,6 +14887,11 @@ public sealed partial class MainWindowViewModel :
 
     private void Redo()
     {
+        if (IsJointPlacementUndoContext)
+        {
+            return;
+        }
+
         if (_redoProjects.Count == 0)
         {
             return;
@@ -14679,6 +14996,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         ProjectAnimation? animation = GetActiveAnimation();
+        RefreshTimelinePlaybackAvailability(_targetBindingStatus);
         OnPropertyChanged(nameof(PreviewMotionAccumulationEnabled));
         _synchronizingProjectBindings = true;
         try
@@ -14903,6 +15221,7 @@ public sealed partial class MainWindowViewModel :
                 static asset => asset.Id),
             _targetRig,
             _attachmentStatuses);
+        RefreshAttachmentGripEditor();
         NotifyAttachmentCommands();
         SynchronizeIkEditorLayerSettings(animation);
         BakeIkConstraintCommand.NotifyCanExecuteChanged();
@@ -15827,10 +16146,13 @@ public sealed partial class MainWindowViewModel :
                         row.IsReviewed);
                 bool hasFacialSource = source is not null &&
                     SourceHasFacialRole(source);
+                bool hasExportableRole = source is not null &&
+                    SourceHasExportableRole(source);
                 bool directFacial =
+                    source is not null &&
                     variant.BindingMode ==
                         ProjectAnimationBindingMode.ExactDirect &&
-                    SourceFacialTracksUseOwningRig(source!);
+                    SourceFacialTracksUseOwningRig(source);
                 bool currentFacialEvidence = !hasFacialSource ||
                     directFacial ||
                     variant.MorphBindings.All(static row =>
@@ -15848,6 +16170,7 @@ public sealed partial class MainWindowViewModel :
                     Path.GetFileNameWithoutExtension(
                         variant.OutputAnm2Name ?? string.Empty));
                 bool ready = sourceReady &&
+                    hasExportableRole &&
                     descriptorReady &&
                     boneReady &&
                     faceReady &&
@@ -15856,6 +16179,8 @@ public sealed partial class MainWindowViewModel :
                     ? $"Output ANM2 '{variant.OutputAnm2Name}' is used by another row; give each one its own name"
                     : !sourceReady
                     ? "Source fingerprint or stack identity requires rebind"
+                    : !hasExportableRole
+                        ? "Source is Auxiliary only; set Body or Facial in Animations before character export"
                     : model is null
                         ? "Target model missing"
                         : model.IsStatic
@@ -15914,7 +16239,8 @@ public sealed partial class MainWindowViewModel :
                             ? "Reviewed retarget"
                             : "Draft retarget",
                     scriptMode: DescribeAnimationLibraryMode(library),
-                    animationLibraryId: library?.Id);
+                    animationLibraryId: library?.Id,
+                    sourceRoles: DescribeExportSourceRoles(source));
                 exportRow.PropertyChanged +=
                     OnExportVariantSelectionChanged;
                 variants.Add(exportRow);
@@ -15976,13 +16302,17 @@ public sealed partial class MainWindowViewModel :
         RefreshAnimationScriptLibraries();
         RefreshActiveExportReadiness();
         OnPropertyChanged(nameof(ExportSelectionSummary));
+        OnPropertyChanged(nameof(HasSelectedModelBlockedVariants));
         OnPropertyChanged(nameof(HasCharacterExportSelections));
+        OnPropertyChanged(nameof(DeveloperToolsSelectionHint));
+        OnPropertyChanged(nameof(HasDeveloperToolsSelectionHint));
         ApplyExportSelectionCommand.NotifyCanExecuteChanged();
         ExportCheckedPortableCommand.NotifyCanExecuteChanged();
         ExportAnm2FilesCommand.NotifyCanExecuteChanged();
         ExportAnimationRPackCommand.NotifyCanExecuteChanged();
         ExportCharacterFilesCommand.NotifyCanExecuteChanged();
         DeployCheckedToDeveloperToolsCommand.NotifyCanExecuteChanged();
+        DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
     }
 
     private void OnExportVariantSelectionChanged(
@@ -15998,6 +16328,8 @@ public sealed partial class MainWindowViewModel :
             nameof(ExportVariantSelectionViewModel.IsSelected))
         {
             OnPropertyChanged(nameof(ExportSelectionSummary));
+            OnPropertyChanged(nameof(DeveloperToolsSelectionHint));
+            OnPropertyChanged(nameof(HasDeveloperToolsSelectionHint));
             ExportCheckedPortableCommand.NotifyCanExecuteChanged();
             ExportAnm2FilesCommand.NotifyCanExecuteChanged();
             ExportAnimationRPackCommand.NotifyCanExecuteChanged();
@@ -16127,7 +16459,9 @@ public sealed partial class MainWindowViewModel :
         {
             if (TargetAnimationScriptOptions.Count == 0)
             {
-                return "No Dying Light installation is indexed, so the stock animation scripts are unavailable. Type the script name directly in the Primary SCR column.";
+                return _retailAnimationScriptsAttempted
+                    ? "Stock animation scripts could not be listed from the current installation. Check Export diagnostics or type the script name in Primary SCR."
+                    : "Select an animation row to load stock script choices, or type a script name in Primary SCR.";
             }
 
             if (SelectedExportVariant is null)
@@ -16274,7 +16608,6 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        _retailAnimationScriptsAttempted = true;
         Dl1InstallLocation? install = _assetWorkspace.Install ??
             SteamInstallDiscovery.Discover()
                 .FirstOrDefault(static candidate => candidate.IsValid);
@@ -16283,6 +16616,7 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        _retailAnimationScriptsAttempted = true;
         try
         {
             _retailAnimationScripts =
@@ -17038,7 +17372,7 @@ public sealed partial class MainWindowViewModel :
             hasSourceFingerprint ? "Ready" : "Blocked",
             hasSourceFingerprint
                 ? "The active source content identity is stored."
-                : "Load or rebind the immutable animation source.",
+                : "Load or rebind the animation source.",
             hasSourceFingerprint));
 
         bool hasTarget = active?.TargetAssetId is { } targetAssetId &&
@@ -17192,17 +17526,30 @@ public sealed partial class MainWindowViewModel :
             $"Saved package checklist: {selected.Count:N0} animation variant(s) selected";
     }
 
-    private bool CanRunCheckedExportWorkflow() =>
-        !IsBusy &&
-        (ExportModelSelections
+    private bool HasSelectedReadyVariant() =>
+        ExportModelSelections
             .SelectMany(static model => model.Variants)
-            .Any(static variant => variant.IsEnabled) ||
-         // "Characters only" compiles models, not animations, so a project
-         // with no animation rows must still be able to run it.
-         (_developerToolsExportMode is
-              DeveloperToolsExportMode.CharactersOnly or
-              DeveloperToolsExportMode.CharacterRpack &&
-          CharacterExportSelections.Any(static model => model.IsSelected)));
+            .Any(static variant => variant.IsEnabled && variant.IsSelected);
+
+    private bool HasSelectedCharacter() =>
+        CharacterExportSelections.Any(static model => model.IsSelected);
+
+    private bool CanRunCheckedExportWorkflow() =>
+        !IsBusy && HasSelectedReadyVariant();
+
+    private bool CanDeployCurrentSelection() =>
+        !IsBusy && (_developerToolsExportMode switch
+        {
+            DeveloperToolsExportMode.CharactersOnly or
+                DeveloperToolsExportMode.CharacterRpack =>
+                HasSelectedCharacter(),
+            DeveloperToolsExportMode.Full =>
+                HasSelectedCharacter() && HasSelectedReadyVariant(),
+            DeveloperToolsExportMode.AnimationsOnly or
+                DeveloperToolsExportMode.Anm2Only =>
+                HasSelectedReadyVariant(),
+            _ => false,
+        });
 
     public bool HasCharacterExportSelections =>
         CharacterExportSelections.Count > 0;
@@ -17224,6 +17571,13 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        _developerToolsExportModeChosenByUser = true;
+        ApplyDeveloperToolsExportMode(mode);
+    }
+
+    private void ApplyDeveloperToolsExportMode(
+        DeveloperToolsExportMode mode)
+    {
         _developerToolsExportMode = mode;
         OnPropertyChanged(nameof(IsDeveloperToolsAnimationsOnlySelected));
         OnPropertyChanged(nameof(IsDeveloperToolsCharactersOnlySelected));
@@ -17232,6 +17586,8 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(IsDeveloperToolsCharacterRpackSelected));
         OnPropertyChanged(nameof(IsCharacterCompilerRequired));
         OnPropertyChanged(nameof(DeveloperToolsExportModeSummary));
+        OnPropertyChanged(nameof(DeveloperToolsSelectionHint));
+        OnPropertyChanged(nameof(HasDeveloperToolsSelectionHint));
         DeployCurrentSelectionCommand.NotifyCanExecuteChanged();
     }
 
@@ -17587,6 +17943,9 @@ public sealed partial class MainWindowViewModel :
             var writes = ImmutableArray.CreateBuilder<
                 ProjectArtifactWrite>();
             int scriptLinkUpdates = 0;
+            string? ownedEditorPackPreimageHash = null;
+            int preservedEditorPackResources = 0;
+            bool mountedEditorPack = false;
             if (includeAnimations)
             {
                 foreach (StandaloneExportArtifact artifact in
@@ -17623,6 +17982,27 @@ public sealed partial class MainWindowViewModel :
                     writes.Add(new ProjectArtifactWrite(
                         $"out/ReAnimated/{projectOutputName}/animations/{projectOutputName}_animations_pc.rpack",
                         pack.Rpack));
+
+                    if (MountAuthoredAnimationPackInEditor &&
+                        _developerToolsExportMode == DeveloperToolsExportMode.AnimationsOnly)
+                    {
+                        EditorAnimationPackMountPlan mount =
+                            await EditorAnimationPackMountPlanner.PrepareAsync(
+                                projectRoot,
+                                _project.ProjectId,
+                                pack.Rpack,
+                                pack.Animations,
+                                pack.Scripts,
+                                job.CancellationToken);
+                        writes.Add(new ProjectArtifactWrite(
+                            EditorAnimationPackMountPlanner.RelativePath,
+                            mount.Payload));
+                        ownedEditorPackPreimageHash = mount.ReplacesOwnedPack
+                            ? mount.ExistingSha256
+                            : null;
+                        preservedEditorPackResources = mount.PreservedResourceCount;
+                        mountedEditorPack = true;
+                    }
 
                     foreach (PreparedCheckedExportModel model in prepared
                                  .Where(static row =>
@@ -17701,7 +18081,8 @@ public sealed partial class MainWindowViewModel :
             job.Stage = "Conflict check";
             ValidateDeveloperToolsArtifactConflicts(
                 projectRoot,
-                writes);
+                writes,
+                ownedEditorPackPreimageHash);
             job.Stage = "One recoverable project transaction";
             job.Progress = 86.0;
             ProjectArtifactTransactionResult result =
@@ -17729,7 +18110,9 @@ public sealed partial class MainWindowViewModel :
                 $"Committed {result.Receipt.Artifacts.Length:N0} artifact(s) to {projectRoot}.",
                 $"Animations: {(includeAnimations ? "yes" : "no")}; animation RPack: " +
                 $"{(includeAnimationRpack ? "yes" : "no")}; characters: " +
-                $"{(includeCharacters ? "yes" : "no")}. Receipt: {result.ReceiptRelativePath}. " +
+                $"{(includeCharacters ? "yes" : "no")}; Editor-mounted authored pack: " +
+                $"{(mountedEditorPack ? "yes" : "no")}; preserved pack resources: " +
+                $"{preservedEditorPackResources:N0}. Receipt: {result.ReceiptRelativePath}. " +
                 "Use \"Undo last export\" to roll the transaction back. Offline artifact validation is not live-game proof.");
             AddDiagnostic(
                 "Info",
@@ -17770,7 +18153,8 @@ public sealed partial class MainWindowViewModel :
 
     private void ValidateDeveloperToolsArtifactConflicts(
         string projectRoot,
-        IEnumerable<ProjectArtifactWrite> artifacts)
+        IEnumerable<ProjectArtifactWrite> artifacts,
+        string? ownedEditorPackPreimageHash)
     {
         foreach (ProjectArtifactWrite artifact in artifacts)
         {
@@ -17803,6 +18187,25 @@ public sealed partial class MainWindowViewModel :
                     selectedHash,
                     StringComparison.OrdinalIgnoreCase))
             {
+                continue;
+            }
+
+            // The mount planner has already validated an active, same-project
+            // receipt for the existing bytes and merged prior resources.
+            if (ownedEditorPackPreimageHash is not null &&
+                string.Equals(
+                    artifact.RelativePath,
+                    EditorAnimationPackMountPlanner.RelativePath,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.Equals(
+                        existingHash,
+                        ownedEditorPackPreimageHash,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new IOException(
+                        "The Editor animation pack changed after ownership verification; retry the export after inspecting the project.");
+                }
                 continue;
             }
 
@@ -18212,6 +18615,9 @@ public sealed partial class MainWindowViewModel :
                 job.Complete("Canceled after complete batch preflight");
                 StatusText =
                     "Developer Tools batch canceled after preflight; project unchanged";
+                SetDeveloperToolsExportOutcome(
+                    "Canceled. The Developer Tools project was left unchanged.",
+                    "The checked batch passed preflight, but its deployment was canceled.");
                 return;
             }
 
@@ -18225,21 +18631,65 @@ public sealed partial class MainWindowViewModel :
             _lastProjectArtifactReceiptRelativePath = null;
             _lastProjectArtifactProjectRoot = null;
             RollBackDeveloperToolsBatchCommand.NotifyCanExecuteChanged();
+            string? projectSelectionWarning = null;
+            try
+            {
+                Models.AdoptCommittedDeveloperToolsProjectRoot(projectRoot);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or IOException or
+                UnauthorizedAccessException or InvalidDataException or
+                NotSupportedException)
+            {
+                projectSelectionWarning =
+                    $"The batch committed, but its project selection was not saved for follow-up controls: {exception.Message}";
+                AddDiagnostic("Warning", "Export",
+                    "Developer Tools follow-up project selection was not saved",
+                    projectSelectionWarning);
+            }
+            Dl1DeveloperToolsDeploymentResult[] needsRefresh = result.Deployments
+                .Where(static deployment =>
+                    !deployment.Receipt.ReferenceExistingAnimationLibrary)
+                .ToArray();
+            var refreshRequestIds = new List<string>(needsRefresh.Length);
+            foreach (Dl1DeveloperToolsDeploymentResult deployment in needsRefresh)
+            {
+                DeveloperToolsAnimationRefreshRequestResult? request =
+                    Models.QueueAutomaticDeveloperToolsAnimationRefresh(
+                        projectRoot, deployment.Receipt);
+                if (request is not null)
+                    refreshRequestIds.Add(request.RequestId);
+            }
+            string refreshSummary = needsRefresh.Length == 0
+                ? "All checked models reference existing stock animation banks; no custom animation refresh was requested."
+                : $"Wrote {refreshRequestIds.Count:N0}/{needsRefresh.Length:N0} Editor animation refresh request(s)" +
+                  (refreshRequestIds.Count == 0
+                      ? ". Check the animation refresh panel before expecting playback."
+                      : $": {string.Join(", ", refreshRequestIds)}. Loader results and visible playback still require verification.");
+            if (projectSelectionWarning is not null)
+                refreshSummary += " " + projectSelectionWarning;
             job.Progress = 100.0;
             job.Complete("Committed");
             StatusText =
                 $"Developer Tools batch committed {result.Deployments.Length:N0} model(s)";
+            SetDeveloperToolsExportOutcome(
+                $"Committed {result.Deployments.Length:N0} model(s) to {projectRoot}.",
+                $"Receipt: {result.ReceiptPath}\n{refreshSummary}");
             AddDiagnostic(
                 "Info",
                 "Export",
                 "Checked Developer Tools batch committed",
                 $"Receipt: {result.ReceiptPath}\n" +
-                "Every checked custom model was preflighted before the first commit. The receipt supports recoverable rollback. Offline compiler and installed-asset checks are not live-game proof.");
+                "Every checked custom model was preflighted before the first commit. The receipt supports recoverable rollback. " +
+                refreshSummary + " Offline compiler and installed-asset checks are not live-game proof.");
         }
         catch (OperationCanceledException)
         {
             job.Complete("Canceled; project retained");
             StatusText = "Developer Tools batch canceled";
+            SetDeveloperToolsExportOutcome(
+                "Canceled. The Developer Tools project was left unchanged.",
+                "The checked batch did not commit.");
         }
         catch (Exception exception) when (
             exception is ArgumentException or
@@ -18269,6 +18719,9 @@ public sealed partial class MainWindowViewModel :
                 Dl1DeveloperToolsBatchTransactionException transaction
                     ? $"\nReceipt: {transaction.ReceiptPath}"
                     : string.Empty;
+            SetDeveloperToolsExportOutcome(
+                $"Failed: {SummarizeException(exception)}",
+                exception.Message + receipt);
             AddDiagnostic(
                 "Error",
                 "Export",
@@ -19474,7 +19927,7 @@ public sealed partial class MainWindowViewModel :
                         source.RequiresSourceRebind)
                     {
                         throw new InvalidDataException(
-                            $"Checked variant '{variant.Name}' has no immutable source contract.");
+                            $"Checked variant '{variant.Name}' has no verified source clip.");
                     }
 
                     ProjectAssetReference sourceAsset = FindProjectAsset(
@@ -20125,6 +20578,23 @@ public sealed partial class MainWindowViewModel :
         return roles is null ||
                roles == AnimationSourceRoles.None ||
                roles.Value.HasFlag(AnimationSourceRoles.Body);
+    }
+
+    internal static bool SourceHasExportableRole(
+        ProjectAnimationSource source) =>
+        SourceHasBodyRole(source) || SourceHasFacialRole(source);
+
+    private static string DescribeExportSourceRoles(
+        ProjectAnimationSource? source)
+    {
+        if (source is null)
+            return "Unassigned";
+        AnimationSourceRoles? roles =
+            source.EmbeddedCustomModelStack?.Roles ??
+            source.SourceBinding?.Roles;
+        return roles is null or AnimationSourceRoles.None
+            ? "Body (default)"
+            : roles.Value.ToString();
     }
 
     private static string AllocateCheckedResourceName(
@@ -21212,7 +21682,7 @@ public sealed partial class MainWindowViewModel :
                 _ => throw new InvalidDataException(
                     "The project contains an unknown DL1 root-motion mode."),
             },
-            animation.RootBoneName,
+            ReconcileTargetRootBoneName(animation.RootBoneName, target),
             directRigBinding: _activeDirectRigBinding,
             accumulatorBoneName: animation.AccumulatorBoneName);
         var cacheKey = new RootMotionTrailCacheKey(
@@ -21690,6 +22160,52 @@ public sealed partial class MainWindowViewModel :
         return true;
     }
 
+    private void FramePlaybackTargetIfNeeded()
+    {
+        if (!IsPlaybackWorkspace ||
+            _viewportCoordinator.HasTargetPreviewCameraOverride ||
+            _activeAnimationId is not { } animationId ||
+            _targetRig is not { } target)
+        {
+            return;
+        }
+
+        string key = $"{animationId:N}|{target.Id}";
+        if (string.Equals(key, _lastPlaybackFramingKey, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        RenderFrameSnapshot frame = TargetViewport.SceneSource.CaptureFrame();
+        if (!HasFrameableContent(frame) ||
+            !RenderCameraFraming.TryFrame(frame, out RenderCamera camera))
+        {
+            return;
+        }
+
+        _viewportCoordinator.UpdateCamera(ViewportSide.Target, camera);
+        _lastPlaybackFramingKey = key;
+    }
+
+    private void FrameAnimationSourceIfNeeded(Guid selectedRowId)
+    {
+        if (!IsAnimationsWorkspace ||
+            _lastAnimationSourceFramingId == selectedRowId)
+        {
+            return;
+        }
+
+        RenderFrameSnapshot frame = SourceViewport.SceneSource.CaptureFrame();
+        if (!HasFrameableContent(frame) ||
+            !RenderCameraFraming.TryFrame(frame, out RenderCamera camera))
+        {
+            return;
+        }
+
+        _viewportCoordinator.UpdateCamera(ViewportSide.Source, camera);
+        _lastAnimationSourceFramingId = selectedRowId;
+    }
+
     private void FrameSelectedAttachment()
     {
         TryFrameSelectedAttachment(reportFailure: true);
@@ -21857,11 +22373,7 @@ public sealed partial class MainWindowViewModel :
                 job.Stage = "Animation source";
                 job.State =
                     "Restoring the active animation's saved source and target";
-                await ActivateAnimationAsync(
-                    activeAnimation!.Id,
-                    beginPlayback: false,
-                    persistActivation: false,
-                    switchWorkspace: false);
+                await RestoreSavedAnimationAsync(activeAnimation!.Id);
             }
             else
             {
@@ -22311,7 +22823,7 @@ public sealed partial class MainWindowViewModel :
             _isolatedBrowsePreviewTitle =
                 $"Project Model - {model.Name}";
             _isolatedBrowsePreviewFidelity =
-                $"Fingerprint-validated {selected.Source.ToLowerInvariant()}; active animation and target variants unchanged";
+                selected.Source;
             TargetViewport.SceneSource.SetExternalPreviewScene(
                 _isolatedBrowsePreviewFrame);
             TargetViewport.SetPresentation(
@@ -22677,7 +23189,7 @@ public sealed partial class MainWindowViewModel :
         IsBusy = true;
         JobViewModel job = BeginExclusiveAssetDecode(
             $"Use {selected.Name} as source",
-            "Decoding immutable source-model candidate");
+            "Loading source model");
         try
         {
             DecodedRetailModelSession model =
@@ -22710,7 +23222,7 @@ public sealed partial class MainWindowViewModel :
                 model.Payload.Skeleton);
             SourceViewport.SetPresentation(
                 "Source Model",
-                "Explicit immutable source-model candidate; no animation or target was changed");
+                $"Selected source: {selected.Name}");
             job.Progress = 100.0;
             job.Complete("Complete");
             StatusText =
@@ -22821,7 +23333,7 @@ public sealed partial class MainWindowViewModel :
         JobViewModel job = AddJob(
             $"Use {modelEntry.Name} as source",
             "Project model",
-            "Validating immutable source-model candidate");
+            "Checking source model");
         try
         {
             DecodedProjectModelSession sourceModel;
@@ -23010,11 +23522,11 @@ public sealed partial class MainWindowViewModel :
             ProjectAnimationSourceBinding sourceBinding =
                 previousAnimation.SourceBinding ??
                 throw new InvalidOperationException(
-                    "The active animation has no immutable source binding. Rebind its source before choosing a target.");
+                    "This clip has no verified source model. Rebind Source before choosing a target.");
             RigDefinition sourceRig = _sourceAnimation?.Rig ??
                 _sourceModelContext?.Rig ??
                 throw new InvalidOperationException(
-                    "The active animation's immutable source rig is not loaded.");
+                    "This clip's saved source rig is not loaded.");
             string sourceSignature = RigSignature.Compute(sourceRig);
             if (!string.Equals(
                     sourceSignature,
@@ -23022,7 +23534,7 @@ public sealed partial class MainWindowViewModel :
                     StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
-                    "The loaded source rig differs from the active animation's immutable source binding.");
+                    "The loaded source rig does not match this clip's saved source.");
             }
 
             ImmutableArray<ProjectAssetReference> assets =
@@ -23312,7 +23824,7 @@ public sealed partial class MainWindowViewModel :
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException(
-                "The variant source rig differs from its immutable source signature.",
+                "The variant's source rig differs from the saved source.",
                 nameof(sourceRig));
         }
 
@@ -23453,6 +23965,19 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(RetargetSetupInstructions));
         if (_disposed || selected is null)
         {
+            return;
+        }
+
+        // While this picker is active, selecting a retail mesh is the
+        // operator's explicit source-model confirmation. Complete the
+        // pending animation action directly instead of only previewing the
+        // mesh and requiring a second trip through the project model library.
+        if (selected.Kind == AssetKind.Mesh &&
+            selected.RetailAsset is not null &&
+            (_pendingExplorerAnimationSourceChoice is not null ||
+             _pendingLocalAnm2ImportPath is not null))
+        {
+            _ = UseSelectedAssetAsSourceAsync();
             return;
         }
 
@@ -23733,7 +24258,7 @@ public sealed partial class MainWindowViewModel :
                 StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidDataException(
-                "The decoded ANM2 partition differs from the immutable saved source binding.");
+                "The ANM2 tracks do not match the saved source model.");
         }
 
         if (imported.CombinedClip.FrameCount != animation.FrameCount)
@@ -24283,7 +24808,7 @@ public sealed partial class MainWindowViewModel :
                     projectAsset.Id,
                     binding.Name,
                     payload.Meshes,
-                    payload.Skeleton);
+                    payload.Skeleton) { ContentSha256 = contentSha256 };
             TrimAttachmentRenderAssetCache();
             _attachmentStatuses[binding.Id] =
                 $"Ready: {payload.Meshes.Count:N0} decoded surface(s)";
@@ -24482,7 +25007,8 @@ public sealed partial class MainWindowViewModel :
             AttachmentEditor.IsPreviewOnly
                 ? AttachmentScope.PreviewOnly
                 : AttachmentScope.AuthoredExportable,
-            parent.Name);
+            parent.Name,
+            AttachmentEditor.CreateGripCalibration(id,assetId));
     }
 
     private ProjectAssetReference?
@@ -24581,7 +25107,7 @@ public sealed partial class MainWindowViewModel :
                         group.Key,
                         projectAsset.RetailIdentity.ResourceName,
                         payload.Meshes,
-                        payload.Skeleton);
+                        payload.Skeleton) { ContentSha256 = actualHash };
                 foreach (AttachmentBinding binding in bindings)
                 {
                     _attachmentStatuses[binding.Id] =
@@ -25593,7 +26119,7 @@ public sealed partial class MainWindowViewModel :
                     : "The transform drag destination changed before commit",
                 destination is null
                     ? "Open a .dlraproj containing a real source animation before authoring bone keys. No synthetic project asset was created."
-                    : "The project, animation, frame, or selected edit layer no longer matches the immutable destination captured when the drag began.");
+                    : "The project, clip, frame, or edit layer changed during this drag. Try again.");
             StatusText = destination is null
                 ? "Bone edit not stored: no active project animation"
                 : "Transform drag canceled: authoring destination changed";
@@ -25669,7 +26195,7 @@ public sealed partial class MainWindowViewModel :
                 "Info",
                 "Bone editor",
                 $"Stored {bone.Path} at frame {frame:N0}",
-                $"Authored in immutable '{targetLayerName}' layer; the decoded rest hierarchy was not mutated.");
+                $"Saved the bone edit in '{targetLayerName}'.");
             StatusText = $"Keyed {bone.Name} at frame {frame:N0}";
         }
         catch (Exception exception) when (
@@ -25890,6 +26416,10 @@ public sealed partial class MainWindowViewModel :
 
     private void RefreshAnimationPreview(bool throwOnFailure = false)
     {
+        _reviewedBscrTargetPreviewApplied = false;
+        ReviewedBscrTargetPreviewStatus = ReviewedBscrTargetPreview
+            ? "Select a prepared DL1 target to use saved bone masks."
+            : string.Empty;
         if (!UsesLinkedTargetExternalView())
         {
             ClearLinkedTargetExternalView();
@@ -26003,16 +26533,7 @@ public sealed partial class MainWindowViewModel :
                 EvaluationPurpose.Preview);
             EvaluationFrame frame =
                 new AnimationEvaluator().Evaluate(request);
-            SkeletonRenderData rendered =
-                _customTargetPreviewSession is { } customPreview
-                    ? customPreview.CreateSkeleton(
-                        frame.DisplayPose,
-                        SelectedTargetBoneIndex,
-                        frame.ActorWorldTransform)
-                    : CorePreviewAdapter.ToRenderSkeleton(
-                        frame.DisplayPose,
-                        SelectedTargetBoneIndex,
-                        frame.ActorWorldTransform);
+            SkeletonRenderData rendered = CreateTargetPresentationSkeleton(frame);
             rendered = ApplySecondaryMotionPreview(projectAnimation, request, rendered);
             GizmoRenderData[] boneGizmos =
                 BuildBoneEditGizmos(rendered);
@@ -26022,7 +26543,7 @@ public sealed partial class MainWindowViewModel :
                     ? BuildCameraHelperGizmos(frame.CameraHelpers)
                     : [];
             GizmoRenderData[] targetGizmos =
-                boneGizmos.Concat(cameraGizmos).Concat(_secondaryGizmos).ToArray();
+                boneGizmos.Concat(cameraGizmos).Concat(_secondaryGizmos).Concat(BuildAttachmentGripGizmos(frame,false)).ToArray();
             MorphWeight[] targetMorphs =
                 frame.DisplayMorphWeights.Select(static pair =>
                     new MorphWeight(
@@ -26103,13 +26624,10 @@ public sealed partial class MainWindowViewModel :
                 projectAnimation,
                 frame);
             FrameComparisonPanes(force: false);
-            SetTargetBindingStatus(
-                directTarget
-                    ? TargetBindingStatus.Direct
-                    : TargetBindingStatus.Ready);
             SynchronizeMorphControls(
                 frame.AuthoredMorphWeights);
             ApplyEvaluatedPreviewCamera(frame);
+            FramePlaybackTargetIfNeeded();
             UpdateFacialSpeechPreview();
             ApplyAuthoringOverlays();
             EnsureRootMotionTrail();
@@ -26249,7 +26767,7 @@ public sealed partial class MainWindowViewModel :
             "Raw Source",
             _sourceBaseMeshes.Length == 0
                 ? $"{source.SourceKind} | skeleton only"
-                : "Exact immutable source model and decoded local pose");
+                : "Saved source model and pose");
         UpdateTargetPreviewPresentation();
         if (!_customTargetUsesSourcePreviewFallback)
         {
@@ -26356,6 +26874,56 @@ public sealed partial class MainWindowViewModel :
         SynchronizeSecondaryMotionModel();
     }
 
+    private SkeletonRenderData CreateTargetPresentationSkeleton(EvaluationFrame frame)
+    {
+        bool requested = ReviewedBscrTargetPreview;
+        bool profile = _project.PreviewMode == ProjectPreviewMode.Dl1Profile;
+        _reviewedBscrTargetPreviewApplied = false;
+        if (_customTargetPreviewSession is not { } customPreview)
+        {
+            ReviewedBscrTargetPreviewStatus = requested
+                ? "Saved masks unavailable for this target."
+                : string.Empty;
+            return CorePreviewAdapter.ToRenderSkeleton(
+                frame.DisplayPose,
+                SelectedTargetBoneIndex,
+                frame.ActorWorldTransform);
+        }
+
+        if (!requested || !profile)
+        {
+            ReviewedBscrTargetPreviewStatus = requested
+                ? "Select DL1 profile to use saved bone masks."
+                : string.Empty;
+            return customPreview.CreateSkeleton(
+                frame.DisplayPose,
+                SelectedTargetBoneIndex,
+                frame.ActorWorldTransform);
+        }
+
+        try
+        {
+            SkeletonRenderData reviewed = customPreview.CreateSkeleton(
+                frame.DisplayPose,
+                SelectedTargetBoneIndex,
+                frame.ActorWorldTransform,
+                reviewedPolicy: true);
+            _reviewedBscrTargetPreviewApplied = true;
+            ReviewedBscrTargetPreviewStatus =
+                "Using saved bone masks for target preview. Test the result in-game.";
+            return reviewed;
+        }
+        catch (Exception exception) when (exception is InvalidDataException or InvalidOperationException)
+        {
+            ReviewedBscrTargetPreviewStatus =
+                $"Saved bone masks unavailable: {exception.Message}";
+            return customPreview.CreateSkeleton(
+                frame.DisplayPose,
+                SelectedTargetBoneIndex,
+                frame.ActorWorldTransform);
+        }
+    }
+
     private void UpdateTargetPreviewPresentation()
     {
         if (UsesLinkedTargetExternalView())
@@ -26379,8 +26947,12 @@ public sealed partial class MainWindowViewModel :
             }
 
             TargetViewport.SetPresentation(
-                TargetPaneTitle,
-                "Custom-model DL1-output UVs, material bindings, authored hierarchy, and embedded textures");
+                _reviewedBscrTargetPreviewApplied
+                    ? "DL1 Target / Reviewed BSCR comparison"
+                    : TargetPaneTitle,
+                _reviewedBscrTargetPreviewApplied
+                    ? ReviewedBscrTargetPreviewStatus
+                    : "Custom-model DL1-output UVs, material bindings, authored hierarchy, and embedded textures");
             return;
         }
 
@@ -26439,6 +27011,7 @@ public sealed partial class MainWindowViewModel :
                 frame.DisplayAttachments,
                 _attachmentRenderAssets,
                 frame.ActorWorldTransform);
+        PublishAttachmentGripStatus(frame,scene);
         Guid? selectedBindingId =
             AttachmentEditor.SelectedAttachment?.Id;
         MeshRenderData[] presentedMeshes = scene.Meshes
@@ -26623,7 +27196,7 @@ public sealed partial class MainWindowViewModel :
                 _ => throw new InvalidDataException(
                     "The project contains an unknown DL1 root-motion mode."),
             },
-            animation.RootBoneName,
+            ReconcileTargetRootBoneName(animation.RootBoneName, target),
             directRigBinding: _activeDirectRigBinding,
             accumulatorBoneName: animation.AccumulatorBoneName);
         ImmutableArray<MorphChannelBinding> morphBindings =
@@ -26710,7 +27283,7 @@ public sealed partial class MainWindowViewModel :
                 AnimationSourceKind.RetailAnm2)
             {
                 throw new InvalidOperationException(
-                    "ANM2 playback is blocked because the existing document has no provable immutable source-model binding. Use Rebind Source to create a new document.");
+                    "Cannot play ANM2: its saved source model could not be verified. Use Rebind Source.");
             }
 
             return;
@@ -26731,7 +27304,7 @@ public sealed partial class MainWindowViewModel :
                  StringComparison.OrdinalIgnoreCase)))
         {
             throw new InvalidOperationException(
-                "The loaded source rig or ANM2 partition differs from this animation document's immutable source binding. Playback was stopped before deformation.");
+                "The source rig or ANM2 tracks no longer match the saved clip. Playback stopped to avoid deformation.");
         }
     }
 
@@ -27680,7 +28253,7 @@ public sealed partial class MainWindowViewModel :
         {
             Meshes = meshes,
             Skeleton = skeleton,
-            Gizmos = BuildBoneEditGizmos(skeleton).Concat(_secondaryExternalGizmos).ToArray(),
+            Gizmos = BuildBoneEditGizmos(skeleton).Concat(_secondaryExternalGizmos).Concat(BuildAttachmentGripGizmos(frame,true)).ToArray(),
             MorphWeights = morphs,
             FppProjectionState = null,
         };
@@ -28662,6 +29235,7 @@ public sealed partial class MainWindowViewModel :
         object? sender,
         PropertyChangedEventArgs args)
     {
+        if(args.PropertyName==nameof(AttachmentEditorViewModel.SelectedAttachment))RefreshAttachmentGripEditor();
         if (args.PropertyName is
                 nameof(AttachmentEditorViewModel.SelectedCatalogAsset) or
                 nameof(AttachmentEditorViewModel.SelectedParentBone) or

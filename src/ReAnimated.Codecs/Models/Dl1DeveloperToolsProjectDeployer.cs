@@ -20,6 +20,7 @@ public enum Dl1DeploymentArtifactRole
     Shared,
     PortableOnly,
     ManifestOwned,
+    ProjectDataAnimationPack,
 }
 
 public enum Dl1DeploymentConflictResolution
@@ -90,6 +91,13 @@ public sealed record Dl1DeveloperToolsDeploymentRequest
 
     public bool ExportPortableAnimationRpack { get; init; } = true;
 
+    /// <summary>
+    /// Mount a copy of the authored animation pack at the conventional Editor
+    /// project-data path. The destination must be absent or still owned by an
+    /// earlier deployment; an unrelated project pack is never replaced.
+    /// </summary>
+    public bool InstallProjectDataAnimationRpack { get; init; }
+
     public ImmutableDictionary<string, Dl1DeploymentConflictResolution> ConflictResolutions { get; init; } =
         ImmutableDictionary<string, Dl1DeploymentConflictResolution>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
@@ -157,6 +165,8 @@ public sealed record Dl1DeveloperToolsDeploymentPlan(
 
     public string? AnimationRuntimePackRelativePath { get; init; }
 
+    public string? ProjectDataAnimationRpackRelativePath { get; init; }
+
     public string? FallbackRpackRelativePath => AnimationRuntimePackRelativePath;
 
     public string? AnimationContentManifestRelativePath { get; init; }
@@ -181,6 +191,8 @@ public sealed record Dl1DeveloperToolsDeploymentReceipt
     public string Format { get; init; } = "dl-reanimated-developer-tools-deployment";
 
     public int SchemaVersion { get; init; } = 2;
+
+    public Dl1DeploymentAuthoringIdentity? AuthoringIdentity { get; init; }
 
     public bool ReferenceExistingAnimationLibrary { get; init; }
 
@@ -282,6 +294,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
     private const int MaximumDuplicateScanFiles = 250_000;
     private const string ReceiptFormat = "dl-reanimated-developer-tools-deployment";
     private const string TransactionFormat = "dl-reanimated-developer-tools-transaction";
+    private const string ProjectDataAnimationRpackRelativePath = "data/common_anims_sp_PC.rpack";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -394,6 +407,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 AnimationScriptAlias = validated.AnimationLibraryName,
                 AnimationLibrary = request.ReferenceExistingAnimationLibrary ? null : source.Library,
                 ExistingMaterialDatabasePath = materialDatabaseSnapshot?.SnapshotPath,
+                ExistingMaterialSourceRoot = materialDatabaseSnapshot is null ? null : validated.ProjectRoot,
                 Timeout = request.CompilerTimeout,
             };
             Dl1OfficialModelCompilerResult modelCompiler = await (
@@ -759,7 +773,18 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         }
     }
 
-    public static Dl1DeveloperToolsDeploymentReceipt? LoadLatestActiveReceipt(string projectRoot)
+    public static Dl1DeveloperToolsDeploymentReceipt? LoadLatestActiveReceipt(string projectRoot) =>
+        LoadLatestActiveReceiptCore(projectRoot,null,null);
+
+    public static Dl1DeveloperToolsDeploymentReceipt? LoadLatestActiveReceipt(string projectRoot,string modelResourceName,string? characterId=null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelResourceName);
+        return LoadLatestActiveReceiptCore(projectRoot,
+            Dl1SourceModelWriter.RequireExactResourceName(modelResourceName,55,"model resource name"),
+            characterId is null?null:NormalizeCharacterId(characterId));
+    }
+
+    private static Dl1DeveloperToolsDeploymentReceipt? LoadLatestActiveReceiptCore(string projectRoot,string? modelResourceName,string? characterId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         string validatedRoot = Path.GetFullPath(projectRoot);
@@ -792,6 +817,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 Dl1DeveloperToolsDeploymentReceipt receipt = ReadAndValidateReceipt(
                     receiptPath,
                     validatedRoot);
+                if (modelResourceName is not null && !string.Equals(receipt.ModelResourceName,modelResourceName,StringComparison.OrdinalIgnoreCase) ||
+                    characterId is not null && !string.Equals(receipt.CharacterId,characterId,StringComparison.OrdinalIgnoreCase)) continue;
                 if (receipt.RolledBackUtc is not null ||
                     latest is not null && receipt.CompletedUtc <= latest.CompletedUtc)
                 {
@@ -873,6 +900,9 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 cancellationToken).ConfigureAwait(false);
         if (!request.ReferenceExistingAnimationLibrary)
             ValidatePreparedAnimationLibrary(library, validated.AnimationLibraryName, cancellationToken);
+        if (request.InstallProjectDataAnimationRpack && library.Animations.IsDefaultOrEmpty)
+            throw new InvalidOperationException(
+                "The conventional project-data animation pack requires at least one authored animation.");
 
         var artifacts = ImmutableArray.CreateBuilder<StagedArtifact>();
         foreach (string sourcePath in Directory.EnumerateFiles(modelSourceDirectory, "*", SearchOption.TopDirectoryOnly))
@@ -936,6 +966,16 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 runtimePackPath,
                 Required: true,
                 "Project-owned animation runtime RPack for loader registration and playback"));
+
+            if (request.InstallProjectDataAnimationRpack)
+            {
+                artifacts.Add(new StagedArtifact(
+                    ProjectDataAnimationRpackRelativePath,
+                    Dl1DeploymentArtifactRole.ProjectDataAnimationPack,
+                    runtimePackPath,
+                    Required: true,
+                    "Conventional project-data animation RPack for Editor discovery"));
+            }
 
             if (request.ExportPortableAnimationRpack)
             {
@@ -1259,6 +1299,19 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     cancellationToken).ConfigureAwait(false);
         foreach (Dl1ProjectAnimationRpackConflict conflict in rpackConflicts)
         {
+            // The prior deployment's conventional pack may be replaced only
+            // while its bytes still match a receipt-owned artifact. Other
+            // active packs remain identity conflicts.
+            if (request.InstallProjectDataAnimationRpack &&
+                string.Equals(conflict.RelativePath, ProjectDataAnimationRpackRelativePath,
+                    StringComparison.OrdinalIgnoreCase) &&
+                owned.TryGetValue(ProjectDataAnimationRpackRelativePath, out string? ownedPackHash) &&
+                File.Exists(ResolveProjectPath(validated.ProjectRoot, ProjectDataAnimationRpackRelativePath)) &&
+                HashesEqual(Sha256File(ResolveProjectPath(validated.ProjectRoot,
+                    ProjectDataAnimationRpackRelativePath)), ownedPackHash))
+            {
+                continue;
+            }
             conflicts.Add(new Dl1DeveloperToolsDeploymentConflict(
                 conflict.RelativePath,
                 $"Active project RPack '{conflict.RelativePath}' already contains {string.Join(", ", conflict.ResourceIdentities)}. Back up the conflicting pack before deploying; duplicate resource identities are never silently skipped.",
@@ -1276,6 +1329,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             bool isOwned = existingHash is not null &&
                 owned.TryGetValue(staged.RelativePath, out string? ownedHash) &&
                 string.Equals(existingHash, ownedHash, StringComparison.OrdinalIgnoreCase);
+            if (staged.Role == Dl1DeploymentArtifactRole.ProjectDataAnimationPack &&
+                existingHash is not null && !isOwned)
+            {
+                conflicts.Add(new Dl1DeveloperToolsDeploymentConflict(
+                    staged.RelativePath,
+                    $"Existing project animation pack '{staged.RelativePath}' is not owned by an active deployment and cannot be replaced.",
+                    CanSkip: false));
+            }
             Dl1DeploymentArtifactDisposition disposition;
             if (existingHash is null)
             {
@@ -1377,6 +1438,9 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 artifact.RelativePath.StartsWith(
                     $"{AnimationRefreshDirectoryRelativePath}/packages/",
                     StringComparison.OrdinalIgnoreCase))?.RelativePath,
+            ProjectDataAnimationRpackRelativePath = request.InstallProjectDataAnimationRpack
+                ? ProjectDataAnimationRpackRelativePath
+                : null,
             AnimationContentManifestRelativePath = effectiveArtifacts
                 .FirstOrDefault(artifact => artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
                     artifact.RelativePath.StartsWith(
@@ -1613,6 +1677,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             Dl1DeveloperToolsDeploymentReceipt receipt = new()
             {
                 SchemaVersion = request.ReferenceExistingAnimationLibrary ? 3 : 2,
+                AuthoringIdentity = Dl1DeploymentAuthoringIdentity.Capture(request.Model),
                 ReferenceExistingAnimationLibrary = request.ReferenceExistingAnimationLibrary,
                 DeploymentId = deploymentId,
                 CharacterId = validated.CharacterId,
@@ -1730,13 +1795,17 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         // ANM2 that was not deployed. A character-only deployment declares no
         // sequences at all, so there is nothing for it to guarantee.
         if (request.ReferenceExistingAnimationLibrary && (!request.DeployWithoutAnimations || request.InstallLooseAnm2 ||
-            request.ExportPortableAnimationRpack || !request.AnimationSelections.IsDefaultOrEmpty || request.PreparedAnimationLibrary is not null))
+            request.ExportPortableAnimationRpack || request.InstallProjectDataAnimationRpack ||
+            !request.AnimationSelections.IsDefaultOrEmpty || request.PreparedAnimationLibrary is not null))
             throw new InvalidOperationException("Stock-reference mode requires character-only deployment with no authored selections, loose ANM2, prepared library, or portable animation pack.");
         if (!request.InstallLooseAnm2 && !request.DeployWithoutAnimations)
         {
             throw new InvalidOperationException(
                 "Alias-mode animation scripts require loose ANM2 deployment; InstallLooseAnm2 cannot be disabled.");
         }
+        if (request.InstallProjectDataAnimationRpack && request.DeployWithoutAnimations)
+            throw new InvalidOperationException(
+                "A character-only deployment cannot mount an authored animation pack in project data.");
         request.Model.Package.Document.Validate();
         if (!request.Model.Package.Document.Bones.IsEmpty)
         {
@@ -2750,6 +2819,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         string path,
         string projectRoot)
     {
+        try { receipt.AuthoringIdentity?.Validate(); }
+        catch(ArgumentException error) { throw new InvalidDataException("Deployment authoring identity is invalid.",error); }
         if (receipt.Format != ReceiptFormat || receipt.SchemaVersion is not (1 or 2 or 3))
         {
             throw new InvalidDataException("Deployment receipt format or schema is unsupported.");
@@ -3005,6 +3076,9 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     $"{AnimationRefreshDirectoryRelativePath}/packages/",
                     StringComparison.OrdinalIgnoreCase) &&
                 relative.EndsWith(".rpack", StringComparison.OrdinalIgnoreCase),
+            Dl1DeploymentArtifactRole.ProjectDataAnimationPack =>
+                string.Equals(relative, ProjectDataAnimationRpackRelativePath,
+                    StringComparison.OrdinalIgnoreCase),
             _ => false,
         };
         if (!valid)

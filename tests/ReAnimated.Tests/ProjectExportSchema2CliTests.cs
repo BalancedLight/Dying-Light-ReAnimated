@@ -124,6 +124,35 @@ public sealed class ProjectExportSchema2CliTests
                 reopened.Package.Document.AnimationClips);
             AnimationClip sourceClip = reopened.AnimationClips[stack.Id];
             Assert.True(stack.HasSkeletalTracks);
+            string skeletonSignature =
+                AnimationSkeletonSignature.Compute(rig);
+            ImmutableArray<DirectBoneBinding> directRows = rig.Bones
+                .Select(bone => new DirectBoneBinding
+                {
+                    SourceBoneIndex = bone.Index,
+                    TargetBoneIndex = bone.Index,
+                    SourceBoneName = bone.Name,
+                    TargetBoneName = bone.Name,
+                    IdentityEvidence = bone.DescriptorHash is null
+                        ? DirectBoneIdentityEvidence.ExactNormalizedName
+                        : DirectBoneIdentityEvidence.UniqueDescriptor,
+                    ParentTopologyMatches = true,
+                    LocalBindMatches = true,
+                    GlobalBindMatches = true,
+                })
+                .ToImmutableArray();
+            string directFingerprint =
+                DirectRigBindingFingerprint.Compute(
+                    skeletonSignature,
+                    skeletonSignature,
+                    DirectRigBinding.PolicyVersion,
+                    directRows);
+            var directBinding = new DirectRigBinding(
+                skeletonSignature,
+                skeletonSignature,
+                directFingerprint,
+                DirectRigBinding.PolicyVersion,
+                directRows);
 
             Guid assetId = Guid.NewGuid();
             Guid modelId = Guid.NewGuid();
@@ -131,6 +160,9 @@ public sealed class ProjectExportSchema2CliTests
             Guid variantId = Guid.NewGuid();
             string packageHash = await ComputeSha256Async(packagePath);
             string runtimeRigSignature = RigSignature.Compute(rig);
+            Assert.NotEqual(
+                reopened.Package.Document.RigSignature,
+                runtimeRigSignature);
             var asset = new ProjectAssetReference
             {
                 Id = assetId,
@@ -145,7 +177,7 @@ public sealed class ProjectExportSchema2CliTests
                 Id = modelId,
                 AssetId = assetId,
                 Name = "Generic model",
-                RigSignature = reopened.Package.Document.RigSignature,
+                RigSignature = runtimeRigSignature,
                 MorphSignature = reopened.Package.Document.MorphSignature,
             };
             var source = new ProjectAnimationSource
@@ -164,6 +196,7 @@ public sealed class ProjectExportSchema2CliTests
                         FacialSourceValueUnit =
                             ProjectMorphSourceValueUnit.Percent,
                     },
+                SourceAnimationSkeletonSignature = skeletonSignature,
                 FrameRate = stack.FrameRate,
                 FrameCount = sourceClip.FrameCount,
             };
@@ -175,6 +208,12 @@ public sealed class ProjectExportSchema2CliTests
                 TargetModelId = modelId,
                 TargetRigId = rig.Id,
                 TargetRigSignature = runtimeRigSignature,
+                TargetAnimationSkeletonSignature = skeletonSignature,
+                BindingMode = ProjectAnimationBindingMode.CompatibleDirect,
+                DirectBinding = directBinding,
+                BindingEvidenceFingerprint =
+                    directBinding.EvidenceFingerprint,
+                BindingPolicyVersion = directBinding.Policy,
             };
             string projectPath = Path.Combine(
                 projectDirectory,
@@ -285,7 +324,7 @@ public sealed class ProjectExportSchema2CliTests
                 Id = modelId,
                 AssetId = assetId,
                 Name = "Fingerprint target",
-                RigSignature = reopened.Package.Document.RigSignature,
+                RigSignature = runtimeSignature,
                 MorphSignature = reopened.Package.Document.MorphSignature,
             };
             var source = new ProjectAnimationSource

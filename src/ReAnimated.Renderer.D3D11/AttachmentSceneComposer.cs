@@ -15,7 +15,10 @@ public sealed record AttachmentRenderAsset(
     Guid ProjectAssetId,
     string DisplayName,
     IReadOnlyList<MeshRenderData> Meshes,
-    SkeletonRenderData? BindSkeleton);
+    SkeletonRenderData? BindSkeleton)
+{
+    public string? ContentSha256 { get; init; }
+}
 
 public sealed record AttachmentRenderDiagnostic(
     string Code,
@@ -83,6 +86,11 @@ public static class AttachmentSceneComposer
                 continue;
             }
 
+            if(attachment.GripCalibration is { } grip && !AttachmentGripFrames.Matches(grip,asset,out string gripError))
+            {
+                diagnostics.Add(new("attachment_grip_owner_mismatch",attachment.BindingId,gripError));
+                continue;
+            }
             TransformMatrix actorWorld =
                 actorWorldTransform ?? TransformMatrix.Identity;
             Matrix4x4 attachmentWorld =

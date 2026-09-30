@@ -12,6 +12,25 @@ public sealed class StudioWorkflowNavigationTests : IDisposable
     private readonly string _directory = RpackTestData.CreateTemporaryDirectory();
 
     [Fact]
+    public void NormalRiggedSetupStartsOnlyAfterChoosingAnExplicitAction()
+    {
+        using var workspace = Workspace(FbxSkinWeightAuthoringTests.Model());
+        var wizard = workspace.Conformance;
+        Assert.True(wizard.IsNormalRiggedSetup);
+        Assert.Null(wizard.SelectedStudioEntry);
+        Assert.Null(workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession);
+        Assert.True(wizard.StartAdaptStudioCommand.CanExecute(null));
+
+        wizard.StartAdaptStudioCommand.Execute(null);
+
+        Assert.Equal(
+            RigStudioEntryPath.AdaptExistingRig,
+            workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession!.EntryPath);
+        Assert.Equal(RigStudioStage.Detect, wizard.StudioStage);
+        Assert.False(wizard.StartRepairStudioCommand.CanExecute(null));
+    }
+
+    [Fact]
     public void LegacyNavigationIsViewOnlyAndOffersAllSevenStages()
     {
         using var workspace = Workspace(FbxSkinWeightAuthoringTests.Model());
@@ -31,9 +50,23 @@ public sealed class StudioWorkflowNavigationTests : IDisposable
     {
         using var workspace = Workspace(FbxSkinWeightAuthoringTests.Model());
         var wizard = workspace.Conformance;
+        Assert.False(wizard.StartStudioCommand.CanExecute(null));
+        Assert.Contains("Choose Repair or Adapt", wizard.StudioStartReason, StringComparison.Ordinal);
         wizard.SelectedStudioEntry = wizard.StudioEntryChoices.Single(c => c.Path == RigStudioEntryPath.AdaptExistingRig);
+        Assert.True(wizard.StartStudioCommand.CanExecute(null));
+        Assert.True(wizard.OpenRiggedCheckCommand.CanExecute(null));
+        wizard.OpenRiggedCheckCommand.Execute(null);
+        Assert.Equal(RigStudioStage.Fit, wizard.StudioStage);
+        Assert.Equal(RigConformanceStage.Verify, wizard.Stage);
+        wizard.StudioStage = RigStudioStage.Import;
+        Assert.Contains("Ready to start", wizard.StudioStartReason, StringComparison.Ordinal);
+        Assert.Empty(wizard.ChannelPolicies);
         wizard.StartStudioCommand.Execute(null);
         var initial = workspace.CaptureProjectSession().Model!;
+        Assert.Equal(initial.Package.Document.Bones.Length, wizard.ChannelPolicies.Count);
+        Assert.True(wizard.HasChannelPolicies);
+        Assert.Contains("already saved", wizard.StudioStartReason, StringComparison.Ordinal);
+        Assert.Contains("No runtime capability profile", wizard.StudioProfileSummary, StringComparison.Ordinal);
         var token = initial.Package.Document.RiggingSession!.CreateJobToken();
         string fingerprint = Fingerprint(initial);
         wizard.RecordStudioReviewCommand.Execute(null);
@@ -77,6 +110,22 @@ public sealed class StudioWorkflowNavigationTests : IDisposable
         var current = workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession!;
         Assert.Equal(18, current.Landmarks.Length);
         Assert.Equal(RigStudioStage.Fit, current.Stage);
+    }
+
+    [Fact]
+    public void ReopenedAutoRigSessionKeepsItsAutoRigEntryChoice()
+    {
+        using var workspace = Workspace(GeneratedBodyWorkflowTests.Source());
+        var wizard = workspace.Conformance;
+        Assert.Single(wizard.StudioEntryChoices);
+        Assert.Equal(RigStudioEntryPath.AutoRigBiped, wizard.SelectedStudioEntry!.Path);
+        wizard.StartStudioCommand.Execute(null);
+        string path = Path.Combine(_directory, "autorig-workflow.dlrmodel");
+        CustomModelPackageSerializer.SaveAtomic(workspace.CaptureProjectSession().Model!.Package, path);
+
+        using var reopened = Workspace(FbxModelAuthoringImporter.ImportPackage(CustomModelPackageSerializer.Load(path)));
+        Assert.Equal(RigStudioEntryPath.AutoRigBiped, reopened.Conformance.SelectedStudioEntry!.Path);
+        Assert.Equal(new[] { RigStudioEntryPath.AutoRigBiped }, reopened.Conformance.StudioEntryChoices.Select(choice => choice.Path).ToArray());
     }
 
     [Fact]
@@ -145,10 +194,59 @@ public sealed class StudioWorkflowNavigationTests : IDisposable
     {
         using var workspace = Workspace(FbxSkinWeightAuthoringTests.Model());
         var wizard = workspace.Conformance;
-        wizard.SelectedStudioEntry = wizard.StudioEntryChoices.Single(c => c.Path == RigStudioEntryPath.AdaptExistingRig);
+        Assert.NotEmpty(workspace.CaptureProjectSession().Model!.Package.Document.Bones);
+        Assert.Null(wizard.SelectedStudioEntry);
         wizard.BodyComponents[0].Kind = RigGeometryComponentKind.Body;
         wizard.SaveBodyComponentsCommand.Execute(null);
+        Assert.Null(workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession);
+        Assert.Contains("Choose Repair or Adapt", wizard.BodyAuthoringStatus, StringComparison.Ordinal);
+        wizard.SelectedStudioEntry = wizard.StudioEntryChoices.Single(c => c.Path == RigStudioEntryPath.AdaptExistingRig);
+        wizard.SaveBodyComponentsCommand.Execute(null);
         Assert.Equal(RigStudioEntryPath.AdaptExistingRig, workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession!.EntryPath);
+        Assert.Equal(RigGeometryComponentKind.Body, workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession!.Components[0].Kind);
+    }
+
+    [Fact]
+    public void ExistingRigWorkflowCanSwitchEntryPathAndUndoWithoutLosingComponentClassification()
+    {
+        using var workspace = Workspace(FbxSkinWeightAuthoringTests.Model());
+        var wizard = workspace.Conformance;
+        wizard.SelectedStudioEntry = wizard.StudioEntryChoices.Single(c => c.Path == RigStudioEntryPath.RepairExistingRig);
+        wizard.BodyComponents[0].Kind = RigGeometryComponentKind.Body;
+        wizard.BodyComponents[0].UseForAnatomy = false;
+        wizard.SaveBodyComponentsCommand.Execute(null);
+
+        foreach (var stage in Enum.GetValues<RigStudioStage>())
+        {
+            wizard.StudioStage = stage;
+            wizard.RecordStudioReviewCommand.Execute(null);
+        }
+        var before = workspace.CaptureProjectSession().Model!;
+        var beforeSession = before.Package.Document.RiggingSession!;
+        var beforeToken = beforeSession.CreateJobToken();
+        var component = beforeSession.Components[0];
+
+        wizard.SelectedStudioEntry = wizard.StudioEntryChoices.Single(c => c.Path == RigStudioEntryPath.AdaptExistingRig);
+        var adapted = workspace.CaptureProjectSession().Model!;
+        var adaptedSession = adapted.Package.Document.RiggingSession!;
+        Assert.Equal(RigStudioEntryPath.AdaptExistingRig, adaptedSession.EntryPath);
+        Assert.Equal(RigMotionStrategy.PreserveAnatomyMapped, adaptedSession.Recipe.MotionStrategy);
+        Assert.Equal(beforeSession.Id, adaptedSession.Id);
+        Assert.Equal(beforeSession.OwnerModelId, adaptedSession.OwnerModelId);
+        Assert.Equal(beforeSession.SourceSha256, adaptedSession.SourceSha256);
+        Assert.Equal(component, adaptedSession.Components[0]);
+        Assert.False(adaptedSession.Matches(beforeToken));
+        Assert.NotNull(adaptedSession.Stages.Single(s => s.Stage == RigStudioStage.Import).ReviewedUtc);
+        Assert.All(adaptedSession.Stages.Where(s => (int)s.Stage >= (int)RigStudioStage.Detect), s => Assert.Null(s.ReviewedUtc));
+        Assert.Equal(component.Kind, wizard.BodyComponents[0].Kind);
+        Assert.Equal(component.UseForAnatomy, wizard.BodyComponents[0].UseForAnatomy);
+
+        Assert.True(workspace.UndoHelperEditCommand.CanExecute(null));
+        workspace.UndoHelperEditCommand.Execute(null);
+        var undone = workspace.CaptureProjectSession().Model!.Package.Document.RiggingSession!;
+        Assert.Equal(RigStudioEntryPath.RepairExistingRig, undone.EntryPath);
+        Assert.Equal(component, undone.Components[0]);
+        Assert.Equal(beforeSession.Stages, undone.Stages);
     }
     private static ModelsWorkspaceViewModel Workspace(FbxModelAuthoringImportResult model)
     {

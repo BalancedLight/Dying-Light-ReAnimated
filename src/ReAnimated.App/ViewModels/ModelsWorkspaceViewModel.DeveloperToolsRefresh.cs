@@ -158,10 +158,11 @@ public sealed partial class ModelsWorkspaceViewModel
         _setStatus(AnimationRefreshStatus);
     }
 
-    internal void QueueAutomaticDeveloperToolsAnimationRefresh(
+    internal DeveloperToolsAnimationRefreshRequestResult? QueueAutomaticDeveloperToolsAnimationRefresh(
         string projectRoot,
         Dl1DeveloperToolsDeploymentReceipt receipt)
     {
+        DeveloperToolsAnimationRefreshRequestResult? queued = null;
         try
         {
             BeginAnimationRefreshRequest(
@@ -170,6 +171,7 @@ public sealed partial class ModelsWorkspaceViewModel
                 DeveloperToolsAnimationRefreshHost.Editor,
                 SelectedAnimationRefreshRoute.Value,
                 "Automatic post-deployment refresh");
+            queued = _lastAnimationRefreshRequest;
         }
         catch (Exception exception) when (
             exception is ArgumentException or InvalidDataException or
@@ -183,6 +185,19 @@ public sealed partial class ModelsWorkspaceViewModel
         }
 
         CheckDeveloperToolsAnimationRefreshResultCommand.NotifyCanExecuteChanged();
+        return queued;
+    }
+
+    internal void AdoptCommittedDeveloperToolsProjectRoot(string projectRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
+        string fullPath = Path.GetFullPath(projectRoot);
+        if (!Directory.Exists(fullPath))
+            throw new DirectoryNotFoundException(
+                $"The committed Developer Tools project is unavailable: {fullPath}");
+        _developerToolsSettings.SaveProjectRoot(fullPath);
+        DeveloperToolsProjectRoot = fullPath;
+        RestoreLatestDeploymentActions();
     }
 
     private void BeginAnimationRefreshRequest(

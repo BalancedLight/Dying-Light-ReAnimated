@@ -34,12 +34,7 @@ public sealed class InstalledDl1RigPromotionEvidenceTests
             string.IsNullOrWhiteSpace(configuredReportPath)
                 ? Path.GetFullPath(
                     Path.Combine(
-                        AppContext.BaseDirectory,
-                        "..",
-                        "..",
-                        "..",
-                        "..",
-                        "..",
+                        TestRepositoryPaths.FindRepositoryRoot(),
                         "artifacts",
                         "validation",
                         "dl1-mesh-corpus-1.55.json"))

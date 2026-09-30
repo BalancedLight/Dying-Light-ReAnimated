@@ -58,6 +58,13 @@ public sealed record Dl1OfficialModelCompilerRequest
     /// </summary>
     public string? ExistingMaterialDatabasePath { get; init; }
 
+    /// <summary>
+    /// Project root containing the source .dmt files for the existing material
+    /// database. A full staged rebuild can then preserve its inventory while
+    /// adding the model's materials; the project itself is never compiled in place.
+    /// </summary>
+    public string? ExistingMaterialSourceRoot { get; init; }
+
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(10);
 
     /// <summary>Optional private staging root for isolated compiler jobs; no machine path is embedded in the project.</summary>
@@ -117,6 +124,7 @@ public sealed record Dl1OfficialModelCompilerEvidence
     public required CompiledMorphDeltaFormat? MorphDeltaFormat { get; init; }
     public ImmutableArray<Dl1BoneScriptReadBack> BoneScriptReadBack { get; init; } = [];
     public ImmutableArray<Dl1CompiledRigNodeReadBack> RigReadBack { get; init; } = [];
+    public int ShadingVerticesVerified { get; init; }
 }
 
 public sealed record Dl1OfficialAnimationCompilerRequest
@@ -154,7 +162,7 @@ public static class Dl1OfficialModelCompiler
     public const string MaterialExportWarning =
         "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-studio-rig-readback-v21";
+        "dl-reanimated-csharp-model-compiler-stock-material-sources-v23";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -291,11 +299,13 @@ public static class Dl1OfficialModelCompiler
         string materialCompilerFingerprint = await Sha256FileAsync(
             materialCompilerPath,
             cancellationToken).ConfigureAwait(false);
+        // Techland's resource compiler can fault in deep per-user staging trees
+        // after emitting otherwise valid mesh and texture objects. Keep the
+        // default job root compact; an explicit root still wins for callers
+        // that need a different private staging location.
         string jobContainer = request.WorkingDirectoryRoot is { } workingRoot ? Path.GetFullPath(workingRoot) : Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "DLReAnimated",
-            "ModelCompiler",
-            "Jobs");
+            "DLRMC");
         string jobId = Guid.NewGuid().ToString("N");
         string jobDirectory = Path.Combine(jobContainer, jobId);
         string workshopDirectory = Path.Combine(jobDirectory, "Workshop");
@@ -328,7 +338,20 @@ public static class Dl1OfficialModelCompiler
                 },
                 cancellationToken).ConfigureAwait(false);
 
+            ImmutableArray<CompilerResourceUnit> units = CreateCompilerResourceUnits(
+                resourceName,
+                virtualMshPath,
+                virtualDirectory,
+                sourceBuild.TextureSourceFiles,
+                jobDirectory);
+            ValidateNativeCompilerPaths(units.SelectMany(unit => new[]
+            {
+                Path.Combine(projectDirectory, unit.VirtualSourcePath.Replace('/', Path.DirectorySeparatorChar)),
+                Path.Combine(unit.OutputDirectory, unit.ExpectedObjectFileName + "_dep"),
+            }).Append(rulesPath).Append(rsrcPath));
+
             warnings.AddRange(sourceBuild.NativeCompanionNotes);
+            warnings.AddRange(sourceBuild.CapabilityDiagnostics.Select(d => "Capability profile: " + d.Message + " " + d.CorrectiveOperation));
             foreach (string name in sourceBuild.NativeCompanionFiles.Where(name => name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
             {
                 string destination = Path.Combine(projectDirectory, "data", "odephysics", "meshpartcloth", name);
@@ -388,12 +411,25 @@ public static class Dl1OfficialModelCompiler
                     stagedSourceDirectory,
                     $"{Path.GetFileNameWithoutExtension(reference)}.dmt")))
                 .ToArray();
+            string? fullMaterialBuildDirectory = null;
+            if (locallyAuthoredMaterialReferences.Length > 0 &&
+                !string.IsNullOrWhiteSpace(request.ExistingMaterialSourceRoot))
+            {
+                fullMaterialBuildDirectory = "data/characters/_dlr_material_build";
+                int stagedMaterialCount = await StageCompleteMaterialSourcesAsync(
+                    request.ExistingMaterialSourceRoot,
+                    stagedSourceDirectory,
+                    Path.Combine(projectDirectory, fullMaterialBuildDirectory.Replace('/', Path.DirectorySeparatorChar)),
+                    cancellationToken,
+                    stockMaterialRoot: devToolsData).ConfigureAwait(false);
+                AppendBounded(compilerLog, $"Full material rebuild staged {stagedMaterialCount} source .dmt files.\r\n");
+            }
             string? existingMaterialDatabasePath = string.IsNullOrWhiteSpace(
                 request.ExistingMaterialDatabasePath)
                 ? null
                 : Path.GetFullPath(request.ExistingMaterialDatabasePath);
             string? compiledMaterialDatabase = null;
-            if (existingMaterialDatabasePath is not null)
+            if (existingMaterialDatabasePath is not null && fullMaterialBuildDirectory is null)
             {
                 if (!File.Exists(existingMaterialDatabasePath))
                 {
@@ -420,8 +456,8 @@ public static class Dl1OfficialModelCompiler
                         CreateMaterialCompilerCommand(
                             projectDirectory,
                             workshopDirectory,
-                            virtualDirectory,
-                            forceRebuild: existingMaterialDatabasePath is null),
+                            fullMaterialBuildDirectory ?? virtualDirectory,
+                            forceRebuild: fullMaterialBuildDirectory is not null || existingMaterialDatabasePath is null),
                         projectDirectory,
                         request.Timeout,
                         cancellationToken).ConfigureAwait(false);
@@ -436,21 +472,12 @@ public static class Dl1OfficialModelCompiler
                         projectDirectory,
                         "Assets_PC",
                         "local_dx11.mp");
-                    ValidateCompiledMaterialDatabase(
-                        compiledMaterialDatabase,
-                        locallyAuthoredMaterialReferences,
-                        sourceBuild.TextureSourceFiles);
-                    if (existingMaterialDatabasePath is not null)
-                    {
-                        ValidateCompiledMaterialDatabasePreserves(
-                            existingMaterialDatabasePath,
-                            compiledMaterialDatabase);
-                    }
                 }
                 catch (Exception exception) when (
-                    exception is InvalidDataException or IOException or
+                    fullMaterialBuildDirectory is null &&
+                    (exception is InvalidDataException or IOException or
                     UnauthorizedAccessException or TimeoutException or
-                    Win32Exception or NotSupportedException)
+                    Win32Exception or NotSupportedException))
                 {
                     warnings.Add(MaterialExportWarning);
                     AppendBounded(
@@ -474,12 +501,26 @@ public static class Dl1OfficialModelCompiler
                 }
             }
 
-            ImmutableArray<CompilerResourceUnit> units = CreateCompilerResourceUnits(
-                resourceName,
-                virtualMshPath,
-                virtualDirectory,
-                sourceBuild.TextureSourceFiles,
-                jobDirectory);
+            if (locallyAuthoredMaterialReferences.Length > 0)
+            {
+                if (compiledMaterialDatabase is null)
+                {
+                    throw new InvalidDataException(
+                        "The model has custom materials but no compiled local_dx11.mp database was produced.");
+                }
+
+                ValidateCompiledMaterialDatabase(
+                    compiledMaterialDatabase,
+                    locallyAuthoredMaterialReferences,
+                    sourceBuild.TextureSourceFiles);
+                if (existingMaterialDatabasePath is not null)
+                {
+                    ValidateCompiledMaterialDatabasePreserves(
+                        existingMaterialDatabasePath,
+                        compiledMaterialDatabase);
+                }
+            }
+
             var compiledObjects = ImmutableArray.CreateBuilder<string>(units.Length);
             for (int stage = 0; stage < units.Length; stage++)
             {
@@ -524,7 +565,10 @@ public static class Dl1OfficialModelCompiler
                     {
                         throw new InvalidDataException(
                             $"Techland model compiler stage {stage + 1} exited with code {process.ExitCode}. " +
-                            $"It did not emit the expected '{unit.ExpectedObjectFileName}'. No model bundle was published.");
+                            (emittedObject is null
+                                ? $"It did not emit the expected '{unit.ExpectedObjectFileName}'. "
+                                : $"It emitted '{unit.ExpectedObjectFileName}', but this exit status is not accepted for publication. ") +
+                            "No model bundle was published.");
                     }
                 }
 
@@ -574,6 +618,7 @@ public static class Dl1OfficialModelCompiler
             int verifiedEntityCount;
             int verifiedSurfaceCount;
             int verifiedVertexCount;
+            int verifiedShadingVertexCount;
             int verifiedIndexCount;
             int verifiedMorphChannelCount;
             int verifiedMorphBindingCount;
@@ -654,6 +699,18 @@ public static class Dl1OfficialModelCompiler
                         "No model RPack was published.");
                 }
 
+                var clothReadBackInputs = new List<(string ResourceName, NativePhxDocument Document)>();
+                foreach (string name in sourceBuild.NativeCompanionFiles.Where(name =>
+                             name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
+                {
+                    string source = await File.ReadAllTextAsync(Path.Combine(stagedSourceDirectory, name), cancellationToken)
+                        .ConfigureAwait(false);
+                    clothReadBackInputs.Add((name, Dl1ClothCodec.ReadPhx(source)));
+                }
+                warnings.AddRange(Dl1CompiledClothReadBackValidator.Validate(hierarchy, geometry, clothReadBackInputs));
+
+                verifiedShadingVertexCount = Dl1CompiledShadingValidator.Validate(
+                    request.Model.Surfaces.Length, geometry.Surfaces, vertexData);
                 ValidateCompiledMorphOutput(request.Model, geometry);
 
                 verifiedEntityCount = hierarchy.Entities.Count;
@@ -803,6 +860,7 @@ public static class Dl1OfficialModelCompiler
                         entities = verifiedEntityCount,
                         surfaces = verifiedSurfaceCount,
                         vertices = verifiedVertexCount,
+                        shadingVertices = verifiedShadingVertexCount,
                         indices = verifiedIndexCount,
                         morphChannels = verifiedMorphChannelCount,
                         morphBindings = verifiedMorphBindingCount,
@@ -864,6 +922,7 @@ public static class Dl1OfficialModelCompiler
                         : CompiledMorphDeltaFormat.PcHalf4,
                     BoneScriptReadBack = boneScriptReadBack,
                     RigReadBack = rigReadBack,
+                    ShadingVerticesVerified = verifiedShadingVertexCount,
                 },
             };
         }
@@ -1568,6 +1627,24 @@ public static class Dl1OfficialModelCompiler
         return units.ToImmutable();
     }
 
+    // A conservative staging budget, not a claim about every native filesystem
+    // call's limit. The installed compiler can fault in deep staging trees even
+    // after it has emitted an object header; moving the same control to a short
+    // job root succeeds. Fail before launching it rather than publishing partial data.
+    internal const int MaximumNativeCompilerPathLength = 240;
+
+    internal static void ValidateNativeCompilerPaths(IEnumerable<string> paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        foreach (string path in paths)
+        {
+            if (path.Length > MaximumNativeCompilerPathLength)
+                throw new InvalidDataException(
+                    $"The native compiler staging path is {path.Length} characters, exceeding the conservative {MaximumNativeCompilerPathLength}-character limit. " +
+                    $"Choose a shorter WorkingDirectoryRoot or shorter resource/character names before compiling. Path: {path}");
+        }
+    }
+
     internal static string CreateResourceRules() =>
         "ResourceRule(\"*.msh\")\nResourceRule(\"*.dds\")\n";
 
@@ -1620,13 +1697,28 @@ public static class Dl1OfficialModelCompiler
             }
         }
 
-        _ = customMaterialReferences;
-        _ = customTextureReferences;
         if (materials.Count == 0)
         {
             throw new InvalidDataException(
                 "Techland's material compiler emitted an empty ABDM material inventory.");
         }
+
+        string[] missingMaterials = customMaterialReferences
+            .Select(ComputeCompiledResourceHash)
+            .Distinct()
+            .Where(hash => !materials.ContainsKey(hash))
+            .Select(hash => $"0x{hash:X8}")
+            .Take(16)
+            .ToArray();
+        if (missingMaterials.Length > 0)
+        {
+            throw new InvalidDataException(
+                "Techland's material compiler did not add all model material references to " +
+                $"Assets_PC/local_dx11.mp ({string.Join(", ", missingMaterials)} missing). " +
+                "The model bundle cannot be published with unresolved materials.");
+        }
+
+        _ = customTextureReferences;
     }
 
     internal static void ValidateCompiledMaterialDatabasePreserves(
@@ -1963,6 +2055,12 @@ public static class Dl1OfficialModelCompiler
                 "The requested existing material database was not found.",
                 request.ExistingMaterialDatabasePath);
         }
+        if (!string.IsNullOrWhiteSpace(request.ExistingMaterialSourceRoot) &&
+            !Directory.Exists(Path.Combine(request.ExistingMaterialSourceRoot, "data")))
+        {
+            throw new DirectoryNotFoundException(
+                "The existing material source root has no Developer Tools data directory.");
+        }
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SurfaceName);
         if (!File.Exists(request.CompilerExecutablePath))
         {
@@ -1996,6 +2094,99 @@ public static class Dl1OfficialModelCompiler
         {
             throw new ArgumentOutOfRangeException(nameof(request), "The compiler timeout must be between zero and one hour.");
         }
+    }
+
+    internal static async Task<int> StageCompleteMaterialSourcesAsync(
+        string projectRoot,
+        string currentSourceDirectory,
+        string outputDirectory,
+        CancellationToken cancellationToken,
+        string? stockMaterialRoot = null)
+    {
+        const int maximumMaterialSources = 16_384;
+        const int maximumMaterialSourceBytes = 1_048_576;
+        const long maximumTotalMaterialSourceBytes = 256L * 1024 * 1024;
+        string dataDirectory = Path.GetFullPath(Path.Combine(projectRoot, "data"));
+        if ((File.GetAttributes(dataDirectory) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidDataException("The project material data directory cannot be a linked directory.");
+        var sources = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+        long totalBytes = 0;
+        var enumeration = new EnumerationOptions
+        {
+            RecurseSubdirectories = true,
+            IgnoreInaccessible = false,
+            AttributesToSkip = FileAttributes.ReparsePoint,
+        };
+        // The Developer Tools default local_dx11.mp contains stock shadow-caster
+        // records even in a newly created empty project. Their source .dmt files
+        // live beside the compiler, outside the project data directory. Include
+        // those exact installed sources before rebuilding from project sources;
+        // otherwise Techland's full rebuild drops the default material records.
+        if (stockMaterialRoot is not null)
+        {
+            string stockDirectory = Path.GetFullPath(stockMaterialRoot);
+            if (!Directory.Exists(stockDirectory) ||
+                (File.GetAttributes(stockDirectory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException("The installed Developer Tools stock material source directory is missing or linked.");
+            foreach (string path in Directory.EnumerateFiles(stockDirectory, "*.dmt", enumeration))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                string name = Path.GetFileName(path);
+                if (sources.Count >= maximumMaterialSources)
+                    throw new InvalidDataException("The installed Developer Tools contains too many stock material sources for a bounded rebuild.");
+                var file = new FileInfo(path);
+                if ((file.Attributes & FileAttributes.ReparsePoint) != 0 || file.Length > maximumMaterialSourceBytes)
+                    throw new InvalidDataException($"Installed stock material source '{name}' is linked or exceeds the bounded size.");
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                totalBytes = checked(totalBytes + bytes.Length);
+                if (bytes.Length > maximumMaterialSourceBytes || totalBytes > maximumTotalMaterialSourceBytes)
+                    throw new InvalidDataException("Installed stock material sources exceed the bounded full-rebuild size.");
+                if (sources.TryGetValue(name, out byte[]? previous) && !previous.AsSpan().SequenceEqual(bytes))
+                    throw new InvalidDataException($"Installed stock material source basename '{name}' is duplicated with different content.");
+                sources[name] = bytes;
+            }
+        }
+        foreach (string path in Directory.EnumerateFiles(dataDirectory, "*.dmt", enumeration))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string name = Path.GetFileName(path);
+            if (sources.Count >= maximumMaterialSources)
+                throw new InvalidDataException("The project contains too many material sources for a bounded full rebuild.");
+            var file = new FileInfo(path);
+            if ((file.Attributes & FileAttributes.ReparsePoint) != 0 || file.Length > maximumMaterialSourceBytes)
+                throw new InvalidDataException($"Project material source '{name}' is linked or exceeds the bounded size.");
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            totalBytes = checked(totalBytes + bytes.Length);
+            if (bytes.Length > maximumMaterialSourceBytes || totalBytes > maximumTotalMaterialSourceBytes)
+                throw new InvalidDataException("Project material sources exceed the bounded full-rebuild size.");
+            if (sources.TryGetValue(name, out byte[]? existing) && !existing.AsSpan().SequenceEqual(bytes))
+                throw new InvalidDataException($"Project material source basename '{name}' is duplicated with different content.");
+            sources[name] = bytes;
+        }
+
+        foreach (string path in Directory.EnumerateFiles(currentSourceDirectory, "*.dmt", SearchOption.TopDirectoryOnly))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string name = Path.GetFileName(path);
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            if (bytes.Length > maximumMaterialSourceBytes)
+                throw new InvalidDataException($"Current model material source '{name}' exceeds the bounded size.");
+            totalBytes = checked(totalBytes + bytes.Length);
+            if (totalBytes > maximumTotalMaterialSourceBytes)
+                throw new InvalidDataException("Material sources exceed the bounded full-rebuild size.");
+            sources[name] = bytes;
+        }
+
+        if (sources.Count == 0 || sources.Count > maximumMaterialSources)
+            throw new InvalidDataException("The full material rebuild has no bounded source inventory.");
+        Directory.CreateDirectory(outputDirectory);
+        foreach ((string name, byte[] bytes) in sources.OrderBy(static pair => pair.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await File.WriteAllBytesAsync(Path.Combine(outputDirectory, name), bytes, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        return sources.Count;
     }
 
     internal static void ValidateCompiledMorphOutput(

@@ -27,18 +27,20 @@ public enum RigConformanceStage
 /// <summary>One reviewable correspondence row surfaced to the mapping table.</summary>
 public sealed partial class RigConformanceMappingItemViewModel : ObservableObject
 {
-    private readonly Action<string, string> _applyRoleOverride;
+    private readonly Func<string, string, bool> _applyRoleOverride;
     private string _selectedSourceName;
 
     public RigConformanceMappingItemViewModel(
         RigCorrespondenceRow row,
         ImmutableArray<string> candidates,
-        Action<string, string> applyRoleOverride)
+        Func<string, string, bool> applyRoleOverride,
+        bool needsSourceMatch = false)
     {
         Row = row;
         Candidates = candidates;
         _applyRoleOverride = applyRoleOverride;
         _selectedSourceName = row.SourceName ?? string.Empty;
+        NeedsSourceMatch = needsSourceMatch;
     }
 
     public RigCorrespondenceRow Row { get; }
@@ -46,6 +48,13 @@ public sealed partial class RigConformanceMappingItemViewModel : ObservableObjec
     public ImmutableArray<string> Candidates { get; }
 
     public string Name => Row.Name;
+
+    public string DisplayName => Row.Role switch
+    {
+        "body.root" => $"Motion root ({Row.Name})",
+        "body.pelvis" => $"Pelvis ({Row.Name})",
+        _ => Row.Name,
+    };
 
     public string Disposition => Row.Disposition.ToString();
 
@@ -60,7 +69,10 @@ public sealed partial class RigConformanceMappingItemViewModel : ObservableObjec
 
     public bool IsAmbiguous => Row.WasAmbiguous;
 
-    public bool CanChooseSource => Candidates.Length > 1 && Row.Role is not null;
+    public bool NeedsSourceMatch { get; }
+
+    public bool CanChooseSource =>
+        Row.TemplateIndex >= 0 && Candidates.Length > 0 && Row.Role is not null;
 
     /// <summary>
     /// The chosen source bone for an ambiguous role. Setting it records an
@@ -71,14 +83,22 @@ public sealed partial class RigConformanceMappingItemViewModel : ObservableObjec
         get => _selectedSourceName;
         set
         {
-            if (!SetProperty(ref _selectedSourceName, value) ||
-                Row.Role is not { } role ||
+            if (Row.Role is not { } role ||
                 string.IsNullOrWhiteSpace(value))
             {
                 return;
             }
 
-            _applyRoleOverride(role, value);
+            string previous = _selectedSourceName;
+            if (!SetProperty(ref _selectedSourceName, value))
+            {
+                return;
+            }
+
+            if (!_applyRoleOverride(role, value))
+            {
+                SetProperty(ref _selectedSourceName, previous);
+            }
         }
     }
 }
@@ -235,8 +255,15 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     private Dl1RigTemplate? _template;
     private ImmutableDictionary<string, string> _roleOverrides =
         ImmutableDictionary<string, string>.Empty;
+    private MappingEditSnapshot? _previousMappingEdit;
+    private bool _sourceConformanceReviewRequired;
+    private sealed record MappingEditSnapshot(
+        ImmutableDictionary<string, string> Roles,
+        ImmutableDictionary<string, Vector3D>? Positions,
+        bool RequiresSourceReview);
     private ImmutableDictionary<string, Vector3D> _positionOverrides =
         ImmutableDictionary<string, Vector3D>.Empty;
+    private ImmutableDictionary<string, Vector3D>? _previousPositionOverrides;
 
     [ObservableProperty]
     private RigConformanceStage _stage = RigConformanceStage.Target;
@@ -279,6 +306,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     [ObservableProperty]
     private string _solveStatus = "Import a model to begin.";
 
+    [ObservableProperty]
+    private string _mappingEditStatus = string.Empty;
+
     public RigConformanceWizardViewModel(
         Func<string, CancellationToken, Task<Dl1RigTemplateResolution>> resolveTemplate,
         Action<string> setStatus)
@@ -299,7 +329,10 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             () => SelectedLandmark is not null && HasOverride(SelectedLandmark.BoneName));
         ResetAllCommand = new RelayCommand(
             ResetAllOverrides,
-            () => !_positionOverrides.IsEmpty);
+            () => !_sourceConformanceReviewRequired && !_positionOverrides.IsEmpty);
+        UndoLastJointPlacementCommand = new RelayCommand(
+            UndoLastJointPlacement,
+            () => _previousPositionOverrides is not null && !IsBusy);
         NextStageCommand = new RelayCommand(
             () => Stage = (RigConformanceStage)((int)Stage + 1),
             () => Stage < RigConformanceStage.Verify && CanAdvance);
@@ -310,11 +343,22 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             () => ApplyRequested?.Invoke(this, EventArgs.Empty),
             () => CanApply && !IsBusy);
         AcceptMappingProposalsCommand = new RelayCommand(AcceptMappingProposals, () => HasPendingMappingReview && !IsBusy);
+        RerunAutomaticMatchingCommand = new RelayCommand(
+            RerunAutomaticMatching,
+            () => CanAdvance && !IsBusy);
+        UndoLastMappingChangeCommand = new RelayCommand(
+            UndoLastMappingChange,
+            () => _previousMappingEdit is not null && !IsBusy);
         InitializeBodyDetection();
         InitializeChannelPolicies();
         InitializeContacts();
         InitializeHands();
         InitializeEyes();
+        InitializeCameras();
+        InitializeStructural();
+        InitializeCapabilityProfile();
+        InitializeSetupTransfer();
+        InitializeRetailReferenceSelection();
         InitializeRestPose();
         InitializeHierarchy();
         InitializeDerivedMotion();
@@ -335,6 +379,15 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public ObservableCollection<RigConformanceMappingItemViewModel> Mappings { get; } = [];
 
+    public IReadOnlyList<RigConformanceMappingItemViewModel> VisibleMappings =>
+        IsAdvancedSetupMode
+            ? Mappings.ToArray()
+            : Mappings.Where(row => row.Row.TemplateIndex >= 0 &&
+                row.Role is "body.root" ||
+                row.Row.TemplateIndex >= 0 &&
+                CoreRoles.Contains(row.Role, StringComparer.Ordinal))
+                .ToArray();
+
     public ObservableCollection<RigConformanceLandmarkViewModel> Landmarks { get; } = [];
 
     public ObservableCollection<string> Warnings { get; } = [];
@@ -345,7 +398,13 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public IRelayCommand AcceptMappingProposalsCommand { get; }
 
+    public IRelayCommand RerunAutomaticMatchingCommand { get; }
+
+    public IRelayCommand UndoLastMappingChangeCommand { get; }
+
     public IRelayCommand ResetAllCommand { get; }
+
+    public IRelayCommand UndoLastJointPlacementCommand { get; }
 
     public IRelayCommand NextStageCommand { get; }
 
@@ -425,9 +484,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public string MissingCoreRolesMessage => MissingCoreRoles.IsEmpty
         ? string.Empty
-        : $"{MissingCoreRoles.Length} core body role(s) have no correspondence: " +
-          $"{string.Join(", ", MissingCoreRoles)}. Assign them on the Mapping stage, " +
-          "or the conversion will not follow this model.";
+        : IsAdvancedSetupMode
+            ? $"{MissingCoreRoles.Length} required {(MissingCoreRoles.Length == 1 ? "joint needs" : "joints need")} a match: {string.Join(", ", MissingCoreRoles)}."
+            : $"Match the highlighted joints ({MissingCoreRoles.Length} remaining).";
 
     public Dl1RigTemplate? Template => _template;
 
@@ -443,6 +502,12 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public bool CanAdvance => HasTemplate && HasModel;
 
+    public bool RequiresSourceRematch => _sourceConformanceReviewRequired;
+
+    public string AutomaticMatchingLabel => RequiresSourceRematch
+        ? "Re-match changed model"
+        : "Re-run automatic matching";
+
     public bool HasPendingMappingReview => UseGeometryCorrespondence && _geometryEvidence is not null &&
         Correspondence?.Rows.Any(static r => r.Disposition == RigBoneDisposition.Mapped && r.WasAmbiguous) == true;
 
@@ -453,7 +518,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public string MappingReviewMessage => HasMissingAnatomicalCorrespondence ? "Some anatomical roles need a source bone. Choose them in the mapping table before applying." :
         HasPendingMappingReview ? "Review the proposed mappings, then accept them or choose different source bones." : string.Empty;
 
-    public bool CanApply => Fit is not null && !HasPendingMappingReview && !HasMissingAnatomicalCorrespondence;
+    public bool CanApply => !RequiresSourceRematch && Fit is not null && !HasPendingMappingReview && !HasMissingAnatomicalCorrespondence;
 
     public int MappedCount => Correspondence?.MappedCount ?? 0;
 
@@ -480,12 +545,22 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     {
         Guid? selectedGuide = model?.Package.Document.ModelId == _model?.Package.Document.ModelId ? SelectedBodyGuideId : null;
         bool mirrorGuide = selectedGuide is not null && MirrorBodyGuide;
+        bool sameSourceModel = model is not null && _model?.Package.Document.ModelId == model.Package.Document.ModelId;
+        bool draftRequiresRematch = sameSourceModel && model?.Rig is not null &&
+            (_sourceConformanceReviewRequired || !string.Equals(
+                _model!.Package.Document.Source.ContentSha256,
+                model.Package.Document.Source.ContentSha256,
+                StringComparison.OrdinalIgnoreCase));
         if (!ReferenceEquals(_model, model)) InvalidateBodyDetection();
         bool freshModel = model is not null && _model?.Package.Document.ModelId != model.Package.Document.ModelId;
         _settingModel = true;
         try
         {
             _model = model;
+            _previousMappingEdit = null;
+            _previousPositionOverrides = null;
+            _sourceConformanceReviewRequired = false;
+            MappingEditStatus = string.Empty;
             _geometryEvidence = null;
             _geometryEvidenceCaptured = false;
             Correspondence = null;
@@ -508,6 +583,10 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 UseGeometryCorrespondence = true;
                 ConformanceStrength = 0;
             }
+            else
+            {
+                _sourceConformanceReviewRequired = draftRequiresRematch;
+            }
         }
         finally { _settingModel = false; }
         RestoreStoredBodyGuides();
@@ -516,6 +595,10 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         RestoreContacts();
         RestoreHands();
         RestoreEyes();
+        RestoreCameras();
+        RestoreStructural();
+        RestoreCapabilityProfile();
+        ResetSetupTransfer();
         RestoreRestPose();
         RestoreHierarchy();
         RestoreDerivedMotion();
@@ -551,6 +634,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             static row => row.BoneName,
             static row => row.Position,
             StringComparer.OrdinalIgnoreCase);
+        _sourceConformanceReviewRequired = !settings.MatchesSource(sourceFbxSha256);
 
         SolveStatus = settings.MatchesSource(sourceFbxSha256)
             ? "Restored the saved conformance settings."
@@ -560,7 +644,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     /// <summary>Captures the current decisions for persistence.</summary>
     public CustomModelRigConformance? CreateSettings()
     {
-        if (_template is not { } template ||
+        if (_sourceConformanceReviewRequired ||
+            _template is not { } template ||
             _model?.Package.Document.Source.ContentSha256 is not { } sourceHash ||
             string.IsNullOrWhiteSpace(sourceHash))
         {
@@ -606,21 +691,34 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         IsBusy = true;
         try
         {
+            string requested = TemplateProfileName;
+            var source = _model;
             Dl1RigTemplateResolution resolution =
-                await _resolveTemplate(TemplateProfileName, cancellationToken)
+                await _resolveTemplate(requested, cancellationToken)
                     .ConfigureAwait(true);
-            _template = resolution.Template;
-            TemplateStatus = resolution.Succeeded
-                ? $"{resolution.ResourceName}: {resolution.Status}"
-                : resolution.Status;
-            _setStatus(TemplateStatus);
-            Solve();
+            if (!ReferenceEquals(source, _model) || !requested.Equals(TemplateProfileName, StringComparison.Ordinal)) return;
+            UseTemplateResolution(resolution);
         }
         finally
         {
             IsBusy = false;
             NotifyStateChanged();
         }
+    }
+
+    private void UseTemplateResolution(Dl1RigTemplateResolution resolution)
+    {
+        _template = resolution.Template;
+        _previousMappingEdit = null;
+        _previousPositionOverrides = null;
+        MappingEditStatus = string.Empty;
+        if (_cameraPreview?.IsCreation == true) InvalidateCameraDraft();
+        RefreshCameraCreation();
+        TemplateStatus = resolution.Succeeded
+            ? $"{resolution.ResourceName}: {resolution.Status}"
+            : resolution.Status;
+        _setStatus(TemplateStatus);
+        Solve();
     }
 
     /// <summary>
@@ -631,6 +729,46 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public void Solve()
     {
         if (_settingModel) return;
+        if (_sourceConformanceReviewRequired)
+        {
+            Correspondence = null;
+            Landmark = null;
+            Fit = null;
+            Mappings.Clear();
+            OnPropertyChanged(nameof(VisibleMappings));
+            RefreshLandmarks();
+            RefreshWarnings();
+            RefreshMissingCoreRoles();
+            SolveStatus = "The previous fit belongs to a different source model. Re-match the changed model before fitting.";
+            NotifyStateChanged();
+            FitChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+        // Applied output bones have DL1 names, while the recorded review
+        // decisions intentionally name the original FBX bones. Keep those
+        // decisions for source reimport, but never solve them against the
+        // renamed output rig or display that expected mismatch as an Apply
+        // failure after the model has already been committed.
+        if (_model is { Rig: { } displayedRig } &&
+            _model.Package.Document.RigConformance is { } savedConformance &&
+            savedConformance.MatchesAppliedOutputRig(
+                displayedRig,
+                _model.Package.Document.Source.ContentSha256))
+        {
+            Correspondence = null;
+            Landmark = null;
+            Fit = null;
+            Mappings.Clear();
+            Landmarks.Clear();
+            Warnings.Clear();
+            RefreshMissingCoreRoles();
+            SolveStatus = "The saved source-bone mapping decisions refer to the original FBX rig, not this applied output. " +
+                "They remain in the package; reimport the source FBX into a copy before revising conformance.";
+            NotifyStateChanged();
+            FitChanged?.Invoke(this, EventArgs.Empty);
+            return;
+        }
+
         if (_template is not { } template ||
             _model?.Rig is not { } source)
         {
@@ -716,6 +854,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         Mappings.Clear();
         if (Correspondence is not { } correspondence)
         {
+            OnPropertyChanged(nameof(VisibleMappings));
             return;
         }
 
@@ -724,6 +863,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 static row => row.Role,
                 static row => row.CandidateSourceNames,
                 StringComparer.Ordinal);
+        ImmutableArray<string> sourceBoneNames = _model?.Rig is { } sourceRig
+            ? sourceRig.Bones.Select(static bone => bone.Name).ToImmutableArray()
+            : [];
 
         foreach (RigCorrespondenceRow row in correspondence.Rows)
         {
@@ -732,13 +874,19 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 candidatesByRole.TryGetValue(role, out ImmutableArray<string> options)
                     ? options
                     : row.SourceName is { } single ? [single] : [];
-            if (UseGeometryCorrespondence && _geometryEvidence is not null && row.TemplateIndex >= 0 && row.Role is not null && _model?.Rig is { } rig)
-                candidates = candidates.Concat(rig.Bones.Select(static b => b.Name)).Distinct(StringComparer.OrdinalIgnoreCase).ToImmutableArray();
+            if (row.TemplateIndex >= 0 && row.Role is not null)
+                candidates = candidates.Concat(sourceBoneNames)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToImmutableArray();
             Mappings.Add(new RigConformanceMappingItemViewModel(
                 row,
                 candidates,
-                ApplyRoleOverride));
+                ApplyRoleOverride,
+                row.TemplateIndex >= 0 && row.Disposition != RigBoneDisposition.Mapped &&
+                    CoreRoles.Contains(row.Role, StringComparer.Ordinal)));
         }
+
+        OnPropertyChanged(nameof(VisibleMappings));
     }
 
     partial void OnUseGeometryCorrespondenceChanged(bool value) => Solve();
@@ -746,10 +894,68 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     private void AcceptMappingProposals()
     {
         if (!HasPendingMappingReview || Correspondence is not { } correspondence) return;
+        _previousMappingEdit = CaptureMappingEdit();
         foreach (var row in correspondence.Rows.Where(static r => r.Disposition == RigBoneDisposition.Mapped && r.Role is not null && r.SourceName is not null))
             _roleOverrides = _roleOverrides.SetItem(row.Role!, row.SourceName!);
         Solve();
+        MappingEditStatus = "Suggested matches accepted. Undo restores the previous mapping choices.";
     }
+
+    private void RerunAutomaticMatching()
+    {
+        if (!CanAdvance || IsBusy)
+        {
+            return;
+        }
+
+        ImmutableDictionary<string, string> previous = _roleOverrides;
+        bool sourceChanged = _sourceConformanceReviewRequired;
+        _previousMappingEdit = previous.IsEmpty && !sourceChanged ? null : CaptureMappingEdit();
+        _roleOverrides = ImmutableDictionary<string, string>.Empty;
+        if (sourceChanged)
+        {
+            _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
+            _previousPositionOverrides = null;
+            _sourceConformanceReviewRequired = false;
+        }
+        _geometryEvidence = null;
+        _geometryEvidenceCaptured = false;
+        Solve();
+        MappingEditStatus = Fit is null
+            ? "Automatic matching could not finish. Check the fit status."
+            : sourceChanged
+                ? "Changed model matched. Review its bones and joint positions. Undo returns to the saved fit review."
+                : previous.IsEmpty
+                ? "Automatic matching refreshed from the current model."
+                : "Automatic matching replaced the manual bone choices. Undo restores them.";
+        UndoLastMappingChangeCommand.NotifyCanExecuteChanged();
+    }
+
+    private void UndoLastMappingChange()
+    {
+        if (_previousMappingEdit is not { } previous || IsBusy)
+        {
+            return;
+        }
+
+        _roleOverrides = previous.Roles;
+        if (previous.Positions is { } positions)
+        {
+            _positionOverrides = positions;
+            _previousPositionOverrides = null;
+        }
+        _sourceConformanceReviewRequired = previous.RequiresSourceReview;
+        _previousMappingEdit = null;
+        Solve();
+        MappingEditStatus = RequiresSourceRematch
+            ? "Saved fit restored for review. Re-match before fitting the changed model."
+            : "Previous bone mapping choices restored.";
+    }
+
+    private MappingEditSnapshot CaptureMappingEdit() => new(
+        _roleOverrides,
+        _sourceConformanceReviewRequired ? _positionOverrides : null,
+        _sourceConformanceReviewRequired);
 
     private void RefreshLandmarks()
     {
@@ -817,13 +1023,70 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         }
     }
 
-    private void ApplyRoleOverride(string role, string sourceBoneName)
+    private bool ApplyRoleOverride(string role, string sourceBoneName)
     {
-        if (UseGeometryCorrespondence)
-            _roleOverrides = _roleOverrides.Where(pair => pair.Key == role || !string.Equals(pair.Value, sourceBoneName, StringComparison.OrdinalIgnoreCase))
-                .ToImmutableDictionary(StringComparer.Ordinal);
-        _roleOverrides = _roleOverrides.SetItem(role, sourceBoneName);
+        if (_sourceConformanceReviewRequired) return false;
+        if (_model?.Rig is not { } sourceRig ||
+            sourceRig.GetBoneIndex(sourceBoneName) < 0)
+        {
+            MappingEditStatus = "That source bone is unavailable. Choose a bone from the current model.";
+            return false;
+        }
+
+        KeyValuePair<string, string> conflict = _roleOverrides.FirstOrDefault(pair =>
+            pair.Key != role &&
+            string.Equals(pair.Value, sourceBoneName, StringComparison.OrdinalIgnoreCase));
+        if (conflict.Key is not null)
+        {
+            MappingEditStatus =
+                $"{sourceBoneName} is already assigned to {conflict.Key}. Change that row first.";
+            return false;
+        }
+
+        if (_roleOverrides.TryGetValue(role, out string? current) &&
+            string.Equals(current, sourceBoneName, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        ImmutableDictionary<string, string> previous = _roleOverrides;
+        MappingEditSnapshot? previousUndo = _previousMappingEdit;
+        int mappedBefore = MappedCount;
+        int coreBefore = CoreRoles.Length - MissingCoreRoles.Length;
+        _previousMappingEdit = CaptureMappingEdit();
+        _roleOverrides = previous.SetItem(role, sourceBoneName);
         Solve();
+        if (Fit is null || Correspondence is null)
+        {
+            _roleOverrides = previous;
+            _previousMappingEdit = previousUndo;
+            Solve();
+            MappingEditStatus = "That bone choice could not be fitted. The previous mappings were restored.";
+            return false;
+        }
+
+        int lostMapped = mappedBefore - MappedCount;
+        int lostCore = coreBefore - (CoreRoles.Length - MissingCoreRoles.Length);
+        bool majorLoss =
+            mappedBefore >= 4 && lostMapped >= Math.Max(3, mappedBefore / 2) ||
+            coreBefore >= 3 && lostCore >= Math.Max(2, coreBefore / 2);
+        if (majorLoss && !IsAdvancedSetupMode)
+        {
+            _roleOverrides = previous;
+            _previousMappingEdit = previousUndo;
+            Solve();
+            MappingEditStatus =
+                $"Would unmap {lostMapped} bones ({Math.Max(0, lostCore)} core). " +
+                "Previous fit restored; Advanced can allow it.";
+            return false;
+        }
+
+        MappingEditStatus = majorLoss
+            ? $"This choice unmapped {lostMapped} bones. Undo restores the previous mapping."
+            : lostMapped > 0
+                ? $"This choice changed {lostMapped} other bone mappings. Undo restores them."
+                : $"{sourceBoneName} assigned. Undo restores the previous mapping.";
+        return true;
     }
 
     /// <summary>
@@ -834,7 +1097,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public void SetBonePosition(string boneName, Vector3D position)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(boneName);
-        if (!position.IsFinite)
+        if (_sourceConformanceReviewRequired || !position.IsFinite)
         {
             return;
         }
@@ -842,11 +1105,12 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         // DL1 model space is X-left, so a mirrored joint is the same point with
         // X negated. ApplyPlacement owns that rule for both this path and the
         // viewport gizmo.
+        _previousPositionOverrides = _positionOverrides;
         ApplyPlacement(boneName, position);
     }
 
     public bool HasOverride(string boneName) =>
-        _positionOverrides.ContainsKey(boneName);
+        !_sourceConformanceReviewRequired && _positionOverrides.ContainsKey(boneName);
 
     public Vector3D? TryGetBonePosition(string boneName) =>
         Fit?.Bones
@@ -876,6 +1140,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             return;
         }
 
+        _previousPositionOverrides = _positionOverrides;
         _positionOverrides = _positionOverrides.Remove(landmark.BoneName);
         if (landmark.MirrorBoneName is { } mirror)
         {
@@ -887,7 +1152,20 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private void ResetAllOverrides()
     {
+        _previousPositionOverrides = _positionOverrides;
         _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
+        Solve();
+    }
+
+    private void UndoLastJointPlacement()
+    {
+        if (_previousPositionOverrides is not { } previous || IsBusy)
+        {
+            return;
+        }
+
+        _positionOverrides = previous;
+        _previousPositionOverrides = null;
         Solve();
     }
 
@@ -928,9 +1206,13 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private void NotifyStateChanged()
     {
+        NotifySetupTransfer();
+        OnPropertyChanged(nameof(Template));
         OnPropertyChanged(nameof(HasTemplate));
         OnPropertyChanged(nameof(HasModel));
         OnPropertyChanged(nameof(CanAdvance));
+        OnPropertyChanged(nameof(RequiresSourceRematch));
+        OnPropertyChanged(nameof(AutomaticMatchingLabel));
         OnPropertyChanged(nameof(CanApply));
         OnPropertyChanged(nameof(HasPendingMappingReview));
         OnPropertyChanged(nameof(HasMissingAnatomicalCorrespondence));
@@ -943,11 +1225,15 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(RegionFits));
         OnPropertyChanged(nameof(CanVerifyWithRetailClip));
         ResolveTemplateCommand.NotifyCanExecuteChanged();
+        UseSelectedRetailMeshCommand?.NotifyCanExecuteChanged();
         ApplyConformanceCommand.NotifyCanExecuteChanged();
         AcceptMappingProposalsCommand.NotifyCanExecuteChanged();
+        RerunAutomaticMatchingCommand.NotifyCanExecuteChanged();
+        UndoLastMappingChangeCommand.NotifyCanExecuteChanged();
         VerifyWithRetailClipCommand.NotifyCanExecuteChanged();
         ResetBoneCommand.NotifyCanExecuteChanged();
         ResetAllCommand.NotifyCanExecuteChanged();
+        UndoLastJointPlacementCommand.NotifyCanExecuteChanged();
         NextStageCommand.NotifyCanExecuteChanged();
         PreviousStageCommand.NotifyCanExecuteChanged();
         NotifyBodyDetectionCommands();
@@ -955,6 +1241,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         NotifyContacts();
         NotifyHands();
         NotifyEyes();
+        NotifyCameras();
+        NotifyStructural();
+        NotifyCapabilityProfile();
         NotifyRestPose();
         NotifyHierarchy();
         NotifyDerivedMotion();

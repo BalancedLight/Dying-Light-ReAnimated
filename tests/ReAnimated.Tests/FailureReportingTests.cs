@@ -183,6 +183,44 @@ public sealed class FailureReportingTests : IDisposable
                 entry.Area == "Retargeting" && entry.Severity == "Error"));
     }
 
+    [Fact]
+    public async Task PassiveMappingDiagnosticsStayVisibleWithoutErrorPopup()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        var dialogs = new NoDialogs();
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "passive-assets.sqlite3"),
+            Path.Combine(_temporaryDirectory, "passive-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            new JsonWorkspaceStateStore(
+                Path.Combine(_temporaryDirectory, "passive-workspace.json")),
+            dialogs,
+            assets,
+            new StubFingerprintService());
+        CompatibilityDiagnostic[] diagnostics =
+        [
+            new("unreviewed_row", CompatibilityDiagnosticSeverity.Error,
+                "A mapped row needs review."),
+            new("unmapped_optional", CompatibilityDiagnosticSeverity.Warning,
+                "An optional target row is unmapped."),
+        ];
+
+        viewModel.PublishCompatibilityDiagnostics(
+            "Retargeting",
+            diagnostics,
+            showErrorPopup: false);
+
+        Assert.Empty(dialogs.ReportedFailures);
+        Assert.Contains(viewModel.Diagnostics, entry =>
+            entry.Area == "Retargeting" &&
+            entry.Severity == "Error" &&
+            entry.Message == "A mapped row needs review.");
+        Assert.Contains(viewModel.Diagnostics, entry =>
+            entry.Area == "Retargeting" &&
+            entry.Severity == "Warning" &&
+            entry.Message == "An optional target row is unmapped.");
+    }
+
     public void Dispose()
     {
         try

@@ -115,6 +115,7 @@ public sealed partial class RigConformanceWizardViewModel
         RefreshHierarchyMetadata(current);
         RefreshDerivedMotionMetadata(current);
         RefreshDoctorMetadata(current);
+        RefreshStructuralMetadata(current);
         RefreshStressReviewModel();
         RestoreStudioWorkflow();
         SelectBodyGuide(selected);

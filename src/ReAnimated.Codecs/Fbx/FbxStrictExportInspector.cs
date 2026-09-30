@@ -433,9 +433,7 @@ public static class FbxStrictExportInspector
         long objectId = ReadObjectId(
             geometry,
             "Geometry");
-        string name = ReadObjectName(
-            geometry,
-            "Geometry");
+        string name = ReadGeometryName(geometry, objectId);
         ImmutableArray<double> vertices =
             FbxSemanticValues.ReadDoubleArray(
                 geometry.FindChild("Vertices"),
@@ -1116,6 +1114,21 @@ public static class FbxStrictExportInspector
         }
 
         return name;
+    }
+
+    internal static string ReadGeometryName(FbxNode geometry, long objectId)
+    {
+        if (geometry.Properties.Length < 2 ||
+            geometry.Properties[1].Value is not string rawName)
+            throw new InvalidDataException(
+                "FBX Geometry has no string object name property.");
+
+        string name = FbxBinaryDocument.CleanObjectName(rawName);
+        // Some valid exporters leave a mesh Geometry name empty while its
+        // object ID and connected Model retain stable identity.
+        return string.IsNullOrWhiteSpace(name)
+            ? $"Geometry_{objectId:X16}"
+            : name;
     }
 
     private static bool IsBindPose(FbxNode pose)

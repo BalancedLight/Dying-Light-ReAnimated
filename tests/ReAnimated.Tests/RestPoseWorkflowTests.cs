@@ -15,6 +15,12 @@ public sealed class RestPoseWorkflowTests
     public async Task PreviewIsTransientNavigationKeepsItAndApplyIsOneUndo(RigRestSurfaceMode mode)
     {
         var source=FbxRestPoseAuthoringTests.Source();
+        source = source with { Package = source.Package with { Document = source.Package.Document with
+        {
+            SecondaryMotion = new() { Groups = [new() { Name = "review-strand",
+                Particles = [new() { ReferenceBoneName = "body_head", Fixed = true,
+                    LocalPosition = new(.03, .01, .02) }] }] },
+        } } };
         using var workspace=new ModelsWorkspaceViewModel(new NoDialogs(),_=>{},_=>Task.CompletedTask,()=>null);
         workspace.CommitProjectRestore(new(source,"rest-test.dlrmodel",new ProjectModelsWorkspaceState{PackageAssetId=Guid.NewGuid()}));
         workspace.IsConformTabSelected=true;
@@ -25,6 +31,9 @@ public sealed class RestPoseWorkflowTests
         var payload=workspace.CaptureProjectSession().Model!.Package.AuthoredLayerPayload;
         await vm.PreviewRestPoseCommand.ExecuteAsync(null);
         Assert.NotNull(vm.RestPosePreview);Assert.True(vm.CanApplyRestPose,vm.RestPoseStatus);
+        Assert.Contains(mode == RigRestSurfaceMode.PreserveSurface ? "stay in place" : "follow the posed bones", vm.RestPoseStatus, StringComparison.Ordinal);
+        Assert.Equal(SecondaryMotionSetupSerializer.Serialize(source.Package.Document.SecondaryMotion),
+            SecondaryMotionSetupSerializer.Serialize(workspace.CaptureProjectSession().Model!.Package.Document.SecondaryMotion));
         Assert.Equal(payload,workspace.CaptureProjectSession().Model!.Package.AuthoredLayerPayload);
         Assert.NotEmpty(workspace.Viewport.SceneSource.CaptureFrame().Gizmos);
         var shown=workspace.Viewport.SceneSource.CaptureFrame();
@@ -44,8 +53,12 @@ public sealed class RestPoseWorkflowTests
         Assert.Null(vm.RestPosePreview);
         workspace.UndoHelperEditCommand.Execute(null);
         Assert.Equal(payload,workspace.CaptureProjectSession().Model!.Package.AuthoredLayerPayload);
+        Assert.Equal(SecondaryMotionSetupSerializer.Serialize(source.Package.Document.SecondaryMotion),
+            SecondaryMotionSetupSerializer.Serialize(workspace.CaptureProjectSession().Model!.Package.Document.SecondaryMotion));
         workspace.RedoHelperEditCommand.Execute(null);
         Assert.Equal(applied.Package.AuthoredLayerPayload,workspace.CaptureProjectSession().Model!.Package.AuthoredLayerPayload);
+        Assert.Equal(SecondaryMotionSetupSerializer.Serialize(applied.Package.Document.SecondaryMotion),
+            SecondaryMotionSetupSerializer.Serialize(workspace.CaptureProjectSession().Model!.Package.Document.SecondaryMotion));
     }
     private sealed class NoDialogs:IProjectFileDialogService
     {

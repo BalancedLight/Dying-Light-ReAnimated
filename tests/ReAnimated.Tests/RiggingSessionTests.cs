@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.IO.Compression;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Core.Mathematics;
@@ -27,6 +28,41 @@ public sealed class RiggingSessionTests
     {
         RoleId = "body.elbow.left", Position = new Vector3D(.2, 1.2, .1), Locked = locked,
     };
+
+    [Fact]
+    public void HistoricalBindingLossIsBoundedPersistentAndClearedWhenSourceChanges()
+    {
+        RiggingSession source = Session();
+        var backend = new RiggingBackendReference
+        {
+            Id = "generic-binding",
+            Version = "1",
+            SettingsSha256 = new string('a', 64),
+        };
+        var point = new RigSkinBindingReviewPoint(source.Components[0].Id, 0, .25);
+        RiggingSession reviewed = source with
+        {
+            BindingBackend = backend,
+            BindingReviewPoints = [point],
+        };
+        reviewed.Validate();
+        Assert.Equal(
+            (source with { BindingBackend = backend }).ComputeInputFingerprint(),
+            reviewed.ComputeInputFingerprint());
+        RiggingSession restored = JsonSerializer.Deserialize<RiggingSession>(
+            JsonSerializer.Serialize(reviewed))!;
+        Assert.Equal<RigSkinBindingReviewPoint>([point], restored.BindingReviewPoints);
+        Assert.Throws<ArgumentException>(() =>
+            (reviewed with { BindingReviewPoints = [point, point] }).Validate());
+        Assert.Throws<ArgumentException>(() =>
+            (reviewed with { BindingReviewPoints = [point with
+            {
+                RemovedWeightBeforeRenormalization = double.NaN,
+            }] }).Validate());
+        RiggingSession changed = RiggingSessions.ReconcileSource(
+            reviewed, new string('b', 64));
+        Assert.Empty(changed.BindingReviewPoints);
+    }
 
     [Fact]
     public void NewSessionPreservesIntentAndDoesNotInventNativeReadiness()
@@ -191,6 +227,28 @@ public sealed class RiggingSessionTests
         Assert.Equal(session.ComputeInputFingerprint(), imported.Package.Document.RiggingSession!.ComputeInputFingerprint());
         var reimport = FbxModelAuthoringImporter.PreviewReimport(restored, original.SourceFbx.AsSpan(), "generic.fbx");
         Assert.Equal(session.ComputeInputFingerprint(), reimport.Replacement.Package.Document.RiggingSession!.ComputeInputFingerprint());
+    }
+
+    [Fact]
+    public void ReimportRejectsChangedGeometryComponentsBeforePreservingStudioDecisions()
+    {
+        CustomModelPackage original = Package();
+        RiggingSession session = RiggingSessions.Create(
+            original.Document,
+            RigStudioEntryPath.RepairExistingRig);
+        CustomModelPackage authored = original with
+        {
+            Document = original.Document with { RiggingSession = session },
+        };
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            FbxModelAuthoringImporter.PreviewReimport(
+                authored,
+                BlenderFbxStrictValidationTests.CreateSeparatedComponentFixture(),
+                "generic-other.fbx"));
+
+        Assert.Contains("Add it as a new model", error.Message, StringComparison.Ordinal);
+        Assert.Equal(session, authored.Document.RiggingSession);
     }
 
     [Fact]

@@ -34,11 +34,6 @@
         </DataGrid>
         <StackPanel Grid.Row="2" Margin="0,7,0,0">
             <TextBlock FontWeight="SemiBold" Text="Helper and camera authoring" />
-            <TextBlock Margin="0,2,0,5"
-                       FontSize="10"
-                       Foreground="{StaticResource MutedTextBrush}"
-                       Text="Duplicate keeps imported deform hierarchy immutable. The new unweighted child begins at the selected node's global bind transform."
-                       TextWrapping="Wrap" />
             <WrapPanel>
                 <ComboBox Width="92"
                           ItemsSource="{Binding HelperKinds}"

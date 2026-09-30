@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.Project;
 
@@ -92,7 +93,7 @@ public sealed record CustomModelRigConformance
     /// <summary>Stable identity of the target skeleton these settings targeted.</summary>
     public string TemplateId { get; init; } = string.Empty;
 
-    /// <summary>The bounded template profile, currently always <c>player</c>.</summary>
+    /// <summary>The reviewed reference identity: a known profile or an exact content-pinned retail mesh.</summary>
     public string TemplateProfileName { get; init; } = string.Empty;
 
     /// <summary>The retail resource the template was extracted from.</summary>
@@ -106,6 +107,13 @@ public sealed record CustomModelRigConformance
 
     /// <summary>SHA-256 of the source FBX these settings were solved against.</summary>
     public string SourceFbxSha256 { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Runtime rig signature of the output produced by applying these source
+    /// decisions. Absent on unapplied and legacy records. This distinguishes
+    /// the renamed output rig from a stale or damaged source rig.
+    /// </summary>
+    public string? AppliedOutputRigSignature { get; init; }
 
     /// <summary>
     /// When true, source bones with no DL1 counterpart are removed and their
@@ -141,6 +149,10 @@ public sealed record CustomModelRigConformance
         ArgumentException.ThrowIfNullOrWhiteSpace(TemplateSourceResourceName, parameterName);
         ProjectAssetReference.ValidateSha256(TemplateFingerprint, parameterName);
         ProjectAssetReference.ValidateSha256(SourceFbxSha256, parameterName);
+        if (AppliedOutputRigSignature is { } appliedSignature)
+        {
+            ProjectAssetReference.ValidateSha256(appliedSignature, parameterName);
+        }
 
         if (!Enum.IsDefined(ScaleMode) || !Enum.IsDefined(CorrespondenceMethod))
         {
@@ -227,4 +239,15 @@ public sealed record CustomModelRigConformance
     public bool MatchesSource(string? sourceFbxSha256) =>
         !string.IsNullOrWhiteSpace(sourceFbxSha256) &&
         string.Equals(SourceFbxSha256, sourceFbxSha256, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// True only when both the source identity and the exact applied output
+    /// rig still match this saved conformance record.
+    /// </summary>
+    public bool MatchesAppliedOutputRig(
+        RigDefinition rig,
+        string? sourceFbxSha256) =>
+        AppliedOutputRigSignature is { } expected &&
+        MatchesSource(sourceFbxSha256) &&
+        string.Equals(expected, RigSignature.Compute(rig), StringComparison.OrdinalIgnoreCase);
 }

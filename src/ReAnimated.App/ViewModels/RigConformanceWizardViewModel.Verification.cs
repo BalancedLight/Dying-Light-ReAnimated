@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Globalization;
 using System.IO;
 using System.Numerics;
 using CommunityToolkit.Mvvm.Input;
@@ -30,6 +29,9 @@ public sealed record RigConformanceVerification
 
     public required int ResolvedDescriptors { get; init; }
 
+    /// <summary>Motion accumulator and other auxiliary tracks are reported separately from rig coverage.</summary>
+    public required int AuxiliaryDescriptorCount { get; init; }
+
     public required ImmutableArray<string> UnmappedDescriptors { get; init; }
 
     /// <summary>
@@ -42,9 +44,36 @@ public sealed record RigConformanceVerification
 
     /// <summary>
     /// Largest distance any vertex travels from its bind position over the
-    /// sampled frames. Large values mean the clip is stretching the mesh.
+    /// sampled frames. This includes ordinary movement and is not a stretch
+    /// measure by itself.
     /// </summary>
     public required double MaximumVertexDisplacementCentimetres { get; init; }
+
+    /// <summary>
+    /// Largest connected deform-bone length change in the raw stock-clip
+    /// preview. Native BSCR component masks are not applied by this check.
+    /// </summary>
+    public required double MaximumSegmentLengthDriftPercent { get; init; }
+
+    public string? WorstSegmentName { get; init; }
+
+    public required int MeasuredSegmentCount { get; init; }
+
+    public required int SampledFrameCount { get; init; }
+
+    /// <summary>
+    /// Optional authoring comparison after reviewed BSCR POS/ROT/SCL masks.
+    /// This is not a measurement of native Player animation composition.
+    /// </summary>
+    public double? ReviewedPolicySegmentLengthDriftPercent { get; init; }
+
+    public string? ReviewedPolicyWorstSegmentName { get; init; }
+
+    public int? ReviewedPolicyMeasuredSegmentCount { get; init; }
+
+    public double? ReviewedPolicyVertexDisplacementCentimetres { get; init; }
+
+    public string? ReviewedPolicyUnavailableReason { get; init; }
 
     public required ImmutableArray<string> PreparerDiagnostics { get; init; }
 
@@ -55,10 +84,25 @@ public sealed record RigConformanceVerification
     public bool IsFullyResolved =>
         TotalDescriptors > 0 && ResolvedDescriptors == TotalDescriptors;
 
-    public string Summary => string.Create(
-        CultureInfo.CurrentCulture,
-        $"{ClipName}: {ResolvedDescriptors} of {TotalDescriptors} track descriptors resolved ({Coverage:P0}); " +
-        $"peak vertex displacement {MaximumVertexDisplacementCentimetres:F1} cm over {FrameCount} frames.");
+    private string SegmentDriftSummary => MeasuredSegmentCount == 0
+        ? "connected deform-segment drift unavailable"
+        : $"raw-preview peak segment-length drift {MaximumSegmentLengthDriftPercent:F1}%" +
+          (WorstSegmentName is null ? "" : $" at {WorstSegmentName}") +
+          $" across {MeasuredSegmentCount} connected deform segments";
+
+    private string PolicyComparisonSummary => ReviewedPolicySegmentLengthDriftPercent is { } drift
+        ? (ReviewedPolicyMeasuredSegmentCount > 0
+            ? $" Reviewed BSCR-mask preview peak connected deform-segment drift {drift:F1}%" +
+              (ReviewedPolicyWorstSegmentName is null ? "" : $" at {ReviewedPolicyWorstSegmentName}")
+            : " Reviewed BSCR-mask preview connected deform-segment drift unavailable") +
+          $"; peak vertex travel {ReviewedPolicyVertexDisplacementCentimetres.GetValueOrDefault():F1} cm. Helper motion, mesh distortion, native LOD, blending and runtime composition require separate review."
+        : $" Reviewed BSCR-mask comparison unavailable: {ReviewedPolicyUnavailableReason ?? "no reviewed policy"}.";
+
+    public string Summary =>
+        $"{ClipName}: {ResolvedDescriptors} of {TotalDescriptors} bone/morph descriptors resolved ({Coverage:P0}); " +
+        $"{AuxiliaryDescriptorCount} auxiliary track(s); " +
+        $"{SegmentDriftSummary} over {SampledFrameCount} of {FrameCount} sampled frames; " +
+        $"peak raw-preview vertex travel {MaximumVertexDisplacementCentimetres:F1} cm." + PolicyComparisonSummary;
 }
 
 public sealed partial class RigConformanceWizardViewModel
@@ -88,6 +132,13 @@ public sealed partial class RigConformanceWizardViewModel
 
     /// <summary>The most recent verification result, if any.</summary>
     public RigConformanceVerification? Verification { get; private set; }
+
+    public string VerificationHeadline => Verification is { } result
+        ? $"{result.ClipName} · {result.ResolvedDescriptors}/{result.TotalDescriptors} tracks matched" +
+          (result.MeasuredSegmentCount > 0
+              ? $" · {result.MaximumSegmentLengthDriftPercent:F1}% raw length drift"
+              : string.Empty)
+        : "No stock animation checked.";
 
     /// <summary>
     /// The conformed model produced by the last verification, ready to preview
@@ -153,6 +204,7 @@ public sealed partial class RigConformanceWizardViewModel
         {
             IsBusy = false;
             OnPropertyChanged(nameof(Verification));
+            OnPropertyChanged(nameof(VerificationHeadline));
             OnPropertyChanged(nameof(ConformedModel));
             OnPropertyChanged(nameof(VerificationClip));
             NotifyStateChanged();
@@ -181,12 +233,25 @@ public sealed partial class RigConformanceWizardViewModel
             rig,
             payload.Timing.FrameRate);
 
-        int total = payload.Clip.TrackDescriptors.Length;
-        int resolved = total - imported.UnmappedDescriptors.Length;
-        double displacement = MeasureDisplacement(
-            conformed,
-            imported.Clip,
-            cancellationToken);
+        Anm2TrackPartition partition = imported.Partition ??
+            throw new InvalidDataException("The stock clip has no descriptor partition for the fitted rig.");
+        // A motion accumulator is not a bone. Counting it as a resolved rig
+        // descriptor makes a completely incompatible character look nonzero.
+        int resolved = partition.BodyDescriptors.Length + partition.MorphDescriptors.Length;
+        int total = resolved + partition.UnresolvedDescriptors.Length;
+        CustomModelPreviewSession session = CustomModelPreviewAdapter.CreateSession(
+            conformed, CustomModelPreviewMode.Dl1Output);
+        PreviewMotionMetrics motion = MeasureMotion(session, imported.Clip, false, cancellationToken);
+        PreviewMotionMetrics? reviewedMotion = null;
+        string? policyUnavailable = null;
+        try
+        {
+            reviewedMotion = MeasureMotion(session, imported.Clip, true, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or InvalidOperationException or ArgumentException)
+        {
+            policyUnavailable = exception.Message;
+        }
 
         ConformedModel = conformed;
         VerificationClip = imported.Clip;
@@ -195,12 +260,22 @@ public sealed partial class RigConformanceWizardViewModel
             ClipName = payload.Asset.DisplayName,
             TotalDescriptors = total,
             ResolvedDescriptors = resolved,
+            AuxiliaryDescriptorCount = partition.AuxiliaryDescriptors.Length,
             UnmappedDescriptors = imported.UnmappedDescriptors
                 .Select(static descriptor => $"0x{descriptor:X8}")
                 .ToImmutableArray(),
             BindFallbackBones = imported.BindFallbackBoneIndices.Length,
             FrameCount = checked((int)Math.Min(int.MaxValue, imported.Clip.FrameCount)),
-            MaximumVertexDisplacementCentimetres = displacement * 100.0,
+            MaximumVertexDisplacementCentimetres = motion.MaximumVertexDisplacementMetres * 100.0,
+            MaximumSegmentLengthDriftPercent = motion.MaximumSegmentLengthDriftPercent,
+            WorstSegmentName = motion.WorstSegmentName,
+            MeasuredSegmentCount = motion.MeasuredSegmentCount,
+            SampledFrameCount = motion.SampledFrameCount,
+            ReviewedPolicySegmentLengthDriftPercent = reviewedMotion?.MaximumSegmentLengthDriftPercent,
+            ReviewedPolicyWorstSegmentName = reviewedMotion?.WorstSegmentName,
+            ReviewedPolicyMeasuredSegmentCount = reviewedMotion?.MeasuredSegmentCount,
+            ReviewedPolicyVertexDisplacementCentimetres = reviewedMotion?.MaximumVertexDisplacementMetres * 100.0,
+            ReviewedPolicyUnavailableReason = policyUnavailable,
             PreparerDiagnostics = prepared.Diagnostics
                 .Select(static row => row.Message)
                 .ToImmutableArray(),
@@ -210,21 +285,19 @@ public sealed partial class RigConformanceWizardViewModel
     }
 
     /// <summary>
-    /// Largest distance any vertex moves away from its bind position across a
-    /// bounded spread of the clip's frames.
+    /// Measures ordinary vertex travel and connected-bone length drift across
+    /// a bounded spread of raw or reviewed-policy preview frames.
     /// </summary>
-    private static double MeasureDisplacement(
-        FbxModelAuthoringImportResult conformed,
+    private static PreviewMotionMetrics MeasureMotion(
+        CustomModelPreviewSession session,
         AnimationClip clip,
+        bool reviewedPolicy,
         CancellationToken cancellationToken)
     {
-        CustomModelPreviewSession session = CustomModelPreviewAdapter.CreateSession(
-            conformed,
-            CustomModelPreviewMode.Dl1Output);
         SkeletonRenderData? bindSkeleton = session.CreateSkeleton(null, 0, null);
         if (bindSkeleton is null || session.Meshes.IsDefaultOrEmpty)
         {
-            return 0.0;
+            return new PreviewMotionMetrics(0.0, 0.0, null, 0, 0);
         }
 
         var bindPositions = new Dictionary<int, CpuDeformedVertex[]>();
@@ -238,17 +311,32 @@ public sealed partial class RigConformanceWizardViewModel
 
         long frameCount = Math.Max(1, clip.FrameCount);
         double maximum = 0.0;
-        for (int sample = 0; sample < DisplacementSampleCount; sample++)
+        double maximumDrift = 0.0;
+        string? worstSegment = null;
+        int measuredSegments = 0;
+        int samples = checked((int)Math.Min(frameCount, DisplacementSampleCount));
+        for (int sample = 0; sample < samples; sample++)
         {
             cancellationToken.ThrowIfCancellationRequested();
             int frame = checked((int)Math.Min(
                 frameCount - 1,
                 (long)Math.Round(sample * (frameCount - 1.0) /
-                    Math.Max(1, DisplacementSampleCount - 1))));
-            SkeletonRenderData? posed = session.CreateSkeleton(clip, frame, null);
+                    Math.Max(1, samples - 1))));
+            SkeletonRenderData? posed = reviewedPolicy
+                ? session.CreateReviewedPolicySkeleton(clip, frame)
+                : session.CreateSkeleton(clip, frame, null);
             if (posed is null)
             {
                 continue;
+            }
+
+            SkeletonSegmentLengthDriftReport segmentDrift =
+                SkeletonSegmentLengthDriftEvaluator.Compare(bindSkeleton, posed);
+            measuredSegments = segmentDrift.ComparableSegments;
+            if (segmentDrift.MaximumAbsoluteDriftPercent > maximumDrift)
+            {
+                maximumDrift = segmentDrift.MaximumAbsoluteDriftPercent;
+                worstSegment = segmentDrift.WorstBoneName;
             }
 
             for (int meshIndex = 0; meshIndex < session.Meshes.Length; meshIndex++)
@@ -272,6 +360,13 @@ public sealed partial class RigConformanceWizardViewModel
             }
         }
 
-        return maximum;
+        return new PreviewMotionMetrics(maximum, maximumDrift, worstSegment, measuredSegments, samples);
     }
+
+    private readonly record struct PreviewMotionMetrics(
+        double MaximumVertexDisplacementMetres,
+        double MaximumSegmentLengthDriftPercent,
+        string? WorstSegmentName,
+        int MeasuredSegmentCount,
+        int SampledFrameCount);
 }

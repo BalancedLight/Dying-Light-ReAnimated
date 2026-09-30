@@ -26,6 +26,7 @@ public static class Dl1BoneScriptPolicyResolver
         var policies = session.Recipe.ComponentPolicies.ToDictionary(static p => p.EntityId);
         var entities = session.Recipe.Entities.ToDictionary(static e => e.EntityId);
         var emitted = new HashSet<Guid>();
+        var unresolved = new List<string>();
         var result = ImmutableArray.CreateBuilder<Dl1ResolvedBoneScriptPolicy>(contract.Nodes.Length);
         foreach (Dl1AuthoredRigNode node in contract.Nodes)
         {
@@ -34,13 +35,29 @@ public static class Dl1BoneScriptPolicyResolver
                 throw new InvalidDataException($"Emitted node '{node.Name}' has no unambiguous studio identity in this model.");
             if (!policies.TryGetValue(id, out AnimationComponentPolicy? policy) || policy.EmittedMask is null ||
                 policy.AnimationLod is null || policy.LodRuleId is null)
-                throw new InvalidDataException($"Node '{node.Name}' requires explicit POS/ROT/SCL and animation LOD decisions before studio export.");
-            RequireEvidence(policy.Position, node.Name, "position");
-            RequireEvidence(policy.Rotation, node.Name, "rotation");
-            RequireEvidence(policy.Scale, node.Name, "scale");
+            {
+                unresolved.Add($"'{node.Name}' (mask/LOD unset)");
+                continue;
+            }
+            var gaps = new List<string>();
+            if (!HasEvidence(policy.Position)) gaps.Add("position owner/evidence");
+            if (!HasEvidence(policy.Rotation)) gaps.Add("rotation owner/evidence");
+            if (!HasEvidence(policy.Scale)) gaps.Add("scale owner/evidence");
             if (!policy.LodEvidence.Any(static e => e.ArtifactSha256 is not null))
-                throw new InvalidDataException($"Node '{node.Name}' has no artifact-backed LOD evidence.");
+                gaps.Add("LOD evidence");
+            if (gaps.Count != 0)
+            {
+                unresolved.Add($"'{node.Name}' ({string.Join(", ", gaps)})");
+                continue;
+            }
             result.Add(new(id, node.PhysicalIndex, node.Name, policy.EmittedMask.Value, policy.AnimationLod.Value, policy));
+        }
+        if (unresolved.Count != 0)
+        {
+            string sample = string.Join(", ", unresolved.Take(16));
+            string remainder = unresolved.Count > 16 ? $", and {unresolved.Count - 16} more" : "";
+            throw new InvalidDataException(
+                $"{unresolved.Count} emitted node(s) require explicit POS/ROT/SCL, owner/evidence, or animation LOD decisions before studio export: {sample}{remainder}. Review exact stock matches with the only-unset scope, then resolve unmatched extras individually in Channel Policies.");
         }
         foreach (AnimationComponentPolicy policy in session.Recipe.ComponentPolicies)
             if (entities[policy.EntityId].OwnerAssetId == document.ModelId && !emitted.Contains(policy.EntityId))
@@ -66,10 +83,8 @@ public static class Dl1BoneScriptPolicyResolver
         RigAnimationLod.Lod3 => "LOD_3", RigAnimationLod.Off => "LOD_OFF", _ => throw new ArgumentOutOfRangeException(nameof(lod)),
     };
 
-    private static void RequireEvidence(RigChannelOwnership channel, string node, string component)
-    {
-        if (channel.Owners.IsEmpty || channel.Owners.Contains(RigComponentOwner.Unknown) ||
-            !channel.Evidence.Any(static e => e.ArtifactSha256 is not null))
-            throw new InvalidDataException($"Node '{node}' has unresolved {component} ownership or lacks artifact-backed evidence.");
-    }
+    private static bool HasEvidence(RigChannelOwnership? channel) =>
+        channel is not null && !channel.Owners.IsEmpty &&
+        !channel.Owners.Contains(RigComponentOwner.Unknown) &&
+        channel.Evidence.Any(static e => e.ArtifactSha256 is not null);
 }

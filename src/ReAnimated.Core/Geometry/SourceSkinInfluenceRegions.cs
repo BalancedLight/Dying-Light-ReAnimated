@@ -102,6 +102,9 @@ public static class SourceSkinInfluenceRegions
             }
 
             int[] sortedUsedControlPoints = usedControlPoints.Order().ToArray();
+            geometry.Skinning?.ValidateReferencedControlPoints(
+                sortedUsedControlPoints,
+                cancellationToken);
             foreach (int controlPoint in sortedUsedControlPoints)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -289,6 +292,11 @@ public static class SourceSkinInfluenceRegions
             {
                 throw new InvalidDataException(
                     $"Source component {componentOrdinal} control point {controlPoint} has inconsistent original skin totals.");
+            }
+
+            if (skinning.UnreferencedUnweightedControlPoints.BinarySearch(controlPoint) >= 0)
+            {
+                continue;
             }
 
             if (skinning.HasSkinDeformer && total <= 0.0)

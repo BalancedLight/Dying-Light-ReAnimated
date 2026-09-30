@@ -33,13 +33,18 @@ public static class FbxHierarchyAuthoring
         if(ReferenceEquals(edit.Document,source))return new(model,model,token,entityId,parentEntityId,edit.OldToNewBoneIndices,0);
         if(edit.OldToNewBoneIndices.Length!=source.Bones.Length||edit.OldToNewBoneIndices.Distinct().Count()!=source.Bones.Length)
             throw new InvalidDataException("The hierarchy transaction did not retain every source bone identity.");
+        int effectiveCount = source.CreateEffectiveBones().Length;
+        if (edit.OldToNewEffectiveIndices.Length != effectiveCount ||
+            edit.OldToNewEffectiveIndices.Any(i => (uint)i >= (uint)effectiveCount) ||
+            edit.OldToNewEffectiveIndices.Distinct().Count() != effectiveCount)
+            throw new InvalidDataException("The hierarchy transaction did not retain every effective bone identity.");
         var surfaces=ImmutableArray.CreateBuilder<FbxModelSurface>(model.Surfaces.Length);
         foreach(var surface in model.Surfaces)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if(surface.PaletteBoneIndices.Length!=surface.InverseBindMatrices.Length||surface.PaletteBoneIndices.Any(i=>(uint)i>=(uint)source.Bones.Length))
+            if(surface.PaletteBoneIndices.Length!=surface.InverseBindMatrices.Length||surface.PaletteBoneIndices.Any(i=>(uint)i>=(uint)effectiveCount))
                 throw new InvalidDataException("A source draw has invalid palette identities or inverse binds.");
-            var palette=surface.PaletteBoneIndices.Select(i=>edit.OldToNewBoneIndices[i]).ToImmutableArray();
+            var palette=surface.PaletteBoneIndices.Select(i=>edit.OldToNewEffectiveIndices[i]).ToImmutableArray();
             surfaces.Add(palette.SequenceEqual(surface.PaletteBoneIndices)?surface:surface with{PaletteBoneIndices=palette});
         }
         var clips=FbxAnimationTrackReindexer.Reindex(model.AnimationClips,edit.OldToNewEffectiveIndices,cancellationToken);
@@ -47,6 +52,7 @@ public static class FbxHierarchyAuthoring
         var document=edit.Document with{Diagnostics=edit.Document.Diagnostics.Where(d=>d.Code!=ReviewDiagnosticCode).Append(new CustomModelImportDiagnostic
         {Code=ReviewDiagnosticCode,Severity=CustomModelImportSeverity.Warning,Message="Hierarchy parentage changed. Draw and animation-track indices retain their bone identities, but local animation curves require fresh motion and native-parent validation."}).ToImmutableArray()};
         var candidate=model with{Package=model.Package with{Document=document},Rig=document.CreateRigDefinition(),Surfaces=surfaces.MoveToImmutable(),AnimationClips=clips};
+        FbxProfileEditGuard.RequireAllowed(model,candidate,cancellationToken);
         candidate=FbxAuthoredModelLayer.Capture(candidate,cancellationToken);
         return new(model,candidate,token,entityId,parentEntityId,edit.OldToNewBoneIndices,trackCount);
     }

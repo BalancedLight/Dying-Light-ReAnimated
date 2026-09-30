@@ -629,6 +629,12 @@ internal sealed class WpfStartupSmoke
                 window.UpdateLayout();
             },
             DispatcherPriority.Loaded);
+        // The real window coalesces dock-root changes at ContextIdle so
+        // AvalonDock can finish earlier visual callbacks before replacing a
+        // layout. Observe that committed layout before measuring its row.
+        await window.Dispatcher.InvokeAsync(
+            () => { },
+            DispatcherPriority.ContextIdle);
         await window.Dispatcher.InvokeAsync(
             () => { },
             DispatcherPriority.Render);

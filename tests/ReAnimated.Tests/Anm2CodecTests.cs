@@ -1106,19 +1106,6 @@ public sealed class Anm2CodecTests
         }
     }
 
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(directory.FullName, "DLReAnimated.slnx")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException("Could not locate the DL ReAnimated repository root.");
-    }
+    private static string FindRepositoryRoot() =>
+        TestRepositoryPaths.FindRepositoryRoot();
 }

@@ -72,7 +72,14 @@ public sealed record EvaluatedAttachment(
     Guid AssetId,
     string Name,
     TransformMatrix WorldTransform,
-    AttachmentScope Scope);
+    AttachmentScope Scope)
+{
+    public AttachmentGripCalibration? GripCalibration { get; init; }
+    public TransformMatrix? PrimaryGripWorldFrame { get; init; }
+    public TransformMatrix? SecondaryPropWorldFrame { get; init; }
+    public TransformMatrix? SecondaryCharacterWorldFrame { get; init; }
+    public double? SecondaryPositionError { get; init; }
+}
 
 /// <summary>
 /// Immutable input to the single animation evaluation path used by export and preview.
@@ -194,7 +201,8 @@ public sealed class EvaluationFrame
         SkeletonPose? rawSourcePose = null,
         TransformTRS? auxiliaryMotion = null,
         TransformMatrix? actorWorldTransform = null,
-        ImmutableDictionary<string, double>? rawSourceMorphWeights = null)
+        ImmutableDictionary<string, double>? rawSourceMorphWeights = null,
+        IEnumerable<AttachmentIkReport>? attachmentIkReports = null)
     {
         ArgumentNullException.ThrowIfNull(authoredPose);
         ArgumentNullException.ThrowIfNull(displayPose);
@@ -225,6 +233,7 @@ public sealed class EvaluationFrame
             authoredMorphWeights;
         AuxiliaryMotion = auxiliaryMotion;
         ActorWorldTransform = actorWorldTransform ?? TransformMatrix.Identity;
+        AttachmentIkReports = attachmentIkReports?.ToImmutableArray() ?? [];
     }
 
     public double SampleFrame { get; }
@@ -249,6 +258,7 @@ public sealed class EvaluationFrame
     /// It never alters skeletal locals or exported animation tracks.
     /// </summary>
     public TransformMatrix ActorWorldTransform { get; }
+    public ImmutableArray<AttachmentIkReport> AttachmentIkReports { get; }
 
     public ImmutableDictionary<string, double> AuthoredMorphWeights { get; }
 

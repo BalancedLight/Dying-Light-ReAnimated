@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,6 +8,7 @@ using System.Xml.Linq;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Models;
+using ReAnimated.Codecs.Rp6l;
 
 namespace ReAnimated.Tests;
 
@@ -281,12 +283,14 @@ public sealed class DeveloperToolsAnimationRefreshTests
             byte[] runtimePackBytes = "generic runtime pack"u8.ToArray();
             string runtimePackSha256 =
                 Convert.ToHexStringLower(SHA256.HashData(runtimePackBytes));
+            byte[] aliasScriptBytes =
+                Encoding.UTF8.GetBytes("AnimScriptAlias(\"generic_library.scr\")\n");
             ImmutableArray<Dl1AnimationContentArtifact> artifacts =
             [
                 new(
                     Dl1AnimationContentArtifactRole.AliasScript,
                     "data/characters/generic_character/generic_model.ascr",
-                    new string('a', 64),
+                    Convert.ToHexStringLower(SHA256.HashData(aliasScriptBytes)),
                     "generic_model"),
                 new(
                     Dl1AnimationContentArtifactRole.AnimationScript,
@@ -322,6 +326,24 @@ public sealed class DeveloperToolsAnimationRefreshTests
                 artifacts[^1].RelativePath.Replace('/', Path.DirectorySeparatorChar));
             Directory.CreateDirectory(Path.GetDirectoryName(runtimePackPath)!);
             File.WriteAllBytes(runtimePackPath, runtimePackBytes);
+            string deployedAliasScriptPath = Path.Combine(
+                root,
+                "data",
+                "characters",
+                "generic_character",
+                "generic_model.ascr");
+            Directory.CreateDirectory(Path.GetDirectoryName(deployedAliasScriptPath)!);
+            File.WriteAllBytes(deployedAliasScriptPath, aliasScriptBytes);
+            string deployedCompiledMeshPath = Path.Combine(
+                root,
+                "assets_pc",
+                "characters",
+                "generic_character",
+                "generic_model.msh_obj");
+            Directory.CreateDirectory(Path.GetDirectoryName(deployedCompiledMeshPath)!);
+            File.WriteAllBytes(
+                deployedCompiledMeshPath,
+                CreateCompiledMesh("generic_library.scr"));
             var receipt = new Dl1DeveloperToolsDeploymentReceipt
             {
                 DeploymentId = DeploymentId,
@@ -350,7 +372,12 @@ public sealed class DeveloperToolsAnimationRefreshTests
             Assert.Equal(
                 DeveloperToolsAnimationRefreshRoute.ProjectRPack,
                 viewModel.SelectedAnimationRefreshRoute.Value);
-            viewModel.QueueAutomaticDeveloperToolsAnimationRefresh(root, receipt);
+            viewModel.AdoptCommittedDeveloperToolsProjectRoot(root);
+            Assert.Equal(Path.GetFullPath(root), viewModel.DeveloperToolsProjectRoot);
+            DeveloperToolsAnimationRefreshRequestResult? queued =
+                viewModel.QueueAutomaticDeveloperToolsAnimationRefresh(root, receipt);
+            Assert.NotNull(queued);
+            Assert.Equal(DeploymentId, queued.DeploymentId);
 
             string requestPath = Assert.Single(Directory.EnumerateFiles(
                 Path.Combine(root, ".dl-reanimated", "animation-refresh", "requests"),
@@ -367,6 +394,20 @@ public sealed class DeveloperToolsAnimationRefreshTests
         {
             RpackTestData.DeleteTemporaryDirectory(root);
         }
+    }
+
+    private static byte[] CreateCompiledMesh(string animationScriptAlias)
+    {
+        byte[] original = RpackTestData.BuildCompactMeshPayload();
+        byte[] metadata = [.. original, .. Encoding.UTF8.GetBytes(animationScriptAlias + '\0')];
+        BinaryPrimitives.WriteUInt64LittleEndian(
+            metadata.AsSpan(0x48),
+            checked((ulong)original.Length + 1));
+        return RpackTestData.BuildArchive(
+            "generic_model",
+            Rp6lResourceTypes.Mesh,
+            [new(0, metadata)],
+            RpackTestCompression.None);
     }
 
     [Fact]
@@ -449,31 +490,16 @@ public sealed class DeveloperToolsAnimationRefreshTests
                 (string?)element.Attribute("Header"),
                 "Receipts",
                 StringComparison.Ordinal));
-        Assert.Contains(
-            document.Descendants(presentation + "Expander"),
+        Assert.Contains(document.Descendants(presentation + "Button"),
             static element => string.Equals(
-                (string?)element.Attribute("Header"),
-                "Failure details and diagnostics",
+                (string?)element.Attribute("Command"),
+                "{Binding Models.RequestDeveloperToolsAnimationRefreshCommand}",
                 StringComparison.Ordinal));
-        foreach (string mode in new[]
-                 {
-                     "Animations only",
-                     // Source staging and the prebuilt pack are separate
-                     // modes now, and each label says which one it is.
-                     "Characters (source)",
-                     "Characters (prebuilt RPack)",
-                     "ANM2 only",
-                     "Initial / full export",
-                 })
-        {
-            Assert.Contains(
-                document.Descendants().Where(static element =>
-                    element.Name.LocalName is "Button" or "ToggleButton"),
-                element => string.Equals(
-                    (string?)element.Attribute("Content"),
-                    mode,
-                    StringComparison.Ordinal));
-        }
+        Assert.Contains(document.Descendants(presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("Command"),
+                "{Binding Models.CheckDeveloperToolsAnimationRefreshResultCommand}",
+                StringComparison.Ordinal));
         XElement[] modeToggles = document
             .Descendants(presentation + "ToggleButton")
             .Where(static element => string.Equals(
@@ -484,11 +510,11 @@ public sealed class DeveloperToolsAnimationRefreshTests
         Assert.Equal(5, modeToggles.Length);
         Assert.Equal(
             [
+                "Full",
                 "AnimationsOnly",
                 "CharactersOnly",
                 "CharacterRpack",
                 "Anm2Only",
-                "Full",
             ],
             modeToggles.Select(static element =>
                 (string?)element.Attribute("CommandParameter") ?? string.Empty));
@@ -528,23 +554,8 @@ public sealed class DeveloperToolsAnimationRefreshTests
         return path;
     }
 
-    private static string FindRepositoryFile(params string[] relativeSegments)
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine([directory.FullName, .. relativeSegments]);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate '{Path.Combine(relativeSegments)}' above '{AppContext.BaseDirectory}'.");
-    }
+    private static string FindRepositoryFile(params string[] relativeSegments) =>
+        TestRepositoryPaths.FindRepositoryFile(relativeSegments);
 
     private sealed class NoOpProjectFileDialogs : IProjectFileDialogService
     {

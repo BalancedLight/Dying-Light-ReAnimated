@@ -129,6 +129,10 @@ public static class FbxLocalHandAuthoring
             coordinates.MetersPerSourceUnit <= 0 || !coordinates.SourceToAuthoring.IsFinite || source.Skinning is not { } skinning)
             throw new InvalidDataException("Hand detection requires complete normalized source geometry and skin provenance.");
         skinning.Validate(source.ControlPoints.Length, cancellationToken);
+        skinning.ValidateReferencedControlPoints(
+            surfaces.SelectMany(static surface => surface.SourceCorners)
+                .Select(static corner => corner.ControlPointIndex),
+            cancellationToken);
         foreach (FbxModelSurface surface in surfaces)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -232,6 +236,7 @@ public static class FbxLocalHandAuthoring
     {
         if (ReferenceEquals(first, second)) return true;
         if (first is null || second is null || first.HasSkinDeformer != second.HasSkinDeformer ||
+            !first.UnreferencedUnweightedControlPoints.SequenceEqual(second.UnreferencedUnweightedControlPoints) ||
             first.ControlPoints.IsDefault || second.ControlPoints.IsDefault || first.ControlPoints.Length != second.ControlPoints.Length)
             return false;
         for (int i = 0; i < first.ControlPoints.Length; i++)

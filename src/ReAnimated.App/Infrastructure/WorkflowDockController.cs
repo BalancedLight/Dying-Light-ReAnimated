@@ -35,6 +35,10 @@ public sealed class WorkflowDockController
     private readonly Dictionary<string, LayoutAnchorable> _activeAnchorables =
         new(StringComparer.Ordinal);
     private EditorDockWorkflow? _activeWorkflow;
+    private LayoutPanel? _focusedModelsBrowser;
+    private LayoutAnchorablePane? _focusedModelsAuthoring;
+    private GridLength? _browserHeightBeforeFocus;
+    private GridLength? _authoringHeightBeforeFocus;
 
     public WorkflowDockController(
         DockingManager manager,
@@ -93,7 +97,16 @@ public sealed class WorkflowDockController
         if (!TryRestoreLayout(workflow))
         {
             ApplyDefaultLayout(workflow);
+            ShowRequiredPanes(workflow);
+            // Replace a stale or unusable saved layout now, so a later crash
+            // cannot bring the same empty workspace back on next launch.
+            SaveCurrentLayout();
         }
+        else
+        {
+            ShowRequiredPanes(workflow);
+        }
+        ConstrainPlaybackContext();
     }
 
     public void ResetCurrentLayout()
@@ -105,6 +118,7 @@ public sealed class WorkflowDockController
 
         CloseFloatingWindowsAndDetachCurrentLayout();
         ApplyDefaultLayout(workflow);
+        ConstrainPlaybackContext();
         SaveCurrentLayout();
     }
 
@@ -114,6 +128,14 @@ public sealed class WorkflowDockController
             _manager.Layout?.RootPanel is null)
         {
             return;
+        }
+
+        // A full-area authoring focus is presentation state. Save the
+        // underlying dock arrangement, then put the focus back on screen.
+        bool focused = _focusedModelsBrowser is not null;
+        if (focused)
+        {
+            SetModelsAuthoringFocus(false);
         }
 
         try
@@ -133,6 +155,64 @@ public sealed class WorkflowDockController
             // Layout persistence is convenience state. A failure must never
             // block project saves, renderer shutdown, or workspace switching.
         }
+        finally
+        {
+            if (focused)
+            {
+                SetModelsAuthoringFocus(true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Gives the Models authoring pane the available height while its browser
+    /// panes are hidden. Restores the user's original split on exit and never
+    /// persists the temporary dimensions.
+    /// </summary>
+    public void SetModelsAuthoringFocus(bool focused)
+    {
+        if (!focused)
+        {
+            if (_focusedModelsBrowser is { } browser &&
+                _browserHeightBeforeFocus is { } browserHeight)
+            {
+                browser.DockHeight = browserHeight;
+            }
+
+            if (_focusedModelsAuthoring is { } authoring &&
+                _authoringHeightBeforeFocus is { } authoringHeight)
+            {
+                authoring.DockHeight = authoringHeight;
+            }
+
+            _focusedModelsBrowser = null;
+            _focusedModelsAuthoring = null;
+            _browserHeightBeforeFocus = null;
+            _authoringHeightBeforeFocus = null;
+            return;
+        }
+
+        if (_activeWorkflow != EditorDockWorkflow.Models ||
+            _focusedModelsBrowser is not null ||
+            _manager.Layout?.RootPanel is not { } root ||
+            root.Orientation != Orientation.Vertical ||
+            root.Children.Count != 2 ||
+            root.Children[0] is not LayoutPanel browserPanel ||
+            root.Children[1] is not LayoutAnchorablePane authoringPane ||
+            !_activeAnchorables.TryGetValue(
+                "models.authoring.workspace",
+                out LayoutAnchorable? authoringContent) ||
+            authoringContent.IsFloating)
+        {
+            return;
+        }
+
+        _focusedModelsBrowser = browserPanel;
+        _focusedModelsAuthoring = authoringPane;
+        _browserHeightBeforeFocus = browserPanel.DockHeight;
+        _authoringHeightBeforeFocus = authoringPane.DockHeight;
+        browserPanel.DockHeight = new GridLength(0.01, GridUnitType.Star);
+        authoringPane.DockHeight = new GridLength(1.0, GridUnitType.Star);
     }
 
     public void SetPaneVisible(string paneId, bool visible)
@@ -147,6 +227,7 @@ public sealed class WorkflowDockController
         if (visible)
         {
             anchorable.Show();
+            anchorable.IsSelected = true;
             anchorable.IsActive = true;
         }
         else if (anchorable.IsVisible)
@@ -247,7 +328,11 @@ public sealed class WorkflowDockController
             serializer.Deserialize(reader);
 
             if (rejected ||
-                _activeAnchorables.Count != panes.Count)
+                _activeAnchorables.Count != panes.Count ||
+                workflow == EditorDockWorkflow.Models &&
+                BrowserModelPaneIds.All(id =>
+                    !_activeAnchorables.TryGetValue(id, out LayoutAnchorable? pane) ||
+                    !pane.IsVisible))
             {
                 return false;
             }
@@ -294,6 +379,11 @@ public sealed class WorkflowDockController
             {
                 SetPaneVisible(id, visible: false);
             }
+        }
+        else if (workflow == EditorDockWorkflow.Export)
+        {
+            SetPaneVisible("export.files", visible: false);
+            SetPaneVisible("export.animation-script", visible: false);
         }
     }
 
@@ -352,7 +442,7 @@ public sealed class WorkflowDockController
         Dictionary<string, EditorDockPaneDefinition> panes)
     {
         LayoutAnchorablePane header = Pane(panes, "playback.context");
-        header.DockHeight = new GridLength(110.0);
+        header.DockHeight = new GridLength(panes["playback.context"].MinimumHeight + 60.0);
         LayoutAnchorablePane fpp = Pane(panes, "playback.fpp-camera");
         LayoutAnchorablePane target = Pane(panes, "playback.target-camera");
         LayoutAnchorablePane timeline = Pane(panes, "playback.timeline");
@@ -416,7 +506,7 @@ public sealed class WorkflowDockController
         Dictionary<string, EditorDockPaneDefinition> panes) =>
         Split(
             Orientation.Horizontal,
-            Pane(panes, "export.files", "export.developer-tools"));
+            Pane(panes, "export.developer-tools", "export.files", "export.animation-script"));
 
     private LayoutAnchorablePane Pane(
         Dictionary<string, EditorDockPaneDefinition> panes,
@@ -444,6 +534,25 @@ public sealed class WorkflowDockController
         }
 
         return pane;
+    }
+
+    private void ConstrainPlaybackContext()
+    {
+        if (_activeWorkflow != EditorDockWorkflow.Playback ||
+            !_activeAnchorables.TryGetValue("playback.context", out LayoutAnchorable? context) ||
+            !_panes[EditorDockWorkflow.Playback].TryGetValue("playback.context", out EditorDockPaneDefinition? definition))
+            return;
+
+        definition.Content.MinHeight = Math.Max(definition.Content.MinHeight, definition.MinimumHeight);
+        definition.Content.MinWidth = Math.Max(definition.Content.MinWidth, definition.MinimumWidth);
+        if (context.Parent is not LayoutAnchorablePane parent) return;
+
+        // The title and tab strip also need space outside the content minimum.
+        double minimumHeight = definition.MinimumHeight + 60.0;
+        parent.DockMinHeight = Math.Max(parent.DockMinHeight, minimumHeight);
+        parent.DockMinWidth = Math.Max(parent.DockMinWidth, definition.MinimumWidth);
+        if (parent.DockHeight.IsAbsolute && parent.DockHeight.Value < minimumHeight)
+            parent.DockHeight = new GridLength(minimumHeight);
     }
 
     private static LayoutPanel Split(
@@ -481,6 +590,7 @@ public sealed class WorkflowDockController
 
     private void CloseFloatingWindowsAndDetachCurrentLayout()
     {
+        SetModelsAuthoringFocus(false);
         _manager.Layout = new LayoutRoot
         {
             RootPanel = new LayoutPanel(),
@@ -492,4 +602,30 @@ public sealed class WorkflowDockController
     [
         "models.authoring.workspace",
     ];
+
+    private static readonly string[] BrowserModelPaneIds =
+    [
+        "models.project",
+        "models.browser",
+        "models.preview",
+    ];
+
+    private static IReadOnlyList<string> RequiredVisiblePaneIds(
+        EditorDockWorkflow workflow) => workflow switch
+    {
+        EditorDockWorkflow.Animations => ["animations.preview"],
+        EditorDockWorkflow.Playback => ["playback.target-camera"],
+        EditorDockWorkflow.RetargetEdit =>
+            ["retarget.source-camera", "retarget.target-camera"],
+        EditorDockWorkflow.Export => ["export.developer-tools"],
+        _ => [],
+    };
+
+    private void ShowRequiredPanes(EditorDockWorkflow workflow)
+    {
+        foreach (string id in RequiredVisiblePaneIds(workflow))
+        {
+            SetPaneVisible(id, visible: true);
+        }
+    }
 }

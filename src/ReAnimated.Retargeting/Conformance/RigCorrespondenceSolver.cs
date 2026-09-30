@@ -73,6 +73,21 @@ public static class RigCorrespondenceSolver
 
         ImmutableArray<string?> sourceRoles = ClassifySource(sourceRig);
         Dictionary<string, List<int>> candidatesByRole = GroupByRole(sourceRoles);
+        var explicitByRole = new Dictionary<string, int>(StringComparer.Ordinal);
+        var reservedSource = new HashSet<int>();
+        foreach ((string role, string sourceName) in options.RoleOverrides)
+        {
+            int sourceIndex = sourceRig.GetBoneIndex(sourceName);
+            if (!template.Entities.Any(entity => ResolveTemplateRole(entity) == role) ||
+                sourceIndex < 0 || options.ExcludedSourceBones.Contains(sourceName) ||
+                !reservedSource.Add(sourceIndex))
+            {
+                throw new ArgumentException(
+                    $"Role override '{role}' must select a unique, available source bone.");
+            }
+
+            explicitByRole.Add(role, sourceIndex);
+        }
         var ambiguities = ImmutableArray.CreateBuilder<RigCorrespondenceAmbiguity>();
         var claimedSource = new HashSet<int>();
         var rows = ImmutableArray.CreateBuilder<RigCorrespondenceRow>();
@@ -87,12 +102,24 @@ public static class RigCorrespondenceSolver
             double confidence;
 
             if (role is not null &&
+                explicitByRole.TryGetValue(role, out int manual))
+            {
+                if (claimedSource.Contains(manual))
+                {
+                    throw new ArgumentException(
+                        $"Role override '{role}' conflicts with an earlier mapping.");
+                }
+
+                chosen = manual;
+            }
+            else if (role is not null &&
                 candidatesByRole.TryGetValue(role, out List<int>? candidates) &&
                 candidates.Count > 0)
             {
                 List<int> available = candidates
                     .Where(index =>
                         !claimedSource.Contains(index) &&
+                        !reservedSource.Contains(index) &&
                         !options.ExcludedSourceBones.Contains(sourceRig.Bones[index].Name))
                     .ToList();
                 if (available.Count > 0)
@@ -124,9 +151,13 @@ public static class RigCorrespondenceSolver
             if (chosen >= 0)
             {
                 claimedSource.Add(chosen);
-                confidence = ambiguous ? 0.6 : 0.95;
-                evidence =
-                    $"role '{role}' joined '{sourceRig.Bones[chosen].Name}' to '{entity.Name}'";
+                bool explicitChoice = role is not null &&
+                    explicitByRole.TryGetValue(role, out int selected) &&
+                    selected == chosen;
+                confidence = explicitChoice ? 1.0 : ambiguous ? 0.6 : 0.95;
+                evidence = explicitChoice
+                    ? $"explicit user choice joined '{sourceRig.Bones[chosen].Name}' to '{entity.Name}'"
+                    : $"role '{role}' joined '{sourceRig.Bones[chosen].Name}' to '{entity.Name}'";
                 rows.Add(new RigCorrespondenceRow
                 {
                     Disposition = RigBoneDisposition.Mapped,

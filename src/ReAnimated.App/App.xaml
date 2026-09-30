@@ -673,10 +673,10 @@
                               ToolTip="Bind the clip to a rigged model already in this project." />
                     <WrapPanel>
                         <Button Command="{Binding UseSelectedProjectModelAsSourceCommand}"
-                                Content="Use project model as source" />
+                                Content="Use project model" />
                         <Button Command="{Binding SelectWorkspaceCommand}"
                                 CommandParameter="Models"
-                                Content="Find base-game model..." />
+                                Content="Browse base-game models..." />
                         <Button Command="{Binding CancelExplorerSourceModelPickerCommand}"
                                 Content="Cancel" />
                     </WrapPanel>

@@ -29,7 +29,23 @@ public static class Dl1CompiledBoneScriptValidator
             _ = policy.Components; _ = policy.LodToken;
             CompactMeshEntity[] matches = byName[policy.Name].ToArray();
             if (matches.Length != 1)
-                throw new InvalidDataException($"Compiled component policy for '{policy.Name}' has {matches.Length} matching entities; exactly one is required.");
+            {
+                string detail = "";
+                if (matches.Length == 0)
+                {
+                    string[] absent = policies
+                        .Where(candidate => !byName.Contains(candidate.Name))
+                        .Select(candidate => candidate.Name)
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
+                    string sample = string.Join(", ", absent.Take(16).Select(static name => $"'{name}'"));
+                    detail = $" The compiled hierarchy lacks {absent.Length} source policy node(s): {sample}" +
+                        (absent.Length > 16 ? $", and {absent.Length - 16} more" : "") +
+                        ". Review compiler retention only for eligible unweighted branches; do not weaken the node check.";
+                }
+                throw new InvalidDataException(
+                    $"Compiled component policy for '{policy.Name}' has {matches.Length} matching entities; exactly one is required." + detail);
+            }
             CompactMeshEntity node = matches[0];
             uint componentBits = node.Flags & 0x0700;
             uint lodBits = node.Flags & 0x7000;

@@ -16,6 +16,12 @@ public sealed record FbxModelAuthoringImportOptions
 {
     public CustomModelRigMode RigMode { get; init; } = CustomModelRigMode.Auto;
 
+    /// <summary>
+    /// A caller-owned model identity for a second authoring instance of the
+    /// same FBX. Ordinary imports keep their content-derived identity.
+    /// </summary>
+    public Guid? ModelIdentityOverride { get; init; }
+
     public int MaximumMeshes { get; init; } = 65_536;
 
     public int MaximumMaterials { get; init; } = 65_536;
@@ -168,7 +174,8 @@ public static class FbxModelAuthoringImporter
 
         byte[] sourceBytes = sourceFbx.ToArray();
         string sourceSha256 = Convert.ToHexString(SHA256.HashData(sourceBytes)).ToLowerInvariant();
-        Guid modelId = CreateDeterministicGuid(SHA256.HashData(sourceBytes));
+        Guid modelId = options.ModelIdentityOverride ??
+            CreateDeterministicGuid(SHA256.HashData(sourceBytes));
         FbxBinaryDocument binary = FbxBinaryReader.Read(sourceBytes, cancellationToken: cancellationToken);
         FbxSemanticScene scene = FbxSemanticScene.Parse(binary, cancellationToken);
         FbxStrictExportInspection inspection = FbxStrictExportInspector.Inspect(binary, cancellationToken);
@@ -187,6 +194,20 @@ public static class FbxModelAuthoringImporter
 
         HashSet<long> weightedBoneIds = ReadWeightedBoneIds(scene, objects, cancellationToken);
         CustomModelRigMode resolvedRigMode = ResolveRigMode(options.RigMode, weightedBoneIds, scene);
+        FbxSkinBindPoseAssessment bindPoseAssessment = FbxSkinBindPoseReconciler.Assess(
+            scene,
+            rawBindPose,
+            rawEvaluatedGlobals,
+            metersPerUnit,
+            cancellationToken: cancellationToken);
+        if (bindPoseAssessment.PreferEvaluatedModelGlobals)
+        {
+            // Replace only weighted Model rows contradicted by every usable
+            // Cluster TransformLink. Keep unrelated valid Pose rows, including
+            // structural helpers and the mesh Model's separate bake transform.
+            foreach (long conflictedModelObjectId in bindPoseAssessment.ConflictingPoseModelIds)
+                rawBindPose = rawBindPose.Remove(conflictedModelObjectId);
+        }
         (RigDefinition? rig, ImmutableArray<CustomModelBone> bones, ImmutableDictionary<long, int> boneIndexByModel) =
             BuildRig(
                 modelId,
@@ -203,6 +224,48 @@ public static class FbxModelAuthoringImporter
                 cancellationToken);
 
         var diagnostics = ImmutableArray.CreateBuilder<CustomModelImportDiagnostic>();
+        if (bindPoseAssessment.PreferEvaluatedModelGlobals)
+        {
+            diagnostics.Add(new CustomModelImportDiagnostic
+            {
+                Code = "model_bind_pose_reconciled_to_skin_links",
+                Severity = CustomModelImportSeverity.Warning,
+                Message = $"FBX Pose::BindPose conflicts with {bindPoseAssessment.PoseConflictCount:N0} of {bindPoseAssessment.PoseComparedCount:N0} weighted skin-cluster TransformLink matrices (largest position difference {bindPoseAssessment.MaximumPoseTranslationDiscrepancyMeters * 100.0:F1} cm). Only {bindPoseAssessment.ConflictingPoseModelIds.Length:N0} contradicted weighted Model bind row(s) use evaluated globals; unrelated Pose rows, the mesh bake and source skin weights remain unchanged.",
+            });
+        }
+        else if (bindPoseAssessment.PoseConflictCount > 0)
+        {
+            diagnostics.Add(new CustomModelImportDiagnostic
+            {
+                Code = "model_bind_pose_skin_link_conflict_unresolved",
+                Severity = CustomModelImportSeverity.Warning,
+                Message = $"FBX Pose::BindPose conflicts with {bindPoseAssessment.PoseConflictCount:N0} weighted skin-cluster TransformLink matrices, but evaluated Model globals did not agree with every usable link. The original Pose::BindPose remains selected; review this rig's bind pose before conformance or export.",
+            });
+        }
+        foreach (FbxModelObject model in scene.Models.Values
+                     .Where(model => FbxCoreAnimationAdapter.IsStructuralContainerModel(scene, model))
+                     .OrderBy(static model => model.ObjectId))
+        {
+            diagnostics.Add(new CustomModelImportDiagnostic
+            {
+                Code = "model_structural_container_excluded",
+                Severity = CustomModelImportSeverity.Warning,
+                Subject = model.Name,
+                Message = $"FBX structural container '{model.Name}' (object {model.ObjectId}) was excluded from the imported bone table; its child LimbNodes retain their source order and indices.",
+            });
+        }
+        foreach (FbxModelObject model in scene.Models.Values
+                     .Where(model => FbxCoreAnimationAdapter.IsIgnorableSceneLight(scene, model))
+                     .OrderBy(static model => model.ObjectId))
+        {
+            diagnostics.Add(new CustomModelImportDiagnostic
+            {
+                Code = "model_scene_light_source_only",
+                Severity = CustomModelImportSeverity.Warning,
+                Subject = model.Name,
+                Message = $"Scene light '{model.Name}' (object {model.ObjectId}) stays in the original FBX but is not a character rig node or exported light.",
+            });
+        }
         if (options.IgnoreMorphChannels)
         {
             diagnostics.Add(new CustomModelImportDiagnostic
@@ -368,6 +431,7 @@ public static class FbxModelAuthoringImporter
                 RigMode = package.Document.AuthoredLayer?.SourceRigMode ??
                     (package.Document.RigConformance is null ? package.Document.RigMode : CustomModelRigMode.Auto),
                 IgnoreMorphChannels = package.Document.AuthoredLayer?.SourceIgnoreMorphChannels ?? ignoreMorphChannels,
+                ModelIdentityOverride = package.Document.ModelId,
             },
             cancellationToken);
 
@@ -489,12 +553,30 @@ public static class FbxModelAuthoringImporter
                 RigMode = existing.Document.RigMode,
                 IgnoreMorphChannels = options?.IgnoreMorphChannels ??
                     existing.Document.IgnoreMorphChannels,
+                ModelIdentityOverride = existing.Document.ModelId,
             };
         FbxModelAuthoringImportResult replacement = Import(
             replacementFbx,
             replacementFileName,
             effectiveOptions,
             cancellationToken);
+        if (existing.Document.RiggingSession is { } savedStudio)
+        {
+            HashSet<string> savedComponents = savedStudio.Components
+                .Select(static component => component.Id)
+                .ToHashSet(StringComparer.Ordinal);
+            HashSet<string> replacementComponents = replacement.Package.Document.Meshes
+                .Select(static mesh => string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"fbx:{mesh.ModelObjectId}:{mesh.GeometryObjectId}"))
+                .ToHashSet(StringComparer.Ordinal);
+            if (!savedComponents.SetEquals(replacementComponents))
+            {
+                throw new InvalidDataException(
+                    "The replacement FBX changes saved Rig Studio component identities. " +
+                    "Add it as a new model; reimporting changed components requires a reviewed old-to-new mapping.");
+            }
+        }
         string existingSourceRigSignature =
             CustomModelContractSignatures.ComputeRig(existing.Document.Bones);
         string replacementSourceRigSignature =
@@ -640,6 +722,7 @@ public static class FbxModelAuthoringImporter
     private static void ValidateOptions(FbxModelAuthoringImportOptions options)
     {
         if (!Enum.IsDefined(options.RigMode) ||
+            options.ModelIdentityOverride == Guid.Empty ||
             options.MaximumMeshes <= 0 ||
             options.MaximumMaterials <= 0 ||
             options.MaximumExpandedVertices <= 0 ||
@@ -658,12 +741,16 @@ public static class FbxModelAuthoringImporter
         HashSet<long> weightedBoneIds,
         FbxSemanticScene scene)
     {
+        FbxCoreAnimationAdapter.ValidateNonLimbModelSemantics(scene);
         if (requested != CustomModelRigMode.Auto)
         {
             return requested;
         }
 
-        return weightedBoneIds.Count == 0 && !scene.Models.Values.Any(static model => model.IsLimb)
+        return weightedBoneIds.Count == 0 &&
+            !scene.Models.Values.Any(static model => model.IsLimb) &&
+            !scene.Models.Values.Any(model =>
+                FbxCoreAnimationAdapter.IsSupportedNonLimbModel(scene, model))
             ? CustomModelRigMode.StaticProp
             : CustomModelRigMode.ExactFbxRig;
     }
@@ -692,13 +779,19 @@ public static class FbxModelAuthoringImporter
         }
 
         ImmutableArray<long> orderedBones =
-            FbxCoreAnimationAdapter.BuildOrderedLimbModels(scene, cancellationToken);
+            FbxCoreAnimationAdapter.BuildOrderedTransformModels(
+                scene,
+                includeSupportedNonLimbModels: true,
+                cancellationToken);
         ImmutableDictionary<long, int> boneIndexByModel = orderedBones
             .Select((modelIdValue, index) => (modelIdValue, index))
             .ToImmutableDictionary(static pair => pair.modelIdValue, static pair => pair.index);
         ImmutableDictionary<long, long?> parentByModel = orderedBones.ToImmutableDictionary(
             static modelIdValue => modelIdValue,
-            scene.GetNearestLimbParentId);
+            modelIdValue => FbxCoreAnimationAdapter.GetNearestImportedParentId(
+                scene,
+                modelIdValue,
+                orderedBones.ToHashSet()));
         ImmutableDictionary<long, TransformMatrix> rawGlobals = rawEvaluatedGlobals.SetItems(
             rawBindPose.Where(pair => boneIndexByModel.ContainsKey(pair.Key)));
         ImmutableDictionary<long, TransformMatrix> globals = FbxCoreAnimationAdapter.NormalizeGlobals(
@@ -732,7 +825,10 @@ public static class FbxModelAuthoringImporter
             {
                 localTrs = FbxCoreAnimationAdapter.ProjectAffineToTrs(local, model.Name, "custom-model bind");
             }
-            BoneKind kind = ClassifyBone(model.Name, parentIndex, weightedBoneIds.Contains(modelObjectId));
+            BoneKind kind = ClassifyBone(
+                model,
+                parentIndex,
+                weightedBoneIds.Contains(modelObjectId));
             int index = boneIndexByModel[modelObjectId];
             customBones.Add(new CustomModelBone
             {
@@ -765,27 +861,33 @@ public static class FbxModelAuthoringImporter
         return (rig, customBones.ToImmutable(), boneIndexByModel);
     }
 
-    private static BoneKind ClassifyBone(string name, int parentIndex, bool isWeighted)
+    private static BoneKind ClassifyBone(
+        FbxModelObject model,
+        int parentIndex,
+        bool isWeighted)
     {
-        if (string.Equals(name, Dl1PreviewContract.EyeCameraBoneName, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(name, Dl1PreviewContract.ReferenceCameraBoneName, StringComparison.OrdinalIgnoreCase))
+        if (model.Subtype.Equals("Camera", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(model.Name, Dl1PreviewContract.EyeCameraBoneName, StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(model.Name, Dl1PreviewContract.ReferenceCameraBoneName, StringComparison.OrdinalIgnoreCase))
         {
             return BoneKind.Camera;
         }
 
-        if (name.Contains("propholder", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("weapon", StringComparison.OrdinalIgnoreCase) &&
-            name.Contains("holder", StringComparison.OrdinalIgnoreCase))
+        if (model.Subtype.Equals("Prop", StringComparison.OrdinalIgnoreCase) ||
+            model.Name.Contains("propholder", StringComparison.OrdinalIgnoreCase) ||
+            model.Name.Contains("prop_holder", StringComparison.OrdinalIgnoreCase) ||
+            model.Name.Contains("weapon", StringComparison.OrdinalIgnoreCase) &&
+            model.Name.Contains("holder", StringComparison.OrdinalIgnoreCase))
         {
             return BoneKind.Prop;
         }
 
-        if (parentIndex < 0)
+        if (model.IsLimb && parentIndex < 0)
         {
             return BoneKind.Root;
         }
 
-        return isWeighted ? BoneKind.Deform : BoneKind.Helper;
+        return model.IsLimb && isWeighted ? BoneKind.Deform : BoneKind.Helper;
     }
 
     private static (
@@ -1238,11 +1340,12 @@ public static class FbxModelAuthoringImporter
             CancellationToken cancellationToken)
     {
         string root = Path.GetFullPath(searchRoot);
-        if (Path.IsPathRooted(reference) || DirectoryHasReparsePoint(root, root))
+        if (DirectoryHasReparsePoint(root, root))
         {
             return ([], null, []);
         }
 
+        bool rootedReference = Path.IsPathRooted(reference);
         string normalizedReference = reference.Replace('\\', Path.DirectorySeparatorChar)
             .Replace('/', Path.DirectorySeparatorChar);
         string basename = Path.GetFileName(normalizedReference);
@@ -1256,13 +1359,23 @@ public static class FbxModelAuthoringImporter
         }
 
         string fbxStem = Path.GetFileNameWithoutExtension(originalFileName);
-        string[] rawCandidates =
-        [
-            Path.Combine(root, basename),
-            Path.Combine(root, $"{fbxStem}.fbm", basename),
-            Path.Combine(root, "textures", basename),
-            Path.Combine(root, normalizedReference),
-        ];
+        // An absolute FBX reference is metadata from the source machine. Use
+        // only its basename when looking for a staged copy below the caller's
+        // root; never turn the original absolute path into a read candidate.
+        string[] rawCandidates = rootedReference
+            ?
+            [
+                Path.Combine(root, basename),
+                Path.Combine(root, $"{fbxStem}.fbm", basename),
+                Path.Combine(root, "textures", basename),
+            ]
+            :
+            [
+                Path.Combine(root, basename),
+                Path.Combine(root, $"{fbxStem}.fbm", basename),
+                Path.Combine(root, "textures", basename),
+                Path.Combine(root, normalizedReference),
+            ];
         string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar)
             ? root
             : root + Path.DirectorySeparatorChar;
@@ -1429,7 +1542,19 @@ public static class FbxModelAuthoringImporter
         foreach ((long geometryObjectId, FbxNode geometry) in geometries)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string geometryName = ReadObjectName(geometry, $"Geometry {geometryObjectId}");
+            string geometryName = FbxStrictExportInspector.ReadGeometryName(
+                geometry, geometryObjectId);
+            if (geometry.Properties[1].Value is string rawGeometryName &&
+                string.IsNullOrWhiteSpace(FbxBinaryDocument.CleanObjectName(rawGeometryName)))
+            {
+                diagnostics.Add(new CustomModelImportDiagnostic
+                {
+                    Code = "model_geometry_name_generated",
+                    Severity = CustomModelImportSeverity.Warning,
+                    Subject = geometryName,
+                    Message = $"Mesh Geometry object {geometryObjectId} has no usable name; assigned stable display name '{geometryName}' while preserving its source ID and connections.",
+                });
+            }
             long? modelObjectId = ResolveMeshModel(scene, geometryObjectId);
             string meshName = modelObjectId.HasValue
                 ? scene.Models[modelObjectId.Value].Name
@@ -1456,6 +1581,10 @@ public static class FbxModelAuthoringImporter
                 polygonVertexIndices,
                 controlPoints.Count,
                 geometryName);
+            HashSet<int> referencedControlPoints = polygons
+                .SelectMany(static polygon => polygon.Corners)
+                .Select(static corner => corner.ControlPointIndex)
+                .ToHashSet();
             FbxVectorLayer? normalLayer = ReadVectorLayer(
                 geometry.FindChildren("LayerElementNormal").FirstOrDefault(),
                 "Normals",
@@ -1482,6 +1611,7 @@ public static class FbxModelAuthoringImporter
                 objects,
                 geometryObjectId,
                 controlPoints.Count,
+                referencedControlPoints,
                 rig,
                 boneIndexByModel,
                 geometryName,
@@ -1537,6 +1667,8 @@ public static class FbxModelAuthoringImporter
             var triangles = ImmutableArray.CreateBuilder<FbxExpandedTriangle>();
             var sourceMaterialSlots = ImmutableHashSet.CreateBuilder<int>();
             int reconstructedNormalCount = 0;
+            int skippedDegenerateTriangleCount = 0;
+            var skippedDegenerateExamples = new List<string>(4);
             for (int polygonIndex = 0; polygonIndex < polygons.Length; polygonIndex++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1562,7 +1694,6 @@ public static class FbxModelAuthoringImporter
                     sourceMaterialIndex = 0;
                 }
 
-                sourceMaterialSlots.Add(sourceMaterialIndex);
                 for (int triangleOrdinal = 0; triangleOrdinal < polygonTriangles.Length; triangleOrdinal++)
                 {
                     (int first, int second, int third) = polygonTriangles[triangleOrdinal];
@@ -1575,12 +1706,29 @@ public static class FbxModelAuthoringImporter
                     Vector3D pa = transformedControlPoints[ca.ControlPointIndex];
                     Vector3D pb = transformedControlPoints[cb.ControlPointIndex];
                     Vector3D pc = transformedControlPoints[cc.ControlPointIndex];
-                    if (!Vector3D.Cross(pb - pa, pc - pa).TryNormalize(
-                            out Vector3D faceNormal))
+                    Vector3D faceCross = Vector3D.Cross(pb - pa, pc - pa);
+                    if (!pa.IsFinite || !pb.IsFinite || !pc.IsFinite || !faceCross.IsFinite)
                     {
                         throw new InvalidDataException(
-                            $"Geometry '{geometryName}' triangle {polygonIndex}:{first},{second},{third} is degenerate and cannot provide a fallback normal.");
+                            $"Geometry '{geometryName}' triangle {polygonIndex}:{first},{second},{third} has non-finite transformed coordinates.");
                     }
+                    if (!faceCross.TryNormalize(
+                            out Vector3D faceNormal))
+                    {
+                        if (!IsPermanentlyCollapsedTriangle(
+                                pa, pb, pc,
+                                ca.ControlPointIndex, cb.ControlPointIndex, cc.ControlPointIndex,
+                                geometryMorphs))
+                        {
+                            throw new InvalidDataException(
+                                $"Geometry '{geometryName}' triangle {polygonIndex}:{first},{second},{third} is degenerate in the base pose but may open under morph blending; repair or bake that source face before import.");
+                        }
+                        skippedDegenerateTriangleCount++;
+                        if (skippedDegenerateExamples.Count < 4)
+                            skippedDegenerateExamples.Add($"{polygonIndex}:{first},{second},{third}");
+                        continue;
+                    }
+                    sourceMaterialSlots.Add(sourceMaterialIndex);
                     triangles.Add(new FbxExpandedTriangle(
                         sourceMaterialIndex,
                         new GeometrySourceTriangle(polygonIndex, triangleOrdinal),
@@ -1588,6 +1736,22 @@ public static class FbxModelAuthoringImporter
                         BuildExpandedCorner(cb, polygonIndex, pb, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount),
                         BuildExpandedCorner(cc, polygonIndex, pc, faceNormal, normalLayer, uvLayer, influences, rawNormalTransform, basis, ref reconstructedNormalCount)));
                 }
+            }
+
+            if (skippedDegenerateTriangleCount > 0)
+            {
+                diagnostics.Add(new CustomModelImportDiagnostic
+                {
+                    Code = "model_permanently_degenerate_triangles_skipped",
+                    Severity = CustomModelImportSeverity.Warning,
+                    Subject = meshName,
+                    Message = $"Mesh '{meshName}' omitted {skippedDegenerateTriangleCount:N0} zero-area triangle(s) that remain non-renderable throughout the supported -4..4 morph-control range; first source polygon/corner identities: {string.Join("; ", skippedDegenerateExamples)}. Original FBX data is retained for repair.",
+                });
+            }
+            if (polygons.Length > 0 && triangles.Count == 0)
+            {
+                throw new InvalidDataException(
+                    $"Geometry '{geometryName}' has no renderable triangles after removing permanently degenerate faces.");
             }
 
             if (reconstructedNormalCount > 0)
@@ -1844,6 +2008,58 @@ public static class FbxModelAuthoringImporter
         long ShapeObjectId,
         ImmutableDictionary<int, Vector3D> DeltasByControlPoint,
         ImmutableDictionary<int, Vector3D> NormalDeltasByControlPoint);
+
+    /// <summary>
+    /// Bounds the face's twice-area throughout the supported -4..4 facial-preset
+    /// weight range for every combination of authored position morphs. A zero-area
+    /// source face may be omitted only when it cannot become rendered there.
+    /// </summary>
+    private static bool IsPermanentlyCollapsedTriangle(
+        Vector3D pa,
+        Vector3D pb,
+        Vector3D pc,
+        int controlPointA,
+        int controlPointB,
+        int controlPointC,
+        ImmutableArray<FbxGeometryMorphDraft> morphs)
+    {
+        const double maximumUnrenderableTwiceArea = 1e-12;
+        const double maximumSupportedMorphWeight = 4.0;
+        Vector3D firstEdge = pb - pa;
+        Vector3D secondEdge = pc - pa;
+        double possibleTwiceArea = Vector3D.Cross(firstEdge, secondEdge).Length;
+        var active = new List<(Vector3D First, Vector3D Second)>();
+        foreach (FbxGeometryMorphDraft morph in morphs)
+        {
+            Vector3D deltaA = morph.DeltasByControlPoint.GetValueOrDefault(controlPointA, Vector3D.Zero);
+            Vector3D deltaB = morph.DeltasByControlPoint.GetValueOrDefault(controlPointB, Vector3D.Zero);
+            Vector3D deltaC = morph.DeltasByControlPoint.GetValueOrDefault(controlPointC, Vector3D.Zero);
+            if (!deltaA.IsFinite || !deltaB.IsFinite || !deltaC.IsFinite)
+                return false;
+            Vector3D firstDeltaEdge = deltaB - deltaA;
+            Vector3D secondDeltaEdge = deltaC - deltaA;
+            if (firstDeltaEdge == Vector3D.Zero && secondDeltaEdge == Vector3D.Zero)
+                continue;
+            Vector3D linear =
+                Vector3D.Cross(firstEdge, secondDeltaEdge) +
+                Vector3D.Cross(firstDeltaEdge, secondEdge);
+            possibleTwiceArea += maximumSupportedMorphWeight * linear.Length;
+            possibleTwiceArea += maximumSupportedMorphWeight * maximumSupportedMorphWeight *
+                Vector3D.Cross(firstDeltaEdge, secondDeltaEdge).Length;
+            foreach ((Vector3D previousFirst, Vector3D previousSecond) in active)
+            {
+                possibleTwiceArea += maximumSupportedMorphWeight * maximumSupportedMorphWeight * (
+                    Vector3D.Cross(firstDeltaEdge, previousSecond) +
+                    Vector3D.Cross(previousFirst, secondDeltaEdge)).Length;
+            }
+            if (!double.IsFinite(possibleTwiceArea) ||
+                possibleTwiceArea > maximumUnrenderableTwiceArea)
+                return false;
+            active.Add((firstDeltaEdge, secondDeltaEdge));
+        }
+        return double.IsFinite(possibleTwiceArea) &&
+            possibleTwiceArea <= maximumUnrenderableTwiceArea;
+    }
 
     private static ImmutableArray<FbxGeometryMorphDraft> ReadGeometryMorphs(
         FbxSemanticScene scene,
@@ -2322,6 +2538,7 @@ public static class FbxModelAuthoringImporter
         ImmutableDictionary<long, FbxNode> objects,
         long geometryObjectId,
         int controlPointCount,
+        HashSet<int> referencedControlPoints,
         RigDefinition? rig,
         ImmutableDictionary<long, int> boneIndexByModel,
         string geometryName,
@@ -2413,6 +2630,7 @@ public static class FbxModelAuthoringImporter
         maximumDiscardedWeight = 0.0;
         var result = ImmutableArray.CreateBuilder<ImmutableArray<FbxBoneInfluence>>(controlPointCount);
         var sourcePoints = ImmutableArray.CreateBuilder<GeometrySourceControlPointWeights>(controlPointCount);
+        var unreferencedUnweighted = ImmutableArray.CreateBuilder<int>();
         for (int controlPointIndex = 0; controlPointIndex < rows.Length; controlPointIndex++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -2424,8 +2642,13 @@ public static class FbxModelAuthoringImporter
             maximumSourceInfluences = Math.Max(maximumSourceInfluences, ordered.Length);
             if (isSkinned && ordered.Length == 0)
             {
-                throw new InvalidDataException(
-                    $"Skinned Geometry '{geometryName}' control point {controlPointIndex} has no positive bone influence. Root fallback is intentionally not inferred.");
+                if (referencedControlPoints.Contains(controlPointIndex))
+                {
+                    throw new InvalidDataException(
+                        $"Skinned Geometry '{geometryName}' control point {controlPointIndex} has no positive bone influence. Root fallback is intentionally not inferred.");
+                }
+
+                unreferencedUnweighted.Add(controlPointIndex);
             }
 
             KeyValuePair<int, double>[] retained = ordered.Take(MaximumInfluencesPerVertex).ToArray();
@@ -2470,7 +2693,21 @@ public static class FbxModelAuthoringImporter
                 $"Geometry '{geometryName}' contains a Skin deformer but the selected model mode has no rig.");
         }
 
-        sourceSkinning = new(isSkinned, sourcePoints.ToImmutable());
+        if (unreferencedUnweighted.Count > 0)
+        {
+            diagnostics.Add(new CustomModelImportDiagnostic
+            {
+                Code = "model_unused_unweighted_control_points_retained",
+                Severity = CustomModelImportSeverity.Warning,
+                Subject = geometryName,
+                Message = $"Skinned mesh '{geometryName}' has {unreferencedUnweighted.Count:N0} unweighted source control point(s) with no polygon references. Their source identities are retained, and no render vertex or fallback bone weight is generated.",
+            });
+        }
+
+        sourceSkinning = new(isSkinned, sourcePoints.ToImmutable())
+        {
+            UnreferencedUnweightedControlPoints = unreferencedUnweighted.ToImmutable(),
+        };
         return result.ToImmutable();
     }
 
@@ -2704,6 +2941,7 @@ public static class FbxModelAuthoringImporter
                             MaximumSampleFrames = options.MaximumAnimationFramesPerStack,
                             MaximumSampledTransformKeys = options.MaximumSampledTransformKeysPerStack,
                             ProjectAffineShearToTrs = true,
+                            IncludeSupportedNonLimbModels = true,
                             SourceAssetFingerprint = rig.SourceAssetFingerprint,
                         },
                         cancellationToken);

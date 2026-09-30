@@ -174,6 +174,7 @@ public static class CustomModelHelperAuthoring
         };
         updated = SynchronizeStudioHelpers(original, updated);
         updated.Validate();
+        RigProfileEditGuard.RequireDocumentAllowed(original, updated);
         return updated;
     }
 
@@ -190,6 +191,7 @@ public static class CustomModelHelperAuthoring
             globals.Add(bone.ParentIndex < 0 ? bone.ExactLocalBindMatrix : globals[bone.ParentIndex] * bone.ExactLocalBindMatrix);
         foreach (CustomModelAuthoredHelper helper in updated.AuthoredHelpers)
         {
+            if (original.AuthoredHelpers.Any(previous => previous == helper)) continue;
             CustomModelAuthoredHelper? previous = original.AuthoredHelpers.FirstOrDefault(h => h.Id == helper.Id);
             if (previous == helper) continue;
             int entityIndex = FindEntity(entities, helper.Id);

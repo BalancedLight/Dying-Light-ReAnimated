@@ -101,7 +101,7 @@ public sealed partial class RigConformanceWizardViewModel
             if (!FbxSkinWeightAuthoring.TrySetMirroring(model, snapshot, source.EntityId, WeightMirrorInfluence?.EntityId, MirrorWeightEdits,
                 new(WeightMirrorOriginX, WeightMirrorOriginY, WeightMirrorOriginZ), new(WeightMirrorNormalX, WeightMirrorNormalY, WeightMirrorNormalZ),
                 WeightMirrorTolerance, out var changed)) return;
-            if (!ReferenceEquals(changed, model)) BodyModelApplyRequested?.Invoke(this, new(model, changed, "Saved the weight mirror plane and explicit influence pairing."));
+            if (!ReferenceEquals(changed, model)) if (!RequestBodyChange(BodyModelApplyRequested, new(model, changed, "Saved the weight mirror plane and explicit influence pairing."))) return;
             await InspectWeightsAsync(token);
         }
         catch (Exception error) when (IsWeightError(error)) { WeightEditingStatus = "Mirror settings were not saved: " + error.Message; }
@@ -198,7 +198,7 @@ public sealed partial class RigConformanceWizardViewModel
                 return FbxSkinWeightAuthoring.TryApply(stroke.Model, preview, out var changed, token) ? changed : null;
             }, token);
             if (result is null || token.IsCancellationRequested || generation != _weightJobGeneration || !ReferenceEquals(_model, stroke.Model)) return;
-            if (!ReferenceEquals(result, stroke.Model)) BodyModelApplyRequested?.Invoke(this, new(stroke.Model, result, "Applied one source-point brush stroke."));
+            if (!ReferenceEquals(result, stroke.Model)) if (!RequestBodyChange(BodyModelApplyRequested, new(stroke.Model, result, "Applied one source-point brush stroke."))) return;
             applied = true;
         }
         catch (OperationCanceledException) { WeightEditingStatus = "Stroke calculation cancelled before commit."; }

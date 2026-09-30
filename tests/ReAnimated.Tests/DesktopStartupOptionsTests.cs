@@ -5,12 +5,12 @@ namespace ReAnimated.Tests;
 public sealed class DesktopStartupOptionsTests
 {
     [Fact]
-    public void NoArgumentsKeepNormalStartupDefaults()
+    public void NoArgumentsUseReliableWpfCompositor()
     {
         DesktopStartupOptions options = DesktopStartupOptions.Parse([]);
 
         Assert.Null(options.ProjectPath);
-        Assert.False(options.SoftwareUi);
+        Assert.True(options.SoftwareUi);
     }
 
     [Fact]
@@ -21,6 +21,16 @@ public sealed class DesktopStartupOptionsTests
 
         Assert.Null(options.ProjectPath);
         Assert.True(options.SoftwareUi);
+    }
+
+    [Fact]
+    public void HardwareUiCanBeRequestedForDiagnosis()
+    {
+        DesktopStartupOptions options = DesktopStartupOptions.Parse(
+            ["--hardware-ui"]);
+
+        Assert.Null(options.ProjectPath);
+        Assert.False(options.SoftwareUi);
     }
 
     [Theory]
@@ -68,7 +78,7 @@ public sealed class DesktopStartupOptionsTests
             ["--project", path]);
 
         Assert.Equal(path, options.ProjectPath);
-        Assert.False(options.SoftwareUi);
+        Assert.True(options.SoftwareUi);
         Assert.False(File.Exists(path));
     }
 
@@ -82,6 +92,8 @@ public sealed class DesktopStartupOptionsTests
         new[] { "first.dlraproj", "second.dlraproj" },
         new[] { "first.dlraproj", "--project", "second.dlraproj" },
         new[] { "--software-ui", "--software-ui" },
+        new[] { "--hardware-ui", "--hardware-ui" },
+        new[] { "--software-ui", "--hardware-ui" },
         new[] { "--unrecognized" },
         new[] { "-project", "scene.dlraproj" },
         new[] { "" },

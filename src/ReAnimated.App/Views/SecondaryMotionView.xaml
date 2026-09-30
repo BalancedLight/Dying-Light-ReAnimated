@@ -4,9 +4,10 @@
     <ScrollViewer VerticalScrollBarVisibility="Auto">
         <StackPanel Margin="12">
             <TextBlock Text="Secondary motion" FontWeight="SemiBold" FontSize="16"/>
-            <TextBlock Text="MPC preview approximation · 120 Hz · 8 iterations" Margin="0,6,0,12" TextWrapping="Wrap"/>
+            <TextBlock Text="Preview simulation · 120 Hz · 8 iterations" ToolTip="The preview approximates MPC behavior; it does not reproduce native results." Margin="0,6,0,12" TextWrapping="Wrap"/>
             <CheckBox Content="Enable preview simulation" IsChecked="{Binding Enabled}"/>
-            <ComboBox ItemsSource="{Binding GroupNames}" SelectedItem="{Binding SelectedGroup}" Margin="0,10,0,6"/>
+            <TextBlock Text="Motion group" Margin="0,10,0,0"/>
+            <ComboBox ItemsSource="{Binding GroupNames}" SelectedItem="{Binding SelectedGroup}" Margin="0,3,0,6"/>
             <CheckBox Content="Enable selected group" IsChecked="{Binding GroupEnabled}"/>
             <TextBlock Text="Structural stiffness" Margin="0,10,0,0"/>
             <Slider Minimum="0" Maximum="1" Value="{Binding Stiffness}"/>
@@ -26,9 +27,8 @@
                 <Button Content="Save setup" Command="{Binding SaveSetupCommand}" Margin="0,0,6,6"/>
                 <Button Content="Save model copy" Command="{Binding SaveModelCopyCommand}" Margin="0,0,6,6"/>
                 <Button Content="Import native scripts" Command="{Binding ImportNativeCommand}" Margin="0,0,6,6"/>
-                <Button Content="Export native scripts" Command="{Binding ExportNativeCommand}" Margin="0,0,6,6"/>
+                <Button Content="Export native scripts" Command="{Binding ExportNativeCommand}" Margin="0,0,6,6" ToolTip="Import one MPCloth wrapper and its PHX files, then save and open the model copy. Preview sliders do not change native coefficients; recheck native axes and collision bounds after rig edits."/>
             </WrapPanel>
-            <TextBlock Text="Native export: import one MPCloth wrapper and its PHX files, then save and open the model copy. Deployment includes those scripts and facial presets automatically. Preview sliders do not change native coefficients; recheck native axes and collision bounds after changing the rig." TextWrapping="Wrap" Margin="0,10,0,0"/>
             <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Margin="0,10,0,0"/>
             <TextBlock Text="{Binding PersistenceStatus}" TextWrapping="Wrap" Margin="0,10,0,0"/>
         </StackPanel>

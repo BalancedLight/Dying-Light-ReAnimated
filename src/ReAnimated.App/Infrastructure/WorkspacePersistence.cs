@@ -1,5 +1,6 @@
 using System.IO;
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Windows.Threading;
 using ReAnimated.App.ViewModels;
@@ -30,6 +31,10 @@ public sealed record WorkspaceSnapshot(
 
     public const int LegacySchemaVersion = 1;
 }
+
+public sealed record WorkspaceSnapshotRead(
+    WorkspaceSnapshot Snapshot,
+    string ContentSha256);
 
 public interface IWorkspaceSnapshotProvider
 {
@@ -81,16 +86,18 @@ public sealed class JsonWorkspaceStateStore
         AtomicFileWriter.WriteAllText(FilePath, json);
     }
 
-    public WorkspaceSnapshot? Load()
+    public WorkspaceSnapshot? Load() => LoadWithFingerprint()?.Snapshot;
+
+    public WorkspaceSnapshotRead? LoadWithFingerprint()
     {
         if (!File.Exists(FilePath))
         {
             return null;
         }
 
-        string json = File.ReadAllText(FilePath);
+        byte[] bytes = File.ReadAllBytes(FilePath);
         WorkspaceSnapshot? snapshot =
-            JsonSerializer.Deserialize<WorkspaceSnapshot>(json, SerializerOptions);
+            JsonSerializer.Deserialize<WorkspaceSnapshot>(bytes, SerializerOptions);
         // Every schema from the legacy one up to the current is readable:
         // each field added since has been optional. Rejecting the immediately
         // previous version silently discarded a recoverable session and then
@@ -102,13 +109,46 @@ public sealed class JsonWorkspaceStateStore
             return null;
         }
 
-        return snapshot with
+        return new WorkspaceSnapshotRead(
+            snapshot with
+            {
+                SchemaVersion = WorkspaceSnapshot.CurrentSchemaVersion,
+                PendingAssets = snapshot.PendingAssets.IsDefault
+                    ? []
+                    : snapshot.PendingAssets,
+            },
+            Convert.ToHexStringLower(SHA256.HashData(bytes)));
+    }
+
+    public void RequireContentHash(string expectedSha256)
+    {
+        if (expectedSha256 is null ||
+            expectedSha256.Length != 64 ||
+            !expectedSha256.All(Uri.IsHexDigit))
         {
-            SchemaVersion = WorkspaceSnapshot.CurrentSchemaVersion,
-            PendingAssets = snapshot.PendingAssets.IsDefault
-                ? []
-                : snapshot.PendingAssets,
-        };
+            throw new ArgumentException(
+                "Expected recovery content hash must be a SHA-256 hex digest.",
+                nameof(expectedSha256));
+        }
+        if (!File.Exists(FilePath))
+        {
+            throw new IOException(
+                "The recovery snapshot was removed in another window; reopen before choosing Restore or Dismiss.");
+        }
+
+        string currentSha256 = Convert.ToHexStringLower(
+            SHA256.HashData(File.ReadAllBytes(FilePath)));
+        if (!string.Equals(currentSha256, expectedSha256, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new IOException(
+                "The recovery snapshot changed in another window; reopen before choosing Restore or Dismiss. No snapshot was deleted.");
+        }
+    }
+
+    public void DeleteIfUnchanged(string expectedSha256)
+    {
+        RequireContentHash(expectedSha256);
+        File.Delete(FilePath);
     }
 
     public string BackupCurrent()

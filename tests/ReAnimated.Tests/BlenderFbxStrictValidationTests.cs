@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Text;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Core.ModelAuthoring;
 
 namespace ReAnimated.Tests;
 
@@ -13,6 +14,7 @@ public sealed class BlenderFbxStrictValidationTests :
         FbxBinaryDocument.TicksPerSecond / 30;
     private const string TextureFileName =
         "DLR_BaseColor_0123456789abcdef.dds";
+    private static readonly double[] UnusedControlPointPosition = [0.33, 0.77, 0.15];
     private readonly string _temporaryDirectory =
         Path.Combine(
             Path.GetTempPath(),
@@ -20,6 +22,177 @@ public sealed class BlenderFbxStrictValidationTests :
 
     internal static byte[] CreateValidModelFixture() =>
         Serialize(BuildFixture(FixtureCorruption.None));
+
+    internal static byte[] CreateModelWithSceneLightFixture(bool animateLight = false)
+    {
+        FbxBinaryDocument document = BuildFixture(FixtureCorruption.None);
+        FbxNode objects = document.Nodes.Single(node => node.Name == "Objects");
+        FbxNode connections = document.Nodes.Single(node => node.Name == "Connections");
+        FbxNode light = Model(900, "SceneLight", "Light");
+        FbxNode attribute = Node(
+            "NodeAttribute",
+            [901L, "NodeAttribute::SceneLight", "Light"]);
+        ImmutableArray<FbxNode> children = objects.Children.Add(light).Add(attribute);
+        ImmutableArray<FbxNode> links = connections.Children
+            .Add(Connection("OO", 900, 0))
+            .Add(Connection("OO", 901, 900));
+        if (animateLight)
+        {
+            children = children.Add(Node(
+                "AnimationCurveNode",
+                [902L, "AnimationCurveNode::SceneLight", string.Empty]));
+            links = links.Add(Connection("OP", 902, 900, "Lcl Translation"));
+        }
+
+        return Serialize(document with
+        {
+            Nodes = document.Nodes
+                .Replace(objects, objects with { Children = children })
+                .Replace(connections, connections with { Children = links }),
+        });
+    }
+
+    internal static byte[] CreateModelWithUnusedSkinnedControlPointFixture(
+        bool referenceUnusedPoint = false)
+    {
+        FbxBinaryDocument document = BuildFixture(FixtureCorruption.None);
+        FbxNode objects = document.Nodes.Single(node => node.Name == "Objects");
+        FbxNode geometry = objects.Children.Single(node =>
+            node.Name == "Geometry" && node.Properties[0].Value is 10L);
+        FbxNode verticesNode = geometry.FindChild("Vertices")!;
+        ImmutableArray<double> vertices =
+            (ImmutableArray<double>)verticesNode.Properties[0].Value;
+        int unusedIndex = vertices.Length / 3;
+        FbxNode updatedVertices = verticesNode with
+        {
+            Properties = verticesNode.Properties.SetItem(0,
+                new('d', vertices.AddRange(UnusedControlPointPosition))),
+        };
+        FbxNode updatedGeometry = geometry with
+        {
+            Children = geometry.Children.Replace(verticesNode, updatedVertices),
+        };
+        if (referenceUnusedPoint)
+        {
+            FbxNode polygons = updatedGeometry.FindChild("PolygonVertexIndex")!;
+            ImmutableArray<long> indices =
+                (ImmutableArray<long>)polygons.Properties[0].Value;
+            FbxNode updatedPolygons = polygons with
+            {
+                Properties = polygons.Properties.SetItem(0,
+                    new('l', indices.SetItem(0, unusedIndex))),
+            };
+            updatedGeometry = updatedGeometry with
+            {
+                Children = updatedGeometry.Children.Replace(polygons, updatedPolygons),
+            };
+        }
+
+        return Serialize(document with
+        {
+            Nodes = document.Nodes.Replace(objects, objects with
+            {
+                Children = objects.Children.Replace(geometry, updatedGeometry),
+            }),
+        });
+    }
+
+    [Fact]
+    public async Task UnnamedMeshGeometryKeepsStableIdentityAndImportsWithReviewWarning()
+    {
+        FbxBinaryDocument document = BuildFixture(FixtureCorruption.None);
+        FbxNode objects = document.Nodes.Single(node => node.Name == "Objects");
+        FbxNode geometry = objects.Children.Single(node =>
+            node.Name == "Geometry" && node.Properties[0].Value is 10L);
+        FbxNode unnamed = geometry with
+        {
+            Properties = geometry.Properties.SetItem(1, new('S', "Geometry::")),
+        };
+        byte[] bytes = Serialize(document with
+        {
+            Nodes = document.Nodes.Replace(objects, objects with
+            {
+                Children = objects.Children.Replace(geometry, unnamed),
+            }),
+        });
+        Directory.CreateDirectory(_temporaryDirectory);
+        string path = Path.Combine(_temporaryDirectory, "unnamed-geometry.fbx");
+        await File.WriteAllBytesAsync(path, bytes);
+
+        FbxStrictExportInspection inspection =
+            await FbxStrictExportInspector.InspectFileAsync(path);
+        Assert.Contains("Geometry_000000000000000A", inspection.MeshGeometries.Keys);
+        FbxModelAuthoringImportResult imported =
+            FbxModelAuthoringImporter.Import(bytes, "generic.fbx");
+        Assert.Contains(imported.Package.Document.Meshes,
+            static mesh => mesh.GeometryObjectId == 10);
+        Assert.Contains(imported.Package.Document.Diagnostics,
+            static diagnostic => diagnostic.Code == "model_geometry_name_generated" &&
+                diagnostic.Subject == "Geometry_000000000000000A");
+        Assert.NotEmpty(imported.Surfaces);
+    }
+
+    [Fact]
+    public void ModelImportUsesClusterSupportedRestWhenBindPoseIsInconsistent()
+    {
+        FbxBinaryDocument document = BuildFixture(FixtureCorruption.None);
+        FbxNode objects = document.Nodes.Single(node => node.Name == "Objects");
+        FbxNode pose = objects.Children.Single(node => node.Name == "Pose");
+        FbxNode childPose = pose.Children.Single(node =>
+            node.Name == "PoseNode" &&
+            node.FindChild("Node")?.Properties[0].Value is 3L);
+        FbxNode meshPose = PoseNode(4);
+        FbxNode meshMatrix = meshPose.FindChild("Matrix")!;
+        meshPose = meshPose with
+        {
+            Children = meshPose.Children.Replace(meshMatrix,
+                Node("Matrix", [IdentityMatrix().SetItem(12, 25.0)])),
+        };
+        FbxNode poseWithValidMeshRow = pose with
+        {
+            Children = pose.Children.Add(meshPose),
+        };
+        byte[] baselineBytes = Serialize(document with
+        {
+            Nodes = document.Nodes.Replace(objects, objects with
+            {
+                Children = objects.Children.Replace(pose, poseWithValidMeshRow),
+            }),
+        });
+        FbxModelAuthoringImportResult baseline =
+            FbxModelAuthoringImporter.Import(baselineBytes, "generic.fbx");
+        FbxNode originalMatrix = childPose.FindChild("Matrix")!;
+        FbxNode conflictingMatrix = Node(
+            "Matrix",
+            [IdentityMatrix().SetItem(12, 50.0)]);
+        FbxNode changedChildPose = childPose with
+        {
+            Children = childPose.Children.Replace(originalMatrix, conflictingMatrix),
+        };
+        FbxNode changedPose = poseWithValidMeshRow with
+        {
+            Children = poseWithValidMeshRow.Children.Replace(childPose, changedChildPose),
+        };
+        byte[] bytes = Serialize(document with
+        {
+            Nodes = document.Nodes.Replace(objects, objects with
+            {
+                Children = objects.Children.Replace(pose, changedPose),
+            }),
+        });
+
+        FbxModelAuthoringImportResult imported =
+            FbxModelAuthoringImporter.Import(bytes, "generic.fbx");
+        CustomModelBone child = imported.Package.Document.Bones.Single(bone =>
+            bone.Name == "Child");
+        Assert.InRange(child.ExactLocalBindMatrix.Translation.Length, 0.0, 1.0e-6);
+        Assert.Contains(imported.Package.Document.Diagnostics, diagnostic =>
+            diagnostic.Code == "model_bind_pose_reconciled_to_skin_links" &&
+            diagnostic.Severity == CustomModelImportSeverity.Warning);
+        Assert.Equal(
+            Assert.Single(baseline.Surfaces).Vertices[0].Position,
+            Assert.Single(imported.Surfaces).Vertices[0].Position);
+    }
 
     internal static byte[] CreateSourceWeightFixture()
     {

@@ -1,8 +1,9 @@
 <UserControl x:Class="ReAnimated.App.Views.RigLocalHandView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:views="clr-namespace:ReAnimated.App.Views">
  <StackPanel Margin="5">
   <TextBlock Text="Local hand analysis and fitting" FontWeight="SemiBold"/>
-  <TextBlock Text="Review the wrist, directions and sampling box. Closed volume is required for automatic branches; fused or uncertain digits stay unresolved. Scores are geometric proposals, not measured accuracy." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,7"/>
+  <TextBlock Text="Hand side"/>
   <ComboBox ItemsSource="{Binding HandSides}" SelectedItem="{Binding HandSide}" Margin="0,0,0,5"/>
+  <TextBlock Text="Mesh part"/>
   <ComboBox ItemsSource="{Binding HandComponents}" SelectedItem="{Binding HandComponent}" DisplayMemberPath="Name" Margin="0,0,0,5"/>
   <CheckBox Content="Show hand review in the source bind pose" IsChecked="{Binding HandReviewEnabled}"/>
   <Expander Header="Region, directions and resolution" IsExpanded="True" Margin="0,6,0,5"><StackPanel>
@@ -15,7 +16,7 @@
    <WrapPanel><TextBlock Text="Longest-axis cells" VerticalAlignment="Center"/><TextBox Width="65" Text="{Binding HandResolution, UpdateSourceTrigger=LostFocus}" Margin="6,0,9,0"/>
     <TextBlock Text="Expected digits" VerticalAlignment="Center"/><TextBox Width="45" Text="{Binding HandExpectedDigits, UpdateSourceTrigger=LostFocus}" Margin="6,0,0,0"/></WrapPanel>
   </StackPanel></Expander>
-  <WrapPanel><Button Content="Detect local hand" Command="{Binding DetectHandCommand}"/><Button Content="Cancel" Command="{Binding CancelHandDetectionCommand}"/></WrapPanel>
+  <WrapPanel><Button Content="Detect local hand" Command="{Binding DetectHandCommand}" ToolTip="Closed volume is required for automatic branches. Fused or uncertain digits stay unresolved; scores are geometric proposals, not measured accuracy."/><Button Content="Cancel" Command="{Binding CancelHandDetectionCommand}"/></WrapPanel>
   <TextBlock Text="{Binding HandStatus}" TextWrapping="Wrap" Margin="0,6,0,7"/>
   <TextBlock Text="Assign candidates and declare every digit" FontWeight="SemiBold"/>
   <DataGrid ItemsSource="{Binding HandDigits}" SelectedItem="{Binding SelectedHandDigit}" AutoGenerateColumns="False" CanUserAddRows="False" MaxHeight="250" Margin="0,5,0,6">
@@ -43,14 +44,12 @@
    <TextBlock Text="Selected digit roll (degrees)"/><TextBox Text="{Binding SelectedHandDigit.RollDegrees, UpdateSourceTrigger=LostFocus}"/>
    <TextBlock Text="Palm offset in saved frame (metres)" Margin="0,5,0,0"/><views:ContactVectorView DataContext="{Binding HandPalmOffset}"/>
    <TextBlock Text="Palm rotation in saved frame (degrees)"/><views:ContactVectorView DataContext="{Binding HandPalmRotation}"/>
-   <WrapPanel><Button Content="Approve saved hand setup" Command="{Binding ReviewHandSetupCommand}"/><Button Content="Append finger bones" Command="{Binding BuildHandRigCommand}"/></WrapPanel>
-   <TextBlock Text="Finger generation is additive for studio-generated bodies. Existing imported rigs and changes to an existing finger extension require the general rig-editing path." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,6,0,0"/>
+  <WrapPanel><Button Content="Approve saved hand setup" Command="{Binding ReviewHandSetupCommand}"/><Button Content="Append finger bones" Command="{Binding BuildHandRigCommand}" ToolTip="Adds fingers to studio-generated bodies. Use general rig editing for imported rigs or existing finger extensions."/></WrapPanel>
   </StackPanel>
   <Expander Header="Bind the selected hand region" IsExpanded="True" Margin="0,8,0,0"><StackPanel>
-   <TextBlock Text="Uses the component and sampling box above. Outside points and locked fractions are preserved. Preview and apply weights before testing deformation." TextWrapping="Wrap"/>
    <WrapPanel Margin="0,5,0,5"><TextBlock Text="Falloff" VerticalAlignment="Center"/><TextBox Width="65" Text="{Binding HandBindingFalloff, UpdateSourceTrigger=LostFocus}" Margin="5,0,8,0"/>
     <TextBlock Text="Heatmap segment" VerticalAlignment="Center"/><TextBox Width="40" Text="{Binding HandBindingSegment, UpdateSourceTrigger=LostFocus}" Margin="5,0,0,0"/></WrapPanel>
-   <WrapPanel><Button Content="Preview hand weights" Command="{Binding PreviewHandBindingCommand}"/><Button Content="Apply weights" Command="{Binding ApplyHandBindingCommand}"/><Button Content="Cancel" Command="{Binding CancelHandBindingCommand}"/><Button Content="Clear preview" Command="{Binding ClearHandBindingCommand}"/></WrapPanel>
+   <WrapPanel><Button Content="Preview hand weights" Command="{Binding PreviewHandBindingCommand}"/><Button Content="Apply weights" Command="{Binding ApplyHandBindingCommand}" ToolTip="Uses the selected component and sampling box. Outside points and locked fractions are preserved; preview before applying."/><Button Content="Cancel" Command="{Binding CancelHandBindingCommand}"/><Button Content="Clear preview" Command="{Binding ClearHandBindingCommand}"/></WrapPanel>
    <TextBlock Text="{Binding HandBindingStatus}" TextWrapping="Wrap" Margin="0,5,0,0"/>
   </StackPanel></Expander>
  </StackPanel>

@@ -1,90 +1,203 @@
 <UserControl x:Class="ReAnimated.App.Views.RigConformanceView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:views="clr-namespace:ReAnimated.App.Views" MinWidth="0" MinHeight="0">
  <Grid Margin="7">
-  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-  <StackPanel>
-   <ListBox ItemsSource="{Binding StudioStages}" SelectedItem="{Binding SelectedStudioStage}" DisplayMemberPath="Label" IsEnabled="{Binding CanNavigateStudio}" ScrollViewer.HorizontalScrollBarVisibility="Disabled" BorderThickness="0"><ListBox.ItemsPanel><ItemsPanelTemplate><WrapPanel/></ItemsPanelTemplate></ListBox.ItemsPanel></ListBox>
-   <WrapPanel Margin="0,4,0,4"><Button Content="&#x2039; Previous stage" Command="{Binding PreviousStudioStageCommand}" Margin="0,0,5,0"/><Button Content="Next stage &#x203A;" Command="{Binding NextStudioStageCommand}"/></WrapPanel>
+  <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+   <StackPanel.Style><Style TargetType="{x:Type StackPanel}"><Setter Property="Visibility" Value="Visible"/><Style.Triggers><DataTrigger Binding="{Binding HasModel}" Value="True"><Setter Property="Visibility" Value="Collapsed"/></DataTrigger></Style.Triggers></Style></StackPanel.Style>
+   <TextBlock Text="No model open" FontWeight="SemiBold" FontSize="16" HorizontalAlignment="Center" Margin="0,0,0,8"/>
+   <Button Content="Import FBX..." Command="{Binding StudioWorkspace.ImportFbxCommand}" MinWidth="140" Margin="0,0,0,5"/>
+   <Button Content="Open model..." Command="{Binding StudioWorkspace.OpenPackageCommand}" MinWidth="140"/>
   </StackPanel>
-  <StackPanel Grid.Row="1" Margin="0,0,0,7"><TextBlock Text="{Binding StudioStagePurpose}" TextWrapping="Wrap" FontWeight="SemiBold"/><TextBlock Text="{Binding StudioSourceSummary}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,0"/></StackPanel>
-  <Grid Grid.Row="2">
+  <Grid Visibility="{Binding HasModel, Converter={StaticResource BooleanToVisibilityConverter}}">
+  <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+  <StackPanel Margin="0,0,0,8">
+   <DockPanel Margin="0,0,0,5">
+    <TextBlock DockPanel.Dock="Right" Text="{Binding SetupModeLabel}" Foreground="{StaticResource MutedTextBrush}" VerticalAlignment="Center" Margin="8,0,0,0"/>
+    <CheckBox Content="Advanced controls" IsChecked="{Binding IsAdvancedSetupMode}" ToolTip="Show detailed evidence, specialist panels, and configuration controls for this session."/>
+   </DockPanel>
+   <DockPanel LastChildFill="True">
+    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="6,0,0,0">
+     <Button Content="Previous stage" Command="{Binding PreviousStudioStageCommand}" Margin="0,0,4,0"/>
+     <Button Content="Next stage" Command="{Binding NextStudioStageCommand}"/>
+    </StackPanel>
+    <ComboBox ItemsSource="{Binding StudioStages}" SelectedItem="{Binding SelectedStudioStage}" DisplayMemberPath="Label" IsEnabled="{Binding CanNavigateStudio}" ToolTip="{Binding StudioStagePurpose}"/>
+   </DockPanel>
+   <TextBlock Margin="0,5,0,0" Foreground="{StaticResource MutedTextBrush}"
+              Text="{Binding Template.SourceResourceName, StringFormat='Reference: {0}'}"
+              Visibility="{Binding HasTemplate, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+   <Border Margin="0,6,0,0" Padding="7" Background="{StaticResource PanelRaisedBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" Visibility="{Binding HasProfileEditRefusal, Converter={StaticResource BooleanToVisibilityConverter}}">
+    <TextBlock Text="{Binding ProfileEditStatus}" TextWrapping="Wrap"/>
+   </Border>
+   <Border Margin="0,6,0,0" Padding="7" Background="{StaticResource PanelRaisedBrush}" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" Visibility="{Binding RequiresSourceRematch, Converter={StaticResource BooleanToVisibilityConverter}}">
+    <StackPanel>
+     <TextBlock Text="Source model changed" FontWeight="SemiBold"/>
+     <TextBlock Text="Re-match its bones before fitting." TextWrapping="Wrap" Margin="0,3,0,5"/>
+     <Button Content="Re-match changed model" Command="{Binding RerunAutomaticMatchingCommand}" HorizontalAlignment="Left"
+             ToolTip="Resolve a reference skeleton first. Re-matching clears previous bone choices and joint placements from the preview; Undo restores their review. Apply commits the new fit." ToolTipService.ShowOnDisabled="True"/>
+    </StackPanel>
+   </Border>
+  </StackPanel>
+  <Grid Grid.Row="1">
    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioImport, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-    <TextBlock Text="{Binding StudioSessionSummary}" TextWrapping="Wrap" Margin="0,0,0,7"/>
-    <ComboBox ItemsSource="{Binding StudioEntryChoices}" SelectedItem="{Binding SelectedStudioEntry}" DisplayMemberPath="Label"/>
-    <Button Content="Start studio session" Command="{Binding StartStudioCommand}" HorizontalAlignment="Left" Margin="0,5,0,8"/>
-    <TextBlock Text="{Binding StudioProfileSummary}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,8"/>
+    <StackPanel Visibility="{Binding IsNormalRiggedSetup, Converter={StaticResource BooleanToVisibilityConverter}}">
+     <Button Content="Adapt this rig" Command="{Binding StartAdaptStudioCommand}" HorizontalAlignment="Left" Margin="0,0,0,5" ToolTip="Fit a rigged model to a DL1 skeleton."/>
+     <Button Content="Repair an existing DL1 rig" Command="{Binding StartRepairStudioCommand}" HorizontalAlignment="Left" Margin="0,0,0,9" ToolTip="Use this when the model already follows a DL1 skeleton."/>
+    </StackPanel>
+    <Button Content="Build a rig from geometry" Command="{Binding StartAutoRigStudioCommand}" HorizontalAlignment="Left" Margin="0,0,0,9"
+            Visibility="{Binding IsNormalUnriggedSetup, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+    <StackPanel Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+     <TextBlock Text="Choose a starting point" FontWeight="SemiBold" Margin="0,0,0,5"/>
+     <ComboBox ItemsSource="{Binding StudioEntryChoices}" SelectedItem="{Binding SelectedStudioEntry}" DisplayMemberPath="Label"/>
+     <Button Content="Start setup" Command="{Binding StartStudioCommand}" ToolTip="{Binding StudioStartReason}" ToolTipService.ShowOnDisabled="True" HorizontalAlignment="Left" Margin="0,7,0,10"/>
+    </StackPanel>
+    <TextBlock Text="Import → Detect → Fit → Verify" FontWeight="SemiBold" Margin="0,0,0,6"/>
     <views:RigComponentSelectionView/>
+    <Expander Header="Reuse a saved setup" Margin="0,9,0,7"><views:RigSetupTransferView/></Expander>
+    <Expander Header="Advanced profile settings" Margin="0,0,0,7" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><views:RigCapabilityProfileView/></Expander>
    </StackPanel></ScrollViewer>
    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioDetect, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-    <views:BodyGuideDetectionView Visibility="{Binding HasBodyAuthoringSource, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-    <StackPanel Visibility="{Binding HasRiggedStudioSource, Converter={StaticResource BooleanToVisibilityConverter}}">
-     <TextBlock Text="Existing-rig correspondence" FontWeight="SemiBold"/>
-     <TextBlock Text="Resolve a reference from the indexed installation, then inspect geometry, hierarchy and name evidence in Fit. This does not establish runtime helper completeness." TextWrapping="Wrap" Margin="0,4,0,5"/>
-     <CheckBox Content="Use geometry and hierarchy for correspondence" IsChecked="{Binding UseGeometryCorrespondence}"/>
-     <TextBox Text="{Binding TemplateProfileName, UpdateSourceTrigger=PropertyChanged}" Margin="0,5,0,4"/>
-     <Button Content="Resolve reference skeleton" Command="{Binding ResolveTemplateCommand}" HorizontalAlignment="Left"/>
-     <TextBlock Text="{Binding TemplateStatus}" TextWrapping="Wrap" Margin="0,5,0,5"/>
-     <Button Content="Review mapping in Fit" Command="{Binding OpenRiggedMappingCommand}" HorizontalAlignment="Left"/>
-    </StackPanel>
-    <Expander Header="Eye geometry and source setup" Margin="0,8,0,0"><views:RigEyeView/></Expander>
-    <Expander Header="Local hand detection and review" Margin="0,8,0,0"><views:RigLocalHandView/></Expander>
-    <TextBlock Text="Broader eye geometry and deformation challenges remain incomplete. Proposal strength is not a calibrated quality or runtime pass." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,0"/>
+     <views:BodyGuideDetectionView Visibility="{Binding HasBodyAuthoringSource, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+     <StackPanel Visibility="{Binding HasRiggedStudioSource, Converter={StaticResource BooleanToVisibilityConverter}}">
+      <TextBlock Text="Reference skeleton" FontWeight="SemiBold" Margin="0,0,0,5"/>
+      <ComboBox ItemsSource="{Binding AvailableTemplateProfiles}"
+                SelectedItem="{Binding TemplateProfileName, Mode=TwoWay}"
+                Margin="0,0,0,5"
+                ToolTip="player is third-person; player_fpp is first-person."/>
+      <StackPanel Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+       <TextBlock Text="Custom reference profile"/>
+       <TextBox Text="{Binding TemplateProfileName, UpdateSourceTrigger=LostFocus}"/>
+      </StackPanel>
+      <WrapPanel><Button Content="Use this skeleton" Command="{Binding ResolveTemplateCommand}"/><Button Content="Use model selected in Assets" Command="{Binding UseSelectedRetailMeshCommand}"/></WrapPanel>
+      <TextBlock Text="{Binding TemplateStatus}" TextWrapping="Wrap" Margin="0,5,0,5"/>
+      <Button Content="Review bone mapping" Command="{Binding OpenRiggedMappingCommand}" HorizontalAlignment="Left" Margin="0,0,0,9"/>
+      <CheckBox Content="Use body shape to help match bones" IsChecked="{Binding UseGeometryCorrespondence}"/>
+      <Expander Header="Reference details" Margin="0,7,0,5" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><TextBlock Text="{Binding TemplateProfileName}" TextWrapping="Wrap"/></Expander>
+     </StackPanel>
+    <Expander Header="Eye geometry and source setup" Margin="0,8,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><views:RigEyeView/></Expander>
+    <Expander Header="Local hand detection and review" Margin="0,8,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><views:RigLocalHandView/></Expander>
    </StackPanel></ScrollViewer>
-   <Grid Visibility="{Binding IsStudioFit, Converter={StaticResource BooleanToVisibilityConverter}}">
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding HasBodyAuthoringSource, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-     <Expander Header="Parent relationships" Margin="0,0,0,7"><views:RigReparentView/></Expander>
-     <Expander Header="Joint rest-pose editing" Margin="0,0,0,7"><views:RigRestPoseView/></Expander>
-     <views:BodyGuideFitView/><TextBlock Text="{Binding BodyAuthoringStatus}" TextWrapping="Wrap" Margin="0,6,0,5"/>
-     <WrapPanel><Button Content="Build draft body rig" Command="{Binding BuildBodyRigCommand}"/><Button Content="Cancel job" Command="{Binding CancelBodyAuthoringCommand}"/></WrapPanel>
-     <Expander Header="Local hand fitting" IsExpanded="True" Margin="0,8,0,0"><views:RigLocalHandView/></Expander>
-     <TextBlock Text="Generated-joint editing currently uses saved guides and undo/rebuild. General joint, chain and rest/rebind tools remain incomplete." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,7,0,0"/>
-    </StackPanel></ScrollViewer>
-    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding HasImportedRiggedStudioSource, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-     <Expander Header="Parent relationships" Margin="0,0,0,7"><views:RigReparentView/></Expander>
-     <Expander Header="Joint rest-pose editing" Margin="0,0,0,7"><views:RigRestPoseView/></Expander>
-     <views:RigFitReviewView MinHeight="650"/>
-     <Expander Header="Local hand fitting" Margin="0,8,0,0"><views:RigLocalHandView/></Expander>
-    </StackPanel></ScrollViewer>
-   </Grid>
-   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioHelpers, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-    <TextBlock Text="{Binding StudioProfileSummary}" TextWrapping="Wrap" Margin="0,0,0,6"/>
-    <Expander Header="Rig Doctor contact repair" IsExpanded="True" Margin="0,0,0,7"><views:RigDoctorView/></Expander>
-    <TextBlock Text="Fit sole contacts from selected geometry or use the hierarchy editor for helper creation and local edits. Complete native role calibration remains in progress." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,7"/>
+    <Grid Background="#191E27" Visibility="{Binding IsStudioFit, Converter={StaticResource BooleanToVisibilityConverter}}">
+     <ScrollViewer Background="#191E27" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding HasBodyAuthoringSource, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
+      <views:BodyGuideFitView/><TextBlock Text="{Binding BodyAuthoringStatus}" TextWrapping="Wrap" Margin="0,6,0,5"/>
+      <WrapPanel><Button Content="Build draft body rig" Command="{Binding BuildBodyRigCommand}"/><Button Content="Cancel job" Command="{Binding CancelBodyAuthoringCommand}"/></WrapPanel>
+      <Expander Header="Hand fitting" Margin="0,8,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><views:RigLocalHandView/></Expander>
+      <Expander Header="Advanced joint edits" Margin="0,7,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel><views:RigReparentView/><views:RigRestPoseView/></StackPanel></Expander>
+     </StackPanel></ScrollViewer>
+     <Grid Background="#191E27" Visibility="{Binding HasImportedRiggedStudioSource, Converter={StaticResource BooleanToVisibilityConverter}}">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+      <StackPanel Margin="0,0,0,7">
+       <DockPanel LastChildFill="True">
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" Margin="6,0,0,0">
+         <Button Content="Previous fit step" Command="{Binding PreviousStageCommand}" Margin="0,0,4,0"/>
+         <Button Content="Next fit step" Command="{Binding NextStageCommand}"/>
+        </StackPanel>
+       <TextBlock Text="{Binding Stage, StringFormat='Fit: {0}'}" FontWeight="SemiBold" VerticalAlignment="Center"/>
+      </DockPanel>
+      <WrapPanel Margin="0,5,0,0">
+       <Button Content="Target" Command="{Binding OpenRiggedTargetCommand}" ToolTip="Choose or resolve the target skeleton"/>
+       <Button Content="Map bones" Command="{Binding OpenRiggedMappingCommand}" ToolTip="Choose which source bones drive each target bone"/>
+       <Button Content="Scale" Command="{Binding OpenRiggedScaleCommand}"/>
+       <Button Content="Place joints" Command="{Binding OpenRiggedRefineCommand}" ToolTip="Select a joint and drag its axis gizmo in the viewport"/>
+       <Button Content="Verify" Command="{Binding OpenRiggedVerifyCommand}"/>
+      </WrapPanel>
+       <Border Margin="0,6,0,0" Padding="7" Background="#33301A" BorderBrush="{StaticResource WarningBrush}" BorderThickness="1" Visibility="{Binding HasMissingCoreRoles, Converter={StaticResource BooleanToVisibilityConverter}}">
+        <TextBlock Text="{Binding MissingCoreRolesMessage}" Foreground="{StaticResource WarningBrush}" TextWrapping="Wrap"/>
+       </Border>
+      </StackPanel>
+      <ScrollViewer Grid.Row="1" Background="#191E27" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel>
+       <views:RigFitReviewView MinHeight="650"/>
+       <Expander Header="Hand fitting" Margin="0,8,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><views:RigLocalHandView/></Expander>
+       <Expander Header="Advanced joint edits" Margin="0,7,0,0" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel><views:RigReparentView/><views:RigRestPoseView/></StackPanel></Expander>
+      </StackPanel></ScrollViewer>
+     </Grid>
+    </Grid>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioHelpers, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
+     <TextBlock Text="Choose a helper task" FontWeight="SemiBold" Margin="0,0,0,7"/>
+     <Expander Header="Add or edit bone helpers" Margin="0,0,0,7"><views:RigHierarchyEditorView DataContext="{Binding StudioWorkspace}" Height="340"/></Expander>
+     <Expander Header="Unmatched terminal helpers" Margin="0,0,0,7">
+      <StackPanel Margin="4">
+       <TextBlock Text="Check each helper's track offset before choosing bind ownership. Constant tracks can still differ from the fitted bind."
+                  TextWrapping="Wrap" Margin="0,0,0,5" />
+       <TextBlock Text="Retained animation LOD" />
+       <ComboBox ItemsSource="{Binding ChannelLodChoices}" SelectedItem="{Binding TerminalHelperLodChoice}"
+                 DisplayMemberPath="Label" Width="160" HorizontalAlignment="Left" Margin="0,2,0,5"
+                 ToolTip="Choose LOD_0 through LOD_3; LOD_OFF cannot retain helper motion" />
+       <Button Content="Preview terminal-helper candidates" Command="{Binding PreviewTerminalHelperPolicyCommand}"
+               HorizontalAlignment="Left" Margin="0,0,0,4" />
+       <TextBlock Text="{Binding TerminalHelperPolicyStatus}" TextWrapping="Wrap" Margin="0,0,0,5" />
+       <ListBox ItemsSource="{Binding TerminalHelperPolicyRows}" Height="160"
+                ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                ScrollViewer.VerticalScrollBarVisibility="Auto">
+        <ListBox.ItemTemplate>
+         <DataTemplate>
+          <Border Margin="1,2,1,4" Padding="5" BorderThickness="1" BorderBrush="{StaticResource BorderBrush}">
+           <StackPanel>
+            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap" />
+            <StackPanel Orientation="Horizontal" Margin="0,2,0,2">
+             <TextBlock Text="{Binding Current}" />
+             <TextBlock Text=" → " />
+             <TextBlock Text="{Binding Candidate}" />
+            </StackPanel>
+            <TextBlock Text="{Binding Status}" Foreground="{StaticResource MutedTextBrush}" />
+            <TextBlock Text="{Binding Evidence}" TextWrapping="Wrap" Margin="0,3,0,2" />
+            <TextBlock Text="{Binding Reason}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
+           </StackPanel>
+          </Border>
+         </DataTemplate>
+        </ListBox.ItemTemplate>
+       </ListBox>
+       <CheckBox IsChecked="{Binding TerminalHelperPolicyReviewed}" Margin="0,6,0,4">
+        <TextBlock Text="I reviewed each candidate and its track offset"
+                   TextWrapping="Wrap" />
+       </CheckBox>
+       <Button Content="Apply reviewed terminal-helper candidates" Command="{Binding ApplyTerminalHelperPolicyCommand}"
+               HorizontalAlignment="Left" Margin="0,0,0,4" />
+      </StackPanel>
+     </Expander>
+     <Expander Header="Runtime capability profile" Margin="0,0,0,7"><views:RigCapabilityProfileView/></Expander>
+     <Expander Header="Channel ownership and LOD" Margin="0,0,0,7"><views:RigChannelPolicyView/></Expander>
+    <Expander Header="Structural helpers and protection" Margin="0,0,0,7"><views:RigStructuralHelperView/></Expander>
+      <Expander Header="Contact repair" Margin="0,0,0,7"><views:RigDoctorView/></Expander>
     <Expander Header="Parent relationships" Margin="0,0,0,7"><views:RigReparentView/></Expander>
     <Expander Header="Eye pivots and gaze helpers" Margin="0,0,0,7"><views:RigEyeView/></Expander>
-    <Expander Header="Sole contact fitting" IsExpanded="True"><views:RigContactView/></Expander>
-    <views:RigHierarchyEditorView DataContext="{Binding StudioWorkspace}" MinHeight="420"/>
-    <Expander Header="Channel ownership and LOD" Margin="0,7,0,0"><views:RigChannelPolicyView/></Expander>
+    <Expander Header="Camera/helper frame calibration" Margin="0,0,0,7"><views:RigCameraCalibrationView/></Expander>
+      <Expander Header="Sole contacts"><views:RigContactView/></Expander>
    </StackPanel></ScrollViewer>
    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioSkin, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-    <TextBlock Text="Binding requires a rig. Generated rigs use the binding tools; imported rigs retain current weights unless explicitly corrected." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
+    <TextBlock Text="Imported rigs keep their weights until you edit them here." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6"/>
     <Expander Header="Generated binding" Visibility="{Binding HasGeneratedBodyRig, Converter={StaticResource BooleanToVisibilityConverter}}"><views:GeneratedSkinBindingView/></Expander>
     <views:RigWeightEditingView Visibility="{Binding HasWeightEditingSource, Converter={StaticResource BooleanToVisibilityConverter}}"/>
     <Expander Header="Joint stress poses and morph review" Margin="0,8,0,0"><views:RigStressReviewView/></Expander>
    </StackPanel></ScrollViewer>
-   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioAnimate, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-    <Expander Header="Derive motion for the current rig" IsExpanded="True" Margin="0,0,0,8"><views:RigDerivedMotionView/></Expander>
-    <TextBlock Text="Source animation stacks" FontWeight="SemiBold"/>
-    <views:ModelAnimationStacksView DataContext="{Binding StudioWorkspace}" MinHeight="260"/>
-    <Button Content="Choose a stock clip for fitted-model review…" Command="{Binding VerifyWithRetailClipCommand}" HorizontalAlignment="Left" Margin="0,7,0,5"/>
-    <TextBlock Text="{Binding Verification.Summary, FallbackValue='No fitted-model stock clip review.', TargetNullValue='No fitted-model stock clip review.'}" TextWrapping="Wrap"/>
-    <Expander Header="Transient stress and morph review" Margin="0,8,0,0"><views:RigStressReviewView/></Expander>
-    <Expander Header="Native size studies" Margin="0,8,0,0"><views:RigNativeScaleStudyView DataContext="{Binding StudioWorkspace.NativeScaleStudy}"/></Expander>
-    <TextBlock Text="Descriptor/pose review is separate from graph events, contacts, equipment and live runtime behavior. Full strategy/contact comparison remains incomplete." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,7,0,0"/>
-   </StackPanel></ScrollViewer>
-   <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioVerify, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
-    <TextBlock Text="Evidence history" FontWeight="SemiBold"/>
-    <TextBlock Text="Recorded receipts retain their original scope. This table does not certify that a prior profile, build, provider or actor still matches." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,5"/>
-    <ItemsControl ItemsSource="{Binding StudioFacetHistory}"><ItemsControl.ItemTemplate><DataTemplate><Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="6" Margin="0,0,0,5"><StackPanel>
-     <TextBlock Text="{Binding Facet}" FontWeight="SemiBold"/><TextBlock Text="{Binding RecordedResult, StringFormat='Recorded result: {0}'}"/><TextBlock Text="{Binding Context}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
-    </StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
-    <views:ModelDiagnosticsView DataContext="{Binding StudioWorkspace}" MinHeight="230"/>
-    <WrapPanel DataContext="{Binding StudioWorkspace}" Margin="0,7,0,5"><Button Content="Save model" Command="{Binding SavePackageCommand}"/><Button Content="Build native package…" Command="{Binding BuildCompletePackageCommand}"/></WrapPanel>
-    <TextBlock Text="{Binding StudioWorkspace.BuildStatus}" TextWrapping="Wrap"/>
-    <TextBlock Text="Compilation and read-back are offline evidence. Provider/load identity and live scenarios require separate validation before delivery is accepted." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,6,0,0"/>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioAnimate, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
+     <Button Content="Check a stock animation..." Command="{Binding VerifyWithRetailClipCommand}" HorizontalAlignment="Left" Margin="0,0,0,5"/>
+     <TextBlock Text="{Binding VerificationHeadline}" TextWrapping="Wrap"/>
+     <Expander Header="Motion details" Margin="0,7,0,0"><TextBlock Text="{Binding Verification.Summary}" TextWrapping="Wrap" Margin="5"/></Expander>
+     <Expander Header="Imported animation clips" Margin="0,8,0,0"><views:ModelAnimationStacksView DataContext="{Binding StudioWorkspace}" MinHeight="260"/></Expander>
+     <Expander Header="Adapt animation to this rig" Margin="0,8,0,0"><views:RigDerivedMotionView/></Expander>
+     <Expander Header="Transient stress and morph review" Margin="0,8,0,0"><views:RigStressReviewView/></Expander>
+     <Expander Header="Native size studies" Margin="0,8,0,0"><views:RigNativeScaleStudyView DataContext="{Binding StudioWorkspace.NativeScaleStudy}"/></Expander>
+    </StackPanel></ScrollViewer>
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioVerify, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
+     <WrapPanel DataContext="{Binding StudioWorkspace}" Margin="0,0,0,5">
+      <Button Content="Save editable model..." Command="{Binding SavePackageCommand}"/>
+      <Button Content="Compile model RPack..." Command="{Binding BuildCompletePackageCommand}" ToolTip="Choose where to save the compiled model pack."/>
+     </WrapPanel>
+     <Button Content="Export project to Developer Tools..."
+             HorizontalAlignment="Left" Margin="0,0,0,7"
+             Command="{Binding StudioWorkspace.OpenProjectExportCommand}"/>
+     <TextBlock Text="{Binding StudioWorkspace.BuildStatus}" TextWrapping="Wrap" Margin="0,0,0,7"/>
+     <Expander Header="Test the installed model" Margin="0,0,0,8"><views:RigDeploymentInspectionView DataContext="{Binding StudioWorkspace}"/></Expander>
+     <Expander Header="Reviewed model batches" Margin="0,0,0,8"><views:RigModelBatchView DataContext="{Binding StudioWorkspace.ModelBatch}"/></Expander>
+     <Expander Header="Previous checks" Margin="0,0,0,8"><StackPanel>
+     <ItemsControl ItemsSource="{Binding StudioFacetHistory}"><ItemsControl.ItemTemplate><DataTemplate><Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="6" Margin="0,0,0,5"><StackPanel>
+      <TextBlock Text="{Binding Facet}" FontWeight="SemiBold"/><TextBlock Text="{Binding RecordedResult, StringFormat='Recorded result: {0}'}"/><TextBlock Text="{Binding Context}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
+     </StackPanel></Border></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+     </StackPanel></Expander>
+     <Expander Header="Diagnostics"><views:ModelDiagnosticsView DataContext="{Binding StudioWorkspace}" MinHeight="230"/></Expander>
    </StackPanel></ScrollViewer>
   </Grid>
-  <Border Grid.Row="3" Background="{StaticResource PanelRaisedBrush}" Padding="7" Margin="0,7,0,0"><StackPanel>
-   <TextBlock Text="{Binding StudioReviewSummary}" TextWrapping="Wrap"/><Button Content="Record authoring review of this stage" Command="{Binding RecordStudioReviewCommand}" HorizontalAlignment="Left" Margin="0,5,0,0"/>
-  </StackPanel></Border>
- </Grid>
-</UserControl>
+   <Expander Grid.Row="2" Header="Stage review" Margin="0,7,0,0" ToolTip="{Binding StudioReviewSummary}">
+    <StackPanel Margin="7"><TextBlock Text="{Binding StudioReviewSummary}" TextWrapping="Wrap"/><Button Content="Record review" Command="{Binding RecordStudioReviewCommand}" ToolTip="Record your review of this stage. Check gameplay separately." HorizontalAlignment="Left" Margin="0,5,0,0"/></StackPanel>
+   </Expander>
+  </Grid>
+  </Grid>
+ </UserControl>

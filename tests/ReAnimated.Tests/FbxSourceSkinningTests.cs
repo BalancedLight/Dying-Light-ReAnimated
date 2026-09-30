@@ -1,3 +1,4 @@
+using System.Globalization;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Core.Geometry;
 
@@ -5,6 +6,51 @@ namespace ReAnimated.Tests;
 
 public sealed class FbxSourceSkinningTests
 {
+    [Fact]
+    public void UnreferencedUnweightedPointIsPreservedWithoutARenderedFallbackWeight()
+    {
+        FbxModelAuthoringImportResult model = FbxModelAuthoringImporter.Import(
+            BlenderFbxStrictValidationTests
+                .CreateModelWithUnusedSkinnedControlPointFixture(),
+            "generic-unused-point.fbx");
+        var geometry = Assert.Single(FbxSourceGeometryAnalysis.Build(model)
+            .Components).Geometry;
+        GeometrySourceSkinning skin = Assert.IsType<GeometrySourceSkinning>(
+            geometry.Skinning);
+        int unusedIndex = geometry.ControlPoints.Length - 1;
+
+        Assert.Equal(unusedIndex, Assert.Single(
+            skin.UnreferencedUnweightedControlPoints));
+        Assert.Empty(skin.ControlPoints[unusedIndex].Influences);
+        Assert.DoesNotContain(model.Surfaces.SelectMany(static surface =>
+            surface.SourceCorners), corner => corner.ControlPointIndex == unusedIndex);
+        Assert.Contains(model.Package.Document.Diagnostics,
+            static diagnostic => diagnostic.Code ==
+                "model_unused_unweighted_control_points_retained");
+        SourceSkinInfluenceRegionsResult regions = SourceSkinInfluenceRegions.Build(
+            FbxSourceGeometryAnalysis.Build(model),
+            model.Package.Document.Bones.ToDictionary(
+                bone => bone.FbxObjectId.ToString(CultureInfo.InvariantCulture),
+                static bone => bone.Index));
+        Assert.NotEmpty(regions.Regions);
+        Assert.Throws<InvalidDataException>(() =>
+            skin.ValidateReferencedControlPoints([unusedIndex]));
+    }
+
+    [Fact]
+    public void ReferencedUnweightedPointStillFailsImport()
+    {
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            FbxModelAuthoringImporter.Import(
+                BlenderFbxStrictValidationTests
+                    .CreateModelWithUnusedSkinnedControlPointFixture(
+                        referenceUnusedPoint: true),
+                "generic-referenced-point.fbx"));
+
+        Assert.Contains("has no positive bone influence", error.Message,
+            StringComparison.Ordinal);
+    }
+
     [Fact]
     public void OriginalEntriesSurviveJointAggregationThresholdAndTopFourReduction()
     {

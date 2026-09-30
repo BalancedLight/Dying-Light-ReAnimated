@@ -478,16 +478,20 @@ public static class CustomModelPackageSerializer
             throw new CustomModelFormatException("The authored-layer payload is missing or has the wrong length.");
         VerifySha256(package.AuthoredLayerPayload.AsSpan(), reference.ContentSha256, reference.EntryPath);
         var layer = AuthoredModelLayerCodec.Deserialize(package.AuthoredLayerPayload.AsSpan());
-        // The payload binds source-linked surface edits to the document's base
-        // bone table. Authored helpers live in the separate hierarchy layer and
-        // therefore make Document.RigSignature describe CreateEffectiveBones()
-        // without changing the payload's base-rig identity.
+        // The base-rig signature remains independent of unweighted helper edits.
+        // Version 2 additionally binds weighted helper names to their persistent IDs.
+        var baseNames = package.Document.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
+        var layerNames = layer.Bones.Select(b => b.Name).ToHashSet(StringComparer.Ordinal);
+        var helpers = package.Document.AuthoredHelpers.ToDictionary(h => h.Name, StringComparer.Ordinal);
+        bool identitiesMatch = layer.Version == 1
+            ? layerNames.SetEquals(baseNames)
+            : baseNames.IsSubsetOf(layerNames) && layer.Bones.Where(b => !baseNames.Contains(b.Name))
+                .All(b => helpers.TryGetValue(b.Name, out var helper) && helper.Id == b.Id);
         if (!string.Equals(layer.SourceSha256, package.Document.Source.ContentSha256, StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(layer.TargetRigSignature, CustomModelContractSignatures.ComputeRig(package.Document.Bones), StringComparison.OrdinalIgnoreCase) ||
             !string.Equals(package.Document.RigSignature, CustomModelContractSignatures.ComputeRig(package.Document.CreateEffectiveBones()), StringComparison.OrdinalIgnoreCase) ||
-            layer.Bones.Length != package.Document.Bones.Length ||
-            !layer.Bones.Select(static b => b.Name).Order(StringComparer.Ordinal).SequenceEqual(package.Document.Bones.Select(static b => b.Name).Order(StringComparer.Ordinal)))
-            throw new CustomModelFormatException("The authored layer belongs to a different source or target rig.");
+            !identitiesMatch)
+            throw new CustomModelFormatException("The authored layer belongs to a different source, target rig or bound helper identity.");
         return layer;
     }
 

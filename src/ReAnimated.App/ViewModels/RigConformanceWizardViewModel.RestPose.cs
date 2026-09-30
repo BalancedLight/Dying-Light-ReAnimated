@@ -110,7 +110,7 @@ public sealed partial class RigConformanceWizardViewModel
             if(generation!=_restPoseGeneration||!ReferenceEquals(model,_model))return;
             _restPosePreview=preview;RestPosePreviewEnabled=true;
             var report=preview.Report;
-            RestPoseStatus=preview.HasChanges?$"Preview only: {report.ChangedNodes} changed joint/helper frames; {report.UpdatedInverseBinds} inverse binds updated. Maximum visible surface movement {report.MaximumVisibleDisplacement*1000:0.###} mm. Review the surface, joints and helpers before applying.":"The requested rest frame is already current. Nothing will be changed.";
+            RestPoseStatus=preview.HasChanges?$"Preview only: {report.ChangedNodes} changed joint/helper frames; {report.UpdatedInverseBinds} inverse binds updated. Maximum visible surface movement {report.MaximumVisibleDisplacement*1000:0.###} mm. Review the surface, joints and helpers before applying." + (report.SecondaryMotionReview.Length == 0 ? string.Empty : " " + report.SecondaryMotionReview):"The requested rest frame is already current. Nothing will be changed.";
         }
         catch(OperationCanceledException){if(generation==_restPoseGeneration)RestPoseStatus="Rest-pose preview cancelled.";}
         catch(Exception error) when(RestPoseError(error)){if(generation==_restPoseGeneration)RestPoseStatus="Rest edit was not applied: "+error.Message;}
@@ -122,7 +122,7 @@ public sealed partial class RigConformanceWizardViewModel
         try
         {
             if(!FbxRestPoseAuthoring.TryApply(model,preview,out var result)){RestPoseStatus="The source changed. Preview the current joint again.";return;}
-            if(!ReferenceEquals(model,result))RestPoseApplyRequested?.Invoke(this,new(model,result,"Applied the reviewed rest-pose transaction. Original source and animation data were retained."));
+            if(!ReferenceEquals(model,result))if (!RequestBodyChange(RestPoseApplyRequested, new(model,result,"Applied the reviewed rest-pose transaction. Original source and animation data were retained."))) return;
             RestPoseStatus="Rest edit saved. Review animation, helper and native binding behavior before acceptance.";
         }
         catch(Exception error) when(RestPoseError(error)){RestPoseStatus="Rest edit was not saved: "+error.Message;}

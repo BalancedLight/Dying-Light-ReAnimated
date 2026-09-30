@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Windows;
 using Microsoft.Win32;
+using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 
@@ -134,6 +135,9 @@ public interface IProjectFileDialogService
 
     string? ShowOpenAnimationDialog(string? initialPath) => null;
 
+    AssetItemViewModel? SelectRetailAnimation(
+        RetailAnimationBrowserViewModel browser) => browser.SelectedAsset;
+
     ExternalFbxAnimationStackSelection?
         SelectExternalFbxAnimationStacks(
             string sourceName,
@@ -248,6 +252,7 @@ public interface IProjectFileDialogService
     string? ShowOpenCustomModelFbxDialog(string? initialPath) => null;
     string? ShowOpenScaleStudySourceDialog() => null;
     string? ShowOpenRigDoctorRulesDialog() => null;
+    string? ShowOpenCapabilityProfileDialog() => null;
     string? ShowSaveScaleStudyDialog() => null;
 
     string? ShowOpenCustomModelPackageDialog(string? initialPath) => null;
@@ -265,6 +270,13 @@ public interface IProjectFileDialogService
         string replacementFileName,
         bool boneAndHelperMappingsBecomeStale,
         bool facialMappingsBecomeStale) => false;
+
+    bool ConfirmCustomModelPackageReplacement(
+        string existingModelName,
+        string incomingFileName,
+        string? existingSha256,
+        string incomingSha256,
+        bool activeSessionDiffers) => false;
 
     /// <summary>
     /// Allows a model whose blend shapes are not valid for DL1 to be imported
@@ -300,6 +312,13 @@ public interface IProjectFileDialogService
     string? ShowSaveCustomModelAnimationRpackDialog(
         string suggestedName,
         string? initialPath) => null;
+
+    string? ShowOpenRigSetupDialog() => null;
+    string? ShowSaveRigSetupDialog() => null;
+
+    string? ShowOpenModelBatchManifestDialog(string? initialPath) => null;
+
+    string? ShowOpenModelBatchData0Dialog(string? initialPath) => null;
 
     string? ShowOpenDl1DeveloperToolsCompilerDialog(string? initialPath) => null;
 
@@ -368,6 +387,13 @@ public sealed class WindowsProjectFileDialogService :
             : null;
     }
 
+    public string? ShowOpenCapabilityProfileDialog()
+    {
+        OpenFileDialog dialog = new() { Filter = "Capability profiles (*.dlrprofile.json)|*.dlrprofile.json|JSON files (*.json)|*.json",
+            CheckFileExists = true, Multiselect = false, Title = "Choose a reviewed capability profile" };
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
     public string? ShowOpenRigDoctorRulesDialog()
     {
         OpenFileDialog dialog = new() { Filter = "Rig Doctor contact rules (*.json)|*.json", CheckFileExists = true,
@@ -424,6 +450,19 @@ public sealed class WindowsProjectFileDialogService :
         ApplyInitialPath(dialog, initialPath);
         return dialog.ShowDialog() == true
             ? dialog.FileName
+            : null;
+    }
+
+    public AssetItemViewModel? SelectRetailAnimation(
+        RetailAnimationBrowserViewModel browser)
+    {
+        ArgumentNullException.ThrowIfNull(browser);
+        RetailAnimationPickerDialog dialog = new(browser)
+        {
+            Owner = Application.Current?.MainWindow,
+        };
+        return dialog.ShowDialog() == true
+            ? dialog.SelectedAnimation
             : null;
     }
 
@@ -509,10 +548,10 @@ public sealed class WindowsProjectFileDialogService :
         ArgumentException.ThrowIfNullOrWhiteSpace(animationName);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelName);
         MessageBoxResult result = MessageBox.Show(
-            $"'{animationName}' plays directly on its owning model '{modelName}'. You can still open it for EyeCamera, helper, prop-holder, or other authoring edits.\n\n" +
-            "Yes: open and play on the existing model.\n" +
-            "No: assign this source to another project model.\n" +
-            "Cancel: remain in Animations.",
+            $"Open '{animationName}' on its current model, '{modelName}'?\n\n" +
+            "Yes: open it on this model.\n" +
+            "No: assign it to another model.\n" +
+            "Cancel: stay in Animations.",
             "Open animation",
             MessageBoxButton.YesNoCancel,
             MessageBoxImage.Question,
@@ -532,16 +571,16 @@ public sealed class WindowsProjectFileDialogService :
     {
         ArgumentNullException.ThrowIfNull(preflight);
         string blocked = preflight.IsBlocked
-            ? $"\n\nThis candidate has {preflight.AmbiguousDescriptorCount:N0} ambiguous descriptor(s), so Yes is not allowed. Choose No to select another model."
+            ? $"\n\nThis model has {preflight.AmbiguousDescriptorCount:N0} ambiguous matches. Yes cannot continue; choose No to select another model."
             : string.Empty;
         System.Windows.MessageBoxResult result = System.Windows.MessageBox.Show(
-            $"Bind '{preflight.AnimationName}' to this immutable DL1 source model?\n\n" +
+            $"Use this DL1 model for '{preflight.AnimationName}'?\n\n" +
             $"Model: {preflight.SourceModelName}\n" +
             $"Retail identity: {preflight.SourceModelIdentity}\n" +
             $"Fingerprint: {preflight.SourceModelFingerprint}\n\n" +
             $"Body: {preflight.BodyDescriptorCount:N0}  |  Facial: {preflight.FacialDescriptorCount:N0}  |  Auxiliary: {preflight.AuxiliaryDescriptorCount:N0}\n" +
             $"Unresolved: {preflight.UnresolvedDescriptorCount:N0}  |  Ambiguous: {preflight.AmbiguousDescriptorCount:N0}\n\n" +
-            "Yes confirms this exact model. No returns to the asset browser to choose another. Cancel keeps the current animation unchanged." +
+            "Yes: use this model. No: choose another model. Cancel: leave the animation unchanged." +
             blocked,
             "Confirm DL1 ANM2 source model",
             System.Windows.MessageBoxButton.YesNoCancel,
@@ -713,7 +752,7 @@ public sealed class WindowsProjectFileDialogService :
             ? "This FBX contains decoded Dying Light 1 retail mesh and texture data. Keep it local and do not redistribute it."
             : "This FBX contains the project-owned custom model, its materials/textures, and the evaluated active animation variant.";
         return System.Windows.MessageBox.Show(
-            $"Export active variant '{animationName}' on '{modelName}' as a self-contained FBX?\n\n{ownership}\n\nOnly the decoded base-color material is reproduced; unsupported DL1 shader maps, cloth, and physics are not fabricated.",
+            $"Export '{animationName}' on '{modelName}' as an FBX?\n\n{ownership}\n\nThe export includes base color. Cloth, physics, and unsupported DL1 shader maps are omitted.",
             "Export active variant to FBX",
             System.Windows.MessageBoxButton.YesNo,
             containsRetailModelBytes
@@ -728,7 +767,7 @@ public sealed class WindowsProjectFileDialogService :
         string proposedResourceName,
         int affectedAnimationCount) =>
         System.Windows.MessageBox.Show(
-            $"'{currentResourceName}' is the animation script for {affectedAnimationCount} animations in this project.\n\nRenaming it to '{proposedResourceName}' changes the type-322 resource for all of them, not just the row you edited.\n\nContinue?",
+            $"Rename '{currentResourceName}' to '{proposedResourceName}' for all {affectedAnimationCount} animations that use it?",
             "Rename animation script",
             System.Windows.MessageBoxButton.YesNo,
             System.Windows.MessageBoxImage.Warning,
@@ -741,7 +780,7 @@ public sealed class WindowsProjectFileDialogService :
         int orphanedAnimationScriptCount)
     {
         string targets = animationTargetCount > 0
-            ? $"\n\n{animationTargetCount:N0} animation target(s) point at this model and will be removed with it. The immutable animation sources they were made from are kept."
+            ? $"\n\n{animationTargetCount:N0} animation target(s) will also be removed. Their source animations will stay in the project."
             : string.Empty;
         string scripts = orphanedAnimationScriptCount switch
         {
@@ -753,7 +792,7 @@ public sealed class WindowsProjectFileDialogService :
             $"Remove '{modelName}' from this project?" +
             targets +
             scripts +
-            "\n\nNothing on disk is deleted; this only changes the project.";
+            "\n\nFiles on disk will not be deleted.";
         return System.Windows.MessageBox.Show(
             detail,
             "Remove project model",
@@ -947,19 +986,46 @@ public sealed class WindowsProjectFileDialogService :
         if (consequences.Count == 0)
         {
             consequences.Add(
-                "Skeleton and morph contracts are unchanged; existing mapping reviews can be preserved.");
+                "Existing bone and facial mapping reviews will be kept.");
         }
 
         consequences.Add(
-            "Authored helpers and preview-camera metadata remain in their separate project layer.");
+            "Helper edits and preview camera settings will be kept.");
         return MessageBox.Show(
             $"Replace the current custom-model FBX with '{replacementFileName}'?\n\n" +
             string.Join(Environment.NewLine, consequences),
-            "Validate custom-model reimport",
+            "Replace model FBX",
             MessageBoxButton.YesNo,
             boneAndHelperMappingsBecomeStale || facialMappingsBecomeStale
                 ? MessageBoxImage.Warning
                 : MessageBoxImage.Question,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+    }
+
+    public bool ConfirmCustomModelPackageReplacement(
+        string existingModelName,
+        string incomingFileName,
+        string? existingSha256,
+        string incomingSha256,
+        bool activeSessionDiffers)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(existingModelName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(incomingFileName);
+        return MessageBox.Show(
+            $"'{incomingFileName}' has the same model ID as '{existingModelName}', but different contents.\n\n" +
+            (string.IsNullOrWhiteSpace(existingSha256)
+                ? "Current project package: not yet saved\n"
+                : $"Current project SHA-256: {existingSha256}\n") +
+            $"Incoming SHA-256: {incomingSha256}\n\n" +
+            (activeSessionDiffers
+                ? "Unsaved model edits will be lost. "
+                : string.Empty) +
+            "Opening it will replace the model in this project. You may need to review its animation assignments again. " +
+            "The current package file will stay on disk. Save a project copy first if you may need to restore this version.\n\n" +
+            "Replace the project model?",
+            "Replace project model",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning,
             MessageBoxResult.No) == MessageBoxResult.Yes;
     }
 
@@ -1124,9 +1190,9 @@ public sealed class WindowsProjectFileDialogService :
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         return MessageBox.Show(
-            $"The preflight passed for {artifactCount:N0} artifact(s) and {animationCount:N0} animation(s).\n\n" +
+            $"Ready to deploy {artifactCount:N0} file(s) and {animationCount:N0} animation(s).\n\n" +
             $"Project: {projectRoot}\n\n" +
-            "Every destination is listed in the Developer Tools export details. Continue with the transactional deployment?",
+            "The Developer Tools export details list every destination. Continue?",
             "Deploy to Dying Light Developer Tools project",
             MessageBoxButton.YesNo,
             MessageBoxImage.Question,
@@ -1186,6 +1252,32 @@ public sealed class WindowsProjectFileDialogService :
             OverwritePrompt = true,
             Title = "Export optional portable animation RPack copy",
         };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenRigSetupDialog()
+    {
+        OpenFileDialog dialog = new() { Title = "Open reusable rig setup", Filter = "Rig setup (*.dlrsetup)|*.dlrsetup", CheckFileExists = true, Multiselect = false };
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowSaveRigSetupDialog()
+    {
+        SaveFileDialog dialog = new() { Title = "Save reusable rig setup", Filter = "Rig setup (*.dlrsetup)|*.dlrsetup", DefaultExt = ".dlrsetup", AddExtension = true, OverwritePrompt = true };
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenModelBatchManifestDialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new() { Title = "Open reviewed model batch", Filter = "Model batch manifest (*.json)|*.json", CheckFileExists = true, Multiselect = false };
+        ApplyInitialPath(dialog, initialPath);
+        return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
+    }
+
+    public string? ShowOpenModelBatchData0Dialog(string? initialPath)
+    {
+        OpenFileDialog dialog = new() { Title = "Select retail Data0.pak", Filter = "Data0.pak|Data0.pak|PAK files (*.pak)|*.pak", CheckFileExists = true, Multiselect = false };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;
     }

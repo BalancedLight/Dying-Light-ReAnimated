@@ -94,7 +94,7 @@ public sealed partial class RigConformanceWizardViewModel
         if(_model is not { } model||_doctorPreview is not { } preview)return;
         if(!FbxRigDoctor.TryApply(model,preview,DoctorReviewed,out var result)) {DoctorStatus="The model changed. Diagnose it again before applying.";return;}
         if(ReferenceEquals(model,result))return;
-        DoctorApplyRequested?.Invoke(this,new(model,result,$"Applied {preview.RepairCount} reviewed contact repairs. Skinning and source animation payloads retained; compiled/live acceptance remains unverified."));
+        if (!RequestBodyChange(DoctorApplyRequested, new(model,result,$"Applied {preview.RepairCount} reviewed contact repairs. Skinning and source animation payloads retained; compiled/live acceptance remains unverified."))) return;
     }
     private void RestoreDoctor()
     {

@@ -6,7 +6,10 @@ namespace ReAnimated.Core.ModelAuthoring;
 public sealed record RigProfileDiagnostic(
     string Code, RigValidationStatus Status, string Message, string CorrectiveOperation,
     string? CapabilityId = null, string? RoleId = null, Guid? EntityId = null,
-    ImmutableArray<string> ConsumerIds = default);
+    ImmutableArray<string> ConsumerIds = default)
+{
+    public ImmutableArray<string> ConsumerIds { get; init; } = ConsumerIds.IsDefault ? [] : ConsumerIds;
+}
 
 public sealed record RigResolvedRole(RigRuntimeRole Role, bool Required, ImmutableArray<string> ConsumerIds);
 
@@ -66,6 +69,22 @@ public static class RigProfileResolver
                 diagnostics.Add(new("capability-consumers-missing", RigValidationStatus.Unverified,
                     $"Capability '{capabilityId}' has no declared consumer coverage.",
                     "Inventory the capability's native consumers before claiming completeness.", capabilityId));
+
+        // A parent's axis can point at a child whose parent role points back.
+        // Frame references require observed roles, not a construction ordering;
+        // expand them separately so this legitimate pair is not a parent cycle.
+        var expandedFrameRoles = new HashSet<string>(StringComparer.Ordinal);
+        while (true)
+        {
+            string[] pendingFrames = included.Where(p => (p.Value || present.Contains(p.Key)) && !expandedFrameRoles.Contains(p.Key))
+                .Select(p => p.Key).Order(StringComparer.Ordinal).ToArray();
+            if (pendingFrames.Length == 0) break;
+            foreach (string roleId in pendingFrames)
+            {
+                expandedFrameRoles.Add(roleId);
+                foreach (string reference in roles[roleId].ValidationRules?.Frame?.GetReferenceRoleIds() ?? []) VisitRole(reference, forced: true);
+            }
+        }
 
         var consumersByRole = profile.Consumers.Where(c => c.CapabilityIds.Any(active.Contains))
             .SelectMany(c => ConsumerRoles(c).Select(roleId => (RoleId: roleId, c.ConsumerId)))
@@ -163,7 +182,7 @@ public static class RigProfileResolver
                 if (!visited.Add(current) || !included.ContainsKey(current)) continue;
                 yield return current;
                 if (!included[current] && !present.Contains(current)) continue;
-                foreach (string prerequisite in roles[current].PrerequisiteRoleIds) pending.Push(prerequisite);
+                foreach (string prerequisite in roles[current].PrerequisiteRoleIds.Concat(roles[current].ValidationRules?.Frame?.GetReferenceRoleIds() ?? [])) pending.Push(prerequisite);
                 if (roles[current].ParentRoleId is { } parent) pending.Push(parent);
             }
         }

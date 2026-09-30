@@ -50,6 +50,112 @@ public sealed class CustomModelAnm2RestoreTests : IDisposable
     }
 
     [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task OpeningDraftRetargetKeepsReviewStatusAndDiagnosticsAfterPreview()
+    {
+        string path = CreateProject(multipleRoots: true);
+        DlraProject project = ProjectSerializer.Load(path);
+        FbxModelAuthoringImportResult imported = FbxModelAuthoringImporter.Import(
+            BlenderFbxStrictValidationTests.CreateValidModelFixture(),
+            "alternate-model.fbx");
+        RigDefinition targetRig = Assert.IsType<RigDefinition>(imported.Rig);
+        string targetPath = Path.Combine(_directory, "alternate-model.dlrmodel");
+        CustomModelPackageSerializer.SaveAtomic(imported.Package, targetPath);
+        Guid modelId = imported.Package.Document.ModelId;
+        var targetAsset = new ProjectAssetReference
+        {
+            Id = modelId,
+            Kind = ProjectAssetKind.CustomModelSource,
+            RelativePath = "alternate-model.dlrmodel",
+            ResourceId = $"custom-model:{modelId:N}:alternate-model",
+            ContentSha256 = Hash(File.ReadAllBytes(targetPath)),
+        };
+        var targetModel = new ProjectModelEntry
+        {
+            Id = modelId,
+            AssetId = targetAsset.Id,
+            Name = "Alternate model",
+            RigSignature = RigSignature.Compute(targetRig),
+            AuthoringRigContractSignature = imported.Package.Document.RigSignature,
+            AnimationSkeletonSignature =
+                AnimationSkeletonSignature.Compute(targetRig),
+            MorphSignature = imported.Package.Document.MorphSignature,
+        };
+        ProjectAnimationVariant variant = Assert.Single(project.AnimationVariants);
+        ProjectAnimationVariant draft = variant with
+        {
+            Id = Guid.NewGuid(),
+            Name = "Generated motion on alternate model",
+            OutputAnm2Name = "generated-motion-alternate.anm2",
+            TargetModelId = modelId,
+            TargetRigId = targetRig.Id,
+            TargetRigSignature = RigSignature.Compute(targetRig),
+            TargetAnimationSkeletonSignature =
+                AnimationSkeletonSignature.Compute(targetRig),
+            BindingMode = ProjectAnimationBindingMode.Retarget,
+            DirectBinding = null,
+            RootBoneName = "Root",
+            BoneMappings =
+            [
+                new ProjectBoneMapping
+                {
+                    SourceBoneName = "Root",
+                    TargetBoneName = "Root",
+                    Method = "Manual",
+                    IsReviewed = false,
+                },
+            ],
+        };
+        project = project with
+        {
+            Assets = project.Assets.Add(targetAsset),
+            Models = project.Models.Add(targetModel),
+            AnimationVariants = [variant, draft],
+            ActiveAnimationId = draft.Id,
+            Workflow = project.Workflow with
+            {
+                SelectedAnimationVariantId = draft.Id,
+            },
+        };
+        ProjectSerializer.SaveAtomic(project, path);
+        await using var assets = CreateAssets();
+        var dialogs = new NoDialogs();
+        await using var viewModel = CreateViewModel(dialogs, assets);
+
+        await viewModel.OpenWorkspaceAsync(path);
+
+        Assert.True(dialogs.Failures.Count == 0,
+            string.Join(Environment.NewLine, dialogs.Failures));
+        Assert.Equal(path, viewModel.ProjectPath);
+        Assert.Equal(TargetBindingStatus.NeedsReview,
+            viewModel.ActiveTargetBindingStatus);
+        Assert.True(viewModel.IsDraftTargetPreview);
+        Assert.Contains("review", viewModel.MappingReviewStatus,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(viewModel.Diagnostics, diagnostic =>
+            diagnostic.Area == "Retargeting" &&
+            diagnostic.Severity == "Error");
+        var initial = viewModel.TargetViewport.SceneSource.CaptureFrame()
+            .Skeleton!.Bones.ToArray();
+
+        // Catalog completion restores the same saved variant after project
+        // open. Its draft map must remain visible without a second popup.
+        await viewModel.RestoreSavedAnimationAsync(draft.Id);
+        Assert.Empty(dialogs.Failures);
+        Assert.Equal(TargetBindingStatus.NeedsReview,
+            viewModel.ActiveTargetBindingStatus);
+
+        viewModel.Timeline.CurrentFrame = 1;
+
+        Assert.Equal(TargetBindingStatus.NeedsReview,
+            viewModel.ActiveTargetBindingStatus);
+        var advanced = viewModel.TargetViewport.SceneSource.CaptureFrame()
+            .Skeleton!.Bones.ToArray();
+        Assert.False(initial.SequenceEqual(advanced));
+    }
+
+    [Fact]
     public async Task SourcePaneUsesThePreparedMeshBoneDomainDuringPlayback()
     {
         string path = CreateProject(multipleRoots: true);

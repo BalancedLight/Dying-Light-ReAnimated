@@ -6,7 +6,11 @@ using ReAnimated.Core.Mathematics;
 namespace ReAnimated.Codecs.Models;
 
 public sealed record NativeClothDiagnostic(string Code, string Message, bool IsError = false);
-public sealed record NativeClothCommand(string Name, ImmutableArray<string> Arguments, int Start, int Length);
+public sealed record NativeClothQuotedArgument(int ArgumentIndex, int Start, int Length, string Value);
+public sealed record NativeClothCommand(string Name, ImmutableArray<string> Arguments, int Start, int Length)
+{
+    public ImmutableArray<NativeClothQuotedArgument> QuotedArguments { get; init; } = [];
+}
 public sealed record NativeClothNode(int X, int Y, string BoneName, int Type, double RightDistance, double DownDistance);
 public sealed record NativeClothClip(int X, int Y, int TargetX, int TargetY, double RightDistance, double DownDistance);
 public sealed record NativeClothCollision(string Command, ImmutableArray<string> Arguments);
@@ -16,6 +20,28 @@ public sealed record NativeClothBinding(string ResourceName, int Enabled, int Fl
 public sealed record NativeClothSyntax(string Text, ImmutableArray<NativeClothCommand> Commands)
 {
     public string Write() => Text;
+
+    /// <summary>Changes parsed string tokens only; surrounding source text remains exact.</summary>
+    public NativeClothSyntax ReplaceQuotedArguments(IReadOnlyDictionary<NativeClothQuotedArgument, string> replacements)
+    {
+        ArgumentNullException.ThrowIfNull(replacements);
+        if (replacements.Count == 0) return this;
+        // Reparse the authoritative text so forged or stale record offsets cannot edit arbitrary text.
+        var known = Dl1ClothCodec.Parse(Text).Commands.SelectMany(c => c.QuotedArguments).ToHashSet();
+        var output = new StringBuilder();
+        int cursor = 0;
+        foreach (var pair in replacements.OrderBy(p => p.Key.Start))
+        {
+            var token = pair.Key;
+            if (!known.Contains(token) || token.Start < cursor)
+                throw new ArgumentException("Replacement is not a current, distinct quoted argument.", nameof(replacements));
+            ArgumentNullException.ThrowIfNull(pair.Value);
+            output.Append(Text, cursor, token.Start - cursor).Append(Dl1ClothCodec.Quote(pair.Value));
+            cursor = token.Start + token.Length;
+        }
+        output.Append(Text, cursor, Text.Length - cursor);
+        return Dl1ClothCodec.Parse(output.ToString());
+    }
 
     /// <summary>Replace one complete call; all unrelated bytes, comments and unsupported calls survive.</summary>
     public NativeClothSyntax ReplaceCommand(int index, string replacement)
@@ -299,11 +325,37 @@ public static class Dl1ClothCodec
                 i++;
             }
             if (depth != 0) throw new FormatException($"Unterminated cloth call '{name}'.");
-            calls.Add(new(name, SplitArguments(text[argumentsStart..(i - 1)]), start, i - start));
+            calls.Add(new(name, SplitArguments(text[argumentsStart..(i - 1)]), start, i - start)
+            {
+                QuotedArguments = ReadQuotedArguments(text, argumentsStart, i - 1),
+            });
             if (calls.Count > 65536) throw new FormatException("Too many native cloth statements.");
         }
         if (braces != 0) throw new FormatException("Unbalanced cloth braces.");
         return new(text, calls.ToImmutable());
+    }
+
+    private static ImmutableArray<NativeClothQuotedArgument> ReadQuotedArguments(string text, int start, int end)
+    {
+        var result = ImmutableArray.CreateBuilder<NativeClothQuotedArgument>();
+        int i = start, argument = 0, depth = 0;
+        while (i < end)
+        {
+            if (SkipComment(text, ref i)) continue;
+            char c = text[i];
+            if (c == '"')
+            {
+                int quotedStart = i;
+                SkipString(text, ref i);
+                result.Add(new(argument, quotedStart, i - quotedStart, Quoted(text[quotedStart..i])));
+                continue;
+            }
+            if (c is '(' or '[') depth++;
+            if (c is ')' or ']') depth--;
+            if (c == ',' && depth == 0) argument++;
+            i++;
+        }
+        return result.ToImmutable();
     }
 
     private static ImmutableArray<string> SplitArguments(string source)
@@ -359,9 +411,12 @@ public static class Dl1ClothCodec
     private static string Quoted(string source)
     {
         if (source.Length < 2 || source[0] != '"' || source[^1] != '"') throw new FormatException("Quoted native string required.");
+        int end = 0;
+        SkipString(source, ref end);
+        if (end != source.Length) throw new FormatException("A single literal native string is required.");
         return source[1..^1].Replace("\\\"", "\"", StringComparison.Ordinal).Replace("\\\\", "\\", StringComparison.Ordinal);
     }
-    private static string Quote(string value) => "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
+    internal static string Quote(string value) => "\"" + value.Replace("\\", "\\\\", StringComparison.Ordinal).Replace("\"", "\\\"", StringComparison.Ordinal) + "\"";
     private static void Count(ImmutableArray<string> arguments, int count)
     {
         if (arguments.Length != count) throw new FormatException($"Expected {count} arguments, received {arguments.Length}.");

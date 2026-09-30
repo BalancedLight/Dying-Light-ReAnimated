@@ -94,7 +94,7 @@ public sealed partial class RigConformanceWizardViewModel
     {
         if(_model is not { } model||_derivedMotionPreview is not {CanApply:true} preview)return;
         if(!FbxDerivedMotionAuthoring.TryApply(model,preview,out var result)){DerivedMotionStatus="The source changed. Derive the current clip again.";return;}
-        DerivedMotionApplyRequested?.Invoke(this,new(model,result,"Saved a separately identified derived clip. Original source curves were retained; native acceptance remains unverified."));
+        if (!RequestBodyChange(DerivedMotionApplyRequested, new(model,result,"Saved a separately identified derived clip. Original source curves were retained; native acceptance remains unverified."))) return;
         DerivedMotionStatus="Derived clip saved. Enable its Use checkbox only after reviewing motion and export component ownership.";
     }
     private void NotifyDerivedMotion()

@@ -425,11 +425,12 @@ public sealed class CustomModelSchema2MorphTests
         string directory = RpackTestData.CreateTemporaryDirectory();
         try
         {
+            FbxModelAuthoringImportResult sourceModel = CreateMorphModel();
             Dl1OfficialModelCompilerResult result =
                 await Dl1OfficialModelCompiler.CompileAsync(
                     new Dl1OfficialModelCompilerRequest
                     {
-                        Model = CreateMorphModel(),
+                        Model = sourceModel,
                         CompilerExecutablePath = compiler!,
                         RetailData0PakPath = data0Pak,
                         OutputRpackPath = Path.Combine(
@@ -443,6 +444,53 @@ public sealed class CustomModelSchema2MorphTests
             Assert.True(File.Exists(result.OutputRpackPath));
             Assert.True(File.Exists(result.CompiledMeshObjectPath));
             Assert.True(File.Exists(result.ReceiptPath));
+            Assert.Equal(3, result.CompilerEvidence.ShadingVerticesVerified);
+            Assert.Equal(1, result.CompilerEvidence.VerifiedMorphChannelCount);
+
+            CustomModelMeshPart originalPart = Assert.Single(sourceModel.Package.Document.Meshes);
+            var secondPart = originalPart with
+            {
+                Name = "GenericMeshSecondary",
+                GeometryObjectId = 40,
+                ModelObjectId = 41,
+            };
+            FbxModelSurface firstSurface = Assert.Single(sourceModel.Surfaces);
+            FbxModelAuthoringImportResult twoSurfaceModel = sourceModel with
+            {
+                Package = sourceModel.Package with
+                {
+                    Document = sourceModel.Package.Document with
+                    {
+                        Meshes = [originalPart, secondPart],
+                    },
+                },
+                Surfaces =
+                [
+                    firstSurface,
+                    firstSurface with
+                    {
+                        Id = "generic-secondary-surface",
+                        MeshName = secondPart.Name,
+                        MorphTargets = [],
+                    },
+                ],
+            };
+            Dl1OfficialModelCompilerResult twoSurfaceResult =
+                await Dl1OfficialModelCompiler.CompileAsync(
+                    new Dl1OfficialModelCompilerRequest
+                    {
+                        Model = twoSurfaceModel,
+                        CompilerExecutablePath = compiler!,
+                        RetailData0PakPath = data0Pak,
+                        OutputRpackPath = Path.Combine(
+                            directory,
+                            "generic_two_surface_model_pc.rpack"),
+                        ResourceName = "generic_two_surface_model",
+                    });
+            Assert.Equal(CustomModelBuildState.CompilerValidated,
+                twoSurfaceResult.BuildReceipt.State);
+            Assert.Equal(6, twoSurfaceResult.CompilerEvidence.ShadingVerticesVerified);
+            Assert.Equal(1, twoSurfaceResult.CompilerEvidence.VerifiedMorphChannelCount);
 
             string receiptDirectory = Path.Combine(
                 Environment.GetFolderPath(
@@ -463,7 +511,7 @@ public sealed class CustomModelSchema2MorphTests
         }
     }
 
-    private static FbxModelAuthoringImportResult CreateMorphModel()
+    internal static FbxModelAuthoringImportResult CreateMorphModel()
     {
         byte[] sourceBytes = "generic custom-model source"u8.ToArray();
         string sourceSha256 = Convert.ToHexString(SHA256.HashData(sourceBytes))

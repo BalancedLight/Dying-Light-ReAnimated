@@ -746,6 +746,7 @@ function Invoke-PackageSelfTest {
         "export-project"
         "conform-model"
         "deploy-model"
+        "batch-models"
     )
     $reportedCliCommands = @(
         $result.cliCommands |
@@ -857,6 +858,9 @@ function Invoke-PackageSelfTest {
         "Embedded.Schemas.dlraproj.schema.json"
         "Embedded.Schemas.animation-library-build.schema.json"
         "Embedded.Schemas.dlrmodel.schema.json"
+        "Embedded.Schemas.dlrprofile.schema.json"
+        "Embedded.Schemas.dlrsetup.schema.json"
+        "Embedded.Schemas.model-batch.schema.json"
         "Embedded.Docs.CSHARP_REWRITE.md"
         "Embedded.Docs.DL1_FIRST_RELEASE_SUPPORT_MATRIX.md"
         "Embedded.Docs.DL1_BLENDER_RETAIL_HANDOFF.md"

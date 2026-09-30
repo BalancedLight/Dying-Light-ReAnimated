@@ -41,6 +41,11 @@
                       Link="Embedded\Schemas\dlraproj.schema.json" />
     <EmbeddedResource Include="..\..\schemas\animation-library-build.schema.json"
                       Link="Embedded\Schemas\animation-library-build.schema.json" />
+    <EmbeddedResource Include="..\..\schemas\model-batch.schema.json"
+                      Link="Embedded\Schemas\model-batch.schema.json" />
+    <EmbeddedResource Include="..\..\schemas\dlrsetup.schema.json" Link="Embedded\Schemas\dlrsetup.schema.json" />
+    <EmbeddedResource Include="..\..\schemas\dlrprofile.schema.json"
+                      Link="Embedded\Schemas\dlrprofile.schema.json" />
     <EmbeddedResource Include="..\..\schemas\dlrmodel.schema.json"
                       Link="Embedded\Schemas\dlrmodel.schema.json" />
     <EmbeddedResource Include="..\..\docs\CSHARP_REWRITE.md"

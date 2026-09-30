@@ -63,6 +63,26 @@ public sealed class Anm2EvaluationAdapter : IAnm2EvaluationAdapter
             requestTemplate.TargetRig,
             requestTemplate.Clip,
             requestTemplate.MorphBindings);
+        foreach (AttachmentBinding binding in requestTemplate.Attachments)
+        {
+            if (binding.Scope != AttachmentScope.AuthoredExportable ||
+                binding.GripCalibration?.Secondary?.Ik is not { Weight: > 0 } driver)
+            {
+                continue;
+            }
+
+            int[] drivenIndices = [driver.RootBoneIndex, driver.JointBoneIndex, driver.EndBoneIndex];
+            foreach (int index in drivenIndices)
+            {
+                if ((uint)index >= (uint)requestTemplate.TargetRig.BoneCount ||
+                    requestTemplate.TargetRig.Bones[index].DescriptorHash is null)
+                {
+                    throw new InvalidOperationException(
+                        $"Attachment '{binding.Name}' drives a node without a target ANM2 descriptor. Rebind the chain before export.");
+                }
+            }
+        }
+
         var frames = ImmutableArray.CreateBuilder<Dl1Anm2AuthoringFrame>(
             checked((int)requestTemplate.Clip.FrameCount));
         for (int frameIndex = 0;
@@ -89,6 +109,17 @@ public sealed class Anm2EvaluationAdapter : IAnm2EvaluationAdapter
                 requestTemplate.IkLayers,
                 directRigBinding: requestTemplate.DirectRigBinding);
             EvaluationFrame evaluated = _evaluator.Evaluate(exportRequest);
+            string[] errors = evaluated.Diagnostics
+                .Where(static diagnostic => diagnostic.Severity == EvaluationDiagnosticSeverity.Error)
+                .Select(static diagnostic => $"{diagnostic.Code}: {diagnostic.Message}")
+                .ToArray();
+            if (errors.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    $"Animation '{requestTemplate.Clip.Name}' cannot be exported at frame {frameIndex}: " +
+                    string.Join("; ", errors));
+            }
+
 
             var tracks = ImmutableArray.CreateBuilder<Dl1Anm2TrackSample>();
             foreach (BoneDefinition bone in requestTemplate.TargetRig.Bones)

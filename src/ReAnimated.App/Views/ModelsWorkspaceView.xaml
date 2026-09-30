@@ -7,11 +7,11 @@
              MinHeight="0">
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300" MinWidth="245" />
+            <ColumnDefinition Width="250" MinWidth="215" />
             <ColumnDefinition Width="5" />
             <ColumnDefinition Width="*" MinWidth="360" />
             <ColumnDefinition Width="5" />
-            <ColumnDefinition Width="360" MinWidth="285" />
+            <ColumnDefinition Width="460" MinWidth="400" />
         </Grid.ColumnDefinitions>
 
         <Border x:Name="AuthoringSettingsPane"
@@ -19,24 +19,45 @@
                 Style="{StaticResource PaneBorderStyle}">
             <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel Margin="10">
-                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="Custom model" />
-                    <TextBlock Margin="0,3,0,10"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="Custom-model authoring is part of the project model library. Importing or previewing here cannot replace an animation target; assign models to immutable sources in Animations."
-                               TextWrapping="Wrap" />
+                    <TextBlock FontSize="16" FontWeight="SemiBold" Text="Model" />
                     <Button Margin="0,0,0,8"
                             HorizontalAlignment="Left"
                             Command="{Binding ReturnToProjectModelsCommand}"
                             Content="Back to project models" />
-                    <WrapPanel Margin="0,0,0,8">
-                        <Button x:Name="ImportFbxButton"
-                                Command="{Binding ImportFbxCommand}"
-                                Content="Import FBX..." />
-                        <Button x:Name="OpenPackageButton"
-                                Command="{Binding OpenPackageCommand}"
-                                Content="Open .dlrmodel..." />
-                        <Button Command="{Binding SavePackageCommand}" Content="Save .dlrmodel..." />
-                    </WrapPanel>
+                    <Button x:Name="ImportFbxButton"
+                            Margin="0,4,0,4"
+                            MinHeight="34"
+                            Command="{Binding ImportFbxCommand}"
+                            Content="{Binding ImportFbxActionLabel}"
+                            AutomationProperties.Name="Import first FBX model">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasModel}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button x:Name="OpenPackageButton"
+                            Command="{Binding OpenPackageCommand}"
+                            Content="Open model..."
+                            Margin="0,0,0,8">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}">
+                                <Setter Property="Visibility" Value="Visible" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasModel}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Command="{Binding SavePackageCommand}" Content="Save model..." Margin="0,0,0,8"
+                            Visibility="{Binding HasModel, Converter={StaticResource BooleanToVisibilityConverter}}" />
 
                     <ProgressBar Height="8"
                                  Margin="0,0,0,8"
@@ -55,82 +76,111 @@
                     <Button Margin="0,0,0,8"
                             HorizontalAlignment="Left"
                             Command="{Binding CancelCommand}"
-                            Content="Cancel current operation" />
+                            Content="Cancel">
+                        <Button.Style>
+                            <Style TargetType="{x:Type Button}">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsBusy}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
 
-                    <TextBlock FontWeight="SemiBold" Text="Authoring identity" />
-                    <TextBlock Margin="0,6,0,2" Text="Model name" />
-                    <TextBox Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="0,6,0,2" Text="Rig treatment" />
+                    <StackPanel Visibility="{Binding HasModel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Margin="0,6,0,2" Text="Model name" />
+                        <TextBox AutomationProperties.Name="Model name"
+                                 Text="{Binding ModelName, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <TextBlock Margin="0,6,0,2" Text="Import rig" />
                     <ComboBox IsEnabled="{Binding CanChangeRigMode}"
-                              ItemsSource="{Binding RigModes}"
-                              SelectedItem="{Binding SelectedRigMode}" />
-                    <TextBlock Margin="0,3,0,8"
-                               FontSize="10"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="ExactFbxRig preserves the imported hierarchy. StaticProp ignores skinning. Dl1HumanoidFit is an explicit retargeting authoring mode; it never silently renames custom bones."
-                               TextWrapping="Wrap" />
+                              ItemsSource="{Binding RigModeChoices}"
+                              DisplayMemberPath="Label"
+                              SelectedValuePath="Mode"
+                              SelectedValue="{Binding SelectedRigMode, Mode=TwoWay}"
+                              AutomationProperties.Name="Import rig"
+                              ToolTip="Choose how to read the FBX rig. Pick Adapt or Repair in Setup after importing." />
                     <CheckBox Margin="3,9,3,0"
                               Content="Match DL1 texture origin (flip V)"
                               IsChecked="{Binding FlipTextureCoordinateV}" />
 
-                    <Separator Margin="0,12" />
-                    <!-- These four settings decide the character's on-disk
-                         identity in a Developer Tools project. They were
-                         editable on the view model but rendered nowhere, so
-                         the animation bank a model points at was invisible. -->
-                    <TextBlock FontWeight="SemiBold" Text="DL1 character identity" />
-                    <TextBlock Margin="0,6,0,2" Text="Character ID (data/characters/&lt;id&gt;/)" />
-                    <TextBox Text="{Binding CharacterId, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="Folder name under data/characters in the Developer Tools project." />
-                    <TextBlock Margin="0,6,0,2" Text="Model resource name" />
-                    <TextBox Text="{Binding ResourceName, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="Base name of the emitted .msh / .chr / .bscr / .ascr files." />
-                    <TextBlock Margin="0,6,0,2" Text="Surface name" />
-                    <TextBox Text="{Binding SurfaceName, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="0,6,0,2" Text="Animation script library (SCR)" />
-                    <TextBox Text="{Binding AnimationScriptAlias, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="The animation bank this character drives. Point a player-model replacement at the base-game bank, for example anims_player." />
-                    <TextBlock Margin="0,3,0,0"
-                               FontSize="10"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="{Binding AnimationScriptAliasSummary}"
-                               TextWrapping="Wrap" />
-                    <CheckBox Margin="0,5,0,0" Content="Reference existing game animation bank"
-                              IsChecked="{Binding ReferenceExistingAnimationLibrary}"
-                              ToolTip="Emit only the model ASCR redirect. Validate the stock source graph and never publish an empty local bank." />
+                    <Expander Margin="0,8,0,0" Header="Source files"
+                              Visibility="{Binding HasModel, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel Margin="2,5,2,2">
+                            <Button Command="{Binding ImportFbxCommand}"
+                                    Content="Reimport current FBX..." />
+                            <Button Command="{Binding ImportNewFbxCommand}"
+                                    Content="Add FBX as new model..."
+                                    ToolTip="Import this FBX as a separate model." />
+                            <Button Command="{Binding OpenPackageCommand}"
+                                    Content="Open another model..." />
+                        </StackPanel>
+                    </Expander>
 
-                    <Separator Margin="0,12" />
-                    <TextBlock FontWeight="SemiBold" Text="Preview" />
-                    <TextBlock Margin="0,5,0,2" Text="Preview contract" />
-                    <ComboBox DisplayMemberPath="Label"
-                              ItemsSource="{Binding PreviewModeChoices}"
-                              SelectedItem="{Binding SelectedPreviewMode}" />
-                    <WrapPanel Margin="0,5,0,4">
-                        <Button Command="{Binding FrameModelCommand}" Content="Frame model" />
-                        <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
-                    </WrapPanel>
-                    <WrapPanel>
-                        <CheckBox Margin="3" Content="Mesh" IsChecked="{Binding ShowMeshes}" />
-                        <CheckBox Margin="3" Content="Bones" IsChecked="{Binding ShowBones}" />
-                        <CheckBox Margin="3" Content="Helpers" IsChecked="{Binding ShowHelpers}" />
-                        <CheckBox Margin="3" Content="Cameras" IsChecked="{Binding ShowCameraHelpers}" />
-                        <CheckBox Margin="3" Content="Props" IsChecked="{Binding ShowPropHelpers}" />
-                    </WrapPanel>
+                    <Expander Margin="0,8,0,0" Header="DL1 resource identity" IsExpanded="False">
+                        <!-- These settings decide the character's on-disk identity in a Developer Tools project. -->
+                        <StackPanel Margin="2,5,2,2">
+                            <TextBlock Margin="0,6,0,2" Text="Character ID" />
+                            <TextBox Text="{Binding CharacterId, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Character ID"
+                                     ToolTip="Folder name under data/characters in the Developer Tools project." />
+                            <TextBlock Margin="0,6,0,2" Text="Model resource name" />
+                            <TextBox Text="{Binding ResourceName, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Model resource name"
+                                     ToolTip="Base name of the emitted .msh / .chr / .bscr / .ascr files." />
+                            <TextBlock Margin="0,6,0,2" Text="Surface name" />
+                            <TextBox Text="{Binding SurfaceName, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Surface name" />
+                            <TextBlock Margin="0,6,0,2" Text="Animation bank" />
+                            <TextBox Text="{Binding AnimationScriptAlias, UpdateSourceTrigger=PropertyChanged}"
+                                     AutomationProperties.Name="Animation bank"
+                                     ToolTip="The animation bank this character drives. Point a player-model replacement at the base-game bank, for example anims_player." />
+                            <TextBlock Margin="0,3,0,0"
+                                       FontSize="10"
+                                       Foreground="{StaticResource MutedTextBrush}"
+                                       Text="{Binding AnimationScriptAliasSummary}"
+                                       TextWrapping="Wrap" />
+                            <CheckBox Margin="0,5,0,0"
+                                      Content="Reference existing game animation bank"
+                                      IsChecked="{Binding ReferenceExistingAnimationLibrary}"
+                                      ToolTip="Emit only the model ASCR redirect. Stock clips remain unchanged; this option does not retarget their bone translations to a different rig. Preview motion before accepting compatibility." />
+                        </StackPanel>
+                    </Expander>
+                    <Expander Margin="0,2,0,0" Header="Preview options" IsExpanded="False">
+                        <StackPanel Margin="2,5,2,2">
+                            <TextBlock Margin="0,5,0,2" Text="Preview mode" />
+                            <ComboBox DisplayMemberPath="Label"
+                                      ItemsSource="{Binding PreviewModeChoices}"
+                                      SelectedItem="{Binding SelectedPreviewMode}"
+                                      AutomationProperties.Name="Preview mode" />
+                            <CheckBox Margin="0,5,0,0"
+                                      Content="Use reviewed bone channels in preview"
+                                      IsChecked="{Binding UseReviewedPolicyPreview}"
+                                      IsEnabled="{Binding CanUseReviewedPolicyPreview}"
+                                      ToolTip="Use saved position, rotation, and scale choices in the DL1 output preview. Game behavior may differ." />
+                            <WrapPanel Margin="0,5,0,4">
+                                <Button Command="{Binding FrameModelCommand}" Content="Frame model" />
+                                <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
+                            </WrapPanel>
+                            <WrapPanel>
+                                <CheckBox Margin="3" Content="Mesh" IsChecked="{Binding ShowMeshes}" />
+                                <CheckBox Margin="3" Content="Bones" IsChecked="{Binding ShowBones}" />
+                                <CheckBox Margin="3" Content="Helpers" IsChecked="{Binding ShowHelpers}" />
+                                <CheckBox Margin="3" Content="Cameras" IsChecked="{Binding ShowCameraHelpers}" />
+                                <CheckBox Margin="3" Content="Props" IsChecked="{Binding ShowPropHelpers}" />
+                            </WrapPanel>
+                        </StackPanel>
+                    </Expander>
 
-                    <Border Margin="0,12,0,0"
-                            Padding="8"
-                            Background="#202A39"
-                            BorderBrush="{StaticResource BorderBrush}"
-                            BorderThickness="1"
-                            CornerRadius="3">
-                        <TextBlock Text="{Binding Summary}" TextWrapping="Wrap" />
-                    </Border>
-                    <Border Margin="0,6,0,0"
+                    <Border Margin="0,4,0,0"
                             Padding="8"
                             Background="{StaticResource PanelRaisedBrush}"
                             BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1"
-                            CornerRadius="3">
+                            CornerRadius="3"
+                            ToolTip="{Binding Summary}">
                         <DockPanel LastChildFill="True">
                             <Border DockPanel.Dock="Right"
                                     Margin="8,0,0,0"
@@ -141,7 +191,8 @@
                                            Foreground="{StaticResource TextBrush}"
                                            Text="{Binding Diagnostics.Count, StringFormat={}{0} diagnostics}" />
                             </Border>
-                            <TextBlock Foreground="{StaticResource TextBrush}"
+                            <TextBlock FontWeight="SemiBold"
+                                       Foreground="{StaticResource TextBrush}"
                                        Text="{Binding BuildStatus}"
                                        TextWrapping="Wrap" />
                         </DockPanel>
@@ -172,29 +223,24 @@
 
         <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
             <TabControl x:Name="AuthoringInspectorTabs">
-                <TabItem x:Name="AuthoringRigTab" Header="Rig">
-                    <views:RigHierarchyEditorView xmlns:views="clr-namespace:ReAnimated.App.Views" />
-                </TabItem>
-
                 <TabItem x:Name="AuthoringConformTab"
-                         Header="Conform"
+                         Header="Setup"
                          IsSelected="{Binding IsConformTabSelected, Mode=TwoWay}">
                     <views:RigConformanceView xmlns:views="clr-namespace:ReAnimated.App.Views"
                                               DataContext="{Binding Conformance}" />
                 </TabItem>
 
+                <TabItem x:Name="AuthoringRigTab" Header="Bones">
+                    <views:RigHierarchyEditorView xmlns:views="clr-namespace:ReAnimated.App.Views" />
+                </TabItem>
+
                 <TabItem x:Name="AuthoringMaterialsTab" Header="Materials">
                     <Grid Margin="7">
                         <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                             <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
-                        <TextBlock Margin="2,0,2,6"
-                                   Foreground="{StaticResource MutedTextBrush}"
-                                   Text="Embedded FBX textures are used automatically. Override base color, normal, specular, or mask independently. Normal maps are repacked to DL1's alpha/green convention during build."
-                                   TextWrapping="Wrap" />
-                        <ListBox Grid.Row="1"
+                        <ListBox Grid.Row="0"
                                  ItemsSource="{Binding Materials}"
                                  SelectedItem="{Binding SelectedMaterial}">
                             <ListBox.ItemTemplate>
@@ -209,7 +255,7 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-                        <StackPanel Grid.Row="2" Margin="0,7,0,0">
+                        <StackPanel Grid.Row="1" Margin="0,7,0,0">
                             <TextBlock Text="Texture channel" />
                             <ComboBox Margin="0,2,0,5"
                                       ItemsSource="{Binding TextureSemantics}"
@@ -222,18 +268,19 @@
                             </StackPanel>
                             <Button HorizontalAlignment="Left"
                                     Command="{Binding SelectTextureCommand}"
-                                    Content="Choose texture..." />
+                                    Content="Choose texture..."
+                                    ToolTip="Replaces the embedded FBX texture for the selected channel." />
                         </StackPanel>
                     </Grid>
                 </TabItem>
 
-                <TabItem x:Name="AuthoringDiagnosticsTab"
-                         Header="{Binding Diagnostics.Count, StringFormat=Diagnostics ({0})}">
-                    <views:ModelDiagnosticsView xmlns:views="clr-namespace:ReAnimated.App.Views" />
+                <TabItem x:Name="AuthoringAnimationsTab" Header="Clips">
+                    <views:ModelAnimationStacksView xmlns:views="clr-namespace:ReAnimated.App.Views" />
                 </TabItem>
 
-                <TabItem x:Name="AuthoringAnimationsTab" Header="Animation stacks">
-                    <views:ModelAnimationStacksView xmlns:views="clr-namespace:ReAnimated.App.Views" />
+                <TabItem x:Name="AuthoringDiagnosticsTab"
+                         Header="Issues">
+                    <views:ModelDiagnosticsView xmlns:views="clr-namespace:ReAnimated.App.Views" />
                 </TabItem>
 
             </TabControl>

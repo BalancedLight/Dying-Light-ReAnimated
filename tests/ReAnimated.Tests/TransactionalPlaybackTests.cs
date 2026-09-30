@@ -303,10 +303,12 @@ public sealed class TransactionalPlaybackTests : IDisposable
             MainWindowViewModel.ResolveStartupWorkspace(result.Project));
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
-    public async Task AssetSelectionAloneChangesNoProjectOrPlaybackState()
+    public async Task AssetSelectionAloneChangesNoProjectOrPlaybackState(bool withActiveAnimation)
     {
         Directory.CreateDirectory(_temporaryDirectory);
         await using var assets = new Dl1AssetWorkspace(
@@ -321,8 +323,38 @@ public sealed class TransactionalPlaybackTests : IDisposable
             assets,
             new NullFingerprintService(),
             retailMeshDecodeService: decoder);
+        if (withActiveAnimation)
+        {
+            Guid sourceId = Guid.NewGuid();
+            var animation = new ProjectAnimation
+            {
+                Id = Guid.NewGuid(),
+                Name = "Generic motion",
+                SourceAssetId = sourceId,
+                FrameCount = 120,
+            };
+            var project = DlraProject.Create("Asset selection") with
+            {
+                Assets = [new ProjectAssetReference
+                {
+                    Id = sourceId,
+                    Kind = ProjectAssetKind.SourceAnimation,
+                    RelativePath = "Sources/generic-motion.anm2",
+                    ContentSha256 = new string('a', 64),
+                }],
+                Animations = [animation],
+            };
+            typeof(MainWindowViewModel).GetField("_project", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(viewModel, project);
+            typeof(MainWindowViewModel).GetField("_activeAnimationId", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .SetValue(viewModel, animation.Id);
+            PlaybackTestData.SetEvaluableSource(viewModel, frameCount: 120);
+            typeof(MainWindowViewModel).GetMethod("RefreshTimelinePlaybackAvailability", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .Invoke(viewModel, [TargetBindingStatus.Direct]);
+        }
         viewModel.Timeline.CurrentFrame = 17;
         viewModel.Timeline.IsPlaying = true;
+        Assert.Equal(withActiveAnimation, viewModel.Timeline.IsPlaying);
         WorkspaceSnapshot before = viewModel.CreateSnapshot();
         AssetItemViewModel row = CreateMeshRow("armored");
         viewModel.AssetBrowser.ReplaceAssets([row]);
@@ -343,7 +375,7 @@ public sealed class TransactionalPlaybackTests : IDisposable
         WorkspaceSnapshot after = viewModel.CreateSnapshot();
         Assert.Equal(before.Project, after.Project);
         Assert.Equal(17, viewModel.Timeline.CurrentFrame);
-        Assert.True(viewModel.Timeline.IsPlaying);
+        Assert.Equal(withActiveAnimation, viewModel.Timeline.IsPlaying);
         Assert.Equal("No target model", viewModel.ActiveTargetModelLabel);
         Assert.Contains("Previewing armored", viewModel.StatusText);
         Assert.Equal(
@@ -674,9 +706,81 @@ public sealed class TransactionalPlaybackTests : IDisposable
         if (restore) await viewModel.RestoreRecoveryCommand.ExecuteAsync(null);
         else viewModel.DismissRecoveryCommand.Execute(null);
         Assert.False(viewModel.HasRecoverySnapshot);
+        if (!restore)
+        {
+            string backupDirectory = Path.Combine(
+                Path.GetDirectoryName(store.FilePath)!,
+                "Backups");
+            string backup = Assert.Single(Directory.GetFiles(backupDirectory));
+            Assert.Equal(original, File.ReadAllText(backup));
+        }
         Assert.True(viewModel.CanSaveWorkspaceSnapshot);
         Assert.True(autosave.SaveNow("after-recovery-decision"));
         Assert.Equal(restore ? "Recoverable draft" : "Untitled", store.Load()!.Project!.Name);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Gate", "Recovery")]
+    public async Task RecoveryDecisionRefusesSnapshotReplacedByAnotherWindow(bool restore)
+    {
+        string path = Path.Combine(_temporaryDirectory, "shared-recovery.json");
+        var firstStore = new JsonWorkspaceStateStore(path);
+        var secondStore = new JsonWorkspaceStateStore(path);
+        firstStore.Save(new WorkspaceSnapshot(
+            WorkspaceSnapshot.CurrentSchemaVersion,
+            DateTimeOffset.UtcNow,
+            null,
+            "",
+            null,
+            null,
+            0,
+            true,
+            60,
+            .02f,
+            "Models",
+            DlraProject.Create("First window"),
+            IsProjectDirty: true));
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "shared-index.sqlite3"),
+            Path.Combine(_temporaryDirectory, "shared-cache"));
+        await using var viewModel = new MainWindowViewModel(
+            firstStore,
+            new NoOpDialogs(),
+            assets,
+            new NullFingerprintService());
+        Assert.True(viewModel.HasRecoverySnapshot);
+
+        secondStore.Save(new WorkspaceSnapshot(
+            WorkspaceSnapshot.CurrentSchemaVersion,
+            DateTimeOffset.UtcNow,
+            null,
+            "",
+            null,
+            null,
+            1,
+            true,
+            60,
+            .02f,
+            "Models",
+            DlraProject.Create("Second window"),
+            IsProjectDirty: true));
+        string newerContents = File.ReadAllText(path);
+
+        if (restore)
+        {
+            await viewModel.RestoreRecoveryCommand.ExecuteAsync(null);
+        }
+        else
+        {
+            viewModel.DismissRecoveryCommand.Execute(null);
+        }
+
+        Assert.True(viewModel.HasRecoverySnapshot);
+        Assert.False(viewModel.CanSaveWorkspaceSnapshot);
+        Assert.Equal(newerContents, File.ReadAllText(path));
+        Assert.Equal("Second window", firstStore.Load()!.Project!.Name);
     }
 
     public void Dispose()

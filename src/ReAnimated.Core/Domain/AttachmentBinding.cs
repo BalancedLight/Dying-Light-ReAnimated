@@ -27,7 +27,8 @@ public sealed record AttachmentBinding
         int parentBoneIndex,
         TransformTRS localOffset,
         AttachmentScope scope,
-        string? parentBoneName = null)
+        string? parentBoneName = null,
+        AttachmentGripCalibration? gripCalibration = null)
     {
         if (id == Guid.Empty)
         {
@@ -70,6 +71,13 @@ public sealed record AttachmentBinding
                 nameof(parentBoneName));
         }
 
+        if(!Enum.IsDefined(scope))throw new ArgumentOutOfRangeException(nameof(scope));
+        if(gripCalibration is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(parentBoneName);
+            gripCalibration.Validate(assetId);
+        }
+        GripCalibration = gripCalibration;
         Id = id;
         AssetId = assetId;
         Name = name;
@@ -97,4 +105,6 @@ public sealed record AttachmentBinding
     public TransformTRS LocalOffset { get; }
 
     public AttachmentScope Scope { get; }
+
+    public AttachmentGripCalibration? GripCalibration { get; }
 }

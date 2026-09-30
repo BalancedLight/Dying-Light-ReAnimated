@@ -249,8 +249,8 @@ public sealed class SecondaryMotionSession
                         Vector3D offset = s.Position[i] - center;
                         double radius = c.Radius + group.Particles[i].Radius * particleScale;
                         if (offset.LengthSquared >= radius * radius) continue;
-                        if (!offset.TryNormalize(out Vector3D normal) && !(targets[i] - center).TryNormalize(out normal))
-                            normal = Vector3D.UnitX;
+                        if (!offset.TryNormalize(out Vector3D normal))
+                            normal = CapsuleAxisFallback(axis, targets[i] - center);
                         s.Position[i] = center + normal * radius;
                         collided[i] = true;
                         contactNormals[i] += normal;
@@ -337,6 +337,23 @@ public sealed class SecondaryMotionSession
             }
             s.PreviousTargets = targets;
         }
+    }
+
+    // A point on the capsule axis has no unique radial normal. An axial
+    // fallback can oscillate between points that are both still inside the
+    // capsule. Keep any useful radial component of the animated reference;
+    // otherwise choose a deterministic perpendicular to the actual world axis.
+    // This is preview geometry, not an emulation of a native ODE/MPC solver.
+    private static Vector3D CapsuleAxisFallback(Vector3D axis, Vector3D reference)
+    {
+        if (axis.LengthSquared <= 1e-16)
+            return reference.TryNormalize(out Vector3D sphereNormal) ? sphereNormal : Vector3D.UnitX;
+        Vector3D direction = axis.Normalized();
+        reference -= direction * Vector3D.Dot(reference, direction);
+        if (reference.TryNormalize(out Vector3D normal)) return normal;
+        Vector3D leastAligned = Math.Abs(direction.X) <= Math.Abs(direction.Y) && Math.Abs(direction.X) <= Math.Abs(direction.Z)
+            ? Vector3D.UnitX : Math.Abs(direction.Y) <= Math.Abs(direction.Z) ? Vector3D.UnitY : Vector3D.UnitZ;
+        return Vector3D.Cross(direction, leastAligned).Normalized();
     }
 
     private static double ClosestSegmentParameter(Vector3D start, Vector3D end, Vector3D capsuleStart, Vector3D capsuleEnd)

@@ -1,12 +1,16 @@
 using System.Collections.Immutable;
 using ReAnimated.Core.Mathematics;
+using ReAnimated.Codecs.Models;
 using ReAnimated.Core.ModelAuthoring;
 
 namespace ReAnimated.Codecs.Fbx;
 
 public enum RigRestSurfaceMode { PreserveSurface, BakePose }
 public sealed record RestPoseEditReport(int ChangedNodes, int ChangedComponents, int UpdatedInverseBinds,
-    int EvaluatedVertices, double MaximumVisibleDisplacement, RigRestSurfaceMode SurfaceMode);
+    int EvaluatedVertices, double MaximumVisibleDisplacement, RigRestSurfaceMode SurfaceMode)
+{
+    public string SecondaryMotionReview { get; init; } = string.Empty;
+}
 
 /// <summary>Immutable, source-bound rest edit. Only this adapter constructs an applicable preview.</summary>
 public sealed class FbxRestPosePreview
@@ -95,13 +99,41 @@ public static class FbxRestPoseAuthoring
             if (changedInverse) candidate = candidate with { InverseBindMatrices = inverses.ToImmutable() };
             updated.Add(candidate);
         }
-        var document = edit.Document with { Diagnostics = edit.Document.Diagnostics.Where(d => d.Code != ReviewDiagnosticCode).Append(new CustomModelImportDiagnostic
+        var secondary = model.Package.Document.SecondaryMotion;
+        string secondaryReview = string.Empty;
+        if (!secondary.Groups.IsEmpty)
+        {
+            if (surfaces == RigRestSurfaceMode.PreserveSurface)
+            {
+                // The surface remains in its old world-space rest position. Particle
+                // and collider anchors must remain there too, despite their new bone basis.
+                var sourceBones = model.Package.Document.CreateEffectiveBones();
+                var transfer = Dl1CompanionReferenceTransfer.Apply(secondary with { NativeSources = [] },
+                    sourceBones, edit.Document.CreateEffectiveBones(),
+                    Enumerable.Range(0, sourceBones.Length).ToImmutableArray(),
+                    sourceBones.Select(_ => TransformMatrix.Identity).ToImmutableArray(), cancellationToken);
+                secondary = secondary with { Groups = transfer.Definition.Groups };
+                secondaryReview = "Editor cloth and hair anchors and collider endpoints stay in place with the surface.";
+            }
+            else
+            {
+                // A pose bake moves the surface with the rig. Keep authored local
+                // attachment offsets exactly, so the anchored geometry follows the pose.
+                secondaryReview = "Editor cloth and hair anchors and collider endpoints follow the posed bones. Review constraint lengths and contacts.";
+            }
+        }
+        if (!secondary.NativeSources.IsEmpty)
+            secondaryReview += (secondaryReview.Length == 0 ? string.Empty : " ") +
+                "Native cloth settings are retained; recheck collision bounds and movement in Player.";
+        var document = edit.Document with { SecondaryMotion = secondary, Diagnostics = edit.Document.Diagnostics.Where(d => d.Code != ReviewDiagnosticCode).Append(new CustomModelImportDiagnostic
         { Code = ReviewDiagnosticCode, Severity = CustomModelImportSeverity.Warning,
-            Message = "Joint rest frames changed through a reviewed authoring transaction. Original animation data was retained; review clip motion, helper behavior and native binding before acceptance." }).ToImmutableArray() };
+            Message = "Joint rest frames changed through a reviewed authoring transaction. Original animation data was retained; review clip motion, helper behavior and native binding before acceptance." + (secondaryReview.Length == 0 ? string.Empty : " " + secondaryReview) }).ToImmutableArray() };
         var candidateModel = model with { Package = model.Package with { Document = document }, Rig = document.CreateRigDefinition(), Surfaces = updated.MoveToImmutable() };
+        FbxProfileEditGuard.RequireAllowed(model, candidateModel, cancellationToken);
         candidateModel = FbxAuthoredModelLayer.Capture(candidateModel, cancellationToken);
         return new(model, candidateModel, token, entityId, edit.BeforeGlobals[selectedIndex], edit.AfterGlobals[selectedIndex],
-            new(edit.ChangedBoneIndices.Length, affectedComponents.Count, inverseCount, vertexCount, maximum, surfaces));
+            new(edit.ChangedBoneIndices.Length, affectedComponents.Count, inverseCount, vertexCount, maximum, surfaces)
+            { SecondaryMotionReview = secondaryReview });
     }
 
     public static bool TryApply(FbxModelAuthoringImportResult current, FbxRestPosePreview preview, out FbxModelAuthoringImportResult result)

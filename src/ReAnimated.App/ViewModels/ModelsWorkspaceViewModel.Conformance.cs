@@ -1,6 +1,10 @@
 using System.ComponentModel;
+using System.Collections.Immutable;
+using System.Globalization;
 using System.IO;
+using System.Numerics;
 using System.Text;
+using CommunityToolkit.Mvvm.Input;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
@@ -14,6 +18,74 @@ namespace ReAnimated.App.ViewModels;
 public sealed partial class ModelsWorkspaceViewModel
 {
     private bool _isConformTabSelected;
+    private IRelayCommand? _frameSelectedConformanceJointCommand;
+
+    public IRelayCommand FrameSelectedConformanceJointCommand =>
+        _frameSelectedConformanceJointCommand ??= new RelayCommand(
+            FrameSelectedConformanceJoint);
+
+    private void FrameSelectedConformanceJoint()
+    {
+        RenderFrameSnapshot frame = Viewport.SceneSource.CaptureFrame();
+        SkeletonRenderData? skeleton = frame.Skeleton;
+        if (!IsConformTabSelected ||
+            !Conformance.IsStudioFit ||
+            Conformance.Stage != RigConformanceStage.Refine ||
+            skeleton is null)
+        {
+            _setStatus("Select a joint in Place joints first.");
+            return;
+        }
+
+        int selected = -1;
+        for (int index = 0; index < skeleton.Bones.Count; index++)
+        {
+            if (skeleton.Bones[index].IsSelected)
+            {
+                selected = index;
+                break;
+            }
+        }
+
+        if (selected < 0)
+        {
+            _setStatus("Select a joint in Place joints first.");
+            return;
+        }
+
+        Vector3 WorldPosition(BoneRenderData bone) =>
+            (bone.WorldTransform * skeleton.RootTransform).Translation;
+        Vector3 pivot = WorldPosition(skeleton.Bones[selected]);
+        float minY = float.PositiveInfinity;
+        float maxY = float.NegativeInfinity;
+        foreach (BoneRenderData bone in skeleton.Bones.Where(static bone =>
+                     bone.Role == BoneRenderRole.Deform))
+        {
+            float y = WorldPosition(bone).Y;
+            minY = Math.Min(minY, y);
+            maxY = Math.Max(maxY, y);
+        }
+
+        float height = float.IsFinite(maxY - minY)
+            ? maxY - minY
+            : 1.0f;
+        float distance = Math.Clamp(height * 0.5f, 0.4f, 1.8f);
+        Vector3 direction = frame.Camera.Eye - frame.Camera.Target;
+        if (direction.LengthSquared() < 1.0e-8f)
+        {
+            direction = Vector3.UnitZ;
+        }
+
+        direction = Vector3.Normalize(direction);
+        _cameraCoordinator.UpdateCamera(
+            ViewportSide.Target,
+            frame.Camera with
+            {
+                Target = pivot,
+                Eye = pivot + direction * distance,
+            });
+        _setStatus("Framed the selected joint.");
+    }
 
     /// <summary>
     /// The preview session built from the conformed model. Its mesh palettes
@@ -21,13 +93,27 @@ public sealed partial class ModelsWorkspaceViewModel
     /// table is unchanged.
     /// </summary>
     private CustomModelPreviewSession? _conformanceSession;
+    private ImmutableArray<int> _conformanceFitToEffective = [];
 
     /// <summary>
     /// Identifies the emitted bone table the cached session was built for.
-    /// Moving a joint changes positions only; the table changes when the
-    /// correspondence does.
+    /// Includes mapping identity and fit frames, not only row order.
     /// </summary>
     private string? _conformanceTopologyKey;
+
+    private bool FitPreviewIsActive =>
+        _model is not null &&
+        IsConformTabSelected &&
+        Conformance.IsStudioFit &&
+        !HandReviewActive &&
+        !EyeReviewActive &&
+        !EyeMotionActive &&
+        !DoctorReviewActive &&
+        !DerivedReviewActive &&
+        !HierarchyReviewActive &&
+        !RestReviewActive &&
+        !Conformance.WeightBrushEnabled &&
+        !Conformance.StressPreviewEnabled;
 
     /// <summary>
     /// Whether the Conform tab is showing. Bound from the tab so viewport joint
@@ -58,22 +144,16 @@ public sealed partial class ModelsWorkspaceViewModel
     /// fit, and rejected outright where they do not.
     /// </para>
     /// <para>
-    /// Rebuilding that pairing costs roughly a quarter second, so it is done
-    /// only when the emitted bone table changes - resolving a template,
-    /// toggling extra bones, overriding a mapping. Placing a joint or moving a
-    /// slider changes positions alone, which the cached session absorbs through
-    /// a skeleton swap costing a couple of milliseconds.
-    /// </para>
-    /// <para>
-    /// At the bind pose this is visually identical to the imported model, since
-    /// skinning through a bind pose is the identity. The author sees their own
-    /// mesh with DL1 bones laid into it, which is exactly what the fitting
-    /// stages are for.
+    /// Rebuild the pairing when either topology or fit frames change. The
+    /// prepared skeleton and its baked mesh must come from the same candidate;
+    /// swapping an independently built fit skeleton can use a different palette
+    /// order or bind basis. Large-asset interaction cost remains a measured
+    /// performance concern, not a reason to display a mismatched pair.
     /// </para>
     /// </remarks>
     private void OnConformanceFitChanged(object? sender, EventArgs e)
     {
-        if (_model is null || !IsConformTabSelected || !Conformance.IsStudioFit)
+        if (_model is not { } model || !FitPreviewIsActive)
         {
             return;
         }
@@ -92,37 +172,46 @@ public sealed partial class ModelsWorkspaceViewModel
             if (_conformanceSession is null ||
                 !string.Equals(_conformanceTopologyKey, topologyKey, StringComparison.Ordinal))
             {
-                FbxModelAuthoringImportResult conformed = Dl1RigConformanceApplier.Apply(
-                    _model,
+                Dl1RigConformanceApplyResult applied = Dl1RigConformanceApplier.ApplyDetailed(
+                    model,
                     fit,
                     Conformance.CreateSettings());
                 _conformanceSession = CustomModelPreviewAdapter.CreateSession(
-                    conformed,
+                    applied.Model,
                     CustomModelPreviewMode.Dl1Output);
+                _conformanceFitToEffective = applied.FitToEffective;
                 _conformanceTopologyKey = topologyKey;
                 rebuilt = true;
             }
 
             CustomModelPreviewSession session = _conformanceSession;
-            RigDefinition rig = Dl1RigConformanceApplier.CreateRigDefinition(fit);
-            SkeletonRenderData skeleton = CorePreviewAdapter.ToRenderSkeleton(
-                rig.CreateBindPose(),
-                Conformance.SelectedBoneIndex >= 0
-                    ? Conformance.SelectedBoneIndex
-                    : null);
+            int selectedFit = Conformance.SelectedBoneIndex;
+            Conformance.SetGizmoBoneIndexMap(_conformanceFitToEffective);
+            int selectedEffective =
+                (uint)selectedFit < (uint)_conformanceFitToEffective.Length
+                    ? _conformanceFitToEffective[selectedFit]
+                    : -1;
+            SkeletonRenderData? skeleton = session.CreateSkeleton(null, 0,
+                selectedEffective >= 0 ? selectedEffective : null);
 
-            if (rebuilt)
+            if (rebuilt || !ReferenceEquals(_sceneOwnerSession, session))
             {
                 Viewport.SceneSource.SetScene(
                     session.Meshes,
                     skeleton,
                     [],
                     generation: Interlocked.Increment(ref _previewGeneration));
+                _sceneOwnerSession = session;
             }
             else
             {
                 Viewport.SceneSource.SetSkeleton(skeleton);
             }
+
+            Viewport.SceneSource.SetGizmos(
+                Conformance.Stage == RigConformanceStage.Refine
+                    ? BuildJointPlacementGizmos(skeleton, selectedEffective)
+                    : []);
 
             Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
             ApplySkeletonVisibility();
@@ -143,10 +232,59 @@ public sealed partial class ModelsWorkspaceViewModel
         }
     }
 
+    private static IReadOnlyList<GizmoRenderData> BuildJointPlacementGizmos(
+        SkeletonRenderData? skeleton,
+        int selectedBoneIndex)
+    {
+        if (skeleton is null ||
+            (uint)selectedBoneIndex >= (uint)skeleton.Bones.Count)
+        {
+            return [];
+        }
+
+        Vector3 WorldPosition(BoneRenderData bone) =>
+            (bone.WorldTransform * skeleton.RootTransform).Translation;
+        Vector3 origin = WorldPosition(skeleton.Bones[selectedBoneIndex]);
+        float height = skeleton.Bones
+            .Where(static bone => bone.Role == BoneRenderRole.Deform)
+            .Select(WorldPosition)
+            .Select(static point => point.Y)
+            .DefaultIfEmpty(origin.Y)
+            .Max() - skeleton.Bones
+            .Where(static bone => bone.Role == BoneRenderRole.Deform)
+            .Select(WorldPosition)
+            .Select(static point => point.Y)
+            .DefaultIfEmpty(origin.Y)
+            .Min();
+        float length = Math.Clamp(height * 0.08f, 0.06f, 0.35f);
+        return
+        [
+            Handle(Vector3.UnitX, TranslationGizmoAxis.X, new(1f, .25f, .2f, 1f)),
+            Handle(Vector3.UnitY, TranslationGizmoAxis.Y, new(.2f, 1f, .3f, 1f)),
+            Handle(Vector3.UnitZ, TranslationGizmoAxis.Z, new(.3f, .55f, 1f, 1f)),
+        ];
+
+        GizmoRenderData Handle(
+            Vector3 axis,
+            TranslationGizmoAxis bindingAxis,
+            Vector4 color) =>
+            new(
+                GizmoKind.TranslationHandle,
+                origin,
+                origin + axis * length,
+                color,
+                4f,
+                new TranslationGizmoBinding(
+                    selectedBoneIndex,
+                    bindingAxis,
+                    RenderGizmoSpace.Global),
+                InteractionAxisWorld: axis);
+    }
+
     /// <summary>
     /// The emitted bone table's identity: names, parents and kinds in order.
-    /// Positions are deliberately excluded, because a moved joint reuses the
-    /// same skin palettes.
+    /// Include exact fit frames so meshes, palettes and the prepared skeleton
+    /// always describe the same authoring candidate.
     /// </summary>
     private static string BuildConformanceTopologyKey(RigConformanceResult fit)
     {
@@ -158,6 +296,12 @@ public sealed partial class ModelsWorkspaceViewModel
                 .Append(bone.ParentIndex)
                 .Append('/')
                 .Append((int)bone.Kind)
+                .Append('/').Append(bone.SourceBoneIndex).Append('/').Append(bone.TemplateIndex)
+                .Append('/').Append(bone.IsDeform).Append('/').Append((int)bone.Disposition)
+                .Append('/').Append(bone.Position.X.ToString("R", CultureInfo.InvariantCulture))
+                .Append('/').Append(bone.Position.Y.ToString("R", CultureInfo.InvariantCulture))
+                .Append('/').Append(bone.Position.Z.ToString("R", CultureInfo.InvariantCulture))
+                .Append('/').Append(bone.Orientation.ToString())
                 .Append('|');
         }
 
@@ -167,11 +311,15 @@ public sealed partial class ModelsWorkspaceViewModel
     private void InvalidateConformancePreview()
     {
         _conformanceSession = null;
+        _conformanceFitToEffective = [];
         _conformanceTopologyKey = null;
+        _sceneOwnerSession = null;
+        Conformance.SetGizmoBoneIndexMap([]);
     }
 
     private void OnConformancePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(RigConformanceWizardViewModel.IsBusy)) ModelBatch?.RefreshAvailability();
         if (e.PropertyName is not (nameof(RigConformanceWizardViewModel.Stage) or nameof(RigConformanceWizardViewModel.StudioStage) or
             nameof(RigConformanceWizardViewModel.SelectedLandmark)))
         {
@@ -268,7 +416,8 @@ public sealed partial class ModelsWorkspaceViewModel
                 : $"{prepared.Diagnostics.Length} diagnostic(s)";
             BuildStatus =
                 $"Applied the DL1 conformance: {prepared.Contract.Nodes.Length:N0} emitted nodes, {diagnostics}. " +
-                "The source FBX and these settings are retained, so the conversion can be reopened.";
+                "The source FBX and these settings are retained, so the conversion can be reopened. " +
+                "Original FBX animation was not retargeted; review a separate clip through Derive Motion before export.";
             _setStatus(BuildStatus);
         }
         catch (Exception exception) when (

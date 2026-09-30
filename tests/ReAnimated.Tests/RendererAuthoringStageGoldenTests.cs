@@ -710,34 +710,8 @@ public sealed class RendererAuthoringStageGoldenTests
         }
     }
 
-    private static string FindRepositoryRoot()
-    {
-        string[] starts =
-        [
-            Directory.GetCurrentDirectory(),
-            AppContext.BaseDirectory,
-        ];
-        foreach (string start in starts)
-        {
-            DirectoryInfo? current =
-                new DirectoryInfo(Path.GetFullPath(start));
-            while (current is not null)
-            {
-                if (File.Exists(
-                        Path.Combine(
-                            current.FullName,
-                            "DLReAnimated.slnx")))
-                {
-                    return current.FullName;
-                }
-
-                current = current.Parent;
-            }
-        }
-
-        throw new DirectoryNotFoundException(
-            "Could not locate the DL ReAnimated repository root.");
-    }
+    private static string FindRepositoryRoot() =>
+        TestRepositoryPaths.FindRepositoryRoot();
 
     private static JsonElement RequiredProperty(
         JsonElement element,

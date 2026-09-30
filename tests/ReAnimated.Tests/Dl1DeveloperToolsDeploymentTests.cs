@@ -17,6 +17,175 @@ namespace ReAnimated.Tests;
 public sealed class Dl1DeveloperToolsDeploymentTests
 {
     [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task ExistingMaterialDatabaseProvidesSourceRootForIsolatedRebuild()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1DeveloperToolsDeploymentRequest request =
+                WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory, true, false));
+            string materialDatabase = Path.Combine(request.ProjectRoot, "assets_pc", "local_dx11.mp");
+            Directory.CreateDirectory(Path.GetDirectoryName(materialDatabase)!);
+            await File.WriteAllBytesAsync(materialDatabase, "existing-abdm"u8.ToArray());
+            string sourceRoot = Path.Combine(request.ProjectRoot, "data");
+            Directory.CreateDirectory(sourceRoot);
+            await File.WriteAllTextAsync(Path.Combine(sourceRoot, "existing-material.dmt"), "existing material");
+            string beforeHash = Convert.ToHexStringLower(
+                SHA256.HashData(await File.ReadAllBytesAsync(materialDatabase)));
+            Dl1OfficialModelCompilerRequest? captured = null;
+            request = request with
+            {
+                ModelCompilerOverride = async (compilerRequest, token) =>
+                {
+                    captured = compilerRequest;
+                    return await WriteSyntheticModelCompilerAsync(compilerRequest, token);
+                },
+                ConflictResolutions = request.ConflictResolutions.SetItem(
+                    "assets_pc/local_dx11.mp",
+                    Dl1DeploymentConflictResolution.BackUpAndReplace),
+            };
+
+            Dl1DeveloperToolsDeploymentResult deployed =
+                await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+
+            Assert.NotNull(captured);
+            Assert.Equal(
+                Path.GetFullPath(request.ProjectRoot),
+                Path.GetFullPath(captured!.ExistingMaterialSourceRoot!));
+            var materialArtifact = deployed.Receipt.Artifacts.Single(artifact =>
+                string.Equals(artifact.RelativePath, "assets_pc/local_dx11.mp", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(beforeHash, materialArtifact.PreviousSha256);
+            Assert.NotNull(materialArtifact.BackupRelativePath);
+            string backup = Path.Combine(request.ProjectRoot, materialArtifact.BackupRelativePath!);
+            Assert.Equal(beforeHash, Convert.ToHexStringLower(
+                SHA256.HashData(await File.ReadAllBytesAsync(backup))));
+            Assert.True(File.Exists(Path.Combine(sourceRoot, "existing-material.dmt")));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    public async Task DeploymentInspectionSeparatesAuthoringFilesAndNativeEvidence()
+    {
+        string directory=RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request=WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory,true,false));
+            var model=request.Model;
+            model=model with{Package=model.Package with{Document=model.Package.Document with
+                {RiggingSession=RiggingSessions.Create(model.Package.Document,RigStudioEntryPath.RepairExistingRig)}}};
+            request=request with{Model=model};
+            var result=await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            Assert.NotNull(result.Receipt.AuthoringIdentity);
+            var inspection=Dl1DeveloperToolsProjectDeployer.InspectDeployment(result.Receipt,request.ProjectRoot,model);
+            Assert.Equal(RigValidationStatus.Passed,inspection.ModelAuthoringStatus);
+            Assert.Equal(RigValidationStatus.Passed,inspection.InstalledFilesStatus);
+            Assert.Equal(RigValidationStatus.Unverified,inspection.LoadedResourceStatus);
+            Assert.Equal(RigValidationStatus.Unverified,inspection.GameplayStatus);
+            var session=model.Package.Document.RiggingSession!;
+            var navigation=model with{Package=model.Package with{Document=model.Package.Document with
+                {RiggingSession=RiggingSessions.Navigate(session,RigStudioStage.Animate)}}};
+            Assert.Equal(RigValidationStatus.Passed,Dl1DeveloperToolsProjectDeployer.InspectDeployment(result.Receipt,request.ProjectRoot,navigation).ModelAuthoringStatus);
+            var profileChange=model with{Package=model.Package with{Document=model.Package.Document with
+                {RiggingSession=session with{Recipe=session.Recipe with{Profile=new(){Id="different-profile",Version="1",ContentSha256=new string('c',64)}}}}}};
+            Assert.Equal(RigValidationStatus.Failed,Dl1DeveloperToolsProjectDeployer.InspectDeployment(result.Receipt,request.ProjectRoot,profileChange).ModelAuthoringStatus);
+            var legacy=result.Receipt with{AuthoringIdentity=null};
+            Assert.Equal(RigValidationStatus.Unverified,Dl1DeveloperToolsProjectDeployer.InspectDeployment(legacy,request.ProjectRoot,model).ModelAuthoringStatus);
+            var rolledBack=result.Receipt with{RolledBackUtc=DateTimeOffset.UtcNow};
+            Assert.Equal(RigValidationStatus.Failed,Dl1DeveloperToolsProjectDeployer.InspectDeployment(rolledBack,request.ProjectRoot,model).InstalledFilesStatus);
+        }
+        finally{RpackTestData.DeleteTemporaryDirectory(directory);}
+    }
+
+    [Fact]
+    public async Task DeploymentInspectionFindsChangedFilesAndNewLooseDuplicates()
+    {
+        string directory=RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request=WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory,true,false));
+            var result=await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            var artifact=result.Receipt.Artifacts.First(a=>a.RelativePath.EndsWith(".msh",StringComparison.Ordinal));
+            string original=Path.Combine(request.ProjectRoot,artifact.RelativePath);
+            string duplicate=Path.Combine(request.ProjectRoot,"data","alternate",Path.GetFileName(original));
+            Directory.CreateDirectory(Path.GetDirectoryName(duplicate)!);File.Copy(original,duplicate);
+            var inspection=Dl1DeveloperToolsProjectDeployer.InspectDeployment(result.Receipt,request.ProjectRoot,request.Model);
+            Assert.Contains(inspection.LocalResourceWarnings,n=>n.Contains("alternate",StringComparison.Ordinal));
+            Assert.Equal(RigValidationStatus.Passed,inspection.InstalledFilesStatus);
+            Assert.Equal(RigValidationStatus.Unverified,inspection.LoadedResourceStatus);
+            await File.AppendAllTextAsync(original,"changed");
+            var stale=Dl1DeveloperToolsProjectDeployer.InspectDeployment(result.Receipt,request.ProjectRoot,request.Model);
+            Assert.Equal(RigValidationStatus.Failed,stale.InstalledFilesStatus);
+            Assert.Contains(artifact.RelativePath,stale.ChangedArtifactPaths);
+            Assert.Throws<OperationCanceledException>(()=>Dl1DeveloperToolsProjectDeployer.InspectDeployment(result.Receipt,request.ProjectRoot,request.Model,new(true)));
+        }
+        finally{RpackTestData.DeleteTemporaryDirectory(directory);}
+    }
+
+    [Fact]
+    public async Task LatestReceiptCanBeSelectedForTheCurrentModelWithoutUsingANewerUnrelatedDeployment()
+    {
+        string directory=RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request=WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory,true,false));
+            var first=await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            var other=request with{CharacterId="other_character",ModelResourceName="OtherModel",AnimationLibraryName="OtherLibrary"};
+            var second=await Dl1DeveloperToolsProjectDeployer.DeployAsync(other);
+            Assert.Equal(second.Receipt.DeploymentId,Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot)!.DeploymentId);
+            Assert.Equal(first.Receipt.DeploymentId,Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot,request.ModelResourceName,request.CharacterId)!.DeploymentId);
+            Assert.Null(Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot,"absent_model"));
+            var path=first.ReceiptPath;
+            var json=JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+            json["authoringIdentity"]!["sourceSha256"]="invalid";
+            await File.WriteAllTextAsync(path,json.ToJsonString());
+            Assert.Null(Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot,request.ModelResourceName));
+        }
+        finally{RpackTestData.DeleteTemporaryDirectory(directory);}
+    }
+
+    [Fact]
+    public async Task DeploymentInspectionViewModelChecksSelectedModelAndClearsEditedResults()
+    {
+        string directory=RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            var request=WithSyntheticDeploymentPipeline(CreateDeploymentRequest(directory,true,false));
+            var settings=new ReAnimated.App.Infrastructure.CustomModelDeveloperToolsSettings(Path.Combine(directory,"settings.json"));
+            settings.SaveProjectRoot(request.ProjectRoot);
+            using var vm=new ReAnimated.App.ViewModels.ModelsWorkspaceViewModel(new InspectionDialogs(),_=>{},_=>Task.CompletedTask,()=>null,settings);
+            var model=request.Model with{Package=request.Model.Package with{Document=request.Model.Package.Document with{BuildSettings=new()
+            {CharacterId="generic_character",ResourceName=request.ModelResourceName,AnimationScriptAlias=request.AnimationLibraryName}}}};
+            vm.CommitProjectRestore(new(model,"generic-model.dlrmodel",new ReAnimated.Core.Project.ProjectModelsWorkspaceState{PackageAssetId=Guid.NewGuid()}));
+            model=vm.CaptureProjectSession().Model!;
+            request=request with{Model=model,CharacterId=vm.CharacterId,ModelResourceName=vm.ResourceName,AnimationLibraryName=vm.AnimationScriptAlias};
+            var deployment=await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            await vm.CheckInstalledDeploymentCommand.ExecuteAsync(null);
+            Assert.NotNull(vm.DeploymentInspection);
+            Assert.Equal(deployment.Receipt.DeploymentId,vm.DeploymentInspection.DeploymentId);
+            Assert.Equal(RigValidationStatus.Passed,vm.DeploymentInspection.ModelAuthoringStatus);
+            Assert.Equal(RigValidationStatus.Passed,vm.DeploymentInspection.InstalledFilesStatus);
+            vm.ModelName="edited-model";
+            Assert.Null(vm.DeploymentInspection);
+            await vm.CheckInstalledDeploymentCommand.ExecuteAsync(null);
+            Assert.Equal(RigValidationStatus.Failed,vm.DeploymentInspection!.ModelAuthoringStatus);
+            Assert.Equal(RigValidationStatus.Unverified,vm.DeploymentInspection.LoadedResourceStatus);
+        }
+        finally{RpackTestData.DeleteTemporaryDirectory(directory);}
+    }
+
+    private sealed class InspectionDialogs:ReAnimated.App.Infrastructure.IProjectFileDialogService
+    {
+        public string? ShowOpenProjectDialog(string? initialPath)=>null;
+        public string? ShowSaveProjectDialog(string suggestedName,string? currentPath)=>null;
+    }
+
+    [Fact]
     public async Task NativeCompanionsParticipateInDeploymentOwnershipConflictsAndRollback()
     {
         string directory = RpackTestData.CreateTemporaryDirectory();
@@ -692,6 +861,98 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Assert.False(conflict.CanSkip);
             Assert.Contains("type-320:idle_loop", conflict.Message, StringComparison.Ordinal);
             Assert.Contains("type-322:GenericLibrary", conflict.Message, StringComparison.Ordinal);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task OptInProjectDataPackIsReceiptedAndRemovedByRollback()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            const string mountedPack = "data/common_anims_sp_PC.rpack";
+            Dl1DeveloperToolsDeploymentRequest request = WithSyntheticDeploymentPipeline(
+                CreateDeploymentRequest(directory, true, false) with
+                {
+                    InstallProjectDataAnimationRpack = true,
+                });
+            Dl1DeveloperToolsDeploymentPlan plan =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+            Assert.True(plan.CanDeploy);
+            Assert.Equal(mountedPack, plan.ProjectDataAnimationRpackRelativePath);
+            Assert.Contains(plan.Artifacts, artifact =>
+                artifact.RelativePath == mountedPack &&
+                artifact.Role == Dl1DeploymentArtifactRole.ProjectDataAnimationPack &&
+                artifact.Disposition == Dl1DeploymentArtifactDisposition.Create);
+
+            Dl1DeveloperToolsDeploymentResult deployed =
+                await Dl1DeveloperToolsProjectDeployer.DeployAsync(request);
+            Assert.Equal(mountedPack, deployed.Plan.ProjectDataAnimationRpackRelativePath);
+            Assert.Contains(deployed.Receipt.Artifacts, artifact =>
+                artifact.RelativePath == mountedPack &&
+                artifact.Role == Dl1DeploymentArtifactRole.ProjectDataAnimationPack &&
+                artifact.CreatedByDeployment);
+            Assert.Equal(
+                await File.ReadAllBytesAsync(ResolveProjectFile(
+                    request.ProjectRoot, deployed.Receipt.AnimationRuntimePackRelativePath!)),
+                await File.ReadAllBytesAsync(ResolveProjectFile(request.ProjectRoot, mountedPack)));
+            Assert.NotNull(Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(request.ProjectRoot));
+
+            Dl1DeveloperToolsDeploymentPlan repeated =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+            Assert.True(repeated.CanDeploy);
+            Assert.Contains(repeated.Artifacts, artifact =>
+                artifact.RelativePath == mountedPack &&
+                artifact.ExistingFileIsOwned &&
+                artifact.Disposition == Dl1DeploymentArtifactDisposition.Unchanged);
+
+            await Dl1DeveloperToolsProjectDeployer.RollbackAsync(deployed.ReceiptPath);
+            Assert.False(ProjectFileExists(request.ProjectRoot, mountedPack));
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelDeployment")]
+    public async Task OptInProjectDataPackNeverReplacesUnownedPack()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            const string mountedPack = "data/common_anims_sp_PC.rpack";
+            Dl1DeveloperToolsDeploymentRequest request = CreateDeploymentRequest(
+                directory, true, false) with
+            {
+                InstallProjectDataAnimationRpack = true,
+            };
+            string path = ResolveProjectFile(request.ProjectRoot, mountedPack);
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            byte[] existing = Rp6lAnimationLibraryCodec.Build(
+                new Dictionary<string, byte[]> { ["other_clip"] = "ANM2"u8.ToArray() },
+                new Dictionary<string, Rp6lAnimationScript>
+                {
+                    ["OtherLibrary"] = new("header"u8.ToArray(), "body"u8.ToArray()),
+                });
+            await File.WriteAllBytesAsync(path, existing);
+            request = ResolveConflict(request, mountedPack,
+                Dl1DeploymentConflictResolution.BackUpAndReplace);
+
+            Dl1DeveloperToolsDeploymentPlan plan =
+                await Dl1DeveloperToolsProjectDeployer.PreflightAsync(request);
+            Assert.False(plan.CanDeploy);
+            Assert.Contains(plan.Conflicts, conflict =>
+                conflict.RelativePath == mountedPack && !conflict.CanSkip);
+            Assert.Equal(existing, await File.ReadAllBytesAsync(path));
         }
         finally
         {

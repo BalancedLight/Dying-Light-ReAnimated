@@ -32,6 +32,14 @@ public sealed record FbxCoreAnimationImportOptions
     /// </summary>
     public bool ProjectAffineShearToTrs { get; init; }
 
+    /// <summary>
+    /// Includes connected non-Limb transform Models (Null, Marker, Camera,
+    /// and explicitly named Prop nodes) in the imported hierarchy. The
+    /// legacy animation-only adapter keeps this disabled; model authoring
+    /// enables it so source helpers and their animation tracks survive.
+    /// </summary>
+    public bool IncludeSupportedNonLimbModels { get; init; }
+
     public SourceAssetFingerprint? SourceAssetFingerprint { get; init; }
 }
 
@@ -103,11 +111,38 @@ public static class FbxCoreAnimationAdapter
 
         FbxSemanticScene scene =
             FbxSemanticScene.Parse(document, cancellationToken);
+        if (options.IncludeSupportedNonLimbModels)
+        {
+            ValidateNonLimbModelSemantics(scene);
+        }
         FbxAnimationStackInfo stack = scene.SelectAnimationStackForImport(
             options.AnimationStackName,
             cancellationToken);
         ImmutableArray<FbxAnimationCurveBinding> bindings =
             scene.ReadAnimationBindings(stack, cancellationToken);
+        if (options.IncludeSupportedNonLimbModels)
+        {
+            foreach (FbxAnimationCurveBinding binding in bindings)
+            {
+                if (scene.Models.TryGetValue(binding.ModelId, out FbxModelObject? model) &&
+                    !model.IsLimb &&
+                    !IsSupportedNonLimbModel(scene, model))
+                {
+                    if (IsStructuralContainerModel(scene, model))
+                    {
+                        // Structural container channels are evaluated by
+                        // FbxTransformEvaluator as inherited global motion;
+                        // the sampled child Limb tracks retain that motion
+                        // after local conversion even though the container
+                        // itself is excluded from the bone table.
+                        continue;
+                    }
+
+                    throw new InvalidDataException(
+                        $"FBX animation binding targets unsupported non-Limb Model '{model.Name}' ({model.Subtype}).");
+                }
+            }
+        }
         cancellationToken.ThrowIfCancellationRequested();
         FbxDeclaredTimebase declaredTimebase =
             scene.ResolveDeclaredTimebase(
@@ -144,7 +179,10 @@ public static class FbxCoreAnimationAdapter
             ? scene.MetersPerUnit
             : 1.0;
         ImmutableArray<long> orderedBones =
-            BuildOrderedLimbModels(scene, cancellationToken);
+            BuildOrderedTransformModels(
+                scene,
+                options.IncludeSupportedNonLimbModels,
+                cancellationToken);
         long sampledTransformKeyCount = checked(
             (long)orderedBones.Length * ticks.Length);
         if (sampledTransformKeyCount > options.MaximumSampledTransformKeys)
@@ -162,7 +200,10 @@ public static class FbxCoreAnimationAdapter
         ImmutableDictionary<long, long?> limbParentByModel = orderedBones
             .ToImmutableDictionary(
                 static modelId => modelId,
-                scene.GetNearestLimbParentId);
+                modelId => GetNearestImportedParentId(
+                    scene,
+                    modelId,
+                    orderedBones.ToHashSet()));
 
         ImmutableDictionary<long, TransformMatrix> rawModelBindGlobals =
             FbxTransformEvaluator.EvaluateModelGlobals(
@@ -207,7 +248,7 @@ public static class FbxCoreAnimationAdapter
                     model.Name,
                     parentIndex,
                     DecomposeForImport(local, model.Name, "bind", options.ProjectAffineShearToTrs),
-                    parentIndex < 0 ? BoneKind.Root : BoneKind.Deform));
+                    ClassifyImportedBone(model, parentIndex)));
         }
 
         var rig = new RigDefinition(
@@ -308,15 +349,27 @@ public static class FbxCoreAnimationAdapter
     internal static ImmutableArray<long> BuildOrderedLimbModels(
         FbxSemanticScene scene,
         CancellationToken cancellationToken)
+        => BuildOrderedTransformModels(scene, false, cancellationToken);
+
+    internal static ImmutableArray<long> BuildOrderedTransformModels(
+        FbxSemanticScene scene,
+        bool includeSupportedNonLimbModels,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (includeSupportedNonLimbModels)
+        {
+            ValidateNonLimbModelSemantics(scene);
+        }
         long[] limbs = scene.ModelOrder
-            .Where(modelId => scene.Models[modelId].IsLimb)
+            .Where(modelId => scene.Models[modelId].IsLimb ||
+                includeSupportedNonLimbModels &&
+                IsSupportedNonLimbModel(scene, scene.Models[modelId]))
             .ToArray();
         if (limbs.Length == 0)
         {
             throw new InvalidDataException(
-                "FBX animation import requires at least one LimbNode Model.");
+                "FBX animation import requires at least one supported transform Model.");
         }
 
         HashSet<long> limbSet = limbs.ToHashSet();
@@ -337,7 +390,10 @@ public static class FbxCoreAnimationAdapter
                     $"FBX skeletal hierarchy contains a cycle at '{scene.Models[modelId].Name}'.");
             }
 
-            long? parent = scene.GetNearestLimbParentId(modelId);
+            long? parent = GetNearestImportedParentId(
+                scene,
+                modelId,
+                limbSet);
             int depth = parent.HasValue && limbSet.Contains(parent.Value)
                 ? checked(ResolveDepth(parent.Value) + 1)
                 : 0;
@@ -354,6 +410,176 @@ public static class FbxCoreAnimationAdapter
             .ThenBy(modelId => sourceOrder[modelId])
             .ToImmutableArray();
     }
+
+    internal static void ValidateNonLimbModelSemantics(FbxSemanticScene scene)
+    {
+        foreach (long modelId in scene.ModelOrder)
+        {
+            FbxModelObject model = scene.Models[modelId];
+            if (model.IsLimb ||
+                model.Subtype.Equals("Mesh", StringComparison.OrdinalIgnoreCase) ||
+                IsStructuralContainerModel(scene, model) ||
+                IsSupportedNonLimbModel(scene, model) ||
+                IsIgnorableSceneLight(scene, model))
+            {
+                continue;
+            }
+
+            throw new InvalidDataException(
+                $"FBX Model '{model.Name}' uses unsupported non-Limb subtype '{model.Subtype}'.");
+        }
+    }
+
+    /// <summary>
+    /// A scene light is retained in the original FBX but is not a character
+    /// transform. Only a leaf light with its own NodeAttribute can be skipped;
+    /// geometry, skin, animation and model-child connections still fail.
+    /// </summary>
+    internal static bool IsIgnorableSceneLight(
+        FbxSemanticScene scene,
+        FbxModelObject model)
+    {
+        if (!model.Subtype.Equals("Light", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        foreach (FbxConnection connection in scene.Connections)
+        {
+            if (connection.ChildId == model.ObjectId &&
+                (!string.Equals(connection.Kind, "OO", StringComparison.Ordinal) ||
+                 connection.ParentId != 0 && !scene.Models.ContainsKey(connection.ParentId)))
+            {
+                return false;
+            }
+
+            if (connection.ParentId == model.ObjectId &&
+                (!string.Equals(connection.Kind, "OO", StringComparison.Ordinal) ||
+                 !scene.ObjectNodes.TryGetValue(connection.ChildId, out FbxNode? child) ||
+                 !string.Equals(child.Name, "NodeAttribute", StringComparison.Ordinal)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    internal static bool IsSupportedNonLimbModel(
+        FbxSemanticScene scene,
+        FbxModelObject model)
+    {
+        if (model.IsLimb)
+        {
+            return true;
+        }
+
+        if (IsStructuralContainerModel(scene, model))
+        {
+            return false;
+        }
+
+        if (model.Subtype.Equals("Null", StringComparison.OrdinalIgnoreCase) ||
+            model.Subtype.Equals("Marker", StringComparison.OrdinalIgnoreCase) ||
+            model.Subtype.Equals("Camera", StringComparison.OrdinalIgnoreCase) ||
+            model.Subtype.Equals("Prop", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Some exporters write prop holders as Mesh Models while retaining
+        // the prop role only in the authored name. Do not promote arbitrary
+        // renderable Mesh Models into the animation hierarchy.
+        return model.Subtype.Equals("Mesh", StringComparison.OrdinalIgnoreCase) &&
+            IsPropName(model.Name) &&
+            scene.GetModelParentId(model.ObjectId).HasValue;
+    }
+
+    /// <summary>
+    /// Blender and several FBX exporters emit a root Null as an armature
+    /// container whose direct model children are LimbNodes and renderable
+    /// Mesh Models. It is a scene container rather than an authored rig
+    /// entity. Excluding this shape keeps legacy deform indices stable while
+    /// actionable Null nodes elsewhere in the hierarchy remain preserved.
+    /// </summary>
+    internal static bool IsStructuralContainerModel(
+        FbxSemanticScene scene,
+        FbxModelObject model)
+    {
+        if (!model.Subtype.Equals("Null", StringComparison.OrdinalIgnoreCase) ||
+            scene.GetModelParentId(model.ObjectId).HasValue)
+        {
+            return false;
+        }
+
+        FbxModelObject[] children = scene.GetChildren(model.ObjectId)
+            .Where(connection =>
+                string.Equals(connection.Kind, "OO", StringComparison.Ordinal) &&
+                scene.Models.TryGetValue(connection.ChildId, out _))
+            .Select(connection => scene.Models[connection.ChildId])
+            .ToArray();
+        return children.Length > 0 && children.All(static child =>
+            child.IsLimb ||
+            child.Subtype.Equals("Mesh", StringComparison.OrdinalIgnoreCase) &&
+            !IsPropName(child.Name));
+    }
+
+    internal static long? GetNearestImportedParentId(
+        FbxSemanticScene scene,
+        long modelId,
+        IReadOnlySet<long> importedModelIds)
+    {
+        var visited = new HashSet<long> { modelId };
+        long? parent = scene.GetModelParentId(modelId);
+        while (parent.HasValue)
+        {
+            if (!visited.Add(parent.Value))
+            {
+                throw new InvalidDataException(
+                    $"FBX Model hierarchy contains a cycle at object {parent.Value}.");
+            }
+
+            if (importedModelIds.Contains(parent.Value))
+            {
+                return parent.Value;
+            }
+
+            parent = scene.GetModelParentId(parent.Value);
+        }
+
+        return null;
+    }
+
+    private static BoneKind ClassifyImportedBone(
+        FbxModelObject model,
+        int parentIndex)
+    {
+        if (model.Subtype.Equals("Camera", StringComparison.OrdinalIgnoreCase) ||
+            model.Name.Equals(Dl1PreviewContract.EyeCameraBoneName, StringComparison.OrdinalIgnoreCase) ||
+            model.Name.Equals(Dl1PreviewContract.ReferenceCameraBoneName, StringComparison.OrdinalIgnoreCase))
+        {
+            return BoneKind.Camera;
+        }
+
+        if (model.Subtype.Equals("Prop", StringComparison.OrdinalIgnoreCase) ||
+            IsPropName(model.Name))
+        {
+            return BoneKind.Prop;
+        }
+
+        if (model.IsLimb && parentIndex < 0)
+        {
+            return BoneKind.Root;
+        }
+
+        return model.IsLimb ? BoneKind.Deform : BoneKind.Helper;
+    }
+
+    private static bool IsPropName(string name) =>
+        name.Contains("propholder", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("prop_holder", StringComparison.OrdinalIgnoreCase) ||
+        name.Contains("weapon", StringComparison.OrdinalIgnoreCase) &&
+        name.Contains("holder", StringComparison.OrdinalIgnoreCase);
 
     private static ImmutableArray<long> BuildSampleTicks(
         FbxAnimationStackInfo stack,

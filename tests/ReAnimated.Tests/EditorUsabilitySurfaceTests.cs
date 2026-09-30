@@ -514,12 +514,84 @@ public sealed class EditorUsabilitySurfaceTests
         XElement rigTreatment = Assert.Single(
             workspace.Descendants(Presentation + "ComboBox"),
             static element => string.Equals(
-                (string?)element.Attribute("SelectedItem"),
-                "{Binding SelectedRigMode}",
+                (string?)element.Attribute("SelectedValue"),
+                "{Binding SelectedRigMode, Mode=TwoWay}",
                 StringComparison.Ordinal));
+        Assert.Equal("{Binding RigModeChoices}", (string?)rigTreatment.Attribute("ItemsSource"));
+        Assert.Equal("Label", (string?)rigTreatment.Attribute("DisplayMemberPath"));
         Assert.Equal(
             "{Binding CanChangeRigMode}",
             (string?)rigTreatment.Attribute("IsEnabled"));
+
+        XElement layoutGrid = Assert.Single(
+            workspace.Descendants(Presentation + "Grid"),
+            static element => element.Parent?.Name.LocalName == "UserControl");
+        string[] workspaceColumnWidths = layoutGrid
+            .Element(Presentation + "Grid.ColumnDefinitions")!
+            .Elements(Presentation + "ColumnDefinition")
+            .Select(static element => (string?)element.Attribute("Width") ?? string.Empty)
+            .ToArray();
+        Assert.Collection(
+            workspaceColumnWidths,
+            width => Assert.Equal("250", width),
+            width => Assert.Equal("5", width),
+            width => Assert.Equal("*", width),
+            width => Assert.Equal("5", width),
+            width => Assert.Equal("460", width));
+        Assert.Contains(
+            workspace.Descendants(Presentation + "Button"),
+            static element => string.Equals(
+                (string?)element.Attribute("AutomationProperties.Name"),
+                "Import first FBX model",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            workspace.Descendants(Presentation + "Expander"),
+            static element => string.Equals(
+                (string?)element.Attribute("Header"),
+                "Source files",
+                StringComparison.Ordinal));
+        Assert.Contains(
+            workspace.Descendants(Presentation + "Expander"),
+            static element => string.Equals(
+                    (string?)element.Attribute("Header"),
+                    "DL1 resource identity",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("IsExpanded"),
+                    "False",
+                    StringComparison.Ordinal));
+        Assert.Contains(
+            workspace.Descendants(Presentation + "Expander"),
+            static element => string.Equals(
+                    (string?)element.Attribute("Header"),
+                    "Preview options",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    (string?)element.Attribute("IsExpanded"),
+                    "False",
+                    StringComparison.Ordinal));
+
+        string[] inspectorTabHeaders = workspace
+            .Descendants(Presentation + "TabControl")
+            .Single(static element => element.Attributes().Any(attribute =>
+                string.Equals(
+                    attribute.Name.LocalName,
+                    "Name",
+                    StringComparison.Ordinal) &&
+                string.Equals(
+                    attribute.Value,
+                    "AuthoringInspectorTabs",
+                    StringComparison.Ordinal)))
+            .Elements(Presentation + "TabItem")
+            .Select(static element => (string?)element.Attribute("Header") ?? string.Empty)
+            .ToArray();
+        Assert.Collection(
+            inspectorTabHeaders,
+            header => Assert.Equal("Setup", header),
+            header => Assert.Equal("Bones", header),
+            header => Assert.Equal("Materials", header),
+            header => Assert.Equal("Clips", header),
+            header => Assert.Equal("Issues", header));
 
         string[] editableAnimationFields =
         [
@@ -541,26 +613,6 @@ public sealed class EditorUsabilitySurfaceTests
             Assert.Contains(binding, attributeValues);
         }
 
-        Assert.Contains(
-            workspace.Descendants(Presentation + "TextBlock"),
-            static element => ((string?)element.Attribute("Text"))?.Contains(
-                "part of the project model library",
-                StringComparison.OrdinalIgnoreCase) == true);
-        Assert.Contains(
-            workspace.Descendants(Presentation + "TextBlock"),
-            static element => ((string?)element.Attribute("Text"))?.Contains(
-                "cannot replace an animation target",
-                StringComparison.OrdinalIgnoreCase) == true);
-        Assert.Contains(
-            workspace.Descendants(Presentation + "Button").Concat(animationStacks.Descendants(Presentation + "Button")),
-            static element => string.Equals(
-                    (string?)element.Attribute("Command"),
-                    "{Binding OpenSelectedAnimationInAnimateCommand}",
-                    StringComparison.Ordinal) &&
-                string.Equals(
-                    (string?)element.Attribute("Content"),
-                    "Play selected in Playback",
-                    StringComparison.Ordinal));
         Assert.DoesNotContain(
             workspace.Descendants(Presentation + "TabItem"),
             static element => string.Equals(
@@ -1304,25 +1356,6 @@ public sealed class EditorUsabilitySurfaceTests
         capturedException?.Throw();
     }
 
-    private static string FindRepositoryFile(
-        params string[] relativeSegments)
-    {
-        DirectoryInfo? directory =
-            new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine(
-                [directory.FullName, .. relativeSegments]);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate '{Path.Combine(relativeSegments)}' " +
-            $"above '{AppContext.BaseDirectory}'.");
-    }
+    private static string FindRepositoryFile(params string[] relativeSegments) =>
+        TestRepositoryPaths.FindRepositoryFile(relativeSegments);
 }

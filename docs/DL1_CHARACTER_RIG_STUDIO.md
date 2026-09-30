@@ -223,6 +223,133 @@ procedural controller, runtime scale operation or IK consumer combines those
 channels correctly. Those measured ownership rules and live scenarios remain
 required. Optional private compiler staging roots allow isolated diagnostic jobs
 to stay in a configured workspace rather than the default application-data area.
+Studio export preflight now lists all emitted nodes with missing masks, owners,
+evidence or LOD decisions in one diagnostic rather than stopping at the first
+node. The reviewed stock-humanoid body proposal reports how many observed nodes
+remain undecided. Exact-stock only-unset review can supply matching helper
+mask/LOD values without replacing saved body choices, but its owner selection
+is uniform; camera and other helper ownership still require explicit review.
+
+For bodies substantially smaller or larger than a stock animation's authoring
+rig, clip translation keys can replace shorter or longer local bind offsets and
+visibly change limb lengths. This is a channel-ownership problem to review,
+not an expected result of the Fit setting. On the installed DL1 build, decoded
+retail `zombie_screamer` and `zombie_goon` meshes use rotation-only animation
+bits on ordinary upper-arm, forearm and thigh bones, while their root accepts
+position, rotation and scale. Their `hspine` helper still accepts position and
+rotation, so a blanket rotation-only conversion is not an exact stock policy.
+They both embed `anims_man_all.scr`. The compiled
+type-322 `anims_man_all` bank has 7,698 parsed sequences; the separate
+`anims_player` bank has 5,925 and contains `tpp_stand_menu_a`, which
+`anims_man_all` does not. This establishes a stock rotation-only precedent,
+not proof that a player-bank clip behaves identically on either creature.
+The Screamer and Goon source BSCR/ASCR companions were not present in the
+available RPACK members. Their compiled type-272 meshes do retain the full
+component/LOD flag table and embedded animation alias, so a readable script
+equivalent can be reconstructed for analysis without presenting it as the
+original source. The Screamer has 80 bone/helper policy rows and the Goon has
+134. Both use `ROT` on ordinary upper arm, forearm, thigh and calf nodes,
+`POS | ROT` on `hspine`, and `POS | ROT | SCL` on `bip01`. This supports
+reviewed bind-owned limb offsets for stock reuse across sizes; it does not
+identify a hidden per-model scale setting or certify arbitrary animations.
+Stock `HumanAI.pre` supplies an independent actor-size route: Screamer presets
+using `zombie_screamer.msh` inherit the base forced scale 1.0, while the
+standard `Goon` preset scales its different `zombie_man_a.msh` mesh to 1.4 and
+the `Demolisher` preset scales `Armored.msh` to 1.5. Compare model bind size
+and preset body scale separately when diagnosing a small or large actor.
+Other installed type-272 controls show that channel policy also differs by
+role. `player_1_fpp` and `player_1_tpp` both embed `anims_player.scr` and use
+POS/ROT on pelvis, spine, arms and hands but ROT on thighs and calves.
+`survivor_woman_a` embeds `anims_man_all.scr`, with ROT on most ordinary body
+bones and POS/ROT on `hspine`. The Following `mother` combat body also embeds
+`anims_man_all.scr` but permits POS/ROT/SCL across its core skeleton. Its
+separate `bossfight_mother_bar` and `mother_head` resources are not the skinned
+combat body. These compiled tables are controls for review, not rules to copy
+by gender, size or bank name. A stock player upper-body mask can still change
+a shorter custom bind; a rotation-only policy can preserve that bind but needs
+separate weapon, camera, contact and special-move checks.
+The retail Demolisher preset selects `Armored.msh`; its compiled body limbs
+follow the same rotation-only pattern, but the mesh embeds the dedicated
+`armored.scr` script. Its 70 sequences also occur in `anims_man_all`, while the
+sampled player menu and sprint clips occur in neither bank. Large stock actors
+therefore support the channel-policy comparison, not universal cross-bank
+compatibility. Hands, head LOD, prop roots and cloth branches require their own
+review.
+
+The Channel Policies panel offers a reviewed stock-humanoid proposal for a
+mapped body: retain authored non-root translation and scale, accept clip
+rotation, choose root channel ownership explicitly, and leave unmatched
+secondary bones and independent prop-holder roots alone. Existing decisions
+require a separate overwrite choice. Applying the proposal is one undoable
+rig edit; it is not a default export rewrite. Test the actual animation bank,
+model size, contacts and special moves in Editor and Player before using the
+result in a production resource.
+The stock-clip verification summary now reports connected deform-bone length
+drift across sampled preview frames. This is a more direct proportion check
+than peak vertex travel, which includes ordinary locomotion and never proved
+stretch by itself. The metric uses raw preview clip tracks; it does not assert
+that native BSCR channel masks or cloth output were applied in the preview.
+The DL1 Output viewport can also show an explicit reviewed-BSCR comparison
+when the model has complete saved channel decisions. It holds omitted local
+POS/ROT/SCL components at the authored bind frame while leaving the raw view
+available. The stock-clip verification reports raw and reviewed-mask connected
+deform-segment drift separately. This comparison is an authoring approximation:
+helper motion, skin distortion, native blending, LOD and runtime binding still
+require Editor and Player review. A missing or stale policy cannot silently
+produce a reviewed result.
+Playback and Retarget / Edit expose the same comparison as an opt-in target
+diagnostic for a project-owned DL1 Output model. It masks the already evaluated
+target pose, so retargeting and authored edits are not replaced by a resampled
+source clip. Select DL1 profile and enable the reviewed BSCR control to compare
+the rendered mesh and bones with Raw. The animation and export data are unchanged.
+The target pane labels the result or explains why a complete matching policy is
+unavailable. Actor/preset scale, bank selection, native blending and LOD,
+attachments, FPP camera and physics are outside this visual comparison.
+The separate exact-stock mask/LOD review can apply only rows without saved
+decisions. Use that scope for missing helpers after reviewing a body policy;
+applying all stock rows would replace existing body choices and requires a
+separate intentional review. Unmatched extra bones remain unresolved.
+For unmatched terminal helpers, Channel Policies offers a separate read-only
+proposal after an exact stock comparison. It checks effective children,
+render weights, and all included embedded tracks; only unweighted leaf helpers
+with constant tracks become candidates. The preview shows any difference
+between a constant track and the fitted bind, requires a chosen retained LOD
+and explicit review, and applies only nodes without saved channel decisions.
+It does not infer that constant tracks are safe to discard or set `LOD_OFF`
+for a retained helper. The session edit is undoable and does not alter clip
+payloads or the source model. Helpers & Hooks places this review first and
+shows each candidate as a wrapped card so its evidence is readable in the
+narrow inspector; the bounded list scrolls independently of its review and
+Apply controls.
+
+## Authored animation packs in Developer Tools
+
+The installed DL1 Editor loads an authored animation library when its compiled
+RPack is placed at the project-local `data/common_anims_sp_PC.rpack` path. In an
+isolated flat-map test, the model's own ASCR/SCR binding listed the custom
+sequence with its expected frame count and rate, and the Editor timeline
+advanced through it without a manual SCR override. This is Editor evidence;
+Player loading and coexistence with every retail animation remain separate
+acceptance checks.
+
+The Developer Tools **Animations only** export offers an explicit Editor-mount
+checkbox. It writes the selected variants as one unified project pack and
+keeps the portable `out/ReAnimated` copy. An unrelated pack already at the
+conventional path blocks the mount. Re-exporting a pack still owned by the
+same project preserves earlier resources while updating selected clips and
+scripts, with transaction receipts and rollback. The single-model CLI has a
+separate `--mount-editor-animation-pack` opt-in; multiple per-model batch
+requests cannot each own that one path. Use an isolated project for native
+review until the Player route and stock-bank coexistence are verified.
+
+A target variant now retains a copied root-bone override only when that bone
+exists in its selected target rig. Activating an older variant with a stale
+source-rig root clears that invalid override within the successful project
+transaction, leaves a review diagnostic, and lets the DL1 target-root policy
+choose its semantic/default root. Preview and root-trail evaluation apply the
+same target-rig check so an old saved name cannot cause a one-off evaluation
+failure. This does not review retarget mappings or authorize export of a
+draft cross-rig animation.
 
 Studio compiler validation also retains the source writer's actual prepared
 contract and compares its animation entities with the compiled hierarchy. Checks
@@ -377,6 +504,11 @@ does not move vertices, replace weights or change proportions.
 The CLI reports candidate evidence and review status. `--legacy-correspondence`
 selects the original mapping method; `--strength 1` explicitly requests DL1
 proportions. A generated report/package is not evidence of native compatibility.
+When exporting both proportion modes from one FBX into the same project, pass a
+different stable `--model-id <guid>` for the intentionally separate identity.
+Without it, both CLI outputs use the same deterministic source identity and the
+second package is treated as a replacement. Keep each chosen GUID when
+rebuilding its corresponding variant.
 
 This is a deterministic heuristic correspondence method, not a calibrated anatomy
 predictor or the unrigged body detector. Automatic orientation solving, complete
@@ -870,9 +1002,380 @@ This implementation addresses missing contact insertion and existing-contact
 diagnostics. Automatic repair of conflicting imported nodes and other runtime role
 families remains open. Compiled and loaded/live acceptance are distinct gates.
 
+Verify & Export now has a read-only installed-model check. New deployment receipts
+retain an optional model authoring identity: source, rig/morph signatures, complete
+package input fingerprint, studio recipe/profile inputs and exporter contract.
+Navigation and review-history changes do not alter this identity. Legacy receipts
+remain readable but cannot prove a current authoring match. Lookup can select the
+latest active receipt for one model/character instead of a newer unrelated deploy.
+
+The check independently reports the authoring match, installed-file hashes and loose
+project duplicates/legacy output. Edits clear the displayed result. Archive contents,
+mount precedence, cached instances, referenced stock-bank binding and active Player
+resource identity remain unverified; no loaded-resource or gameplay receipt is
+created from this filesystem inspection. The panel calls out the fresh actor spawn
+or reinitialization required for contact/IK acceptance. External prepared-animation
+variants still need separate authoring evidence. This advances RS-031 without
+closing native receipt or runtime acceptance requirements.
+
+Installed-model inspection now also inventories project RP6L tables by exact
+resource type and case-insensitive name. It scans root-level packs, data, assets_pc,
+out and the deployment animation-runtime package folder. Receipt-owned retained
+packs are identified separately from additional project copies. Matching archive
+files receive container-byte hashes; these are not compared with logical resource
+payload hashes. Payload decompression and semantic equivalence are not claimed.
+
+File/directory/archive/match counts, table allocation, container hashing and error
+output are bounded. Malformed or unreadable packs, refused reparse points and budget
+exhaustion produce incomplete coverage rather than a clean result. The UI shows
+matching entries and additional-copy warnings while keeping mounted precedence and
+active-resource/gameplay facets unverified. Installation-wide providers and native
+cache/load capture remain separate work.
+
+Attachment authoring now supports an optional prop-owned grip calibration. The
+existing character parent index/name guard and local offset remain authoritative;
+the evaluator aligns a separately selected prop model-space frame using its exact
+affine inverse. The project stores the prop asset ID, content hash, named/indexed
+frame and matrix without embedding retail geometry. Rendering rejects changed
+content, missing/reordered frames or frame-matrix drift instead of redirecting a prop.
+Legacy origin-based attachments retain their original behavior.
+
+A secondary character/prop frame pair can be saved with its own character-local
+offset. The attachment panel can optionally drive an explicit root/joint/end chain
+with a two-bone solver, pole point, pole space, orientation matching and weight.
+The solver follows the evaluated prop after pose edits without modifying source
+samples. The binding scope selects preview-only or authored/exportable solving;
+preview is evaluated independently so partial weights are not applied twice.
+
+Saved index/name identities remain guarded. Invalid ancestry, feedback into the
+primary prop parent, competing attachment drivers, camera descendants and
+unsupported scale or affine residuals preserve the incoming pose and report an
+error. Targets beyond reach retain a measured gap and clamp warning. Selected-frame
+overlays distinguish the primary frame and secondary prop/character contact.
+Unresolved saved chain choices remain available for an explicit rebind.
+
+ANM2 sampling rejects evaluator errors and requires descriptors on every driven
+node, including nodes otherwise marked optional. Generic encode/readback tests
+cover the solved output. This does not emit or verify native equipment configuration;
+native holder consumers, runtime control ownership and real character/prop gameplay
+acceptance remain required RS-019 work. The self-contained Blender variant handoff
+continues to reject attachments because it cannot package their mesh/material data.
+
+Camera calibration now has a dedicated Helpers and Hooks panel. Observed camera
+nodes keep independent names and parents; reviewed parent-local translation and
+rotation offsets preserve source geometry, weights, morphs, clips and channel
+policies. Preview preparation runs as a cancelable job, source/draft changes
+invalidate pending results, and apply uses the existing model transaction/undo path.
+Direction and roll are displayed with a prepared-frame overlay. Independent global
+frame overrides and camera branches carrying skin weights require separate review.
+
+Reviewed camera recipes explicitly opt into `FollowPreparedParent`. Older helper
+recipes default to their existing source-parent basis, preserving solved contact,
+socket and structural footprints when preparation changes a parent basis. The
+setting persists with the helper recipe and is consumed by the final rig preparer.
+Camera creation accepts a separately chosen parent; it does not infer an eye midpoint
+or invent native component ownership. Profile-driven creation, native lens/clipping acceptance,
+camera motion on actual owner controls and native acceptance remain RS-020 work.
+
+Camera review now shares one explicit view basis with its renderer-facing lens:
++Z forward and -Y up by default, matching the existing helper preview convention.
+A diagnostic up-axis toggle changes the readout, frustum and look-through view
+together. Vertical FOV, aspect, near/far clips and a separate frustum drawing depth
+are session-only preview settings; they never modify the authored frame or clips.
+The look-through override preserves the orbit camera and restores it when disabled.
+Invalid lenses or unrepresentable camera positions fall back with an explanation.
+
+The animation-review option samples the prepared camera from the same evaluated
+skeleton used to render the model. Direction/roll and lens view update with timeline
+scrubbing and playback; a rest-only review remains available. Generic workspace
+tests compare camera motion to independent hierarchy composition and verify the
+source keys and authored draft are unchanged. Projection tests cover frustum
+corners and near/far clipping; synthetic D3D11 review images are editor evidence,
+not native lens or gameplay acceptance.
+
+Camera creation can now preview a named EyeCamera or RefCamera observation from
+the resolved installed template. Player FPP resolves its own resource/fingerprint
+rather than sharing the TPP identity. The target parent is explicit, with a unique
+name-match suggestion only; frame copying never guesses an eye midpoint or scales
+the character. Physical camera-row order cannot redirect a named selection.
+
+Creation retains historical template origin: resource fingerprint, template ID,
+profile/resource/node/parent names, observed local frame and creation offset. It
+adds imported-source evidence without claiming a native profile rule. Existing
+channel/LOD policies are preserved and missing policies stay unresolved. Creation
+is previewed, explicitly reviewed and applied through one undoable model transaction.
+Name collisions, foreign parents, stale source/reference input and cancellation
+are guarded. Completed camera previews survive stage-only navigation; authoring
+changes require a fresh preview. These mechanisms do not prove native parent or
+component requirements, or native FPP/TPP/cinematic acceptance on actual actors.
+
+Native model compilation defaults to a compact per-user staging root. In an
+installed-toolchain comparison, the same two-surface morph model compiled and
+passed shading read-back twice from a short root, but the old deep default root
+made the texture stage exit with code 9. A realistic multi-surface FBX control
+also compiled from the compact default. The 240-character source/object path
+preflight remains an outer safety bound, not a guarantee that every shorter
+path is accepted by the native compiler. Callers can still supply an explicit
+private working root. A partial object with an unsupported exit status remains
+ineligible for publication.
+
+Structural helper review now scans all effective nodes, including unknown extras,
+using palette-resolved positive vertex influences as well as weighted metadata.
+The Conform Helpers stage shows saved role/frame/channel/LOD decisions and source
+transform-track counts. Unverified native driver semantics stay explicit; names
+such as normal or twist do not decide weight eligibility.
+
+Unweighted helper branches support reviewed rigid local offsets. Weighted source
+joints route into the surface-preserving rest editor with descendant frames held
+fixed; weighted helper branches are rejected by the quick helper edit path.
+Protection captures the current prepared frame/bounds when needed, and locks
+name, parent, position, orientation, bounds or channels separately. Frame-policy
+and source/prepared-parent-basis changes cannot bypass position/orientation/parent
+protection. Unlocking is an explicit previewed transaction. Original imported
+bones, geometry, weights, morphs and clips are retained.
+
+The inspector uses a cancellable scan, explicit preview/review/apply, stage-only
+preview preservation and the workspace's one-step undo/redo transaction. Frame
+comparison uses the prepared output on both sides, with original and edited axes.
+Detailed role/channel information and lock controls are expandable. Generic tests
+cover palette use, stale work, protection, persistence and workspace transactions;
+private synthetic compiler read-back is separate from native driver acceptance.
+Profile-specific twist/share/normal placement/driver rules and actual actor tests
+remain open; this inspector does not close RS-021 or its native release gates.
+
+Capability profiles can now be loaded as portable `.dlrprofile.json` definitions
+in Helpers & Hooks. Select behavior capabilities, explicitly assign existing nodes
+to roles and select their owning assets, then preview and review before saving.
+The full profile snapshot is stored in the model, so a reopened package does not
+need the original file path. Legacy reference-only recipes remain loadable and
+are reported as lacking the definition needed for role validation.
+
+`RigCapabilityProfileSerializer.Seal` computes the canonical content fingerprint;
+serialization and loading verify it. The profile hash field is zeroed while hashing
+the typed camel-case JSON. This is content identity, not an authentication or
+native-evidence certificate. The standalone and embedded schemas describe the
+same profile data. Neither loading nor saving promotes native validation evidence.
+
+The role report includes unselected families, capability prerequisites, missing
+or competing assignments, owner/name/parent/type conflicts, actual skin-influence
+conflicts and unresolved rules/consumer coverage. Previous assignments missing
+from a replacement profile appear as migration items and retain their source
+entities. Clicking a review row selects the corresponding assignment controls.
+Unknown extras are retained. Decisions use a cancellable preview and one undoable
+transaction; stale sources or changed drafts require another review.
+
+The source writer rejects failed checks for an explicitly selected profile before
+writing source outputs. Missing definitions and unresolved evidence remain explicit
+manifest/compiler diagnostics, never inferred runtime acceptance. Complete native
+profiles, frame/component/retention-rule evaluation, multi-asset authoring and live
+family coverage remain open work.
+
+Capability roles can now carry executable `validationRules` for the prepared
+contract. Frame checks support allowed preparation policies, current source-frame
+preservation, optional orthonormality, an origin in another role's local coordinates,
+and an axis aimed at another role. Reference roles enter capability closure without
+turning a normal parent/child direction relationship into a construction cycle.
+Bounds checks declare allowed ownership policies and half-extent ranges. Channel
+checks compare the explicit mask and ordered position/rotation/scale owners.
+Retention checks compare prepared entity presence and the animation-LOD decision.
+
+These checks consume the same prepared contract as output and do not change the
+source or solve a new pose. A failed rule blocks source export through the profile
+validator. Passed observations name only the checks actually requested. Missing
+executable definitions remain unverified even when legacy rule IDs are present;
+typed allowed frame policies take precedence over the legacy policy hint in the
+review display. Other representations need their specialized resource validators.
+Required variants/resource LODs remain unverified until their own compiled inventory
+is inspected; animation LOD is not a substitute for those records. Local rule checks
+and compiled read-back do not certify native consumers or actual actor behavior.
+
+Profile edit admission is explicit and opt-in: a role's `validationRules.edits`
+activates its `allowedEdits` flags and an independent removal permission. Legacy
+profiles without this definition retain their authoring behavior and report the
+missing permission definition as unverified. Name, parent, local position,
+orientation/scale, bounds and channel/animation-LOD decisions are checked against
+the previous profile; clearing assignments or replacing that profile in the same
+edit cannot bypass an existing restriction. Helper locks remain independent.
+Adding evidence without changing channel values or owners does not count as a
+channel edit. Changing frame ownership/basis can require both position and
+orientation permissions even when the current numeric frame looks similar.
+
+Core recipe/document mutations and prepared-output comparisons are both covered.
+The latter catches indirect frame/bounds changes caused by editing another node.
+The main Studio model-event path reports a refusal before committing or recording
+undo, and legacy helper fields use the same admission. Undo/redo and explicit model
+open/replacement use their existing separate restore paths. Unchanged authored
+helpers are no longer rewritten as a side effect of editing another helper.
+
+The capability-profile panel exposes local authoring permissions under the selected
+role. These controls change only the draft, preserve native rule definitions, retain
+a UserOverride reference to the source profile hash, and require preview/review/apply
+before saving. A refused change is shown in a bounded, expandable Conform banner.
+Model-level field admission is not complete project/attachment or specialized
+resource protection; multi-asset and native scenario acceptance remain open.
+
+Conformance now projects authored helper rows back into the helper layer instead
+of clearing them. IDs, kinds, helper branches, preview-camera selection and exact
+affine frames are retained through the source rest-pose transfer. A helper absent
+from an explicit drop-extra fit survives under its nearest mapped source ancestor;
+its weights are not folded away merely because it is an authored helper. Split
+hierarchies that would require a base bone to parent under an authored helper, or
+promote that helper into a deform bone, are rejected for explicit reconciliation.
+
+Retained base rows keep their source FBX object identities. Studio identities,
+parents and active frame/component decisions are reconciled, and dependent reviews
+are invalidated. A locked influence prevents dropping its source bone. Source
+animation keys are reindexed by stable identity; they are not retargeted. A clip
+that addresses an intentionally dropped node remains in the embedded source but
+is unavailable on the changed rig until a derived version is created. Source-linked
+layer replay uses source identities before name fallback to avoid accidental
+same-index ownership after save/reopen. Motion acceptance still requires separate checks.
+
+Conformance also reconciles saved secondary-motion references. PHX grid bones and
+known collider attachment names follow the mapped hierarchy; only quoted name tokens
+change, preserving comments, virtual endpoints, grid/seam declarations and native
+coefficients. The first imported PHX text remains in the model as `originalText`.
+An unknown statement referring to a renamed bone, or a used bone that would be
+removed, stops the proposal with an explicit review error before commit.
+
+Editor particle anchors and collider endpoints are transported into the final
+bone frames, including authored-helper adjustments. Fixed roots, driven bindings,
+constraint distances, radii and tuning retain their authored values. Review their
+resulting shape and contact after a proportion change. MPCloth export similarly
+replaces only resource-name tokens, retaining inline comments and activation flags.
+This reference migration does not recalibrate native collision bounds, prove native
+cloth movement, or retarget stock motion; those require compiled and Player checks.
+
+Native companion export now requires every supplied PHX to appear exactly once in
+its MPCloth wrapper. A deliberately disabled binding remains authored as such, but
+the export notes explicitly say it cannot activate that garment. After official
+mesh compilation, read-back compares each PHX grid-bone name with the compiled
+hierarchy. A missing compiled node stops publication; a case-only difference is
+reported for native review. Read-back also checks whether any movable grid node
+influences rendered vertices and warns when none do. These checks establish
+reference and skin-weight coverage, not Player cloth creation, synchronization,
+collision response or visible secondary motion.
+
+The conformance viewport now consumes the skeleton from the same prepared session
+as its mesh, including the fit-to-effective selection map. Fit-frame changes
+invalidate the paired preview rather than swapping in an unrelated skeleton.
+Large-asset preview responsiveness remains a performance gate.
+
 The master-plan scope remains all RS-001–038 and applicable VT-01–35. Installed
 corpus/dependency records and native consumer evidence, frame/component rules,
 role-aware preparation and repair, the staged UI, geometry-driven body/hand/eye
 detection, automatic skinning and corrections, scale/motion behavior, compiled
 semantic read-back, deployment freshness and actual-load/live scenario acceptance
 remain release requirements. Passing foundation tests does not close those gates.
+
+
+### Secondary motion during structural edits
+
+A rest-frame refit that keeps the surface still also keeps editor particle anchors
+and collider endpoints in their original model-space positions. Their bone-local
+offsets are rebased into the edited joint frames. Baking a posed shape instead
+retains those local offsets so attachments follow the posed bones. The rest-edit
+preview explains the selected behavior before Apply, and the same undo/redo entry
+owns the geometry, rig and secondary setup.
+
+Native PHX/MPCloth text and coefficients remain unchanged for these non-renaming
+edits. Native collision bounds, constraint lengths and resulting movement still
+need review. A hierarchy reparent retains global rest frames and unchanged named
+secondary attachments; palette remapping includes authored helpers that carry
+weights, rather than rejecting them as out-of-range base bones.
+
+The binary authored-surface layer now writes version 2, which can bind actual
+helper influences using the helper's persistent ID. It still validates the base
+rig signature, and unweighted helpers remain outside the surface payload. Version
+1 layers remain readable and upgrade on the next capture. A same-named helper
+with a different ID cannot silently inherit saved weights or inverse binds.
+
+
+### Reviewed compiler retention proposals
+
+Helpers and Hooks > Structural helpers now includes an explicit retention proposal
+for a prepared bone branch with no actual mesh influences or helper dependencies.
+The scanner reports this observed condition separately from compiled retention.
+Preview adds one named helper child with a visible marker. Existing bones keep
+their type, hierarchy, frames, bounds, weights and animation policies. The new
+helper uses a bind-inherited NONE/LOD_OFF policy and does not add animation clips.
+
+The `compiler.retention` helper role is a non-anatomical leaf dependency. Shape
+solving ignores it when deriving bone axes and segment bounds, while the emitted
+hierarchy keeps its real parent. Giving it mesh weights or children requires
+reviewing its purpose first; preparation rejects those ambiguous uses.
+
+The existing review checkbox, Apply, Cancel and undo/redo flow owns the proposal.
+It is saved as an ordinary authored helper and recipe, rather than a hidden
+export-only node. Official compiler readback must verify the exact candidate;
+adding the helper is not a compiled pass or a native scenario validation result.
+In a bounded compiler acceptance run, an unweighted branch was removed despite
+being present in the source MSH, CHR and BSCR. Reviewed terminal helper
+dependencies preserved that branch transitively, and compiled readback matched
+the complete source policy table and component/LOD bits. This establishes a
+checked repair pattern, not a universal rule that every unused branch will
+survive or animate correctly.
+
+
+### Removing a saved retention helper
+
+Select a `compiler.retention` helper in the structural scan and use Preview
+removal. The operation requires an unweighted leaf with no protected decisions,
+model references, owned tracks or unresolved companion dependencies. Remaining
+helper parents, draw palettes and decoded tracks are reindexed by identity.
+Original source bytes and authored layers remain available; Apply and undo/redo
+are the same reviewed model transaction.
+
+Project references are checked before preview and again before Apply. Attachment
+parents, secondary grips/IK, root-motion choices and mappings are protected. The
+index guard covers both source and prepared ordering. Target edit/IK layers that
+need reconciliation currently block removal instead of being silently changed.
+Derived/auxiliary animation payloads and unresolved native includes/statements
+also block removal pending dependency reconciliation.
+
+Removing the dependency may allow the compiler to discard its parent again.
+The build receipt is cleared and the changed rig must pass fresh compilation and
+native scenario checks before deployment. This feature does not automatically
+remove or rewrite project attachments or authored edit layers.
+
+
+### Durable model-package batches
+
+The shared `Dl1ModelBatchRunner` and `batch-models` command process exact approved
+model packages through the existing complete package builder. Per-item outcomes,
+source snapshots, output hashes and cancellation state are durable. Resume verifies
+declared inputs and finished outputs; mismatches remain review-required. See
+`DL1_MODEL_BATCH.md` for the manifest and recovery contract. This does not yet
+supply cross-model recipe application, and does
+not promote compiler evidence to runtime acceptance.
+
+The Verify and Export stage includes an interactive reviewed queue over this
+runner, with package approvals, JSON save/open, cancellation, result inspection
+and resume. Compiler results remain explicitly runtime-unverified.
+
+### Reusable profile and channel setup
+
+The Helpers and Hooks stage now saves and opens .dlrsetup files. The shared
+serializer and transfer service resolve semantic role/name selectors onto the
+destination's own nodes, require explicit mapping review, and preserve fitted
+coordinates, geometry, source clips and historical validation scope. See
+DL1_RIG_SETUP.md for transfer rules and remaining geometry/guide reuse work.
+
+
+### Reviewed setup application in batches
+
+Queued packages can pin a `.dlrsetup` and reviewed destination binding list.
+The App and headless runner apply through the same setup-transfer service, retain
+original package/preset snapshots and the prepared authoring candidate, and check
+both input hashes on build/resume. Changed setup inputs remain review-required;
+invalid mappings and expected compiler data failures stay isolated per item.
+This extends profile/channel reuse, not geometry or fitted-guide transplantation.
+
+### Exact installed reference selection
+
+Conform can resolve the mesh currently selected in Assets, and save its exact
+decoded resource fingerprint as the reference identity. The family candidate
+service inventories decoded roles and treats FPP/TPP pairing conflicts and
+missing native consumer rules as separate diagnostics. See
+DL1_RETAIL_RIG_PROFILES.md. This does not complete all family profiles or live
+acceptance.

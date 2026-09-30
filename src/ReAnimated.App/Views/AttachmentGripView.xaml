@@ -1,0 +1,32 @@
+<UserControl x:Class="ReAnimated.App.Views.AttachmentGripView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="6">
+  <TextBlock Text="Character and prop grip frames" FontWeight="SemiBold"/>
+  <TextBlock Text="{Binding GripAssetStatus}" TextWrapping="Wrap" Margin="0,4,0,5"/>
+  <TextBlock Text="Character-side and prop-side frames" FontWeight="SemiBold" Margin="0,0,0,5"/>
+  <CheckBox Content="Align using a prop-side frame" IsChecked="{Binding UseGripCalibration}"/>
+  <ComboBox ItemsSource="{Binding PropGripFrames}" SelectedItem="{Binding SelectedPropGrip}" DisplayMemberPath="NodeName" Margin="0,3,0,6"/>
+  <CheckBox Content="Review a secondary hand contact" IsChecked="{Binding UseSecondaryGrip}"/>
+  <TextBlock Text="Secondary character frame" Margin="0,4,0,2"/>
+  <ComboBox ItemsSource="{Binding ParentBones}" SelectedItem="{Binding SecondaryCharacterBone}" DisplayMemberPath="DisplayName"/>
+  <TextBlock Text="Secondary prop frame" Margin="0,4,0,2"/>
+  <ComboBox ItemsSource="{Binding PropGripFrames}" SelectedItem="{Binding SelectedSecondaryPropGrip}" DisplayMemberPath="NodeName"/>
+  <TextBlock Text="Secondary character offset X / Y / Z (metres)" Margin="0,4,0,2"/>
+  <UniformGrid Columns="3"><TextBox Text="{Binding SecondaryOffsetX,UpdateSourceTrigger=LostFocus}"/><TextBox Text="{Binding SecondaryOffsetY,UpdateSourceTrigger=LostFocus}"/><TextBox Text="{Binding SecondaryOffsetZ,UpdateSourceTrigger=LostFocus}"/></UniformGrid>
+  <CheckBox Content="Enable optional secondary-hand two-bone IK" IsChecked="{Binding UseSecondaryIk}" Margin="0,6,0,2"/>
+  <TextBlock Text="IK chain root / joint / end (character bones; saved unresolved names are retained)" TextWrapping="Wrap" Margin="0,3,0,2"/>
+  <UniformGrid Columns="3">
+   <ComboBox ItemsSource="{Binding SecondaryIkBones}" SelectedItem="{Binding SecondaryIkRoot}" DisplayMemberPath="DisplayName"/>
+   <ComboBox ItemsSource="{Binding SecondaryIkBones}" SelectedItem="{Binding SecondaryIkJoint}" DisplayMemberPath="DisplayName"/>
+   <ComboBox ItemsSource="{Binding SecondaryIkBones}" SelectedItem="{Binding SecondaryIkEnd}" DisplayMemberPath="DisplayName"/>
+  </UniformGrid>
+  <TextBlock Text="Pole X / Y / Z" Margin="0,4,0,2"/>
+  <UniformGrid Columns="3"><TextBox Text="{Binding SecondaryIkPoleX,UpdateSourceTrigger=LostFocus}"/><TextBox Text="{Binding SecondaryIkPoleY,UpdateSourceTrigger=LostFocus}"/><TextBox Text="{Binding SecondaryIkPoleZ,UpdateSourceTrigger=LostFocus}"/></UniformGrid>
+  <StackPanel Margin="0,3,0,0">
+   <CheckBox Content="Pole is in primary grip space" IsChecked="{Binding SecondaryIkPoleInPrimaryGripSpace}"/>
+   <CheckBox Content="Match end orientation" IsChecked="{Binding SecondaryIkMatchOrientation}" Margin="0,2,0,0"/>
+  </StackPanel>
+  <TextBlock Text="IK weight (0..1)" Margin="0,4,0,2"/>
+  <TextBox Text="{Binding SecondaryIkWeight,UpdateSourceTrigger=LostFocus}"/>
+  <TextBlock Text="{Binding GripContactStatus}" TextWrapping="Wrap" ToolTip="Use Apply offset to save these choices. IK is opt-in and guarded by character bone index/name identity; it does not rewrite source animation or install native equipment configuration."/>
+ </StackPanel>
+</UserControl>

@@ -201,6 +201,7 @@ public static class RigHierarchyAuthoring
             LastBuildReceipt = null,
         };
         result.Validate();
+        RigProfileEditGuard.RequireDocumentAllowed(document, result);
         return new RigHierarchyEditResult(
             result,
             oldToNew.ToImmutableArray(),

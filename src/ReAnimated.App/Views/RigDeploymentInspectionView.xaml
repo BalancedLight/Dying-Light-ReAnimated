@@ -1,0 +1,22 @@
+<UserControl x:Class="ReAnimated.App.Views.RigDeploymentInspectionView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="5">
+  <TextBlock Text="Check installed model" FontWeight="SemiBold"/>
+  <TextBlock Text="Developer Tools project" Margin="0,5,0,2"/>
+  <TextBlock Text="{Binding DeveloperToolsProjectStatus}" TextWrapping="Wrap"/><Button Content="Choose project…" Command="{Binding SelectDeveloperToolsProjectCommand}" HorizontalAlignment="Left" Margin="0,4,0,4"/>
+  <TextBlock Text="{Binding ResourceName,StringFormat='Selected model: {0}'}" Margin="0,5,0,5"/>
+  <WrapPanel><Button Content="Check installed files" Command="{Binding CheckInstalledDeploymentCommand}"/><Button Content="Cancel" Command="{Binding CancelCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding DeploymentInspectionStatus}" TextWrapping="Wrap" Margin="0,5,0,7"/>
+  <StackPanel DataContext="{Binding DeploymentInspection}">
+   <TextBlock Text="{Binding ModelAuthoringStatus,StringFormat='Model authoring match: {0}',TargetNullValue='Model authoring match: not checked'}"/>
+   <TextBlock Text="{Binding InstalledFilesStatus,StringFormat='Installed file match: {0}',TargetNullValue='Installed file match: not checked'}"/>
+   <TextBlock Text="{Binding ArchiveScan.Complete,StringFormat='Project archive scan complete: {0}',TargetNullValue='Project archive scan: not checked'}"/>
+   <Expander Header="Matching archive entries" Margin="0,5,0,5"><ItemsControl ItemsSource="{Binding ArchiveScan.Copies}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding Summary}" TextWrapping="Wrap" Margin="0,3,0,3"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl></Expander>
+   <TextBlock Text="Active Player resource: unverified"/>
+   <TextBlock Text="Gameplay behavior: unverified"/>
+   <ItemsControl ItemsSource="{Binding ChangedArtifactPaths}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding StringFormat='Changed or missing: {0}'}" TextWrapping="Wrap" Margin="0,4,0,0"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+   <ItemsControl ItemsSource="{Binding LocalResourceWarnings}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Margin="0,4,0,0"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+   <ItemsControl ItemsSource="{Binding Notes}"><ItemsControl.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,5,0,0"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+  </StackPanel>
+ </StackPanel>
+</UserControl>

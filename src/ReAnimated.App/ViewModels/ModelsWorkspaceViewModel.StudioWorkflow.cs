@@ -4,6 +4,9 @@ namespace ReAnimated.App.ViewModels;
 
 public sealed partial class ModelsWorkspaceViewModel
 {
+    internal void BindStudioEntryPathChange(RigConformanceWizardViewModel wizard) =>
+        wizard.StudioEntryPathChangeRequested += OnStudioEntryPathChangeRequested;
+
     private void OnStudioMetadataRequested(object? sender, StudioMetadataEventArgs e)
     {
         if (!ReferenceEquals(_model, e.Model)) return;
@@ -21,6 +24,35 @@ public sealed partial class ModelsWorkspaceViewModel
         else PersistenceStateChanged?.Invoke(this, EventArgs.Empty);
         UpdateConformanceViewportBinding();
         NotifyCommands();
+    }
+
+    private void OnStudioEntryPathChangeRequested(object? sender, StudioEntryPathChangeEventArgs e)
+    {
+        if (!ReferenceEquals(_model, e.Model) || _model?.Package.Document.RiggingSession is not { } current || !current.Matches(e.ExpectedToken) ||
+            e.EntryPath is not (RigStudioEntryPath.RepairExistingRig or RigStudioEntryPath.AdaptExistingRig))
+        {
+            if (ReferenceEquals(_model, e.Model)) Conformance.RefreshStudioMetadataSnapshot(_model!, _model!);
+            return;
+        }
+        if (current.EntryPath == e.EntryPath) return;
+        var strategy = e.EntryPath == RigStudioEntryPath.RepairExistingRig
+            ? RigMotionStrategy.RepairExistingRig
+            : RigMotionStrategy.PreserveAnatomyMapped;
+        var replacement = current with
+        {
+            EntryPath = e.EntryPath,
+            Recipe = current.Recipe with { MotionStrategy = strategy },
+        };
+        try
+        {
+            var changed = RiggingSessions.Change(current, replacement, RiggingEditKind.Detection);
+            CommitBodyGuideSession(changed, $"Switched to {e.EntryPath}; dependent stage reviews were cleared.");
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or OverflowException)
+        {
+            BuildStatus = "The workflow could not be changed: " + error.Message;
+            Conformance.RefreshStudioMetadataSnapshot(_model!, _model!);
+        }
     }
 
     private bool BuildSnapshotStillCurrent(ReAnimated.Codecs.Fbx.FbxModelAuthoringImportResult built, long revision, string resourceName)

@@ -299,10 +299,24 @@ public sealed class SkeletonPose
             GlobalMatrices = rig.ComputeGlobalMatrices(locals);
             return;
         }
-        _exactLocalMatrices = exactLocalMatrices.ToImmutableArray();
-        if (LocalMatrices.Length != rig.BoneCount || LocalMatrices.Any(static matrix => !matrix.IsFinite ||
-            matrix.M41 != 0 || matrix.M42 != 0 || matrix.M43 != 0 || matrix.M44 != 1))
+        ImmutableArray<TransformMatrix> authoredExact = exactLocalMatrices.ToImmutableArray();
+        const double affineRoundoffTolerance = 1e-12;
+        if (authoredExact.Length != rig.BoneCount || authoredExact.Any(matrix => !matrix.IsFinite ||
+            Math.Abs(matrix.M41) > affineRoundoffTolerance ||
+            Math.Abs(matrix.M42) > affineRoundoffTolerance ||
+            Math.Abs(matrix.M43) > affineRoundoffTolerance ||
+            Math.Abs(matrix.M44 - 1) > affineRoundoffTolerance))
             throw new ArgumentException("Exact pose matrices must be finite affine transforms covering the rig.", nameof(exactLocalMatrices));
+        // Inverting and composing valid FBX affine matrices can leave a
+        // machine-epsilon residue in the homogeneous row. Keep the authored
+        // 3x4 frame exact while canonicalizing only that numerical residue.
+        _exactLocalMatrices = authoredExact.Select(static matrix => matrix with
+        {
+            M41 = 0,
+            M42 = 0,
+            M43 = 0,
+            M44 = 1,
+        }).ToImmutableArray();
         var globals = ImmutableArray.CreateBuilder<TransformMatrix>(rig.BoneCount);
         for (int index = 0; index < rig.BoneCount; index++)
         {

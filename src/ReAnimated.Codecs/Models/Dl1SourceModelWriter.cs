@@ -42,6 +42,7 @@ public sealed record Dl1SourceModelBuildResult(
     ImmutableDictionary<string, string> OutputSha256,
     ImmutableArray<string> BlockingReasons)
 {
+    public ImmutableArray<RigProfileDiagnostic> CapabilityDiagnostics { get; init; } = [];
     public ImmutableArray<string> NativeCompanionFiles { get; init; } = [];
     public ImmutableArray<string> NativeCompanionNotes { get; init; } = [];
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
@@ -90,6 +91,7 @@ public static class Dl1SourceModelWriter
         string outputDirectory = Path.GetFullPath(request.OutputDirectory);
         cancellationToken.ThrowIfCancellationRequested();
 
+        var capabilityDiagnostics = FbxCapabilityProfileAuthoring.ValidateExport(request.Model, cancellationToken);
         PreparedSourceModel prepared = Prepare(request.Model, resourceName, surfaceName, cancellationToken);
         ImmutableArray<Dl1ResolvedBoneScriptPolicy> componentPolicies = request.Model.Package.Document.RiggingSession is not null && prepared.RigContract is not null
             ? Dl1BoneScriptPolicyResolver.Resolve(request.Model.Package.Document, prepared.RigContract) : default;
@@ -183,6 +185,14 @@ public static class Dl1SourceModelWriter
                     : "Authored Chrome +X frames shared with authored animation conversion",
                 unsupported = new[] { ".skn", ".msh_obj" },
             },
+            capabilityProfile = new
+            {
+                reference = request.Model.Package.Document.RiggingSession?.Recipe.Profile,
+                definitionPresent = request.Model.Package.Document.RiggingSession?.Recipe.ProfileSnapshot is not null,
+                selectedCapabilities = request.Model.Package.Document.RiggingSession?.Recipe.SelectedCapabilityIds ?? [],
+                diagnostics = capabilityDiagnostics,
+                nativeBehaviorVerified = false,
+            },
             counts = new
             {
                 bones = prepared.BoneNames.Length,
@@ -267,6 +277,7 @@ public static class Dl1SourceModelWriter
                 .. prepared.MaterialNotes,
             ])
         {
+            CapabilityDiagnostics = capabilityDiagnostics,
             NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
             BoneScriptPolicies = componentPolicies,
             AuthoredRigContract = prepared.RigContract,
@@ -472,6 +483,14 @@ public static class Dl1SourceModelWriter
         ImmutableArray<int> physicalPalette,
         bool flipTextureCoordinateV)
     {
+        for (int index = 0; index < surface.Vertices.Length; index++)
+        {
+            Vector3D normal = surface.Vertices[index].Normal;
+            if (!normal.IsFinite || normal.LengthSquared <= 1e-16)
+                throw new InvalidDataException(
+                    $"Surface '{surface.Id}' vertex {index} has a missing or degenerate base normal. " +
+                    "Review authored normal edits before native output.");
+        }
         ImmutableArray<Vector3D> positions = surface.Vertices.Select(static vertex => vertex.Position).ToImmutableArray();
         ImmutableArray<Vector3D> normals = surface.Vertices.Select(static vertex => vertex.Normal.Normalized()).ToImmutableArray();
         ImmutableArray<(double U, double V)> uvs = surface.Vertices
@@ -481,6 +500,15 @@ public static class Dl1SourceModelWriter
             .ToImmutableArray();
         (ImmutableArray<Vector3D> tangents, ImmutableArray<Vector3D> bitangents) =
             ComputeTangentBasis(positions, normals, uvs, surface.Indices);
+        for (int index = 0; index < normals.Length; index++)
+        {
+            if (!normals[index].IsFinite || normals[index].LengthSquared <= 1e-16 ||
+                !tangents[index].IsFinite || tangents[index].LengthSquared <= 1e-16 ||
+                !bitangents[index].IsFinite || bitangents[index].LengthSquared <= 1e-16)
+                throw new InvalidDataException(
+                    $"Surface '{surface.Id}' vertex {index} has no finite normal/tangent basis. " +
+                    "Review the normals, triangles and UVs before native output.");
+        }
         ImmutableArray<SkinVertex> skin = surface.IsSkinned
             ? surface.Vertices.Select((vertex, index) =>
             {

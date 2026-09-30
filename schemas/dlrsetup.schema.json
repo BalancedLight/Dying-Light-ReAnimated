@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "dlrsetup.schema.json",
+  "title": "Reusable rig profile and channel setup",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "version",
+    "name",
+    "contentSha256",
+    "profile",
+    "capabilities",
+    "characterOwnerRoles",
+    "nodes"
+  ],
+  "properties": {
+    "format": {
+      "const": "dl-reanimated-rig-setup"
+    },
+    "version": {
+      "const": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contentSha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "profile": {
+      "$ref": "dlrprofile.schema.json"
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "characterOwnerRoles": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "nodes": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "nativeName",
+          "kind",
+          "roles",
+          "requiresFrameReview"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "nativeName": {
+            "type": "string",
+            "minLength": 1
+          },
+          "kind": {
+            "enum": [
+              "unknown",
+              "bone",
+              "helper",
+              "mesh",
+              "morph",
+              "particle",
+              "collision"
+            ]
+          },
+          "roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "uniqueItems": true
+          },
+          "requiresFrameReview": {
+            "type": "boolean"
+          },
+          "channels": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "positionOwners": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "unknown",
+                    "bindInherited",
+                    "clip",
+                    "procedural",
+                    "attachment",
+                    "runtimeBodyScale"
+                  ]
+                }
+              },
+              "rotationOwners": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "unknown",
+                    "bindInherited",
+                    "clip",
+                    "procedural",
+                    "attachment",
+                    "runtimeBodyScale"
+                  ]
+                }
+              },
+              "scaleOwners": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": {
+                  "enum": [
+                    "unknown",
+                    "bindInherited",
+                    "clip",
+                    "procedural",
+                    "attachment",
+                    "runtimeBodyScale"
+                  ]
+                }
+              },
+              "positionRule": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rotationRule": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "scaleRule": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "lodRuleId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "emittedMask": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "animationLod": {
+                "enum": [
+                  null,
+                  "lod0",
+                  "lod1",
+                  "lod2",
+                  "lod3",
+                  "off"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

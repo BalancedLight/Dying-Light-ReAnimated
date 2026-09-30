@@ -12,7 +12,7 @@
         </Grid.RowDefinitions>
         <TextBlock Margin="2,0,2,6"
                    Foreground="{StaticResource MutedTextBrush}"
-                   Text="Original FBX stacks and saved derived clips are listed here. New derived clips start with Use off. Names, cadence, root policy, and root bone are editable per clip."
+                   Text="New derived clips are excluded until you select Use."
                    TextWrapping="Wrap" />
         <DataGrid Grid.Row="1"
                   AutoGenerateColumns="False"
@@ -51,7 +51,7 @@
             <Button Margin="0,6,0,0"
                     HorizontalAlignment="Left"
                     Command="{Binding OpenSelectedAnimationInAnimateCommand}"
-                    Content="Play selected in Playback" />
+                    Content="Play selected clip" />
         </StackPanel>
     </Grid>
 </UserControl>

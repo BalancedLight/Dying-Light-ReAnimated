@@ -12,7 +12,8 @@ using ReAnimated.Retargeting.Geometry;
 namespace ReAnimated.App.ViewModels;
 
 public sealed record WeightComponentChoice(string Id, string Name, int PointCount);
-public sealed record WeightPointReview(int SourcePoint, string Before, string After, double RemovedWeight, double SourceRoundingError, bool InfluenceLocked);
+public sealed record WeightPointReview(int SourcePoint, string Before, string After, double RemovedWeight,
+    double SourceRoundingError, bool InfluenceLocked, double InitialBindingRemovedWeight = 0);
 public sealed record WeightOperationChoice(SkinWeightCorrectionKind Kind, string Label);
 
 public sealed partial class RigConformanceWizardViewModel
@@ -118,7 +119,9 @@ public sealed partial class RigConformanceWizardViewModel
             SelectedWeightInfluence = WeightInfluences.FirstOrDefault(i => i.EntityId == _preferredWeightInfluence) ?? WeightInfluences.FirstOrDefault();
             SelectedWeightComponent = WeightComponents.FirstOrDefault(c => c.Id == _preferredWeightComponent) ?? WeightComponents.FirstOrDefault();
             RestoreWeightMirroring();
-            WeightEditingStatus = $"Observed {snapshot.Points.Length} original points and {snapshot.Session.WeightLocks.Length} saved influence locks. Viewing does not change weights.";
+            WeightEditingStatus = $"Observed {snapshot.Points.Length} original points and {snapshot.Session.WeightLocks.Length} saved influence locks. " +
+                $"{snapshot.Session.BindingReviewPoints.Length} source points have recorded provisional weight loss from their initial automatic bind. " +
+                "That history is not a current deformation score; viewing does not change weights.";
         }
         catch (OperationCanceledException) { WeightEditingStatus = "Weight inspection cancelled."; }
         catch (Exception error) when (IsWeightError(error)) { WeightEditingStatus = "Weights need attention: " + error.Message; }
@@ -140,11 +143,18 @@ public sealed partial class RigConformanceWizardViewModel
             _weightPreview = preview;
             WeightPointReviews.Clear();
             var names = snapshot.Influences.ToDictionary(static b => b.EntityId, static b => b.Name);
+            var initialLoss = snapshot.Session.BindingReviewPoints.ToDictionary(
+                static row => (row.ComponentId, row.ControlPointIndex),
+                static row => row.RemovedWeightBeforeRenormalization);
             foreach (var change in preview.Correction.Changes.Take(1000))
-                WeightPointReviews.Add(new(snapshot.Points[change.PointIndex].ControlPointIndex,
+            {
+                var point = snapshot.Points[change.PointIndex];
+                WeightPointReviews.Add(new(point.ControlPointIndex,
                     DescribeWeights(change.Before, names), DescribeWeights(change.After, names), change.RemovedWeightBeforeNormalization,
                     Dl1SkinWeightQuantization.MaximumNormalizedError(change.After.Select(static w => w.Weight).ToArray()),
-                    snapshot.Points[change.PointIndex].LockedInfluences.Contains(SelectedWeightInfluence!.EntityId)));
+                    point.LockedInfluences.Contains(SelectedWeightInfluence!.EntityId),
+                    initialLoss.GetValueOrDefault((point.ComponentId, point.ControlPointIndex))));
+            }
             string diagnostics = string.Join(" ", preview.Correction.Diagnostics.Take(4).Select(static d => d.Message));
             WeightEditingStatus = $"Preview: {preview.Correction.Changes.Length} changed source points. {diagnostics}" +
                 (preview.Correction.Changes.Length > 1000 ? " Showing the first 1,000 changes." : string.Empty);
@@ -164,7 +174,7 @@ public sealed partial class RigConformanceWizardViewModel
         {
             var result = await Task.Run(() => FbxSkinWeightAuthoring.TryApply(source, preview, out var updated, token) ? updated : null, token);
             if (result is null || token.IsCancellationRequested || generation != _weightJobGeneration || !ReferenceEquals(_model, source)) return;
-            if (!ReferenceEquals(result, source)) BodyModelApplyRequested?.Invoke(this, new(source, result, "Saved source-point weight correction. Deformation review remains required."));
+            if (!ReferenceEquals(result, source)) if (!RequestBodyChange(BodyModelApplyRequested, new(source, result, "Saved source-point weight correction. Deformation review remains required."))) return;
             applied = true;
         }
         catch (OperationCanceledException) { WeightEditingStatus = "Weight correction cancelled before commit."; }
@@ -179,7 +189,7 @@ public sealed partial class RigConformanceWizardViewModel
         try
         {
             if (!FbxSkinWeightAuthoring.TrySetLocks(source, snapshot, SelectedWeightPoints(), influence.EntityId, locked, out var updated)) return;
-            if (!ReferenceEquals(updated, source)) BodyModelApplyRequested?.Invoke(this, new(source, updated, locked ? "Locked selected influence fractions, including zero weights." : "Unlocked selected influence fractions."));
+            if (!ReferenceEquals(updated, source)) if (!RequestBodyChange(BodyModelApplyRequested, new(source, updated, locked ? "Locked selected influence fractions, including zero weights." : "Unlocked selected influence fractions."))) return;
             await InspectWeightsAsync(token);
         }
         catch (Exception error) when (IsWeightError(error)) { WeightEditingStatus = "Locks were not changed: " + error.Message; }
@@ -222,10 +232,28 @@ public sealed partial class RigConformanceWizardViewModel
     {
         if (_weightSnapshot is not { } snapshot || SelectedWeightComponent is not { } component || SelectedWeightInfluence is not { } influence) return;
         var names = snapshot.Influences.ToDictionary(static b => b.EntityId, static b => b.Name);
-        foreach (var point in snapshot.Points.Where(p => p.ComponentId == component.Id).Take(1000))
+        var initialLoss = snapshot.Session.BindingReviewPoints.ToDictionary(
+            static row => (row.ComponentId, row.ControlPointIndex),
+            static row => row.RemovedWeightBeforeRenormalization);
+        HashSet<int> selected = [];
+        if (!WholeWeightComponent)
+        {
+            try { selected = SelectedWeightPoints().ToHashSet(); }
+            catch (InvalidOperationException) { /* Keep the table usable while a source-point range is being edited. */ }
+        }
+        foreach (var entry in snapshot.Points.Select((point, index) => (point, index))
+                     .Where(entry => entry.point.ComponentId == component.Id)
+                     .OrderByDescending(entry => selected.Contains(entry.index))
+                     .ThenByDescending(entry => initialLoss.GetValueOrDefault((entry.point.ComponentId, entry.point.ControlPointIndex)))
+                     .ThenBy(entry => entry.point.ControlPointIndex)
+                     .Take(1000))
+        {
+            var point = entry.point;
             WeightPointReviews.Add(new(point.ControlPointIndex, DescribeWeights(point.Weights, names), string.Empty, 0,
                 point.Weights.IsEmpty ? 0 : Dl1SkinWeightQuantization.MaximumNormalizedError(point.Weights.Select(static w => w.Weight).ToArray()),
-                point.LockedInfluences.Contains(influence.EntityId)));
+                point.LockedInfluences.Contains(influence.EntityId),
+                initialLoss.GetValueOrDefault((point.ComponentId, point.ControlPointIndex))));
+        }
     }
     partial void OnSelectedWeightInfluenceChanged(SkinWeightInfluenceChoice? value) { if (value is not null) _preferredWeightInfluence = value.EntityId; InvalidateWeightPreview(); RestoreWeightMirroring(); }
     partial void OnSelectedWeightComponentChanged(WeightComponentChoice? value) { if (value is not null) _preferredWeightComponent = value.Id; InvalidateWeightPreview(); }

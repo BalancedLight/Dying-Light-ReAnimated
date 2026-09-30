@@ -228,7 +228,7 @@ public sealed class AuthoredModelLayerCodecTests
         Assert.Throws<InvalidDataException>(() => AuthoredModelLayerCodec.Deserialize(payload.Add(0).AsSpan()));
 
         byte[] unknownVersion = payload.ToArray();
-        unknownVersion[4] = 2;
+        unknownVersion[4] = AuthoredModelLayer.CurrentVersion + 1;
         Assert.Throws<InvalidDataException>(() => AuthoredModelLayerCodec.Deserialize(unknownVersion));
         byte[] hostileCount = payload.ToArray();
         // The first count after the three fixed strings is the bone count.

@@ -3,16 +3,128 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              MinWidth="0">
     <StackPanel Margin="4,8,4,4">
-        <TextBlock Text="Choose what drives each transform and which channels are exported. Changes apply only when you press an Apply button."
+        <TextBlock Text="Choose channel owners, exported channels, and animation LOD."
                    TextWrapping="Wrap" />
         <TextBlock Text="{Binding ChannelPolicyScope}" Margin="0,6,0,4" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
-        <ListBox ItemsSource="{Binding ChannelPolicies}" SelectedItem="{Binding SelectedChannelPolicy}"
+        <TextBox Text="{Binding ChannelPolicyNameFilter, UpdateSourceTrigger=PropertyChanged}"
+                 ToolTip="Filter nodes by name"
+                 Margin="0,0,0,4" />
+        <TextBlock Text="{Binding FilteredChannelPolicySummary}" TextWrapping="Wrap"
+                   Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,4" />
+        <ListBox ItemsSource="{Binding VisibleChannelPolicies}" SelectedItem="{Binding SelectedChannelPolicy}"
                  DisplayMemberPath="Name" Height="130" IsEnabled="{Binding CanEditChannelPolicies}"
                  ScrollViewer.HorizontalScrollBarVisibility="Auto" />
+        <Expander Header="Edit filtered nodes"
+                  IsExpanded="True" Margin="0,6,0,5"
+                  Visibility="{Binding CanApplyFilteredChannelPolicies, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <StackPanel Margin="4" IsEnabled="{Binding CanEditChannelPolicies}">
+                <TextBlock Text="Review the matching nodes before applying these settings to all of them."
+                           TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,5" />
+                <WrapPanel>
+                    <ComboBox ItemsSource="{Binding ChannelOwnerChoices}" SelectedItem="{Binding PositionChannelOwner}" DisplayMemberPath="Label" Width="180" Margin="0,0,5,4" ToolTip="Position owner" />
+                    <ComboBox ItemsSource="{Binding ChannelOwnerChoices}" SelectedItem="{Binding RotationChannelOwner}" DisplayMemberPath="Label" Width="180" Margin="0,0,5,4" ToolTip="Rotation owner" />
+                    <ComboBox ItemsSource="{Binding ChannelOwnerChoices}" SelectedItem="{Binding ScaleChannelOwner}" DisplayMemberPath="Label" Width="180" Margin="0,0,5,4" ToolTip="Scale owner" />
+                </WrapPanel>
+                <WrapPanel>
+                    <CheckBox Content="POS" IsThreeState="True" IsChecked="{Binding EmitPositionChannel}" Margin="0,0,12,4" />
+                    <CheckBox Content="ROT" IsThreeState="True" IsChecked="{Binding EmitRotationChannel}" Margin="0,0,12,4" />
+                    <CheckBox Content="SCL" IsThreeState="True" IsChecked="{Binding EmitScaleChannel}" Margin="0,0,12,4" />
+                    <Button Content="Omit all three" Command="{Binding OmitAllChannelComponentsCommand}" Margin="8,0,0,4" />
+                </WrapPanel>
+                <ComboBox ItemsSource="{Binding ChannelLodChoices}" SelectedItem="{Binding ChannelLod}" DisplayMemberPath="Label" Width="160" HorizontalAlignment="Left" Margin="0,0,0,4" ToolTip="Animation LOD" />
+                <Button Content="Apply to filtered nodes" Command="{Binding ApplyFilteredChannelPoliciesCommand}" HorizontalAlignment="Left" Margin="0,0,0,4" />
+                <TextBlock Text="{Binding ChannelPolicyStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Expander>
+        <Expander Header="Stock humanoid clip settings" Margin="0,8,0,5">
+            <StackPanel Margin="4">
+                <TextBlock Text="Propose rotation from the clip while keeping fitted positions and scale. Cloth, hair, and helper nodes stay unchanged. Some clips need translation, so check playback in Editor and Player."
+                           TextWrapping="Wrap" Margin="0,0,0,6" />
+                <TextBlock Text="Root position" />
+                <ComboBox ItemsSource="{Binding StockHumanoidRootChoices}" SelectedItem="{Binding StockHumanoidRootPosition}"
+                          DisplayMemberPath="Label" Margin="0,2,0,5" />
+                <TextBlock Text="Root rotation" />
+                <ComboBox ItemsSource="{Binding StockHumanoidRootChoices}" SelectedItem="{Binding StockHumanoidRootRotation}"
+                          DisplayMemberPath="Label" Margin="0,2,0,5" />
+                <TextBlock Text="Root scale" />
+                <ComboBox ItemsSource="{Binding StockHumanoidRootChoices}" SelectedItem="{Binding StockHumanoidRootScale}"
+                          DisplayMemberPath="Label" Margin="0,2,0,5" />
+                <Button Content="Preview channel choices" Command="{Binding PreviewStockHumanoidPolicyCommand}"
+                        HorizontalAlignment="Left" Margin="0,1,0,5" />
+                <TextBlock Text="Review the proposed rows before applying. Existing choices are included only if selected below."
+                           TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,4" />
+                <CheckBox Content="Include nodes with existing channel choices"
+                          IsChecked="{Binding StockHumanoidIncludeExisting}" Margin="0,1,0,4" />
+                <CheckBox Content="I reviewed the proposed rows and root choices"
+                          IsChecked="{Binding StockHumanoidReviewed}" Margin="0,0,0,4" />
+                <Button Content="Apply reviewed choices" Command="{Binding ApplyStockHumanoidPolicyCommand}"
+                        HorizontalAlignment="Left" Margin="0,0,0,5" />
+                <TextBlock Text="{Binding StockHumanoidStatus}" TextWrapping="Wrap" Margin="0,0,0,4" />
+                <ListView ItemsSource="{Binding StockHumanoidRows}" Height="150"
+                          ScrollViewer.HorizontalScrollBarVisibility="Auto">
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Node" DisplayMemberBinding="{Binding Name}" Width="140" />
+                            <GridViewColumn Header="Current mask" DisplayMemberBinding="{Binding CurrentMask}" Width="100" />
+                            <GridViewColumn Header="Proposed mask" DisplayMemberBinding="{Binding ProposedMask}" Width="110" />
+                            <GridViewColumn Header="LOD" DisplayMemberBinding="{Binding Lod}" Width="80" />
+                            <GridViewColumn Header="Status" DisplayMemberBinding="{Binding Status}" Width="115" />
+                            <GridViewColumn Header="Reason" DisplayMemberBinding="{Binding Reason}" Width="390" />
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+            </StackPanel>
+        </Expander>
+        <Expander Header="Stock channel and LOD settings" Margin="0,8,0,5">
+            <StackPanel Margin="4">
+        <TextBlock Text="Preview the stock channel mask and LOD. Assign channel owners before applying."
+                   TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,8,0,4" />
+        <Button Content="Preview stock channels" Command="{Binding PreviewStockChannelPoliciesCommand}"
+                HorizontalAlignment="Left" Margin="0,0,0,4" />
+        <TextBlock Text="{Binding StockPolicyPreviewStatus}" TextWrapping="Wrap" Margin="0,0,0,4" />
+        <ListView ItemsSource="{Binding StockPolicyPreviewRows}" Height="175"
+                  ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                  ScrollViewer.VerticalScrollBarVisibility="Auto">
+            <ListView.View>
+                <GridView>
+                    <GridViewColumn Header="Node" DisplayMemberBinding="{Binding Name}" Width="130" />
+                    <GridViewColumn Header="Current mask" DisplayMemberBinding="{Binding CurrentMask}" Width="100" />
+                    <GridViewColumn Header="Current LOD" DisplayMemberBinding="{Binding CurrentLod}" Width="90" />
+                    <GridViewColumn Header="Proposed mask" DisplayMemberBinding="{Binding ProposedMask}" Width="110" />
+                    <GridViewColumn Header="Proposed LOD" DisplayMemberBinding="{Binding ProposedLod}" Width="100" />
+                    <GridViewColumn Header="Raw flags" DisplayMemberBinding="{Binding RawFlags}" Width="90" />
+                    <GridViewColumn Header="Source SHA-256" DisplayMemberBinding="{Binding SourceHash}" Width="260" />
+                    <GridViewColumn Header="Status" DisplayMemberBinding="{Binding Status}" Width="220" />
+                    <GridViewColumn Header="Review note" DisplayMemberBinding="{Binding Reason}" Width="420" />
+                </GridView>
+            </ListView.View>
+        </ListView>
+        <Expander Header="Apply stock settings" Margin="0,6,0,8">
+            <StackPanel Margin="4">
+                <TextBlock Text="Choose who drives channels present or omitted in the stock mask. Check the result in Player after building."
+                           TextWrapping="Wrap" Margin="0,0,0,6" />
+                <TextBlock Text="Apply scope" />
+                <ComboBox ItemsSource="{Binding StockPolicyApplyScopes}" SelectedItem="{Binding StockPolicyApplyScope}"
+                          DisplayMemberPath="Label" Margin="0,2,0,6" />
+                <TextBlock Text="Owner for each channel included by the stock mask" />
+                <ComboBox ItemsSource="{Binding ExplicitChannelOwnerChoices}" SelectedItem="{Binding StockEnabledChannelOwner}"
+                          DisplayMemberPath="Label" Margin="0,2,0,6" />
+                <TextBlock Text="Owner for each channel omitted by the stock mask" />
+                <ComboBox ItemsSource="{Binding ExplicitChannelOwnerChoices}" SelectedItem="{Binding StockOmittedChannelOwner}"
+                          DisplayMemberPath="Label" Margin="0,2,0,6" />
+                <CheckBox Content="I reviewed the stock rows and channel owners"
+                          IsChecked="{Binding StockPolicyReviewed}" Margin="0,2,0,6" />
+                <Button Content="Apply reviewed stock rows" Command="{Binding ApplyReviewedStockPolicyCommand}"
+                        HorizontalAlignment="Left" Margin="0,0,0,5" />
+                <TextBlock Text="{Binding StockPolicyApplyStatus}" TextWrapping="Wrap" />
+            </StackPanel>
+        </Expander>
+            </StackPanel>
+        </Expander>
         <TextBlock Text="{Binding SelectedChannelSummary}" TextWrapping="Wrap" Margin="0,5,0,8" />
         <StackPanel IsEnabled="{Binding CanEditChannelPolicies}">
             <TextBlock Text="Channel owners" FontWeight="SemiBold" />
-            <TextBlock Text="Keep saved owners preserves each node's own settings, including mixed ownership. For a node with no saved owners, choose an explicit owner for every channel."
+            <TextBlock Text="Choose an owner for each channel on nodes without saved settings."
                        TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,5" />
             <WrapPanel>
                 <StackPanel Width="250" Margin="0,0,8,6">
@@ -34,15 +146,19 @@
                 <CheckBox Content="Rotation (ROT)" IsThreeState="True" IsChecked="{Binding EmitRotationChannel}" Margin="0,0,12,4" />
                 <CheckBox Content="Scale (SCL)" IsThreeState="True" IsChecked="{Binding EmitScaleChannel}" Margin="0,0,12,4" />
             </WrapPanel>
+            <Button Content="Omit all channels" Command="{Binding OmitAllChannelComponentsCommand}"
+                    HorizontalAlignment="Left" Margin="0,0,0,4"
+                    ToolTip="Sets all three exported-channel decisions to omit; ownership and LOD still require review" />
             <TextBlock Text="{Binding ChannelMaskSummary}" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
             <TextBlock Text="Animation LOD" Margin="0,6,0,3" FontWeight="SemiBold" />
             <ComboBox ItemsSource="{Binding ChannelLodChoices}" SelectedItem="{Binding ChannelLod}" DisplayMemberPath="Label" Width="160" HorizontalAlignment="Left" />
-            <TextBlock Text="LOD uses the native export value shown here. Saving a value does not verify its behavior in Player." TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,3,0,5" />
             <WrapPanel Margin="0,3,0,5">
                 <Button Content="Apply to selected node" Command="{Binding ApplySelectedChannelPolicyCommand}" Margin="0,0,6,5" />
+                <Button Content="Apply to filtered nodes" Command="{Binding ApplyFilteredChannelPoliciesCommand}" Margin="0,0,6,5"
+                        ToolTip="Requires a nonempty name filter; applies the displayed mask, LOD, and owner choices only to matching rows" />
                 <Button Content="Apply to all listed nodes" Command="{Binding ApplyAllChannelPoliciesCommand}" Margin="0,0,6,5" />
             </WrapPanel>
+            <TextBlock Text="{Binding ChannelPolicyStatus}" TextWrapping="Wrap" />
         </StackPanel>
-        <TextBlock Text="{Binding ChannelPolicyStatus}" TextWrapping="Wrap" />
     </StackPanel>
 </UserControl>

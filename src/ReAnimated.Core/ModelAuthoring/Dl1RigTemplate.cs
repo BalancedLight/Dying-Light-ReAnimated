@@ -99,8 +99,8 @@ public sealed class Dl1RigTemplate
     public string SourceResourceName { get; }
 
     /// <summary>
-    /// The installed-build fingerprint the extraction was taken under. A
-    /// template from a different build does not inherit an earlier control.
+    /// Fingerprint of the decoded reference resource. Native module/build
+    /// identity and runtime acceptance are separate evidence.
     /// </summary>
     public string SourceFingerprint { get; }
 

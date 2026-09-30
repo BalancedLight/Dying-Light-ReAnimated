@@ -212,23 +212,6 @@ public sealed class ProjectJsonSchemaTests
         }
     }
 
-    private static string FindRepositoryFile(params string[] relativeSegments)
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            string candidate = Path.Combine(
-                [directory.FullName, .. relativeSegments]);
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new FileNotFoundException(
-            $"Could not locate '{Path.Combine(relativeSegments)}' above " +
-            $"'{AppContext.BaseDirectory}'.");
-    }
+    private static string FindRepositoryFile(params string[] relativeSegments) =>
+        TestRepositoryPaths.FindRepositoryFile(relativeSegments);
 }

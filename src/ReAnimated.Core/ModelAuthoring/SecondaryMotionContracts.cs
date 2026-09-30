@@ -12,6 +12,8 @@ public sealed record NativeClothSource
     public NativeClothSourceKind Kind { get; init; }
     public string ResourceName { get; init; } = string.Empty;
     public string Text { get; init; } = string.Empty;
+    /// <summary>First imported text retained when an authored hierarchy migration changes references.</summary>
+    public string? OriginalText { get; init; }
 }
 
 /// <summary>Explicit editor tuning; these values are NOT native MPC spring coefficients.</summary>
@@ -142,7 +144,7 @@ public sealed record SecondaryMotionDefinition
         foreach (NativeClothSource source in NativeSources)
         {
             ArgumentNullException.ThrowIfNull(source);
-            if (!Enum.IsDefined(source.Kind) || source.Text is null || source.Text.Length > 4 * 1024 * 1024)
+            if (!Enum.IsDefined(source.Kind) || source.Text is null || source.Text.Length > 4 * 1024 * 1024 || source.OriginalText?.Length > 4 * 1024 * 1024)
                 throw new ArgumentException("Native cloth source is invalid or exceeds the text limit.");
             CustomModelSourceIdentity.ValidatePackageEntryPath(source.ResourceName, nameof(NativeSources));
             if (!sourceNames.Add(source.ResourceName.Replace('\\', '/')) ||

@@ -1,0 +1,50 @@
+<UserControl x:Class="ReAnimated.App.Views.RigCapabilityProfileView" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="5">
+  <TextBlock Text="Runtime capability profile" FontWeight="SemiBold"/>
+  <TextBlock Text="Review profile roles and assignments. A resolved reference can seed an incomplete observed-node inventory; node presence does not establish runtime behavior." TextWrapping="Wrap" Margin="0,3,0,5"/>
+  <WrapPanel><Button Content="Create draft from resolved template" Command="{Binding CreateObservedNodeProfileCommand}"/><Button Content="Load profile..." Command="{Binding LoadCapabilityProfileCommand}"/><Button Content="Restore saved choices" Command="{Binding ResetCapabilityProfileCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding CapabilityProfileIdentity}" TextWrapping="Wrap" Margin="0,5,0,4"/>
+  <Expander Header="Profile identity and evidence"><TextBlock Text="{Binding CapabilityProfileProvenance}" TextWrapping="Wrap" Margin="5"/></Expander>
+  <TextBlock Text="Behaviors to include" FontWeight="SemiBold" Margin="0,6,0,3"/>
+  <ItemsControl ItemsSource="{Binding ProfileCapabilities}"><ItemsControl.ItemTemplate><DataTemplate><CheckBox Content="{Binding Id}" IsChecked="{Binding Selected}" Margin="0,2,0,2"/></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+  <TextBlock Text="Prerequisite behaviors and roles are included in the review automatically." TextWrapping="Wrap" Margin="0,3,0,4"/>
+  <Expander Header="Assign roles and owning assets" Margin="0,4,0,5"><StackPanel Margin="5">
+   <TextBlock Text="Profile role"/>
+   <ComboBox ItemsSource="{Binding CapabilityRoles}" SelectedItem="{Binding CapabilityRole}" DisplayMemberPath="Id"/>
+   <Expander Header="Authoring permissions for this role" IsEnabled="{Binding CanEditCapabilityPermissions}" Margin="0,5,0,5"><StackPanel Margin="5">
+    <CheckBox Content="Use explicit edit restrictions" IsChecked="{Binding EnforceRoleEditPermissions}"/>
+    <WrapPanel IsEnabled="{Binding EnforceRoleEditPermissions}" Margin="0,5,0,3">
+     <CheckBox Content="Name" IsChecked="{Binding PermitRoleName}" Margin="0,0,10,4"/>
+     <CheckBox Content="Parent" IsChecked="{Binding PermitRoleParent}" Margin="0,0,10,4"/>
+     <CheckBox Content="Position" IsChecked="{Binding PermitRolePosition}" Margin="0,0,10,4"/>
+     <CheckBox Content="Rotation / scale" IsChecked="{Binding PermitRoleOrientation}" Margin="0,0,10,4"/>
+     <CheckBox Content="Bounds" IsChecked="{Binding PermitRoleExtents}" Margin="0,0,10,4"/>
+     <CheckBox Content="Channels / LOD" IsChecked="{Binding PermitRoleChannels}" Margin="0,0,10,4"/>
+     <CheckBox Content="Remove node" IsChecked="{Binding PermitRoleRemoval}" Margin="0,0,10,4"/>
+    </WrapPanel>
+    <TextBlock Text="Checked fields may be edited. Changes update only this profile draft until it is previewed, reviewed and saved. Helper locks and native role checks still apply." TextWrapping="Wrap"/>
+   </StackPanel></Expander>
+   <TextBlock Text="Expected native name" Margin="0,4,0,0"/><TextBlock Text="{Binding CapabilityRole.NativeName, FallbackValue='Unresolved'}" TextWrapping="Wrap"/>
+   <TextBlock Text="Existing node" Margin="0,4,0,0"/>
+   <ComboBox ItemsSource="{Binding CapabilityEntities}" SelectedItem="{Binding CapabilityEntity}" DisplayMemberPath="NativeName" IsTextSearchEnabled="True"/>
+   <Button Content="Assign selected node" Command="{Binding AssignCapabilityRoleCommand}" HorizontalAlignment="Left" Margin="0,4,0,5"/>
+   <TextBlock Text="Saved and draft assignments"/>
+   <ListBox ItemsSource="{Binding CapabilityAssignments}" SelectedItem="{Binding CapabilityAssignment}" DisplayMemberPath="Label" MaxHeight="140"/>
+   <Button Content="Remove selected assignment" Command="{Binding RemoveCapabilityAssignmentCommand}" HorizontalAlignment="Left" Margin="0,4,0,5"/>
+   <TextBlock Text="Removing an assignment retains the node and all its geometry, weights and animation." TextWrapping="Wrap"/>
+   <TextBlock Text="Owning asset role" FontWeight="SemiBold" Margin="0,7,0,3"/>
+   <ComboBox ItemsSource="{Binding CapabilityOwnerRoles}" SelectedItem="{Binding CapabilityOwnerRole}"/>
+   <Button Content="Assign this character as owner" Command="{Binding BindCapabilityOwnerCommand}" HorizontalAlignment="Left" Margin="0,4,0,3"/>
+   <TextBlock Text="{Binding CapabilityOwnerSummary}" TextWrapping="Wrap"/>
+  </StackPanel></Expander>
+  <WrapPanel><Button Content="Preview role report" Command="{Binding PreviewCapabilityProfileCommand}"/><Button Content="Cancel preview" Command="{Binding CancelCapabilityProfileCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding CapabilityReviewSummary}" TextWrapping="Wrap" Margin="0,5,0,4"/>
+  <ListBox ItemsSource="{Binding CapabilityReviewRows}" SelectedItem="{Binding CapabilityReviewRow}" MaxHeight="190" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+   <ListBox.ItemTemplate><DataTemplate><StackPanel><TextBlock Text="{Binding Id}" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="{Binding Status}" TextWrapping="Wrap"/></StackPanel></DataTemplate></ListBox.ItemTemplate>
+  </ListBox>
+  <TextBlock Text="{Binding CapabilityReviewRow.Details, FallbackValue='Select a role to inspect its requirements and next steps.'}" TextWrapping="Wrap" Margin="0,4,0,6"/>
+  <CheckBox Content="I reviewed this profile and its unresolved items" IsChecked="{Binding CapabilityProfileReviewed}"/>
+  <Button Content="Save reviewed profile choices" Command="{Binding ApplyCapabilityProfileCommand}" HorizontalAlignment="Left" Margin="0,4,0,5"/>
+  <TextBlock Text="{Binding CapabilityProfileStatus}" TextWrapping="Wrap"/>
+ </StackPanel>
+</UserControl>

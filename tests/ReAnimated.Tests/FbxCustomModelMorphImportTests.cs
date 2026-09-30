@@ -42,6 +42,87 @@ public sealed class FbxCustomModelMorphImportTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelMorph")]
+    public void SkipsPermanentlyCollapsedFaceWithoutLosingRenderableMorphOrSource()
+    {
+        byte[] fbx = CreateMorphFbx(
+            ["generic_smile"],
+            meshVertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0],
+            meshPolygons: [0, 1, -3, 0, 1, -4]);
+
+        FbxModelAuthoringImportResult imported = FbxModelAuthoringImporter.Import(
+            fbx, "collapsed-face.fbx",
+            new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp });
+
+        FbxModelSurface surface = Assert.Single(imported.Surfaces);
+        Assert.Single(surface.SourceTriangles);
+        Assert.Equal(1, Assert.Single(imported.Package.Document.Meshes).TriangleCount);
+        Assert.All(surface.Vertices, vertex =>
+        {
+            Assert.True(vertex.Normal.IsFinite);
+            Assert.InRange(vertex.Normal.Length, 0.999999, 1.000001);
+        });
+        Assert.Equal(3, Assert.Single(surface.MorphTargets).PositionDeltas.Length);
+        Assert.Contains(imported.Package.Document.Diagnostics, diagnostic =>
+            diagnostic.Code == "model_permanently_degenerate_triangles_skipped" &&
+            diagnostic.Message.Contains("1:0,1,2"));
+        Assert.True(fbx.AsSpan().SequenceEqual(imported.Package.SourceFbx.AsSpan()));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelMorph")]
+    public void RejectsCollapsedFaceThatMorphBlendingCanOpen()
+    {
+        byte[] fbx = CreateMorphFbx(
+            ["generic_smile"],
+            firstShapeDeltaY: 0.5,
+            meshVertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0],
+            meshPolygons: [0, 1, -3, 0, 1, -4]);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            FbxModelAuthoringImporter.Import(fbx, "opening-face.fbx",
+                new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+        Assert.Contains("triangle 1:0,1,2", error.Message);
+        Assert.Contains("may open under morph blending", error.Message);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelMorph")]
+    public void RejectsFaceThatOpensOnlyBeyondUnitMorphWeight()
+    {
+        byte[] fbx = CreateMorphFbx(
+            ["generic_smile"],
+            firstShapeDeltaX: 0.0,
+            firstShapeDeltaY: 3e-9,
+            meshVertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0],
+            meshPolygons: [0, 1, -3, 0, 1, -4]);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            FbxModelAuthoringImporter.Import(fbx, "wide-weight-face.fbx",
+                new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+        Assert.Contains("may open under morph blending", error.Message);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelMorph")]
+    public void RejectsGeometryWithOnlyCollapsedFaces()
+    {
+        byte[] fbx = CreateMorphFbx(
+            ["generic_smile"],
+            meshVertices: [0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0],
+            meshPolygons: [0, 1, -4]);
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+            FbxModelAuthoringImporter.Import(fbx, "empty-render.fbx",
+                new FbxModelAuthoringImportOptions { RigMode = CustomModelRigMode.StaticProp }));
+        Assert.Contains("no renderable triangles", error.Message);
+    }
+
+    [Fact]
     public void ImportsUniformFullWeightsPerAffectedPointWithoutChangingSourceOrDeltas()
     {
         byte[] fbx = CreateMorphFbx(["generic_smile"], fullWeights: [100.0, 100.0]);
@@ -336,7 +417,8 @@ public sealed class FbxCustomModelMorphImportTests
         bool scaleMesh = false,
         bool splitCorners = false,
         double[]? meshVertices = null,
-        long[]? meshPolygons = null)
+        long[]? meshPolygons = null,
+        double firstShapeDeltaY = 0.0)
     {
         const long baseGeometryId = 10;
         const long blendShapeId = 40;
@@ -400,7 +482,8 @@ public sealed class FbxCustomModelMorphImportTests
             objects.Add(CreateShape(
                 shapeId,
                 channelName,
-                index == 0 ? firstShapeDeltaX : 0.5, normalDeltas));
+                index == 0 ? firstShapeDeltaX : 0.5, normalDeltas,
+                index == 0 ? firstShapeDeltaY : 0.0));
             connections.Add(Connection(shapeId, channelId));
             connections.Add(Connection(channelId, blendShapeId));
 
@@ -426,7 +509,8 @@ public sealed class FbxCustomModelMorphImportTests
         long shapeId,
         string name,
         double firstDeltaX,
-        double[]? normalDeltas = null) =>
+        double[]? normalDeltas = null,
+        double firstDeltaY = 0.0) =>
         Node(
             "Geometry",
             [
@@ -437,7 +521,7 @@ public sealed class FbxCustomModelMorphImportTests
             [
             Node("Indexes", [Int64Array([0, 2])]),
             Node("Vertices", [DoubleArray([
-                firstDeltaX, 0.0, 0.0,
+                firstDeltaX, firstDeltaY, 0.0,
                 0.0, -0.25, 0.0,
             ])]),
             ..(normalDeltas is null ? Array.Empty<FbxTreeNode>() : new[] { Node("Normals",[DoubleArray(normalDeltas)]) })]);

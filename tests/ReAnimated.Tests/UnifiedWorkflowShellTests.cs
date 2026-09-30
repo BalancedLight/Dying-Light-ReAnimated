@@ -25,6 +25,9 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         await using var viewModel = CreateViewModel();
 
         Assert.Equal("Models", viewModel.ActiveWorkspaceMode);
+        Assert.Contains("Select an animation row",
+            viewModel.AnimationScriptTargetSummary,
+            StringComparison.Ordinal);
         Assert.Equal(
             ["Models", "Animations", "Playback", "Retarget/Edit", "Export"],
             viewModel.WorkspaceModes);
@@ -686,12 +689,15 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         Assert.Contains("Content=\"FPP camera\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("ItemsSource=\"{Binding ExportReadiness}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("ItemsSource=\"{Binding ExportVariants}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Binding=\"{Binding SourceRoles}\" Header=\"Source role\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding ExportFullProjectCommand}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding DeployCurrentSelectionCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding Models.RequestDeveloperToolsAnimationRefreshCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("Command=\"{Binding Models.CheckDeveloperToolsAnimationRefreshResultCommand}\"", xaml, StringComparison.Ordinal);
+        Assert.Contains("SelectedItem=\"{Binding Models.SelectedAnimationRefreshHost, Mode=TwoWay}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("Command=\"{Binding RollBackDeveloperToolsBatchCommand}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("SelectedItem=\"{Binding SelectedProjectModel}\"", xaml, StringComparison.Ordinal);
         Assert.Contains("DataContext=\"{Binding TargetViewport}\"", xaml, StringComparison.Ordinal);
-        Assert.Contains("active animation source and every target variant remain unchanged", xaml, StringComparison.Ordinal);
         Assert.Contains("Header=\"Facial / FPP\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("Header=\"Receipts\"", xaml, StringComparison.Ordinal);
         Assert.DoesNotContain("CommandParameter=\"Face\"", xaml, StringComparison.Ordinal);
@@ -822,6 +828,33 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
         Assert.Contains(blocked, model.Variants);
     }
 
+    [Fact]
+    public void AuxiliaryOnlyEmbeddedStackHasNoCharacterExportRole()
+    {
+        var source = new ProjectAnimationSource
+        {
+            EmbeddedCustomModelStack = new ProjectEmbeddedAnimationStackIdentity
+            {
+                Roles = AnimationSourceRoles.Auxiliary,
+            },
+        };
+        Assert.False(MainWindowViewModel.SourceHasExportableRole(source));
+        Assert.True(MainWindowViewModel.SourceHasExportableRole(source with
+        {
+            EmbeddedCustomModelStack = source.EmbeddedCustomModelStack with
+            {
+                Roles = AnimationSourceRoles.Body,
+            },
+        }));
+        Assert.True(MainWindowViewModel.SourceHasExportableRole(source with
+        {
+            EmbeddedCustomModelStack = source.EmbeddedCustomModelStack with
+            {
+                Roles = AnimationSourceRoles.Facial,
+            },
+        }));
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDirectory))
@@ -862,22 +895,6 @@ public sealed class UnifiedWorkflowShellTests : IDisposable
             string? currentPath) => null;
     }
 
-    private static string LocateRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null)
-        {
-            if (File.Exists(Path.Combine(
-                    directory.FullName,
-                    "DLReAnimated.slnx")))
-            {
-                return directory.FullName;
-            }
-
-            directory = directory.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            "Could not locate the DL ReAnimated repository root.");
-    }
+    private static string LocateRepositoryRoot() =>
+        TestRepositoryPaths.FindRepositoryRoot();
 }

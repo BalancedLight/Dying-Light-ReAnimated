@@ -97,6 +97,9 @@ public sealed record RiggingJobToken(Guid SessionId, Guid Generation, long Revis
 
 /// <summary>A source-point influence lock. Its current fraction, including zero, is preserved by weight edits.</summary>
 public sealed record RigSkinWeightLock(string ComponentId, int ControlPointIndex, Guid EntityId);
+/// <summary>Historical automatic-binding loss at an original source point; it is not a current deformation score.</summary>
+public sealed record RigSkinBindingReviewPoint(
+    string ComponentId, int ControlPointIndex, double RemovedWeightBeforeRenormalization);
 public sealed record RigWeightMirrorPair(Guid EntityId, Guid CounterpartEntityId);
 
 /// <summary>
@@ -126,6 +129,7 @@ public sealed record RiggingSession
     /// <summary>Explicit reviewed parent choices checked against the current hierarchy.</summary>
     public ImmutableArray<RigParentDecision> ParentDecisions { get; init; } = [];
     public ImmutableArray<RigSkinWeightLock> WeightLocks { get; init; } = [];
+    public ImmutableArray<RigSkinBindingReviewPoint> BindingReviewPoints { get; init; } = [];
     public ImmutableArray<RigWeightMirrorPair> WeightMirrorPairs { get; init; } = [];
     public bool MirrorWeightEdits { get; init; }
     public double WeightMirrorTolerance { get; init; } = .005;
@@ -156,6 +160,7 @@ public sealed record RiggingSession
         RigContractRules.Array(Eyes, nameof(Eyes));
         RigContractRules.Array(ParentDecisions, nameof(ParentDecisions));
         RigContractRules.Array(WeightLocks, nameof(WeightLocks));
+        RigContractRules.Array(BindingReviewPoints, nameof(BindingReviewPoints));
         RigContractRules.Array(WeightMirrorPairs, nameof(WeightMirrorPairs));
         RigContractRules.Array(Stages, nameof(Stages));
         RigContractRules.Array(ValidationHistory, nameof(ValidationHistory));
@@ -171,6 +176,13 @@ public sealed record RiggingSession
         if (WeightLocks.Length > 1_000_000 || WeightLocks.Distinct().Count() != WeightLocks.Length ||
             WeightLocks.Any(l => l is null || l.ControlPointIndex < 0 || !componentIds.Contains(l.ComponentId) || !entityIds.Contains(l.EntityId)))
             throw new ArgumentException("Weight locks require unique owned source-point and influence identities within the supported limit.");
+        if (BindingReviewPoints.Length > 1_000_000 ||
+            BindingReviewPoints.Any(row => row is null || row.ControlPointIndex < 0 ||
+                !componentIds.Contains(row.ComponentId) || !double.IsFinite(row.RemovedWeightBeforeRenormalization) ||
+                row.RemovedWeightBeforeRenormalization is <= 0 or > 1) ||
+            BindingReviewPoints.Select(static row => (row.ComponentId, row.ControlPointIndex)).Distinct().Count() != BindingReviewPoints.Length ||
+            !BindingReviewPoints.IsEmpty && BindingBackend is null)
+            throw new ArgumentException("Automatic binding review points require unique owned source identities, finite loss, and a saved binding backend.");
         if (!double.IsFinite(WeightMirrorTolerance) || WeightMirrorTolerance <= 0) throw new ArgumentException("Weight mirror tolerance must be positive and finite.");
         var paired = new HashSet<Guid>();
         foreach (var pair in WeightMirrorPairs)
@@ -297,7 +309,11 @@ public static class RiggingSessions
     public static RiggingSession Change(RiggingSession current, RiggingSession replacement, RiggingEditKind kind, bool allowLockedChanges = false)
     {
         ArgumentNullException.ThrowIfNull(current); ArgumentNullException.ThrowIfNull(replacement);
-        current.Validate(); replacement.Validate(); RigContractRules.Defined(kind, nameof(kind));
+        current.Validate();
+        if (!RigContractRules.SameHash(current.SourceSha256, replacement.SourceSha256) ||
+            !Equal(current.Components, replacement.Components))
+            replacement = replacement with { BindingReviewPoints = [] };
+        replacement.Validate(); RigContractRules.Defined(kind, nameof(kind));
         if (current.Id != replacement.Id || current.OwnerModelId != replacement.OwnerModelId)
             throw new ArgumentException("An edit cannot switch the owning model or session identity.");
         foreach (RigEntityBinding entity in current.Recipe.Entities)
@@ -320,6 +336,7 @@ public static class RiggingSessions
             };
             replacement.Validate();
         }
+        RigProfileEditGuard.RequireRecipeAllowed(current, replacement);
         if (!allowLockedChanges) RequireLocksPreserved(current, replacement);
         RigStudioStage first = kind switch
         {
@@ -339,7 +356,7 @@ public static class RiggingSessions
             current.Recipe.ScalePolicy.SourceToAuthoring != replacement.Recipe.ScalePolicy.SourceToAuthoring ||
             current.Recipe.ScalePolicy.ImportConversionAlreadyApplied != replacement.Recipe.ScalePolicy.ImportConversionAlreadyApplied)
             first = RigStudioStage.Import;
-        if (current.EntryPath != replacement.EntryPath || !Equal(current.Recipe.Profile, replacement.Recipe.Profile) ||
+        if (current.EntryPath != replacement.EntryPath || !Equal(current.Recipe.Profile, replacement.Recipe.Profile) || !Equal(current.Recipe.ProfileSnapshot, replacement.Recipe.ProfileSnapshot) ||
             !Equal(current.Recipe.SelectedCapabilityIds, replacement.Recipe.SelectedCapabilityIds) || !Equal(current.DetectionBackend, replacement.DetectionBackend) ||
             current.SymmetryOrigin != replacement.SymmetryOrigin || current.SymmetryNormal != replacement.SymmetryNormal || current.MirroringEnabled != replacement.MirroringEnabled)
             first = Earlier(first, RigStudioStage.Detect);
@@ -459,6 +476,8 @@ public static class RiggingSessions
             if (next is null) throw new InvalidOperationException("A locked helper cannot be removed implicitly.");
             RigHelperEditFields fields = helper.LockedFields;
             if ((next.LockedFields & fields) != fields ||
+                (fields & (RigHelperEditFields.Position | RigHelperEditFields.Orientation | RigHelperEditFields.Parent)) != 0 &&
+                    (next.FramePolicy != helper.FramePolicy || next.FollowPreparedParent != helper.FollowPreparedParent) ||
                 fields.HasFlag(RigHelperEditFields.Parent) && next.ParentEntityId != helper.ParentEntityId ||
                 fields.HasFlag(RigHelperEditFields.Position) && next.LocalFrame.Translation != helper.LocalFrame.Translation ||
                 fields.HasFlag(RigHelperEditFields.Orientation) && WithoutTranslation(next.LocalFrame) != WithoutTranslation(helper.LocalFrame) ||

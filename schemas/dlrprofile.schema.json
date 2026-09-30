@@ -1,0 +1,717 @@
+{
+  "type": "object",
+  "properties": {
+    "identity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "contentSha256": {
+          "type": "string",
+          "pattern": "^[A-Fa-f0-9]{64}$"
+        },
+        "buildFingerprint": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "contentSha256"
+      ],
+      "additionalProperties": false
+    },
+    "familyId": {
+      "type": "string"
+    },
+    "roles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "category": {
+            "enum": [
+              "unknown",
+              "body",
+              "contact",
+              "eye",
+              "gaze",
+              "grip",
+              "referenceCamera",
+              "viewCamera",
+              "twist",
+              "normal",
+              "structural",
+              "equipment",
+              "effect",
+              "facial",
+              "cloth",
+              "physics",
+              "damage"
+            ]
+          },
+          "entityKind": {
+            "enum": [
+              "unknown",
+              "bone",
+              "helper",
+              "mesh",
+              "morph",
+              "particle",
+              "collision"
+            ]
+          },
+          "nativeName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ownerAssetRoleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "aliases": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "lookupRuleId": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "enum": [
+                          "importedSource",
+                          "profileRule",
+                          "geometryInference",
+                          "userOverride",
+                          "offlineTest",
+                          "compiledReadBack",
+                          "loadedResourceCapture",
+                          "liveScenarioCapture"
+                        ]
+                      },
+                      "artifactSha256": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "buildFingerprint": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "consumerId": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "description": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "kind"
+                    ],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "lookupRuleId",
+                "evidence"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "requirement": {
+            "enum": [
+              "unknown",
+              "required",
+              "conditional",
+              "optional"
+            ]
+          },
+          "conditionCapabilityId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prerequisiteRoleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parentRoleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parentConstraint": {
+            "enum": [
+              "unspecified",
+              "direct",
+              "ancestor"
+            ]
+          },
+          "minimumCount": {
+            "type": "integer"
+          },
+          "maximumCount": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "skinInfluenceAllowed": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "framePolicy": {
+            "enum": [
+              "preserveSource",
+              "generatedDeform",
+              "contact",
+              "camera",
+              "socket",
+              "structural",
+              "manual"
+            ]
+          },
+          "frameRuleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "componentRuleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "retentionRuleId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "allowedEdits": {
+            "type": "string"
+          },
+          "requiredVariantIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requiredLods": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "rulesComplete": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "importedSource",
+                    "profileRule",
+                    "geometryInference",
+                    "userOverride",
+                    "offlineTest",
+                    "compiledReadBack",
+                    "loadedResourceCapture",
+                    "liveScenarioCapture"
+                  ]
+                },
+                "artifactSha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "buildFingerprint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "consumerId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "validationRules": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "frame": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "allowedPolicies": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "preserveSource",
+                        "generatedDeform",
+                        "contact",
+                        "camera",
+                        "socket",
+                        "structural",
+                        "manual"
+                      ]
+                    }
+                  },
+                  "preserveSourceGlobal": {
+                    "type": "boolean"
+                  },
+                  "requireOrthonormal": {
+                    "type": "boolean"
+                  },
+                  "originRoleId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "originOffset": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "x",
+                      "y",
+                      "z"
+                    ]
+                  },
+                  "directionRoleId": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "localAxis": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "x",
+                      "y",
+                      "z"
+                    ]
+                  },
+                  "positionToleranceMetres": {
+                    "type": "number"
+                  },
+                  "matrixTolerance": {
+                    "type": "number"
+                  },
+                  "angularToleranceDegrees": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "bounds": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "allowedPolicies": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "preserveSource",
+                        "solved",
+                        "generateSegmentProxy"
+                      ]
+                    }
+                  },
+                  "minimumHalfExtents": {
+                    "type": "object",
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "x",
+                      "y",
+                      "z"
+                    ]
+                  },
+                  "maximumHalfExtents": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "x": {
+                        "type": "number"
+                      },
+                      "y": {
+                        "type": "number"
+                      },
+                      "z": {
+                        "type": "number"
+                      }
+                    },
+                    "additionalProperties": false,
+                    "required": [
+                      "x",
+                      "y",
+                      "z"
+                    ]
+                  },
+                  "toleranceMetres": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "channels": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "emittedMask": {
+                    "type": "string"
+                  },
+                  "positionOwners": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "unknown",
+                        "bindInherited",
+                        "clip",
+                        "procedural",
+                        "attachment",
+                        "runtimeBodyScale"
+                      ]
+                    }
+                  },
+                  "rotationOwners": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "unknown",
+                        "bindInherited",
+                        "clip",
+                        "procedural",
+                        "attachment",
+                        "runtimeBodyScale"
+                      ]
+                    }
+                  },
+                  "scaleOwners": {
+                    "type": "array",
+                    "items": {
+                      "enum": [
+                        "unknown",
+                        "bindInherited",
+                        "clip",
+                        "procedural",
+                        "attachment",
+                        "runtimeBodyScale"
+                      ]
+                    }
+                  }
+                },
+                "additionalProperties": false
+              },
+              "retention": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "mustEmit": {
+                    "type": "boolean"
+                  },
+                  "animationLod": {
+                    "enum": [
+                      "lod0",
+                      "lod1",
+                      "lod2",
+                      "lod3",
+                      "off"
+                    ]
+                  }
+                },
+                "additionalProperties": false
+              },
+              "edits": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "allowRemoval": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "roleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prerequisiteCapabilityIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "facet": {
+                  "enum": [
+                    "geometryAndBind",
+                    "mapping",
+                    "runtimeNodeCompleteness",
+                    "motionCompatibility",
+                    "compiledVerification",
+                    "loadedResourceIdentity",
+                    "liveScenario"
+                  ]
+                },
+                "applicable": {
+                  "type": "boolean"
+                },
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "facet"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "consumers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "consumerId": {
+            "type": "string"
+          },
+          "capabilityIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "discoveredRoleIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "unknowns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "inspected": {
+            "type": "boolean"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "enum": [
+                    "importedSource",
+                    "profileRule",
+                    "geometryInference",
+                    "userOverride",
+                    "offlineTest",
+                    "compiledReadBack",
+                    "loadedResourceCapture",
+                    "liveScenarioCapture"
+                  ]
+                },
+                "artifactSha256": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "buildFingerprint": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "consumerId": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "consumerId"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "consumerCoverageComplete": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "identity",
+    "familyId"
+  ],
+  "additionalProperties": false,
+  "description": "Declared capability profile with a canonical content hash. Native evidence claims require independent verification."
+}

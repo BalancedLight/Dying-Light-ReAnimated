@@ -66,7 +66,7 @@ public sealed partial class RigConformanceWizardViewModel
         {
             var result = await Task.Run(() => FbxGeneratedEyeAuthoring.Append(model, side, name, token), token);
             if (!ReferenceEquals(model, _model)) return;
-            if (!ReferenceEquals(result, model)) EyeModelApplyRequested?.Invoke(this, new(model, result, "Created the reviewed eye bone. Existing skinning is preserved until the selected eye is explicitly bound."));
+            if (!ReferenceEquals(result, model)) if (!RequestBodyChange(EyeModelApplyRequested, new(model, result, "Created the reviewed eye bone. Existing skinning is preserved until the selected eye is explicitly bound."))) return;
             EyeRigStatus = "Eye bone saved. Preview and apply the selected eye binding before reviewing its motion.";
         }
         catch (OperationCanceledException) { EyeRigStatus = "Eye bone creation cancelled."; }
@@ -97,7 +97,7 @@ public sealed partial class RigConformanceWizardViewModel
             var result = await Task.Run(() => FbxRigidEyeBinding.TryApply(model, preview, out var changed, token) ? changed : null, token);
             if (generation != _eyeBindingGeneration || !ReferenceEquals(model, _model)) return;
             if (result is null) { EyeRigStatus = "The source changed; preview the current eye binding again."; return; }
-            if (!ReferenceEquals(result, model)) EyeModelApplyRequested?.Invoke(this, new(model, result, "Bound the selected eye island. Outside weights and all existing morph targets were preserved."));
+            if (!ReferenceEquals(result, model)) if (!RequestBodyChange(EyeModelApplyRequested, new(model, result, "Bound the selected eye island. Outside weights and all existing morph targets were preserved."))) return;
             EyeRigStatus = "Eye binding saved. Review horizontal and vertical gaze, eyelid contact and facial expressions.";
         }
         catch (OperationCanceledException) { EyeRigStatus = "Eye binding cancelled."; }

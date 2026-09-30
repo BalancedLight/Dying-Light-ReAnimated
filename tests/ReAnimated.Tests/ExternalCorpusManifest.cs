@@ -198,24 +198,8 @@ internal sealed class ExternalCorpusManifest
         return value.GetString()!;
     }
 
-    private static string FindRepositoryRoot([CallerFilePath] string sourceFile = "")
-    {
-        // Test artifacts may deliberately live outside the checkout. Use the
-        // working/source locations as fallbacks without a workstation-specific path.
-        foreach (string start in new[] { AppContext.BaseDirectory, Directory.GetCurrentDirectory(), Path.GetDirectoryName(sourceFile) ?? string.Empty })
-        {
-            if (string.IsNullOrEmpty(start)) continue;
-            var directory = new DirectoryInfo(start);
-            while (directory is not null)
-            {
-                if (File.Exists(Path.Combine(directory.FullName, "DLReAnimated.slnx"))) return directory.FullName;
-                directory = directory.Parent;
-            }
-        }
-
-        throw new DirectoryNotFoundException(
-            "Could not locate the DL ReAnimated repository root for external corpus configuration.");
-    }
+    private static string FindRepositoryRoot([CallerFilePath] string sourceFile = "") =>
+        TestRepositoryPaths.FindRepositoryRoot(sourceFile);
 }
 
 internal sealed record ExternalCorpusControl(

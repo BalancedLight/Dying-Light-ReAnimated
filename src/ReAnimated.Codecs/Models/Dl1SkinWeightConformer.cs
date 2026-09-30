@@ -78,12 +78,31 @@ public static class Dl1SkinWeightConformer
             throw new ArgumentException("The surface set must be initialized.", nameof(surfaces));
         }
 
-        ImmutableArray<int> sourceToEmitted = BuildSourceToEmitted(sourceRig, fit);
+        var direct = Enumerable.Repeat(-1, sourceRig.BoneCount).ToArray();
+        foreach (var bone in fit.Bones) if (bone.SourceBoneIndex >= 0) direct[bone.SourceBoneIndex] = bone.Index;
+        return ConformToHierarchy(surfaces, sourceRig, direct.ToImmutableArray(), fit.Bones.Length, cancellationToken);
+    }
+
+    public static Dl1SkinConformanceResult ConformToHierarchy(ImmutableArray<FbxModelSurface> surfaces, RigDefinition sourceRig,
+        ImmutableArray<int> direct, int outputBoneCount, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(sourceRig);
+        if (surfaces.IsDefault || direct.IsDefault || direct.Length != sourceRig.BoneCount || outputBoneCount <= 0 || direct.Any(i => i < -1 || i >= outputBoneCount))
+            throw new ArgumentException("Skin transfer requires a current source-to-output hierarchy map.");
+        var resolved = new int[direct.Length];
+        for (int i = 0; i < direct.Length; i++)
+        {
+            int source = i;
+            while (source >= 0 && direct[source] < 0) source = sourceRig.Bones[source].ParentIndex;
+            resolved[i] = source >= 0 ? direct[source] : -1;
+        }
+        ImmutableArray<int> sourceToEmitted = resolved.ToImmutableArray();
+
         var foldedBones = ImmutableArray.CreateBuilder<string>();
         for (int index = 0; index < sourceToEmitted.Length; index++)
         {
             int emitted = sourceToEmitted[index];
-            if (emitted >= 0 && fit.Bones[emitted].SourceBoneIndex != index)
+            if (emitted >= 0 && direct[index] != emitted)
             {
                 foldedBones.Add(sourceRig.Bones[index].Name);
             }
@@ -279,33 +298,4 @@ public static class Dl1SkinWeightConformer
     /// Maps every source bone to the emitted bone that now carries its weights.
     /// A dropped bone resolves to its nearest surviving source ancestor.
     /// </summary>
-    private static ImmutableArray<int> BuildSourceToEmitted(
-        RigDefinition sourceRig,
-        RigConformanceResult fit)
-    {
-        var direct = new int[sourceRig.BoneCount];
-        Array.Fill(direct, -1);
-        foreach (RigConformedBone bone in fit.Bones)
-        {
-            if (bone.SourceBoneIndex >= 0 &&
-                bone.SourceBoneIndex < direct.Length)
-            {
-                direct[bone.SourceBoneIndex] = bone.Index;
-            }
-        }
-
-        var resolved = ImmutableArray.CreateBuilder<int>(sourceRig.BoneCount);
-        for (int index = 0; index < sourceRig.BoneCount; index++)
-        {
-            int current = index;
-            while (current >= 0 && direct[current] < 0)
-            {
-                current = sourceRig.Bones[current].ParentIndex;
-            }
-
-            resolved.Add(current >= 0 ? direct[current] : -1);
-        }
-
-        return resolved.MoveToImmutable();
-    }
 }

@@ -114,7 +114,7 @@ public sealed partial class RigConformanceWizardViewModel
         try
         {
             if(!FbxHierarchyAuthoring.TryApply(model,preview,out var result)){HierarchyStatus="The source changed. Preview the current hierarchy again.";return;}
-            if(!ReferenceEquals(model,result))HierarchyApplyRequested?.Invoke(this,new(model,result,"Applied the reviewed parent relationship. Rest placement and bone-bound data were preserved; motion requires review."));
+            if(!ReferenceEquals(model,result))if (!RequestBodyChange(HierarchyApplyRequested, new(model,result,"Applied the reviewed parent relationship. Rest placement and bone-bound data were preserved; motion requires review."))) return;
             HierarchyStatus="Parent relationship saved. Review animation and the target profile's parent rules before native acceptance.";
         }
         catch(Exception error) when(RestPoseError(error)){HierarchyStatus="Hierarchy edit was not saved: "+error.Message;}

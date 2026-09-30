@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.Project;
 
 namespace ReAnimated.Tests;
@@ -10,6 +11,35 @@ public sealed class ProjectSchema2MigrationTests : IDisposable
     private readonly string _temporaryDirectory = Path.Combine(
         Path.GetTempPath(),
         $"ReAnimated-Schema2-{Guid.NewGuid():N}");
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ProjectSchema")]
+    public void TargetVariantDoesNotInheritAnAbsentSourceRoot()
+    {
+        var target = new RigDefinition("custom-target", "Target", [
+            new BoneDefinition(0, "target_root", -1, TransformTRS.Identity,
+                BoneKind.Root, semanticRole: "root.skeletal"),
+        ]);
+
+        Assert.Null(MainWindowViewModel.ReconcileTargetRootBoneName("source_root", target));
+        Assert.Equal("target_root", MainWindowViewModel.ReconcileTargetRootBoneName("TARGET_ROOT", target));
+
+        Guid id = Guid.NewGuid();
+        var oldVariant = new ProjectAnimationVariant
+        {
+            Id = id,
+            SourceId = Guid.NewGuid(),
+            TargetModelId = Guid.NewGuid(),
+            Name = "Retargeted motion",
+            RootBoneName = "source_root",
+        };
+        var activated = new ProjectAnimation { Id = id, RootBoneName = null };
+        DlraProject repaired = MainWindowViewModel.PersistResolvedAnimationBinding(
+            DlraProject.Create("Root reconciliation") with { AnimationVariants = [oldVariant] },
+            activated);
+        Assert.Null(Assert.Single(repaired.AnimationVariants).RootBoneName);
+    }
 
     [Fact]
     [Trait("ValidationTier", "Focused")]

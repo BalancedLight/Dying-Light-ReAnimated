@@ -17,6 +17,8 @@ public sealed record HumanoidBoneSemanticMatch(
 public static class HumanoidBoneSemanticClassifier
 {
     private const double NameAliasConfidence = 0.82;
+    private static readonly string[] NonAnatomicalStems =
+        ["hair", "braid", "ponytail", "skirt", "cloth", "cape", "dress", "coat", "sleeve", "ribbon", "flap", "hem", "amice", "tassel", "tassle", "hat", "hoodie", "drawstring", "string", "weapon", "sword", "shield", "prop", "accessory"];
 
     private static readonly HashSet<string> CanonicalRoles =
         new(StringComparer.Ordinal)
@@ -77,8 +79,12 @@ public static class HumanoidBoneSemanticClassifier
             localName.Contains("spine_", StringComparison.OrdinalIgnoreCase);
 
         compact = StripKnownRigPrefix(compact);
+        if (IsNonAnatomicalBranchName(localName))
+        {
+            return null;
+        }
         if (compact is "root" or "armature" or "rootbone" or
-            "boneroot" or "bip01")
+            "boneroot" or "bip01" or "bip001")
         {
             return Match("body.root", localName);
         }
@@ -109,14 +115,14 @@ public static class HumanoidBoneSemanticClassifier
             string? sidedRole = sidedBase switch
             {
                 "clavicle" or "shoulder" or "collarbone" => $"arm.{side}.clavicle",
-                "upperarm" or "uparm" or "arm" => $"arm.{side}.upper",
-                "forearm" or "lowerarm" or "lowarm" => $"arm.{side}.lower",
+                "upperarm" or "uparm" or "toparm" or "arm" => $"arm.{side}.upper",
+                "forearm" or "lowerarm" or "lowarm" or "bottomarm" => $"arm.{side}.lower",
                 "hand" or "wrist" => $"hand.{side}",
-                "thigh" or "upleg" or "upperleg" => $"leg.{side}.upper",
-                "calf" or "lowerleg" or "lowleg" or "shin" => $"leg.{side}.lower",
+                "thigh" or "upleg" or "upperleg" or "legtop" => $"leg.{side}.upper",
+                "calf" or "lowerleg" or "lowleg" or "shin" or "legbottom" => $"leg.{side}.lower",
                 "leg" when isMixamo => $"leg.{side}.lower",
-                "foot" or "ankle" => $"foot.{side}",
-                "toe" or "toebase" or "ball" => $"toe.{side}",
+                "foot" or "ankle" or "footfront" => $"foot.{side}",
+                "toe" or "toe0" or "toebase" or "ball" => $"toe.{side}",
                 _ => ClassifyFinger(sidedBase, side),
             };
             if (sidedRole is not null)
@@ -155,6 +161,25 @@ public static class HumanoidBoneSemanticClassifier
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(value);
         return ContainsExcludedModifier(StripKnownRigPrefix(Compact(GetLocalName(value.Normalize(NormalizationForm.FormKC)))));
+    }
+
+    /// <summary>
+    /// Identifies named garment, hair and accessory branches that must not be
+    /// claimed as humanoid anatomy merely because their vertices are nearby.
+    /// The bones remain available as extras or explicit user role overrides.
+    /// </summary>
+    public static bool IsNonAnatomicalBranchName(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        string compact = StripKnownRigPrefix(Compact(GetLocalName(
+            value.Normalize(NormalizationForm.FormKC))));
+        if (NonAnatomicalStems.Any(stem => compact.StartsWith(stem, StringComparison.Ordinal)))
+        {
+            return true;
+        }
+
+        return ExtractSides(compact).Any(sided => NonAnatomicalStems.Any(
+            stem => sided.Base.StartsWith(stem, StringComparison.Ordinal)));
     }
 
     private static HumanoidBoneSemanticMatch? ClassifyAxial(
@@ -253,6 +278,13 @@ public static class HumanoidBoneSemanticClassifier
         {
             int position = value.IndexOf(alias, StringComparison.Ordinal);
             if (position < 0)
+            {
+                continue;
+            }
+
+            // Finger aliases must begin the sided name or follow a known hand
+            // prefix. A garment "string1" contains "ring1" but is not a finger.
+            if (value[..position] is not ("" or "hand" or "finger" or "handfinger"))
             {
                 continue;
             }
@@ -363,7 +395,7 @@ public static class HumanoidBoneSemanticClassifier
     private static string StripKnownRigPrefix(string value)
     {
         foreach (string prefix in
-                 new[] { "bip01", "ccbase", "rlbone", "def" })
+                 new[] { "bip001", "bip01", "ccbase", "rlbone", "def" })
         {
             if (value.StartsWith(prefix, StringComparison.Ordinal) &&
                 value.Length > prefix.Length)

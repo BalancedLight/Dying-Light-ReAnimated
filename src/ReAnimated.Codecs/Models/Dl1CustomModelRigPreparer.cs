@@ -173,6 +173,7 @@ public static class Dl1CustomModelRigPreparer
         ImmutableArray<TransformMatrix> originalGlobals = physicalOriginalGlobals.MoveToImmutable();
         ImmutableArray<int> parentArray = physicalParents.MoveToImmutable();
         ImmutableArray<bool> deformArray = physicalDeform.MoveToImmutable();
+        var shapeParents = BoneShapeParents(model, sourceBones, sourceToPhysical.ToImmutable(), parentArray, cancellationToken);
         ImmutableArray<RigEntityFramePolicy> physicalPolicies = studioPolicies.IsDefault ? default :
             depthFirstSource.Select(sourceIndex => studioPolicies[sourceIndex]).ToImmutableArray();
         ImmutableArray<bool> generateFrames = physicalPolicies.IsDefault ? default :
@@ -184,9 +185,9 @@ public static class Dl1CustomModelRigPreparer
             .Select(particle => particle.DrivenBoneName!)
             .ToHashSet(StringComparer.Ordinal);
         ImmutableArray<TransformMatrix> chromeGlobals = physicalPolicies.IsDefault
-            ? (!preserveSourceFrames || secondaryBones.Count > 0 ? AuthorChromeFrames(originalGlobals, parentArray, deformArray, default, cancellationToken) : originalGlobals)
+            ? (!preserveSourceFrames || secondaryBones.Count > 0 ? AuthorChromeFrames(originalGlobals, shapeParents, deformArray, default, cancellationToken) : originalGlobals)
             : generateFrames.Any(static generate => generate)
-            ? AuthorChromeFrames(originalGlobals, parentArray, deformArray, generateFrames, cancellationToken)
+            ? AuthorChromeFrames(originalGlobals, shapeParents, deformArray, generateFrames, cancellationToken)
             : originalGlobals;
         ImmutableArray<TransformMatrix> authoredGlobals = !physicalPolicies.IsDefault
             ? physicalPolicies.Select((policy, index) => policy.SolvedGlobalFrame ?? (generateFrames[index] ? chromeGlobals[index] : originalGlobals[index])).ToImmutableArray()
@@ -195,10 +196,14 @@ public static class Dl1CustomModelRigPreparer
                 ? chromeGlobals[physicalIndex]
                 : originalGlobals[physicalIndex]).ToImmutableArray()
             : chromeGlobals;
+        // Helper recipes own parent-local frames. Compose them only after each
+        // parent's source/generated/solved frame has been selected.
+        authoredGlobals = Dl1StudioRigPolicies.ComposeParentLocalHelpers(
+            model.Package.Document, authoredGlobals, depthFirstSource, sourceToPhysical.ToImmutable());
         ImmutableArray<Dl1AuthoredBoneBounds> bounds = ComputeSegmentProxyBounds(
             model.Surfaces,
             authoredGlobals,
-            parentArray,
+            shapeParents,
             sourceToPhysical.ToImmutable(),
             cancellationToken);
 
@@ -410,6 +415,39 @@ public static class Dl1CustomModelRigPreparer
         maximum = Math.Max(maximum, Math.Abs(left.M31 - right.M31));
         maximum = Math.Max(maximum, Math.Abs(left.M32 - right.M32));
         return Math.Max(maximum, Math.Abs(left.M33 - right.M33));
+    }
+
+    private static ImmutableArray<int> BoneShapeParents(FbxModelAuthoringImportResult model,
+        ImmutableArray<CustomModelBone> bones, ImmutableArray<int> sourceToPhysical, ImmutableArray<int> parents,
+        CancellationToken token)
+    {
+        var doc = model.Package.Document;
+        var markers = doc.RiggingSession?.Recipe.Helpers.Where(h => h.RoleId == FbxCompilerRetentionAuthoring.RoleId).ToArray() ?? [];
+        if (markers.Length == 0) return parents;
+        var excluded = new HashSet<int>();
+        var shaped = parents.ToBuilder();
+        foreach (var marker in markers)
+        {
+            token.ThrowIfCancellationRequested();
+            int helperIndex = Enumerable.Range(0, doc.AuthoredHelpers.Length).FirstOrDefault(i => doc.AuthoredHelpers[i].Id == marker.EntityId, -1);
+            int source = doc.Bones.Length + helperIndex;
+            if (helperIndex < 0 || bones[source].Kind != BoneKind.Helper || bones.Any(b => b.ParentIndex == source))
+                throw new InvalidDataException("A compiler-retention marker must be an authored, unweighted leaf helper. Review its role before changing its purpose.");
+            excluded.Add(source);
+            // Only the shape solver ignores this edge. The emitted hierarchy and
+            // parent-local helper composition keep the real parent dependency.
+            shaped[sourceToPhysical[source]] = -1;
+        }
+        foreach (var surface in model.Surfaces.Where(s => s.IsSkinned))
+        foreach (var vertex in surface.Vertices)
+        {
+            token.ThrowIfCancellationRequested();
+            for (int i = 0; i < Math.Min(vertex.BoneIndices.Length, vertex.BoneWeights.Length); i++)
+                if (vertex.BoneWeights[i] > 0 && (uint)vertex.BoneIndices[i] < (uint)surface.PaletteBoneIndices.Length &&
+                    excluded.Contains(surface.PaletteBoneIndices[vertex.BoneIndices[i]]))
+                    throw new InvalidDataException("A compiler-retention marker cannot own mesh weights. Review its role before using it for deformation.");
+        }
+        return shaped.ToImmutable();
     }
 
     private static ImmutableArray<TransformMatrix> AuthorChromeFrames(

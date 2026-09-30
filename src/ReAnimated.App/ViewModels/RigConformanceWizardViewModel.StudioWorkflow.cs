@@ -16,23 +16,30 @@ public sealed class StudioMetadataEventArgs(FbxModelAuthoringImportResult model,
     public RiggingSession Session { get; } = session;
     public bool Undoable { get; } = undoable;
 }
+public sealed class StudioEntryPathChangeEventArgs(FbxModelAuthoringImportResult model, RiggingJobToken expectedToken, RigStudioEntryPath entryPath) : EventArgs
+{
+    public FbxModelAuthoringImportResult Model { get; } = model;
+    public RiggingJobToken ExpectedToken { get; } = expectedToken;
+    public RigStudioEntryPath EntryPath { get; } = entryPath;
+}
 
 public sealed partial class RigConformanceWizardViewModel
 {
     [ObservableProperty] private RigStudioStage _studioStage;
     [ObservableProperty] private StudioEntryChoice? _selectedStudioEntry;
+    [ObservableProperty] private bool _isAdvancedSetupMode;
     private bool _restoringStudio;
     private bool _routingStudioAction;
     private Guid? _studioModelId;
     public ModelsWorkspaceViewModel? StudioWorkspace { get; private set; }
     public IReadOnlyList<StudioStageChoice> StudioStages { get; } = [
-        new(RigStudioStage.Import, "1 Import", "Review source identity, component selection and the intended workflow."),
-        new(RigStudioStage.Detect, "2 Detect", "Inspect geometry proposals or existing-rig correspondence and remaining ambiguity."),
-        new(RigStudioStage.Fit, "3 Fit", "Place and pin guides, or review rigged-model fitting before applying anatomy changes."),
-        new(RigStudioStage.HelpersAndHooks, "4 Helpers & Hooks", "Inspect hierarchy, helper frames, ownership and unresolved runtime requirements."),
-        new(RigStudioStage.Skin, "5 Skin", "Bind selected components, correct source weights and inspect deformation."),
-        new(RigStudioStage.Animate, "6 Animate", "Review source stacks, selected stock clips and transient stress poses."),
-        new(RigStudioStage.VerifyAndExport, "7 Verify & Export", "Inspect diagnostics, compile and keep compiled, loaded and live evidence distinct."),
+        new(RigStudioStage.Import, "1 Import", "Choose a workflow and select model parts."),
+        new(RigStudioStage.Detect, "2 Detect", "Find joints or match the existing rig to a reference."),
+        new(RigStudioStage.Fit, "3 Fit", "Review joint positions, mapping, and proportions."),
+        new(RigStudioStage.HelpersAndHooks, "4 Helpers", "Add contacts, eyes, grips, and camera helpers."),
+        new(RigStudioStage.Skin, "5 Skin", "Review weights and deformation."),
+        new(RigStudioStage.Animate, "6 Animate", "Play stock clips and check the fit."),
+        new(RigStudioStage.VerifyAndExport, "7 Export", "Build the model and check the exported files."),
     ];
     public ObservableCollection<StudioEntryChoice> StudioEntryChoices { get; } = [];
     public ObservableCollection<StudioFacetHistoryRow> StudioFacetHistory { get; } = [];
@@ -48,8 +55,11 @@ public sealed partial class RigConformanceWizardViewModel
     public bool IsStudioSkin => StudioStage == RigStudioStage.Skin;
     public bool IsStudioAnimate => StudioStage == RigStudioStage.Animate;
     public bool IsStudioVerify => StudioStage == RigStudioStage.VerifyAndExport;
+    public string SetupModeLabel => IsAdvancedSetupMode ? "Advanced setup" : "Normal setup";
+    public bool IsNormalRiggedSetup => !IsAdvancedSetupMode && HasRiggedStudioSource;
+    public bool IsNormalUnriggedSetup => !IsAdvancedSetupMode && HasModel && !HasRiggedStudioSource;
     public bool HasStudioSession => _model?.Package.Document.RiggingSession is not null;
-    public bool HasRiggedStudioSource => _model?.Rig is not null;
+    public bool HasRiggedStudioSource => _model is { } model && !model.Package.Document.Bones.IsEmpty;
     public bool HasImportedRiggedStudioSource => HasRiggedStudioSource && !HasGeneratedBodyRig;
     public bool CanNavigateStudio => HasModel;
     public string StudioStagePurpose => SelectedStudioStage.Purpose;
@@ -63,24 +73,51 @@ public sealed partial class RigConformanceWizardViewModel
     {
         get
         {
-            if (_model?.Package.Document.RiggingSession is not { } session) return "No authoring review is recorded for this stage.";
+            if (_model?.Package.Document.RiggingSession is not { } session) return "Start setup before recording a review.";
             var stage = session.Stages.Single(s => s.Stage == StudioStage);
-            return stage.ReviewedUtc is { } reviewed ? $"Authoring review recorded {reviewed:u}. This is a review record, not a capability pass." : "No current review record for this stage. Dependent edits clear affected reviews.";
+            return stage.ReviewedUtc is { } reviewed ? $"Reviewed {reviewed:u}." : "This stage has no current review.";
         }
     }
     public string StudioProfileSummary => _model?.Package.Document.RiggingSession?.Recipe.Profile is { } profile
         ? $"Profile reference: {profile.Id} / {profile.Version}. Capability completeness requires its own evidence."
         : "No runtime capability profile is selected. A fitting template alone does not establish helper or gameplay completeness.";
+    public string StudioStartReason => !HasModel
+        ? "Import or open a model before starting a studio session."
+        : HasStudioSession
+            ? "A studio session is already saved for this model."
+            : IsBusy
+                ? "Finish the current model job before starting a session."
+                : SelectedStudioEntry is null
+                    ? "Choose Repair or Adapt above, then start the studio session. A runtime capability profile is not required to begin."
+                    : $"Ready to start: {SelectedStudioEntry.Label}.";
     public IRelayCommand StartStudioCommand { get; private set; } = null!;
+    public IRelayCommand StartAdaptStudioCommand { get; private set; } = null!;
+    public IRelayCommand StartRepairStudioCommand { get; private set; } = null!;
+    public IRelayCommand StartAutoRigStudioCommand { get; private set; } = null!;
     public IRelayCommand PreviousStudioStageCommand { get; private set; } = null!;
     public IRelayCommand NextStudioStageCommand { get; private set; } = null!;
     public IRelayCommand RecordStudioReviewCommand { get; private set; } = null!;
     public IRelayCommand OpenRiggedMappingCommand { get; private set; } = null!;
+    public IRelayCommand OpenRiggedRefineCommand { get; private set; } = null!;
+    public IRelayCommand OpenRiggedTargetCommand { get; private set; } = null!;
+    public IRelayCommand OpenRiggedScaleCommand { get; private set; } = null!;
+    public IRelayCommand OpenRiggedVerifyCommand { get; private set; } = null!;
+    public IRelayCommand OpenRiggedCheckCommand { get; private set; } = null!;
     public event EventHandler<StudioMetadataEventArgs>? StudioMetadataRequested;
+    public event EventHandler<StudioEntryPathChangeEventArgs>? StudioEntryPathChangeRequested;
 
     private void InitializeStudioWorkflow()
     {
         StartStudioCommand = new RelayCommand(StartStudio, () => HasModel && !HasStudioSession && SelectedStudioEntry is not null && !IsBusy);
+        StartAdaptStudioCommand = new RelayCommand(
+            () => StartStudioWithEntry(RigStudioEntryPath.AdaptExistingRig),
+            () => CanStartStudioWithEntry(RigStudioEntryPath.AdaptExistingRig));
+        StartRepairStudioCommand = new RelayCommand(
+            () => StartStudioWithEntry(RigStudioEntryPath.RepairExistingRig),
+            () => CanStartStudioWithEntry(RigStudioEntryPath.RepairExistingRig));
+        StartAutoRigStudioCommand = new RelayCommand(
+            () => StartStudioWithEntry(RigStudioEntryPath.AutoRigBiped),
+            () => CanStartStudioWithEntry(RigStudioEntryPath.AutoRigBiped));
         PreviousStudioStageCommand = new RelayCommand(() => StudioStage = (RigStudioStage)((int)StudioStage - 1), () => CanNavigateStudio && StudioStage > RigStudioStage.Import);
         NextStudioStageCommand = new RelayCommand(() => StudioStage = (RigStudioStage)((int)StudioStage + 1), () => CanNavigateStudio && StudioStage < RigStudioStage.VerifyAndExport);
         RecordStudioReviewCommand = new RelayCommand(() => {
@@ -89,10 +126,15 @@ public sealed partial class RigConformanceWizardViewModel
             StudioMetadataRequested?.Invoke(this, new(model, reviewed, true));
         }, () => HasStudioSession && !IsBusy && _model!.Package.Document.RiggingSession!.MatchesSource(_model.Package.Document.Source.ContentSha256));
         OpenRiggedMappingCommand = new RelayCommand(() => { StudioStage = RigStudioStage.Fit; Stage = RigConformanceStage.Mapping; }, () => HasRiggedStudioSource);
+        OpenRiggedRefineCommand = new RelayCommand(() => { StudioStage = RigStudioStage.Fit; Stage = RigConformanceStage.Refine; }, () => HasImportedRiggedStudioSource);
+        OpenRiggedTargetCommand = new RelayCommand(() => { StudioStage = RigStudioStage.Fit; Stage = RigConformanceStage.Target; }, () => HasImportedRiggedStudioSource);
+        OpenRiggedScaleCommand = new RelayCommand(() => { StudioStage = RigStudioStage.Fit; Stage = RigConformanceStage.Scale; }, () => HasImportedRiggedStudioSource);
+        OpenRiggedVerifyCommand = new RelayCommand(() => { StudioStage = RigStudioStage.Fit; Stage = RigConformanceStage.Verify; }, () => HasImportedRiggedStudioSource);
+        OpenRiggedCheckCommand = new RelayCommand(() => { StudioStage = RigStudioStage.Fit; Stage = RigConformanceStage.Verify; }, () => HasImportedRiggedStudioSource && !IsBusy);
     }
 
     internal void SetStudioWorkspace(ModelsWorkspaceViewModel workspace)
-    { StudioWorkspace = workspace; OnPropertyChanged(nameof(StudioWorkspace)); }
+    { StudioWorkspace = workspace; workspace.BindStudioEntryPathChange(this); OnPropertyChanged(nameof(StudioWorkspace)); }
 
     private void StartStudio()
     {
@@ -104,6 +146,27 @@ public sealed partial class RigConformanceWizardViewModel
         StudioMetadataRequested?.Invoke(this, new(model, session, true));
     }
 
+    private bool CanStartStudioWithEntry(RigStudioEntryPath path) =>
+        HasModel && !HasStudioSession && !IsBusy &&
+        StudioEntryChoices.Any(choice => choice.Path == path);
+
+    private void StartStudioWithEntry(RigStudioEntryPath path)
+    {
+        StudioEntryChoice? choice = StudioEntryChoices.FirstOrDefault(
+            candidate => candidate.Path == path);
+        if (choice is null || !CanStartStudioWithEntry(path))
+        {
+            return;
+        }
+
+        SelectedStudioEntry = choice;
+        StartStudio();
+        if (HasStudioSession)
+        {
+            StudioStage = RigStudioStage.Detect;
+        }
+    }
+
     private void RestoreStudioWorkflow()
     {
         bool sameModel = _studioModelId == _model?.Package.Document.ModelId;
@@ -111,14 +174,25 @@ public sealed partial class RigConformanceWizardViewModel
         _restoringStudio = true;
         StudioStage = _model?.Package.Document.RiggingSession?.Stage ?? (sameModel ? StudioStage : RigStudioStage.Import);
         StudioEntryChoices.Clear();
-        if (_model?.Package.Document.RiggingSession is { } session) StudioEntryChoices.Add(new(session.EntryPath, EntryLabel(session.EntryPath)));
-        else if (HasUnriggedSource) StudioEntryChoices.Add(new(RigStudioEntryPath.AutoRigBiped, "Build a rig from geometry"));
+        if (_model?.Package.Document.RiggingSession is { } session)
+        {
+            if (session.EntryPath == RigStudioEntryPath.AutoRigBiped)
+                StudioEntryChoices.Add(new(RigStudioEntryPath.AutoRigBiped, EntryLabel(RigStudioEntryPath.AutoRigBiped)));
+            else
+            {
+                StudioEntryChoices.Add(new(RigStudioEntryPath.RepairExistingRig, EntryLabel(RigStudioEntryPath.RepairExistingRig)));
+                StudioEntryChoices.Add(new(RigStudioEntryPath.AdaptExistingRig, EntryLabel(RigStudioEntryPath.AdaptExistingRig)));
+            }
+        }
+        else if (_model is { } sourceModel && sourceModel.Package.Document.Bones.IsEmpty) StudioEntryChoices.Add(new(RigStudioEntryPath.AutoRigBiped, "Build a rig from geometry"));
         else if (HasModel)
         {
             StudioEntryChoices.Add(new(RigStudioEntryPath.RepairExistingRig, "Repair an existing DL rig"));
             StudioEntryChoices.Add(new(RigStudioEntryPath.AdaptExistingRig, "Adapt a rigged model"));
         }
-        SelectedStudioEntry = StudioEntryChoices.Count == 1 ? StudioEntryChoices[0] : sameModel ? StudioEntryChoices.FirstOrDefault(c => c.Path == SelectedStudioEntry?.Path) : null;
+        SelectedStudioEntry = _model?.Package.Document.RiggingSession is { } activeSession
+            ? StudioEntryChoices.FirstOrDefault(c => c.Path == activeSession.EntryPath)
+            : StudioEntryChoices.Count == 1 ? StudioEntryChoices[0] : sameModel ? StudioEntryChoices.FirstOrDefault(c => c.Path == SelectedStudioEntry?.Path) : null;
         _restoringStudio = false;
         RefreshStudioHistory(); NotifyStudioWorkflow();
     }
@@ -150,6 +224,12 @@ public sealed partial class RigConformanceWizardViewModel
     {
         if (!ReferenceEquals(_model, previous)) { SetModel(current); return; }
         _model = current;
+        // A newly started session creates the stable node identities consumed by
+        // the channel editor. Refresh that editor now; navigation-only metadata
+        // changes must leave any in-progress channel review intact.
+        if (previous.Package.Document.RiggingSession is null &&
+            current.Package.Document.RiggingSession is not null)
+            RestoreChannelPolicies();
         if (_bodyDetectionWork is { } work && ReferenceEquals(work.Model, previous))
             _bodyDetectionWork = new(current, current.Package.Document.RiggingSession ?? work.Session, work.Token, work.Detection);
         RefreshWeightMetadata(current);
@@ -160,6 +240,10 @@ public sealed partial class RigConformanceWizardViewModel
         RefreshHierarchyMetadata(current);
         RefreshDerivedMotionMetadata(current);
         RefreshDoctorMetadata(current);
+        RefreshCameraMetadata(current);
+        RefreshStructuralMetadata(current);
+        RefreshCapabilityProfileMetadata(current);
+        RefreshSetupMetadata(current);
         RefreshStressReviewModel();
         RestoreStudioWorkflow();
     }
@@ -167,6 +251,7 @@ public sealed partial class RigConformanceWizardViewModel
     private void CancelStudioInteractions()
     {
         DeriveMotionCommand?.Cancel(); LoadDoctorRulesCommand?.Cancel(); RunDoctorCommand?.Cancel();
+        PreviewCameraCalibrationCommand?.Cancel(); PreviewCameraCreationCommand?.Cancel();
         PreviewHierarchyCommand?.Cancel(); PreviewRestPoseCommand?.Cancel(); CancelBodyGuideDrag(); CancelWeightBrush(); DetectEyeCommand?.Cancel(); CancelEyeRigCommand?.Execute(null);
         DetectBodyCommand?.Cancel(); BuildBodyRigCommand?.Cancel(); BindBodyGeometryCommand?.Cancel(); CancelWeightJobs();
         VerifyWithRetailClipCommand?.Cancel();
@@ -198,12 +283,36 @@ public sealed partial class RigConformanceWizardViewModel
         }
         NotifyStudioWorkflow();
     }
-    partial void OnSelectedStudioEntryChanged(StudioEntryChoice? value) => StartStudioCommand?.NotifyCanExecuteChanged();
+    partial void OnSelectedStudioEntryChanged(StudioEntryChoice? value)
+    {
+        OnPropertyChanged(nameof(StudioStartReason));
+        StartStudioCommand?.NotifyCanExecuteChanged();
+        StartAdaptStudioCommand?.NotifyCanExecuteChanged();
+        StartRepairStudioCommand?.NotifyCanExecuteChanged();
+        StartAutoRigStudioCommand?.NotifyCanExecuteChanged();
+        if (_restoringStudio || value is null || _model is not { } model || model.Package.Document.RiggingSession is not { } session || session.EntryPath == value.Path) return;
+        if (value.Path is not (RigStudioEntryPath.RepairExistingRig or RigStudioEntryPath.AdaptExistingRig)) return;
+        StudioEntryPathChangeRequested?.Invoke(this, new(model, session.CreateJobToken(), value.Path));
+    }
     private void NotifyStudioWorkflow()
     {
         foreach (var property in new[] { nameof(SelectedStudioStage), nameof(IsStudioImport), nameof(IsStudioDetect), nameof(IsStudioFit), nameof(IsStudioHelpers), nameof(IsStudioSkin), nameof(IsStudioAnimate), nameof(IsStudioVerify),
-            nameof(CanNavigateStudio), nameof(HasStudioSession), nameof(HasRiggedStudioSource), nameof(HasImportedRiggedStudioSource), nameof(StudioStagePurpose), nameof(StudioSourceSummary), nameof(StudioSessionSummary), nameof(StudioReviewSummary), nameof(StudioProfileSummary) }) OnPropertyChanged(property);
+            nameof(CanNavigateStudio), nameof(HasStudioSession), nameof(HasRiggedStudioSource), nameof(HasImportedRiggedStudioSource), nameof(IsNormalRiggedSetup), nameof(IsNormalUnriggedSetup), nameof(StudioStagePurpose), nameof(StudioSourceSummary), nameof(StudioSessionSummary), nameof(StudioReviewSummary), nameof(StudioProfileSummary), nameof(StudioStartReason), nameof(SetupModeLabel) }) OnPropertyChanged(property);
         StartStudioCommand?.NotifyCanExecuteChanged(); PreviousStudioStageCommand?.NotifyCanExecuteChanged(); NextStudioStageCommand?.NotifyCanExecuteChanged();
+        StartAdaptStudioCommand?.NotifyCanExecuteChanged(); StartRepairStudioCommand?.NotifyCanExecuteChanged();
+        StartAutoRigStudioCommand?.NotifyCanExecuteChanged();
         RecordStudioReviewCommand?.NotifyCanExecuteChanged(); OpenRiggedMappingCommand?.NotifyCanExecuteChanged();
+        OpenRiggedCheckCommand?.NotifyCanExecuteChanged();
+        OpenRiggedRefineCommand?.NotifyCanExecuteChanged();
+        OpenRiggedTargetCommand?.NotifyCanExecuteChanged(); OpenRiggedScaleCommand?.NotifyCanExecuteChanged(); OpenRiggedVerifyCommand?.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsAdvancedSetupModeChanged(bool value)
+    {
+        OnPropertyChanged(nameof(SetupModeLabel));
+        OnPropertyChanged(nameof(VisibleMappings));
+        OnPropertyChanged(nameof(MissingCoreRolesMessage));
+        OnPropertyChanged(nameof(IsNormalRiggedSetup));
+        OnPropertyChanged(nameof(IsNormalUnriggedSetup));
     }
 }

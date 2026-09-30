@@ -42,6 +42,10 @@ public static class FbxSourceGeometryAnalysis
                 throw new InvalidDataException("Source geometry coordinate provenance is missing or invalid.");
             if (geometry.Skinning is null) throw new InvalidDataException("Source skin provenance is unavailable. Reimport the source before geometry analysis.");
             geometry.Skinning.Validate(geometry.ControlPoints.Length, cancellationToken);
+            geometry.Skinning.ValidateReferencedControlPoints(
+                group.SelectMany(static surface => surface.SourceCorners)
+                    .Select(static corner => corner.ControlPointIndex),
+                cancellationToken);
             var triangles = new Dictionary<GeometrySourceTriangle, SourceGeometryAnalysisTriangle>();
             foreach (FbxModelSurface surface in group)
             {

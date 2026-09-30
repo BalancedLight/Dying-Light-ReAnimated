@@ -213,7 +213,7 @@ public sealed partial class RigConformanceWizardViewModel
             var updated = FbxContactAuthoring.Apply(snapshot, model, ContactHelper?.Id, ContactName.Trim(), ContactRole.Trim(),
                 snapshot.ParentGlobal.InvertedAffine() * preview.GlobalFrame, preview.Center, preview.HalfExtents, overridden);
             if (ReferenceEquals(updated, model)) { ContactStatus = "This contact placement is already saved."; return; }
-            ContactModelApplyRequested?.Invoke(this, new(model, updated, "Saved reviewed contact frame and bounds; source weights, geometry and morphs were preserved."));
+            if (!RequestBodyChange(ContactModelApplyRequested, new(model, updated, "Saved reviewed contact frame and bounds; source weights, geometry and morphs were preserved."))) return;
             ContactStatus = "Contact saved. Channel ownership and native contact behavior require separate review.";
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or InvalidDataException)

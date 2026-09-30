@@ -217,3 +217,21 @@ dotnet test tests\ReAnimated.Tests\ReAnimated.Tests.csproj `
   -c Debug --no-restore `
   --filter "FullyQualifiedName~Dl1RetailMeshClassificationTests|FullyQualifiedName~InstalledDl1RigFamilyProfileTests|FullyQualifiedName~InstalledDl1VisualReferenceControlTests|FullyQualifiedName~AssetProfileFilterViewModelTests"
 ```
+
+### Selecting an exact installed mesh in Conform
+
+The Detect stage can use the mesh selected in Assets as a reference. ReAnimated
+decodes that catalog row, builds a template from its actual hierarchy, and saves
+a resource-name plus full SHA-256 selector. Reopening the project resolves only that
+exact decoded revision; a changed or missing mesh requires a new review.
+
+The family candidate service records provider identity, decoded role inventory,
+family and perspective evidence, and missing capability roles. Player FPP/TPP
+pairing compares a hierarchy signature that excludes each mesh's own resource ID.
+It also checks actual role sets and reports conflicts. The ordinary rig signature
+retains its asset identity and is not used as a cross-resource equality test.
+
+These are offline candidate and reference checks. A reviewed capability profile
+still supplies the required roles and consumers. Missing rules, partial rigs,
+source changes, and unverified native behavior remain visible; no animation
+bank or runtime acceptance is inferred from a family name.

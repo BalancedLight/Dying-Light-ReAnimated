@@ -1,0 +1,20 @@
+<UserControl x:Class="ReAnimated.App.Views.RigSetupTransferView"
+ xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+ <StackPanel Margin="7">
+  <TextBlock Text="Reuse a rig setup" FontSize="16" FontWeight="SemiBold"/>
+  <TextBlock Text="Reuse profile and channel settings on another model. Preview the node mapping before applying." TextWrapping="Wrap" Margin="0,5,0,7"/>
+  <WrapPanel><Button Content="Save current setup…" Command="{Binding SaveSetupCommand}"/><Button Content="Open setup…" Command="{Binding LoadSetupCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding SetupIdentity}" TextWrapping="Wrap" Margin="0,5,0,7"/>
+  <ListBox ItemsSource="{Binding SetupMappings}" MaxHeight="360" ScrollViewer.HorizontalScrollBarVisibility="Disabled"><ListBox.ItemTemplate><DataTemplate>
+   <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" Padding="6" Margin="0,0,0,5"><StackPanel>
+    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextWrapping="Wrap"/><TextBlock Text="{Binding Details}" TextWrapping="Wrap" Margin="0,3,0,4"/>
+    <ComboBox ItemsSource="{Binding DataContext.SetupDestinations, RelativeSource={RelativeSource AncestorType=UserControl}}" SelectedItem="{Binding Destination, Mode=TwoWay}" DisplayMemberPath="NativeName"/>
+   </StackPanel></Border>
+  </DataTemplate></ListBox.ItemTemplate></ListBox>
+  <WrapPanel><Button Content="Preview mapped setup" Command="{Binding PreviewSetupCommand}"/><Button Content="Cancel preview" Command="{Binding CancelSetupCommand}"/></WrapPanel>
+  <TextBlock Text="{Binding SetupStatus}" TextWrapping="Wrap" Margin="0,6,0,6"/>
+  <TextBlock Text="{Binding SetupReview}" TextWrapping="Wrap"/>
+  <CheckBox IsChecked="{Binding SetupReviewed}" Margin="0,7,0,5"><TextBlock Text="I reviewed the node mapping and profile changes." TextWrapping="Wrap"/></CheckBox>
+  <Button Content="Apply setup" Command="{Binding ApplySetupCommand}" HorizontalAlignment="Left"/>
+ </StackPanel>
+</UserControl>

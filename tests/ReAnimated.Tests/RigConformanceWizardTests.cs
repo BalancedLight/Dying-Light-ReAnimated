@@ -112,6 +112,68 @@ public sealed class RigConformanceWizardTests
     }
 
     [Fact]
+    public void RootBoneChangePreservesOtherMappingsAndCanBeUndoneOrRematched()
+    {
+        RigConformanceWizardViewModel wizard = CreateResolvedWizard();
+        int mappedBefore = wizard.MappedCount;
+        Assert.True(wizard.RerunAutomaticMatchingCommand.CanExecute(null));
+        Assert.False(wizard.UndoLastMappingChangeCommand.CanExecute(null));
+
+        wizard.Mappings.Single(row => row.Name == "bip01")
+            .SelectedSourceName = "CC_Base_Hip";
+
+        Assert.Equal("CC_Base_Hip", wizard.Mappings.Single(row => row.Name == "bip01").SourceName);
+        Assert.Equal("CC_Base_Pelvis", wizard.Mappings.Single(row => row.Name == "pelvis").SourceName);
+        Assert.Equal(mappedBefore, wizard.MappedCount);
+        Assert.True(wizard.UndoLastMappingChangeCommand.CanExecute(null));
+
+        wizard.UndoLastMappingChangeCommand.Execute(null);
+        Assert.Equal("RL_BoneRoot", wizard.Mappings.Single(row => row.Name == "bip01").SourceName);
+        Assert.Equal("CC_Base_Hip", wizard.Mappings.Single(row => row.Name == "pelvis").SourceName);
+
+        wizard.Mappings.Single(row => row.Name == "bip01")
+            .SelectedSourceName = "CC_Base_Hip";
+        wizard.RerunAutomaticMatchingCommand.Execute(null);
+        Assert.Equal("RL_BoneRoot", wizard.Mappings.Single(row => row.Name == "bip01").SourceName);
+        Assert.Equal(mappedBefore, wizard.MappedCount);
+        Assert.True(wizard.UndoLastMappingChangeCommand.CanExecute(null));
+        wizard.UndoLastMappingChangeCommand.Execute(null);
+        Assert.Equal("CC_Base_Hip", wizard.Mappings.Single(row => row.Name == "bip01").SourceName);
+    }
+
+    [Fact]
+    public void BoneAlreadyAssignedManuallyCannotSilentlyReplaceAnotherRole()
+    {
+        RigConformanceWizardViewModel wizard = CreateResolvedWizard();
+        wizard.Mappings.Single(row => row.Name == "pelvis")
+            .SelectedSourceName = "CC_Base_Pelvis";
+
+        wizard.Mappings.Single(row => row.Name == "bip01")
+            .SelectedSourceName = "CC_Base_Pelvis";
+
+        Assert.Equal("RL_BoneRoot", wizard.Mappings.Single(row => row.Name == "bip01").SourceName);
+        Assert.Equal("CC_Base_Pelvis", wizard.Mappings.Single(row => row.Name == "pelvis").SourceName);
+        Assert.Contains("already assigned", wizard.MappingEditStatus, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NormalSetupShowsCoreBoneTargetsAndAdvancedShowsTheWholeRig()
+    {
+        RigConformanceWizardViewModel wizard = CreateResolvedWizard();
+        Assert.False(wizard.IsAdvancedSetupMode);
+        Assert.Contains(wizard.VisibleMappings, row => row.Role == "body.root");
+        Assert.All(wizard.VisibleMappings, row => Assert.True(row.Row.TemplateIndex >= 0));
+        int normalCount = wizard.VisibleMappings.Count;
+
+        wizard.IsAdvancedSetupMode = true;
+        Assert.Equal(wizard.Mappings.Count, wizard.VisibleMappings.Count);
+        Assert.True(wizard.VisibleMappings.Count > normalCount);
+
+        wizard.IsAdvancedSetupMode = false;
+        Assert.Equal(normalCount, wizard.VisibleMappings.Count);
+    }
+
+    [Fact]
     public void KeepingOrDroppingExtraBonesResolvesImmediately()
     {
         RigConformanceWizardViewModel wizard = CreateResolvedWizard();
@@ -222,6 +284,29 @@ public sealed class RigConformanceWizardTests
     }
 
     [Fact]
+    public void NormalMappingHighlightsOnlyMissingRequiredJoints()
+    {
+        RigConformanceWizardViewModel wizard = CreateResolvedWizard();
+        wizard.IsAdvancedSetupMode = true;
+        wizard.Mappings.Single(row => row.Role == "body.root").SelectedSourceName = "CC_Base_Head";
+        Assert.NotEmpty(wizard.MissingCoreRoles);
+        Assert.Equal(
+            wizard.MissingCoreRoles.OrderBy(role => role, StringComparer.Ordinal),
+            wizard.Mappings.Where(row => row.NeedsSourceMatch).Select(row => row.Role).OrderBy(role => role, StringComparer.Ordinal));
+        Assert.False(wizard.Mappings.Single(row => row.Name == "eyecamera").NeedsSourceMatch);
+        string missingRole = wizard.MissingCoreRoles[0];
+
+        wizard.IsAdvancedSetupMode = false;
+        Assert.Contains("highlighted joints", wizard.MissingCoreRolesMessage, StringComparison.Ordinal);
+        Assert.DoesNotContain(missingRole, wizard.MissingCoreRolesMessage, StringComparison.Ordinal);
+        wizard.IsAdvancedSetupMode = true;
+        Assert.Contains(missingRole, wizard.MissingCoreRolesMessage, StringComparison.Ordinal);
+        wizard.UndoLastMappingChangeCommand.Execute(null);
+        Assert.Empty(wizard.MissingCoreRoles);
+        Assert.DoesNotContain(wizard.Mappings, row => row.NeedsSourceMatch);
+    }
+
+    [Fact]
     public void CapturedSettingsRoundTripThroughTheDocument()
     {
         RigConformanceWizardViewModel wizard = CreateResolvedWizard();
@@ -301,6 +386,133 @@ public sealed class RigConformanceWizardTests
     }
 
     [Fact]
+    public void ChangedSourceDoesNotActivateSavedChoicesUntilRematched()
+    {
+        RigConformanceWizardViewModel authored = CreateResolvedWizard();
+        authored.MirrorEdits = false;
+        authored.Mappings.Single(row => row.Name == "pelvis").SelectedSourceName = "CC_Base_Pelvis";
+        authored.SetBonePosition("l_forearm", new Vector3D(0.4, 1.3, 0.02));
+        CustomModelRigConformance saved = authored.CreateSettings()! with
+        {
+            SourceFbxSha256 = new string('a', 64),
+        };
+        FbxModelAuthoringImportResult model = CreateModel();
+        model = model with
+        {
+            Package = model.Package with
+            {
+                Document = model.Package.Document with { RigConformance = saved },
+            },
+        };
+        var restored = new RigConformanceWizardViewModel(
+            (profile, _) => Task.FromResult(CreateResolution(profile)), static _ => { });
+        restored.SetModel(model);
+        restored.ResolveTemplateCommand.Execute(null);
+
+        Assert.Null(restored.Fit);
+        Assert.Null(restored.CreateSettings());
+        Assert.Empty(restored.Mappings);
+        Assert.False(restored.HasOverride("l_forearm"));
+        Assert.False(restored.ApplyConformanceCommand.CanExecute(null));
+        Assert.True(restored.RerunAutomaticMatchingCommand.CanExecute(null));
+        Assert.Same(saved, model.Package.Document.RigConformance);
+
+        restored.RerunAutomaticMatchingCommand.Execute(null);
+
+        Assert.NotNull(restored.Fit);
+        Assert.Equal("CC_Base_Hip", restored.Mappings.Single(row => row.Name == "pelvis").SourceName);
+        Assert.Empty(restored.CreateSettings()!.RoleOverrides);
+        Assert.Empty(restored.CreateSettings()!.PositionOverrides);
+        Assert.True(restored.CreateSettings()!.MatchesSource(model.Package.Document.Source.ContentSha256));
+        Assert.Same(saved, model.Package.Document.RigConformance);
+        Assert.True(restored.UndoLastMappingChangeCommand.CanExecute(null));
+
+        restored.UndoLastMappingChangeCommand.Execute(null);
+
+        Assert.Null(restored.Fit);
+        Assert.Null(restored.CreateSettings());
+        Assert.False(restored.ApplyConformanceCommand.CanExecute(null));
+        Assert.True(restored.RerunAutomaticMatchingCommand.CanExecute(null));
+        Assert.Same(saved, model.Package.Document.RigConformance);
+    }
+
+    [Fact]
+    public void ChangedSourceWithUnsavedFitChoicesAlsoRequiresRematching()
+    {
+        FbxModelAuthoringImportResult original = CreateModel();
+        var wizard = new RigConformanceWizardViewModel(
+            (profile, _) => Task.FromResult(CreateResolution(profile)), static _ => { });
+        wizard.SetModel(original);
+        wizard.ResolveTemplateCommand.Execute(null);
+        wizard.MirrorEdits = false;
+        wizard.Mappings.Single(row => row.Name == "pelvis").SelectedSourceName = "CC_Base_Pelvis";
+        wizard.SetBonePosition("l_forearm", new Vector3D(0.4, 1.3, 0.02));
+        FbxModelAuthoringImportResult changed = original with
+        {
+            Package = original.Package with
+            {
+                Document = original.Package.Document with
+                {
+                    Source = original.Package.Document.Source with { ContentSha256 = new string('d', 64) },
+                },
+            },
+        };
+
+        wizard.SetModel(changed);
+        Assert.True(wizard.RequiresSourceRematch);
+        Assert.Null(wizard.Fit);
+        Assert.Null(wizard.CreateSettings());
+        Assert.False(wizard.HasOverride("l_forearm"));
+        Assert.Null(changed.Package.Document.RigConformance);
+
+        wizard.SetModel(changed with { });
+        Assert.True(wizard.RequiresSourceRematch);
+        Assert.Null(wizard.Fit);
+        wizard.RerunAutomaticMatchingCommand.Execute(null);
+        Assert.False(wizard.RequiresSourceRematch);
+        Assert.NotNull(wizard.Fit);
+        Assert.Empty(wizard.CreateSettings()!.RoleOverrides);
+        Assert.Empty(wizard.CreateSettings()!.PositionOverrides);
+        wizard.UndoLastMappingChangeCommand.Execute(null);
+        Assert.True(wizard.RequiresSourceRematch);
+        Assert.Null(wizard.Fit);
+    }
+
+    [Fact]
+    public void ReopenedMatchingSourceKeepsManualBoneAndPlacementChoices()
+    {
+        RigConformanceWizardViewModel authored = CreateResolvedWizard();
+        authored.MirrorEdits = false;
+        authored.Mappings.Single(row => row.Name == "pelvis").SelectedSourceName = "CC_Base_Pelvis";
+        var position = new Vector3D(0.4, 1.3, 0.02);
+        authored.SetBonePosition("l_forearm", position);
+        CustomModelRigConformance saved = authored.CreateSettings()!;
+        FbxModelAuthoringImportResult model = CreateModel();
+        model = model with
+        {
+            Package = model.Package with
+            {
+                Document = model.Package.Document with { RigConformance = saved },
+            },
+        };
+        var restored = new RigConformanceWizardViewModel(
+            (profile, _) => Task.FromResult(CreateResolution(profile)), static _ => { });
+        restored.SetModel(model);
+        restored.ResolveTemplateCommand.Execute(null);
+
+        Assert.NotNull(restored.Fit);
+        Assert.Equal("CC_Base_Pelvis", restored.Mappings.Single(row => row.Name == "pelvis").SourceName);
+        Assert.Equal(position, restored.TryGetBonePosition("l_forearm"));
+        Assert.True(restored.HasOverride("l_forearm"));
+        Assert.Equal(
+            saved.RoleOverrides.Select(row => (row.Role, row.SourceBoneName)),
+            restored.CreateSettings()!.RoleOverrides.Select(row => (row.Role, row.SourceBoneName)));
+        Assert.Equal(
+            saved.PositionOverrides.Select(row => (row.BoneName, row.Position)),
+            restored.CreateSettings()!.PositionOverrides.Select(row => (row.BoneName, row.Position)));
+    }
+
+    [Fact]
     public void ClearingTheModelDiscardsTheSolvedFit()
     {
         RigConformanceWizardViewModel wizard = CreateResolvedWizard();
@@ -359,6 +571,11 @@ public sealed class RigConformanceWizardTests
         Vector3D moved = wizard.TryGetBonePosition("l_forearm")!.Value;
         Assert.Equal(start.Y + 0.05, moved.Y, 5);
         Assert.True(wizard.HasOverride("l_forearm"));
+        Assert.True(wizard.UndoLastJointPlacementCommand.CanExecute(null));
+
+        wizard.UndoLastJointPlacementCommand.Execute(null);
+        Assert.False(wizard.HasOverride("l_forearm"));
+        Assert.Equal(start, wizard.TryGetBonePosition("l_forearm")!.Value);
     }
 
     [Fact]

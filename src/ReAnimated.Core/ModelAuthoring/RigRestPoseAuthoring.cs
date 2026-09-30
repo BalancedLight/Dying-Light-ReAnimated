@@ -155,6 +155,7 @@ public static class RigRestPoseAuthoring
             LastBuildReceipt = null,
         };
         result.Validate();
+        RigProfileEditGuard.RequireDocumentAllowed(document, result);
         return new RigRestPoseEditResult(
             result,
             beforeGlobals.ToImmutableArray(),

@@ -12,6 +12,61 @@ public sealed class RigGeometryCorrespondenceWizardTests
     [Fact]
     public void ActualCurrentSurfaceEvidenceReachesMappingReviewAndAcceptanceWithoutMutatingSource()
     {
+        var (wizard, model, template, surface) = CreateWizardWithCurrentSurface();
+        Assert.NotNull(wizard.Fit);
+        Assert.True(wizard.HasPendingMappingReview);
+        Assert.False(wizard.CanApply);
+        Assert.True(wizard.AcceptMappingProposalsCommand.CanExecute(null));
+        Assert.Contains(wizard.Mappings, r => r.Role == "body.head" && r.SourceName == "node_3" && r.CanChooseSource);
+        Assert.Contains("Head", wizard.Mappings.Single(r => r.Name == "body.head").Candidates);
+        wizard.AcceptMappingProposalsCommand.Execute(null);
+        Assert.False(wizard.HasPendingMappingReview);
+        Assert.True(wizard.CanApply);
+        var settings = Assert.IsType<CustomModelRigConformance>(wizard.CreateSettings());
+        Assert.Equal(template.EntityCount, settings.RoleOverrides.Length);
+        Assert.Equal(CustomModelCorrespondenceMethod.GeometryHierarchyV1, settings.CorrespondenceMethod);
+        Assert.Equal(0, settings.ConformanceStrength);
+        Assert.Null(model.Package.Document.RigConformance);
+        Assert.Same(surface, model.Surfaces[0]);
+    }
+
+    [Fact]
+    public void RootMappingChangeCanRestoreThePriorGeometryFitAndRematch()
+    {
+        var (wizard, model, _, _) = CreateWizardWithCurrentSurface();
+        Dictionary<string, string?> before = wizard.Correspondence!.Rows
+            .Where(static row => row.TemplateIndex >= 0 && row.Role is not null)
+            .ToDictionary(static row => row.Role!, static row => row.SourceName, StringComparer.Ordinal);
+
+        wizard.Mappings.Single(row => row.Role == "body.root")
+            .SelectedSourceName = "node_1";
+        if (wizard.UndoLastMappingChangeCommand.CanExecute(null))
+        {
+            wizard.UndoLastMappingChangeCommand.Execute(null);
+        }
+
+        foreach ((string role, string? source) in before)
+        {
+            Assert.Equal(source, wizard.Correspondence!.Rows.Single(row =>
+                row.TemplateIndex >= 0 && row.Role == role).SourceName);
+        }
+
+        Assert.True(wizard.RerunAutomaticMatchingCommand.CanExecute(null));
+        wizard.RerunAutomaticMatchingCommand.Execute(null);
+        foreach ((string role, string? source) in before)
+        {
+            Assert.Equal(source, wizard.Correspondence!.Rows.Single(row =>
+                row.TemplateIndex >= 0 && row.Role == role).SourceName);
+        }
+
+        Assert.Null(model.Package.Document.RigConformance);
+    }
+
+    private static (RigConformanceWizardViewModel Wizard,
+        FbxModelAuthoringImportResult Model,
+        Dl1RigTemplate Template,
+        FbxModelSurface Surface) CreateWizardWithCurrentSurface()
+    {
         var (template, rig, geometry) = RigGeometryCorrespondenceTests.Fixture();
         var original = RigConformanceWizardTests.CreateModel();
         var vertices = ImmutableArray.CreateBuilder<FbxModelVertex>();
@@ -35,20 +90,6 @@ public sealed class RigGeometryCorrespondenceWizardTests
             template, profile, "synthetic", new string('b', 64), "synthetic geometry control")), static _ => { });
         wizard.SetModel(model);
         wizard.ResolveTemplateCommand.Execute(null);
-        Assert.NotNull(wizard.Fit);
-        Assert.True(wizard.HasPendingMappingReview);
-        Assert.False(wizard.CanApply);
-        Assert.True(wizard.AcceptMappingProposalsCommand.CanExecute(null));
-        Assert.Contains(wizard.Mappings, r => r.Role == "body.head" && r.SourceName == "node_3" && r.CanChooseSource);
-        Assert.Contains("Head", wizard.Mappings.Single(r => r.Name == "body.head").Candidates);
-        wizard.AcceptMappingProposalsCommand.Execute(null);
-        Assert.False(wizard.HasPendingMappingReview);
-        Assert.True(wizard.CanApply);
-        var settings = Assert.IsType<CustomModelRigConformance>(wizard.CreateSettings());
-        Assert.Equal(template.EntityCount, settings.RoleOverrides.Length);
-        Assert.Equal(CustomModelCorrespondenceMethod.GeometryHierarchyV1, settings.CorrespondenceMethod);
-        Assert.Equal(0, settings.ConformanceStrength);
-        Assert.Null(model.Package.Document.RigConformance);
-        Assert.Same(surface, model.Surfaces[0]);
+        return (wizard, model, template, surface);
     }
 }

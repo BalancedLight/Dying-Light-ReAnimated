@@ -24,6 +24,8 @@ namespace ReAnimated.Codecs.Models;
 /// untouched, so the package still round-trips to its original input.
 /// </para>
 /// </remarks>
+public sealed record Dl1RigConformanceApplyResult(FbxModelAuthoringImportResult Model, ImmutableArray<int> FitToEffective, ImmutableArray<int> SourceToEffective);
+
 public static class Dl1RigConformanceApplier
 {
     /// <param name="settings">
@@ -35,7 +37,10 @@ public static class Dl1RigConformanceApplier
         FbxModelAuthoringImportResult model,
         RigConformanceResult fit,
         CustomModelRigConformance? settings = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) => ApplyDetailed(model, fit, settings, cancellationToken).Model;
+
+    public static Dl1RigConformanceApplyResult ApplyDetailed(FbxModelAuthoringImportResult model, RigConformanceResult fit,
+        CustomModelRigConformance? settings = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(fit);
@@ -49,43 +54,82 @@ public static class Dl1RigConformanceApplier
             model.Surfaces,
             fit.RestPoseTransfer,
             cancellationToken);
-        Dl1SkinConformanceResult skin = Dl1SkinWeightConformer.Conform(
-            baked.Surfaces,
-            sourceRig,
-            fit,
-            cancellationToken);
-
-        ImmutableArray<CustomModelBone> bones = BuildBones(fit, cancellationToken);
-        CustomModelDocument document = model.Package.Document with
+        var original = model.Package.Document;
+        Dl1ConformanceHierarchy hierarchy = ProjectHierarchy(original, fit, cancellationToken);
+        Dl1SkinConformanceResult skin = Dl1SkinWeightConformer.ConformToHierarchy(baked.Surfaces, sourceRig,
+            hierarchy.SourceToEffective, hierarchy.EffectiveGlobals.Length, cancellationToken);
+        var document = original with
         {
-            Bones = bones,
-            // Conformance replaces the whole imported bone table, so any helper
-            // authored against the old row indexes would now point elsewhere.
-            AuthoredHelpers = [],
-            Camera = ResolveCamera(model.Package.Document.Camera, bones),
-            RigSignature = CustomModelContractSignatures.ComputeRig(bones),
-            RigConformance = settings ?? model.Package.Document.RigConformance,
-            LastBuildReceipt = null,
+            Bones = hierarchy.Bones, AuthoredHelpers = hierarchy.Helpers,
+            RigConformance = settings ?? original.RigConformance, LastBuildReceipt = null,
         };
+        var effective = document.CreateEffectiveBones();
+        var companionTransfer = Dl1CompanionReferenceTransfer.Apply(original.SecondaryMotion,
+            original.CreateEffectiveBones(), effective, hierarchy.SourceToEffective,
+            fit.RestPoseTransfer.SkinningTransforms, cancellationToken);
+        document = document with { SecondaryMotion = companionTransfer.Definition };
+        var sourceNames = original.CreateEffectiveBones().ToDictionary(b => b.Name, b => b.Index, StringComparer.Ordinal);
+        string? RemapName(string? name) => name is not null && sourceNames.TryGetValue(name, out int index) && hierarchy.SourceToEffective[index] >= 0
+            ? effective[hierarchy.SourceToEffective[index]].Name : name;
+        var camera = original.Camera with { ActivePreviewNodeName = RemapName(original.Camera.ActivePreviewNodeName) };
+        document = document with { AnimationClips = original.AnimationClips.Select(c => c with { RootBoneName = RemapName(c.RootBoneName) }).ToImmutableArray() };
+        document = document with { Camera = ResolveCamera(camera, document.CreateEffectiveBones()),
+            RigSignature = CustomModelContractSignatures.ComputeRig(document.CreateEffectiveBones()) };
+        document = Dl1ConformanceSessionTransfer.Apply(original, document, hierarchy, fit.TemplateId);
+        var clips = FbxAnimationTrackReindexer.ReindexAvailable(model.AnimationClips, hierarchy.SourceToEffective, cancellationToken);
+        var notes = hierarchy.Notes.AddRange(companionTransfer.Notes).Add("Conformance retained authored helper identities and affine frames. Existing source animation keys are reindexed, not retargeted; review motion or derive a new clip before acceptance.");
+        if (clips.Count != model.AnimationClips.Count) notes = notes.Add("Source clips referencing deliberately dropped nodes remain in the embedded source but are unavailable on this rig until derived again.");
+        document = document with { Diagnostics = document.Diagnostics.Where(d => d.Code != "conformance_preservation_review")
+            .Append(new CustomModelImportDiagnostic { Code = "conformance_preservation_review", Severity = CustomModelImportSeverity.Warning, Message = string.Join(" ", notes) }).ToImmutableArray() };
         document.Validate();
-
-        // The weight mapper deliberately drops obsolete source inverse binds.
-        // Complete the authored surface contract from the new exact bind hierarchy;
-        // native +X frame preparation still derives its own final physical references.
-        var globals = new TransformMatrix[bones.Length];
-        foreach (var bone in bones)
-            globals[bone.Index] = bone.ParentIndex < 0 ? bone.ExactLocalBindMatrix : globals[bone.ParentIndex] * bone.ExactLocalBindMatrix;
-        var inverse = globals.Select(static matrix => matrix.InvertedAffine()).ToArray();
-        var boundSurfaces = skin.Surfaces.Select(surface => surface with {
-            InverseBindMatrices = surface.PaletteBoneIndices.Select(index => inverse[index]).ToImmutableArray(),
-        }).ToImmutableArray();
-
-        return model with
+        var inverse = hierarchy.EffectiveGlobals.Select(m => m.InvertedAffine()).ToArray();
+        var boundSurfaces = skin.Surfaces.Select(surface => surface with
+            { InverseBindMatrices = surface.PaletteBoneIndices.Select(index => inverse[index]).ToImmutableArray() }).ToImmutableArray();
+        var candidate = model with
         {
-            Package = model.Package with { Document = document },
-            Rig = document.CreateRigDefinition(),
-            Surfaces = boundSurfaces,
+            Package = model.Package with { Document = document }, Rig = document.CreateRigDefinition(),
+            Surfaces = boundSurfaces, AnimationClips = clips,
         };
+        candidate = Dl1ConformancePreparedHelpers.Preserve(model, candidate, fit, cancellationToken);
+        // Prepared-parent policies may adjust authored helper locals. Transport only
+        // preview offsets again, from the original positions, after those adjustments.
+        // Native name migration has already completed and its source lineage stays intact.
+        if (!original.SecondaryMotion.Groups.IsEmpty &&
+            !candidate.Package.Document.AuthoredHelpers.SequenceEqual(document.AuthoredHelpers))
+        {
+            var previewTransfer = Dl1CompanionReferenceTransfer.Apply(original.SecondaryMotion with { NativeSources = [] },
+                original.CreateEffectiveBones(), candidate.Package.Document.CreateEffectiveBones(),
+                hierarchy.SourceToEffective, fit.RestPoseTransfer.SkinningTransforms, cancellationToken);
+            candidate = candidate with { Package = candidate.Package with { Document = candidate.Package.Document with
+                { SecondaryMotion = companionTransfer.Definition with { Groups = previewTransfer.Definition.Groups } } } };
+        }
+        candidate.Package.Document.Validate();
+        if (original.RiggingSession is { } oldSession && candidate.Package.Document.RiggingSession is { } changedSession)
+            candidate = candidate with { Package = candidate.Package with { Document = candidate.Package.Document with
+                { RiggingSession = RiggingSessions.Change(oldSession, changedSession, RiggingEditKind.Anatomy) } } };
+        if (candidate.Rig is { } outputRig &&
+            candidate.Package.Document.RigConformance is { } conformance)
+        {
+            // Source-space role choices remain in the record for later source
+            // reimport. Mark the exact output rig so the wizard can recognize
+            // it without mistaking any stale source rig for an applied result.
+            candidate = candidate with
+            {
+                Package = candidate.Package with
+                {
+                    Document = candidate.Package.Document with
+                    {
+                        RigConformance = conformance with
+                        {
+                            AppliedOutputRigSignature = RigSignature.Compute(outputRig),
+                        },
+                    },
+                },
+            };
+        }
+        candidate.Package.Document.Validate();
+        FbxProfileEditGuard.RequireAllowed(model, candidate, cancellationToken);
+        return new(candidate, hierarchy.FitToEffective, hierarchy.SourceToEffective);
     }
 
     /// <summary>
@@ -118,6 +162,18 @@ public static class Dl1RigConformanceApplier
             $"conformance:{fit.TemplateId}",
             "Conformed rig",
             definitions.MoveToImmutable());
+    }
+
+    internal static Dl1ConformanceHierarchy ProjectHierarchy(CustomModelDocument document, RigConformanceResult fit, CancellationToken token)
+    {
+        var projection = Dl1ConformanceHelperTransfer.Build(document, fit, BuildBones(fit, token), token);
+        var bones = projection.Bones.ToBuilder();
+        for (int source = 0; source < document.Bones.Length; source++)
+        {
+            int target = projection.SourceToEffective[source];
+            if (target >= 0 && target < bones.Count) bones[target] = bones[target] with { FbxObjectId = document.Bones[source].FbxObjectId };
+        }
+        return projection with { Bones = bones.ToImmutable() };
     }
 
     private static ImmutableArray<CustomModelBone> BuildBones(

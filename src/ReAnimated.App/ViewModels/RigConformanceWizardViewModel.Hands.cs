@@ -265,7 +265,7 @@ public sealed partial class RigConformanceWizardViewModel
             var result = await Task.Run(() => FbxGeneratedHandAuthoring.Append(model, side, token), token);
             if (!ReferenceEquals(_model, model)) return;
             if (ReferenceEquals(result, model)) { HandStatus = "This reviewed hand is already generated."; return; }
-            HandModelApplyRequested?.Invoke(this, new(model, result, "Appended reviewed finger bones. Existing weights were preserved; new finger weights still need binding and review."));
+            if (!RequestBodyChange(HandModelApplyRequested, new(model, result, "Appended reviewed finger bones. Existing weights were preserved; new finger weights still need binding and review."))) return;
             HandStatus = "Finger bones appended. Bind and review the hand before animation acceptance.";
         }
         catch (OperationCanceledException) { HandStatus = "Hand generation cancelled."; }
@@ -276,7 +276,7 @@ public sealed partial class RigConformanceWizardViewModel
     private void PublishHandSession(FbxModelAuthoringImportResult model, RiggingSession session, string status)
     {
         var result = model with { Package = model.Package with { Document = model.Package.Document with { RiggingSession = session, LastBuildReceipt = null } } };
-        HandModelApplyRequested?.Invoke(this, new(model, result, status)); HandStatus = status;
+        if (!RequestBodyChange(HandModelApplyRequested, new(model, result, status))) return; HandStatus = status;
     }
     private static TransformMatrix HandRotation(Vector3D degrees)
     {

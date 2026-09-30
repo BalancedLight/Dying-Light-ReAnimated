@@ -326,9 +326,9 @@ public sealed class CustomModelProjectIdentityRepairTests
                 imported));
 
         Assert.Contains(
-            "ambiguous",
+            "Automatic repair stopped without changing the project",
             exception.Message,
-            StringComparison.OrdinalIgnoreCase);
+            StringComparison.Ordinal);
     }
 
     [Fact]

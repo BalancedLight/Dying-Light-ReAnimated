@@ -54,6 +54,10 @@ public sealed class CustomModelAuthoringTests
             viewModel.BuildStatus,
             StringComparison.OrdinalIgnoreCase);
 
+        Assert.True(viewModel.ImportNewFbxCommand.CanExecute(null));
+        await viewModel.ImportNewFbxCommand.ExecuteAsync(null);
+        Assert.Equal(2, dialogs.FbxPickerCalls);
+
         dialogs.PackagePickerException =
             new InvalidOperationException("simulated picker failure");
         Assert.True(viewModel.OpenPackageCommand.CanExecute(null));
@@ -73,6 +77,30 @@ public sealed class CustomModelAuthoringTests
             static status => status.Contains(
                 "File picker failed",
                 StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPackage")]
+    public void ExplicitModelIdentityAndClipIdsSurvivePackageReopen()
+    {
+        Guid identity = Guid.NewGuid();
+        FbxModelAuthoringImportResult imported = FbxModelAuthoringImporter.Import(
+            BlenderFbxStrictValidationTests.CreateValidModelFixture(),
+            "generic-model.fbx",
+            new FbxModelAuthoringImportOptions
+            {
+                ModelIdentityOverride = identity,
+            });
+
+        FbxModelAuthoringImportResult reopened =
+            FbxModelAuthoringImporter.ImportPackage(imported.Package);
+
+        Assert.Equal(identity, reopened.Package.Document.ModelId);
+        Assert.NotEmpty(imported.Package.Document.AnimationClips);
+        Assert.Equal(
+            imported.Package.Document.AnimationClips.Select(static clip => clip.Id),
+            reopened.Package.Document.AnimationClips.Select(static clip => clip.Id));
     }
 
     [Fact]
@@ -465,6 +493,36 @@ public sealed class CustomModelAuthoringTests
                     databasePath,
                     [materialName],
                     [diffuseName, normalName]));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelCompilerContract")]
+    public void ModelCompilerRejectsMaterialDatabaseMissingModelReferences()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string databasePath = Path.Combine(directory, "local_dx11.mp");
+            File.WriteAllBytes(
+                databasePath,
+                BuildSyntheticMaterialDatabase(
+                    new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["existing_surface.mat"] = ["existing_surface_Diffuse.dds"],
+                    }));
+
+            InvalidDataException exception = Assert.Throws<InvalidDataException>(() =>
+                Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabase(
+                    databasePath,
+                    ["new_surface.mat"],
+                    ["new_surface_Diffuse.dds"]));
+            Assert.Contains("unresolved materials", exception.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
