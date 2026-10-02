@@ -250,9 +250,16 @@ public sealed class EditorUsabilitySurfaceTests
                 (string?)element.Attribute("IsChecked"),
                 "{Binding IsRetargetWorkspace, Mode=OneWay}",
                 StringComparison.Ordinal));
-        Assert.All(
-            workflowTabs,
-            static element => Assert.Null(element.Attribute("IsEnabled")));
+        foreach (XElement tab in workflowTabs)
+        {
+            string? expectedAvailability = (string?)tab.Attribute("CommandParameter") switch
+            {
+                "Animations" => "{Binding IsAnimationWorkflowEnabled}",
+                "Retarget/Edit" => "{Binding IsRetargetWorkflowAvailable}",
+                _ => null,
+            };
+            Assert.Equal(expectedAvailability, (string?)tab.Attribute("IsEnabled"));
+        }
 
         // These moved to the Viewport menu, which already carried duplicates
         // of them before the toolbar was trimmed.
@@ -533,11 +540,16 @@ public sealed class EditorUsabilitySurfaceTests
             .ToArray();
         Assert.Collection(
             workspaceColumnWidths,
-            width => Assert.Equal("250", width),
-            width => Assert.Equal("5", width),
+            width => Assert.Equal("0", width),
+            width => Assert.Equal("0", width),
             width => Assert.Equal("*", width),
             width => Assert.Equal("5", width),
-            width => Assert.Equal("460", width));
+            width => Assert.Equal("380", width));
+        Assert.Contains(workspace.Descendants(), static element => element.Name.LocalName == "GuidedModelSetupView");
+        XDocument guided = XDocument.Load(FindRepositoryFile("src", "ReAnimated.App", "Views", "GuidedModelSetupView.xaml"));
+        Assert.Contains(guided.Descendants(Presentation + "CheckBox"), static element =>
+            (string?)element.Attribute("Content") == "Advanced" &&
+            (string?)element.Attribute("IsChecked") == "{Binding Conformance.IsAdvancedSetupMode}");
         Assert.Contains(
             workspace.Descendants(Presentation + "Button"),
             static element => string.Equals(
@@ -1335,26 +1347,7 @@ public sealed class EditorUsabilitySurfaceTests
                 element.Name.LocalName == "ResponsiveUniformGrid") >= 10);
     }
 
-    private static void RunOnStaThread(Action action)
-    {
-        ExceptionDispatchInfo? capturedException = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                capturedException =
-                    ExceptionDispatchInfo.Capture(exception);
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        capturedException?.Throw();
-    }
+    private static void RunOnStaThread(Action action) => WpfTestDispatcher.Run(action);
 
     private static string FindRepositoryFile(params string[] relativeSegments) =>
         TestRepositoryPaths.FindRepositoryFile(relativeSegments);

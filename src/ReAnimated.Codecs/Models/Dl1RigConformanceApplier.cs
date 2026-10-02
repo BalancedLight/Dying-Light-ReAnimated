@@ -47,6 +47,13 @@ public static class Dl1RigConformanceApplier
         RigDefinition sourceRig = model.Rig ?? throw new InvalidOperationException(
             "A static model has no rig to conform.");
 
+        // A previous output can retain a generated, unweighted source-name
+        // helper whose name also appears in the DL1 template. The fitter may
+        // classify that row as deforming, but only rows with explicit generated
+        // identity provenance, no actual skin weights, and the same fitted
+        // parent may be folded into the template row.
+        (fit, int[] originalToFit) = MergeTemplateNamedNonDeformExtras(model, fit);
+
         // Carry the mesh into the conformed skeleton's rest pose first. The
         // transforms are indexed by source bone, so this must happen before the
         // weight transfer rewrites the bindings.
@@ -129,7 +136,268 @@ public static class Dl1RigConformanceApplier
         }
         candidate.Package.Document.Validate();
         FbxProfileEditGuard.RequireAllowed(model, candidate, cancellationToken);
-        return new(candidate, hierarchy.FitToEffective, hierarchy.SourceToEffective);
+        var fitToEffective = new int[originalToFit.Length];
+        for (int originalIndex = 0; originalIndex < originalToFit.Length; originalIndex++)
+        {
+            int fitIndex = originalToFit[originalIndex];
+            fitToEffective[originalIndex] = fitIndex >= 0 && fitIndex < hierarchy.FitToEffective.Length
+                ? hierarchy.FitToEffective[fitIndex]
+                : -1;
+        }
+        return new(candidate, fitToEffective.ToImmutableArray(), hierarchy.SourceToEffective);
+    }
+
+    private static (RigConformanceResult Fit, int[] OriginalToFit) MergeTemplateNamedNonDeformExtras(
+        FbxModelAuthoringImportResult model,
+        RigConformanceResult fit)
+    {
+        var bones = fit.Bones.ToArray();
+        var removals = new HashSet<int>();
+        var remap = Enumerable.Range(0, bones.Length).ToArray();
+        var templateRowsByName = bones
+            .Select((bone, index) => (bone, index))
+            .Where(static row => row.bone.TemplateIndex >= 0 && row.bone.SourceBoneIndex < 0)
+            .GroupBy(static row => row.bone.Name, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(static group => group.Key, static group => group.First().index, StringComparer.OrdinalIgnoreCase);
+
+        for (int extraIndex = 0; extraIndex < bones.Length; extraIndex++)
+        {
+            RigConformedBone extra = bones[extraIndex];
+            bool previouslyGeneratedUnweightedHelper =
+                (extra.IsDeform || extra.Kind == BoneKind.Deform) &&
+                IsPreviouslyGeneratedUnweightedHelper(model, extra.SourceBoneIndex);
+            if (extra.TemplateIndex >= 0 ||
+                (extra.IsDeform || extra.Kind == BoneKind.Deform) &&
+                    !previouslyGeneratedUnweightedHelper ||
+                !templateRowsByName.TryGetValue(extra.Name, out int templateIndex))
+            {
+                continue;
+            }
+
+            // Preserve a real source row when folding a helper onto its
+            // same-name template row. Source-less duplicate rows have no stable
+            // source identity to retain, and still need one output identity.
+            RigConformedBone target = bones[templateIndex];
+            if (target.SourceBoneIndex >= 0 && extra.SourceBoneIndex >= 0 &&
+                target.SourceBoneIndex != extra.SourceBoneIndex)
+            {
+                // Two distinct source entities cannot share one stable identity.
+                continue;
+            }
+
+            if (previouslyGeneratedUnweightedHelper)
+            {
+                int targetParent = ResolveRetainedParentIndex(
+                    target.ParentIndex,
+                    removals,
+                    remap);
+                int extraParent = ResolveRetainedParentIndex(
+                    extra.ParentIndex,
+                    removals,
+                    remap);
+                if (targetParent < -1 || extraParent < -1 ||
+                    targetParent != extraParent)
+                {
+                    // Same-name rows with different or unresolved retained
+                    // parents are not proven aliases. A generated parent may
+                    // already have been folded into its template counterpart.
+                    continue;
+                }
+            }
+
+            // If the template row is inside the helper branch, folding the
+            // ancestor would create a cycle; leave that case for an explicit
+            // authoring decision instead.
+            bool templateIsDescendant = false;
+            for (int ancestor = templateIndex; ancestor >= 0; ancestor = bones[ancestor].ParentIndex)
+            {
+                if (ancestor == extraIndex)
+                {
+                    templateIsDescendant = true;
+                    break;
+                }
+            }
+            if (templateIsDescendant)
+            {
+                continue;
+            }
+
+            int retainedSource = target.SourceBoneIndex >= 0 ? target.SourceBoneIndex : extra.SourceBoneIndex;
+            bones[templateIndex] = target with
+            {
+                SourceBoneIndex = retainedSource,
+                Disposition = retainedSource >= 0 ? RigBoneDisposition.Mapped : target.Disposition,
+                Position = previouslyGeneratedUnweightedHelper ? extra.Position : target.Position,
+                Orientation = previouslyGeneratedUnweightedHelper ? extra.Orientation : target.Orientation,
+                OffsetFromSourceJoint = previouslyGeneratedUnweightedHelper
+                    ? extra.OffsetFromSourceJoint
+                    : target.OffsetFromSourceJoint,
+                SegmentRatio = previouslyGeneratedUnweightedHelper
+                    ? extra.SegmentRatio
+                    : target.SegmentRatio,
+            };
+            removals.Add(extraIndex);
+            remap[extraIndex] = templateIndex;
+        }
+
+        if (removals.Count == 0)
+        {
+            return (fit, remap);
+        }
+
+        var oldToNew = new int[bones.Length];
+        Array.Fill(oldToNew, -1);
+        var merged = ImmutableArray.CreateBuilder<RigConformedBone>(bones.Length - removals.Count);
+        for (int index = 0; index < bones.Length; index++)
+        {
+            if (removals.Contains(index))
+            {
+                continue;
+            }
+
+            oldToNew[index] = merged.Count;
+            merged.Add(bones[index]);
+        }
+
+        for (int index = 0; index < merged.Count; index++)
+        {
+            RigConformedBone bone = merged[index];
+            int parent = bone.ParentIndex;
+            while (parent >= 0 && removals.Contains(parent))
+            {
+                parent = remap[parent];
+            }
+            merged[index] = bone with
+            {
+                Index = index,
+                ParentIndex = parent < 0 ? -1 : oldToNew[parent],
+            };
+        }
+
+        for (int index = 0; index < remap.Length; index++)
+        {
+            int mapped = remap[index];
+            while (mapped >= 0 && removals.Contains(mapped))
+            {
+                mapped = remap[mapped];
+            }
+            remap[index] = mapped < 0 ? -1 : oldToNew[mapped];
+        }
+
+        RigConformanceResult normalized = fit.WithBones(merged);
+        return (normalized, remap);
+    }
+
+    private static int ResolveRetainedParentIndex(
+        int parentIndex,
+        HashSet<int> removals,
+        int[] remap)
+    {
+        if (parentIndex < 0 || (uint)parentIndex >= (uint)remap.Length)
+        {
+            return parentIndex == -1 ? -1 : int.MinValue;
+        }
+
+        int remaining = remap.Length;
+        while (parentIndex >= 0 && removals.Contains(parentIndex))
+        {
+            if (remaining-- <= 0)
+            {
+                return int.MinValue;
+            }
+
+            parentIndex = remap[parentIndex];
+            if (parentIndex < 0 || (uint)parentIndex >= (uint)remap.Length)
+            {
+                return int.MinValue;
+            }
+        }
+
+        return parentIndex;
+    }
+
+    private static bool IsPreviouslyGeneratedUnweightedHelper(
+        FbxModelAuthoringImportResult model,
+        int sourceBoneIndex)
+    {
+        CustomModelDocument document = model.Package.Document;
+        if ((uint)sourceBoneIndex >= (uint)document.Bones.Length ||
+            document.RiggingSession is not { } session)
+        {
+            return false;
+        }
+
+        CustomModelBone sourceBone = document.Bones[sourceBoneIndex];
+        if (sourceBone.FbxObjectId != 0 ||
+            HasSkinInfluence(model.Surfaces, sourceBoneIndex))
+        {
+            return false;
+        }
+
+        ImmutableArray<RigParentObservation> observed =
+            RiggingSessions.ObserveSourceHierarchy(document);
+        Guid sourceEntityId = observed[sourceBoneIndex].EntityId;
+        RigEntityBinding? sourceEntity = session.Recipe.Entities
+            .FirstOrDefault(entity =>
+                entity.OwnerAssetId == document.ModelId &&
+                entity.EntityId == sourceEntityId);
+        // A prior output may still classify this bone as deforming even when
+        // no surface point uses it. The retained studio entity proves it was
+        // generated; actual surface weights, not BoneKind/IsWeighted alone,
+        // decide whether the same-name alias can be folded safely.
+        return sourceEntity is
+        {
+            Imported: false,
+            SourceEntityId: string sourceIdentity,
+        } && sourceIdentity.StartsWith(
+            "source-name:",
+            StringComparison.Ordinal);
+    }
+
+    private static bool HasSkinInfluence(
+        IReadOnlyList<FbxModelSurface> surfaces,
+        int sourceBoneIndex)
+    {
+        foreach (FbxModelSurface surface in surfaces)
+        {
+            if (!surface.IsSkinned)
+            {
+                continue;
+            }
+
+            foreach (FbxModelVertex vertex in surface.Vertices)
+            {
+                if (vertex.BoneIndices.Length != vertex.BoneWeights.Length)
+                {
+                    return true;
+                }
+
+                for (int influence = 0; influence < vertex.BoneIndices.Length; influence++)
+                {
+                    double weight = vertex.BoneWeights[influence];
+                    if (weight == 0.0)
+                    {
+                        continue;
+                    }
+                    if (!double.IsFinite(weight) || weight < 0.0)
+                    {
+                        return true;
+                    }
+
+                    int paletteIndex = vertex.BoneIndices[influence];
+                    if ((uint)paletteIndex >= (uint)surface.PaletteBoneIndices.Length)
+                    {
+                        return true;
+                    }
+                    if (surface.PaletteBoneIndices[paletteIndex] == sourceBoneIndex)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

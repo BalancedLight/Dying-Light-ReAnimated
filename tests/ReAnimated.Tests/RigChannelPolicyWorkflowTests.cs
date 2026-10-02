@@ -17,6 +17,36 @@ public sealed class RigChannelPolicyWorkflowTests : IDisposable
     private readonly string _directory = RpackTestData.CreateTemporaryDirectory();
 
     [Fact]
+    public async Task ReopenedPolicyPreviewLoadsItsSavedReferenceWithoutReapplyingTheFit()
+    {
+        var fixture = StockPreviewFixture();
+        int resolves = 0;
+        using var workspace = new ModelsWorkspaceViewModel(new NoDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null,
+            resolveRigTemplate: (profile, _) =>
+            {
+                resolves++;
+                Assert.Equal(fixture.Template.ProfileName, profile);
+                return Task.FromResult(new Dl1RigTemplateResolution(fixture.Template, profile, fixture.Template.SourceResourceName,
+                    fixture.Template.SourceFingerprint, "Generic reference"));
+            },
+            pickStockPolicySource: (template, _) =>
+            {
+                Assert.Same(fixture.Template, template);
+                return Task.FromResult<Dl1MeshPreviewPayload?>(fixture.Payload);
+            });
+        workspace.CommitProjectRestore(new(fixture.Model, "generic.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        var before = workspace.CaptureProjectSession().Model;
+        long revision = workspace.PersistenceRevision;
+        Assert.True(workspace.Conformance.PreviewStockChannelPoliciesCommand.CanExecute(null));
+        await workspace.Conformance.PreviewStockChannelPoliciesCommand.ExecuteAsync(null);
+        Assert.Equal(1, resolves);
+        Assert.NotEmpty(workspace.Conformance.StockPolicyPreviewRows);
+        Assert.Same(before, workspace.CaptureProjectSession().Model);
+        Assert.Equal(revision, workspace.PersistenceRevision);
+        Assert.Empty(Current(workspace).RiggingSession!.Recipe.ComponentPolicies);
+    }
+
+    [Fact]
     public async Task StockHumanoidPolicyRequiresRootChoicesAndReviewThenUndoesAsOneEdit()
     {
         var fixture = StockPreviewFixture();
@@ -28,6 +58,7 @@ public sealed class RigChannelPolicyWorkflowTests : IDisposable
         await wizard.UseSelectedRetailMeshCommand.ExecuteAsync(null);
 
         Assert.False(wizard.PreviewStockHumanoidPolicyCommand.CanExecute(null));
+        Assert.Contains("Choose root position, rotation, and scale", wizard.StockHumanoidStatus, StringComparison.Ordinal);
         wizard.StockHumanoidRootPosition = wizard.StockHumanoidRootChoices.Single(choice => choice.Value == StockHumanoidRootChannel.Clip);
         wizard.StockHumanoidRootRotation = wizard.StockHumanoidRootPosition;
         wizard.StockHumanoidRootScale = wizard.StockHumanoidRootChoices.Single(choice => choice.Value == StockHumanoidRootChannel.Bind);

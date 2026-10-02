@@ -54,6 +54,25 @@ public sealed class FbxRigGeometryEvidenceTests
     }
 
     [Fact]
+    public void GuidedSessionMatchesLegacySurfaceByUniqueDocumentMeshName()
+    {
+        var model = RigConformanceWizardTests.CreateModel();
+        var session = RiggingSessions.Create(model.Package.Document, RigStudioEntryPath.AdaptExistingRig);
+        var withSession = model with
+        {
+            Package = model.Package with
+            {
+                Document = model.Package.Document with { RiggingSession = session },
+            },
+        };
+
+        RigGeometryEvidence evidence = FbxRigGeometryEvidence.Build(withSession);
+
+        Assert.Empty(evidence.Supports);
+        Assert.Equal("current-render-binding", evidence.GeometryBasis);
+    }
+
+    [Fact]
     public void MaterialSplitsDoNotDuplicateSurfaceMassOrSourcePointSupport()
     {
         var whole = FbxRigGeometryEvidence.Build(FbxModelAuthoringImporter.Import(BlenderFbxStrictValidationTests.CreateSourceProvenanceFixture(false, false), "whole.fbx"));

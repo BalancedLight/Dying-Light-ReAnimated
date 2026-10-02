@@ -20,12 +20,12 @@ public sealed partial class ModelsWorkspaceViewModel
     }
     private ImmutableArray<MorphWeight> SampleAnimationMorphs(FbxModelAuthoringImportResult model,AnimationClip? clip,int frame)
     {
-        if(clip is null||clip.ScalarTracks.IsEmpty)return [];
+        if(clip is null||clip.ScalarTracks.IsEmpty)return MergeGuidedMorphOverrides(model, []);
         Guid? id=DerivedReviewActive?Conformance.DerivedMotionPreview?.ClipId:SelectedAnimation?.Id;
         var selection=model.Package.Document.AnimationClips.FirstOrDefault(c=>c.Id==id);
         double scale=selection?.FacialSourceValueUnit=="percent"?.01:1;
         var samples=clip.SampleScalars(frame/clip.FrameRate.FramesPerSecond);
-        return model.Package.Document.MorphChannels.Where(m=>samples.ContainsKey(m.Name))
-            .Select(m=>new MorphWeight(m.Name,(float)(samples[m.Name]*scale))).ToImmutableArray();
+        return MergeGuidedMorphOverrides(model, model.Package.Document.MorphChannels.Where(m=>samples.ContainsKey(m.Name))
+            .Select(m=>new MorphWeight(m.Name,(float)(samples[m.Name]*scale))).ToImmutableArray());
     }
 }

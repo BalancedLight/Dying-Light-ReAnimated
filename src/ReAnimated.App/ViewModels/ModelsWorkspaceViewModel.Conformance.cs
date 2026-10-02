@@ -213,11 +213,12 @@ public sealed partial class ModelsWorkspaceViewModel
                     ? BuildJointPlacementGizmos(skeleton, selectedEffective)
                     : []);
 
+            Viewport.SceneSource.SetMorphWeights(MergeGuidedMorphOverrides(model, []));
             Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
             ApplySkeletonVisibility();
             Viewport.SetPresentation(
-                $"Conformance preview - {ModelName}",
-                Conformance.SolveStatus);
+                Conformance.IsAdvancedSetupMode ? $"Conformance preview - {ModelName}" : $"Joint preview - {ModelName}",
+                Conformance.IsAdvancedSetupMode ? Conformance.SolveStatus : "Review the joint positions and body proportions.");
             Viewport.SetDiagnosticOverlay(null);
         }
         catch (Exception exception) when (
@@ -367,6 +368,16 @@ public sealed partial class ModelsWorkspaceViewModel
 
         if (IsConformTabSelected && Conformance.IsStudioFit)
         {
+            if (FitPreviewIsActive)
+            {
+                // The Models workspace uses a target-side scene source. A
+                // session preview camera overrides its orbit camera, and that
+                // override blocks translation-gizmo input on target panes.
+                // The conformance fit owns this viewport until we leave Fit;
+                // RefreshPreview below restores the session/evaluated camera.
+                _cameraCoordinator.SetTargetPreviewCameraOverride(null);
+            }
+
             OnConformanceFitChanged(this, EventArgs.Empty);
         }
         else if (_model is not null)
@@ -414,10 +425,12 @@ public sealed partial class ModelsWorkspaceViewModel
             string diagnostics = prepared.Diagnostics.IsEmpty
                 ? "no diagnostics"
                 : $"{prepared.Diagnostics.Length} diagnostic(s)";
-            BuildStatus =
-                $"Applied the DL1 conformance: {prepared.Contract.Nodes.Length:N0} emitted nodes, {diagnostics}. " +
-                "The source FBX and these settings are retained, so the conversion can be reopened. " +
-                "Original FBX animation was not retargeted; review a separate clip through Derive Motion before export.";
+            BuildStatus = Conformance.IsAdvancedSetupMode
+                ? $"Applied the DL1 conformance: {prepared.Contract.Nodes.Length:N0} emitted nodes, {diagnostics}. " +
+                  "The source FBX and these settings are retained, so the conversion can be reopened. " +
+                  "Original FBX animation was not retargeted; review a separate clip through Derive Motion before export."
+                : "Dying Light skeleton applied. Your source model and settings are retained." +
+                  (prepared.Diagnostics.IsEmpty ? string.Empty : $" {prepared.Diagnostics.Length} model checks need review.");
             _setStatus(BuildStatus);
         }
         catch (Exception exception) when (

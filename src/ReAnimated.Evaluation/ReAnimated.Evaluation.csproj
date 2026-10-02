@@ -7,4 +7,13 @@
     <ProjectReference Include="..\ReAnimated.Core\ReAnimated.Core.csproj" />
     <ProjectReference Include="..\ReAnimated.Retargeting\ReAnimated.Retargeting.csproj" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('Native\win-x64\ReAnimated.OdeCollision.dll')">
+    <EmbeddedResource Include="Native\win-x64\ReAnimated.OdeCollision.dll"
+                      LogicalName="ReAnimated.Evaluation.Native.win-x64.ReAnimated.OdeCollision.dll" />
+  </ItemGroup>
+  <Target Name="RequireOdeCollisionForRelease"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(Configuration)' == 'Release' and !Exists('Native\win-x64\ReAnimated.OdeCollision.dll')">
+    <Error Text="Release requires the ODE collision payload. Run tools/native/ode-collision/build.ps1 with -StageForEvaluation." />
+  </Target>
 </Project>

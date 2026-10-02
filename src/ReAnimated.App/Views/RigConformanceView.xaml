@@ -116,10 +116,10 @@
       <StackPanel Margin="4">
        <TextBlock Text="Check each helper's track offset before choosing bind ownership. Constant tracks can still differ from the fitted bind."
                   TextWrapping="Wrap" Margin="0,0,0,5" />
-       <TextBlock Text="Retained animation LOD" />
+       <TextBlock Text="Animation LOD policy" />
        <ComboBox ItemsSource="{Binding ChannelLodChoices}" SelectedItem="{Binding TerminalHelperLodChoice}"
                  DisplayMemberPath="Label" Width="160" HorizontalAlignment="Left" Margin="0,2,0,5"
-                 ToolTip="Choose LOD_0 through LOD_3; LOD_OFF cannot retain helper motion" />
+                 ToolTip="Choose an explicit animation LOD policy. Native behavior needs separate validation." />
        <Button Content="Preview terminal-helper candidates" Command="{Binding PreviewTerminalHelperPolicyCommand}"
                HorizontalAlignment="Left" Margin="0,0,0,4" />
        <TextBlock Text="{Binding TerminalHelperPolicyStatus}" TextWrapping="Wrap" Margin="0,0,0,5" />

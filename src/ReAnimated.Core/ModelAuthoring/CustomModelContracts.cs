@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Text;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
@@ -719,6 +719,10 @@ public sealed record CustomModelDocument
 
     public CustomModelCameraMetadata Camera { get; init; } = new();
 
+    /// <summary>Editable FPP geometry choices; the embedded source and full TPP geometry remain intact.</summary>
+    public CustomModelPerspectiveSelection? FirstPersonVisibility { get; init; }
+
+
     public ImmutableArray<CustomModelMorphChannel> MorphChannels { get; init; } = [];
 
     public FacialPresetLibrary FacialPresets { get; init; } = new();
@@ -821,6 +825,14 @@ public sealed record CustomModelDocument
                 throw new ArgumentException("A rigging session belongs to another model.", nameof(RiggingSession));
         }
         Camera.Validate(effectiveNames, nameof(Camera));
+        if (FirstPersonVisibility is { } visibility)
+        {
+            visibility.Validate();
+            if (visibility.Perspective != CustomModelPerspective.FirstPerson ||
+                !string.Equals(visibility.SourceSha256, Source.ContentSha256, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("First-person visibility must belong to this source model.", nameof(FirstPersonVisibility));
+        }
+
         ArgumentNullException.ThrowIfNull(SecondaryMotion);
         SecondaryMotion.Validate(effectiveNames);
         HashSet<string> secondaryOutputs = SecondaryMotion.Groups.SelectMany(static group => group.Particles)

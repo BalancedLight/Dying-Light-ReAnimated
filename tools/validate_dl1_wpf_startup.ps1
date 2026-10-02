@@ -7,6 +7,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-WpfStartupFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString(
+            $sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 function Test-ExpectedViewportDiagnostics {
     param(
         [Parameter(Mandatory = $true)]
@@ -407,14 +422,8 @@ try {
 
     $executableFile =
         Get-Item -LiteralPath $resolvedExecutable
-    $sourceReceiptHash =
-        (Get-FileHash `
-            -LiteralPath $sourceReceipt `
-            -Algorithm SHA256).Hash.ToLowerInvariant()
-    $executableHash =
-        (Get-FileHash `
-            -LiteralPath $resolvedExecutable `
-            -Algorithm SHA256).Hash.ToLowerInvariant()
+    $sourceReceiptHash = Get-WpfStartupFileSha256 -Path $sourceReceipt
+    $executableHash = Get-WpfStartupFileSha256 -Path $resolvedExecutable
     $acceptance =
         [ordered]@{
             format =
@@ -457,10 +466,7 @@ try {
             $finalReceipt)
     }
 
-    $finalHash =
-        (Get-FileHash `
-            -LiteralPath $finalReceipt `
-            -Algorithm SHA256).Hash.ToLowerInvariant()
+    $finalHash = Get-WpfStartupFileSha256 -Path $finalReceipt
     $committed = $true
     Write-Host "Packaged WPF/D3D11 startup acceptance passed."
     Write-Host "Receipt: $finalReceipt"

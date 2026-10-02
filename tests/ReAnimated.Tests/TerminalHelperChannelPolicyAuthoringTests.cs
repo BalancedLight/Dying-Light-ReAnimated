@@ -10,6 +10,44 @@ namespace ReAnimated.Tests;
 public sealed class TerminalHelperChannelPolicyAuthoringTests
 {
     [Fact]
+    public void ExcludingATakeFromExportPreservesItsOriginalTrackEvidence()
+    {
+        var fixture = CreateFixture();
+        var document = fixture.Model.Package.Document;
+        document = document with { AnimationClips = document.AnimationClips.Select(clip => clip with { Included = false }).ToImmutableArray() };
+        var model = fixture.Model with { Package = fixture.Model.Package with { Document = document } };
+        var observations = TerminalHelperChannelPolicyAuthoring.Observe(model, new HashSet<Guid> { fixture.EntityId }, RigAnimationLod.Off);
+        var track = Assert.Single(Assert.Single(observations).Tracks);
+        Assert.False(track.IncludedForExport);
+        Assert.Equal(2, track.Keys.Length);
+        var proposal = TerminalHelperChannelPolicyAuthoring.Propose(document, observations);
+        var row = Assert.Single(proposal.Rows);
+        Assert.Equal(TerminalHelperPolicyRowStatus.Proposed, row.Status);
+        Assert.Contains("takes excluded from export=1", row.Evidence, StringComparison.Ordinal);
+        Assert.Contains("constant value differs from fitted bind", row.Evidence, StringComparison.Ordinal);
+        Assert.False(Assert.Single(document.AnimationClips).Included);
+    }
+
+    [Fact]
+    public void ExplicitOffLodRemainsAnIndependentReviewedAuthoringChoice()
+    {
+        var fixture = CreateFixture();
+        var observations = TerminalHelperChannelPolicyAuthoring.Observe(fixture.Model, new HashSet<Guid> { fixture.EntityId }, RigAnimationLod.Off);
+        var proposal = TerminalHelperChannelPolicyAuthoring.Propose(fixture.Model.Package.Document, observations);
+        Assert.Equal(TerminalHelperPolicyRowStatus.Proposed, Assert.Single(proposal.Rows).Status);
+        Assert.Equal(RigAnimationLod.Off, Assert.Single(proposal.Edits).Lod);
+        Assert.Throws<InvalidOperationException>(() => TerminalHelperChannelPolicyAuthoring.TryApply(
+            fixture.Model.Package.Document, observations, proposal, reviewed: false, out _));
+        Assert.True(TerminalHelperChannelPolicyAuthoring.TryApply(fixture.Model.Package.Document, observations, proposal, reviewed: true, out var updated));
+        var policy = Assert.Single(updated.Recipe.ComponentPolicies);
+        Assert.Equal(RigAnimationLod.Off, policy.AnimationLod);
+        Assert.Equal(RigAnimationComponents.None, policy.EmittedMask);
+        Assert.Equal(RigComponentOwner.BindInherited, Assert.Single(policy.Position.Owners));
+        Assert.Throws<ArgumentOutOfRangeException>(() => TerminalHelperChannelPolicyAuthoring.Observe(
+            fixture.Model, new HashSet<Guid> { fixture.EntityId }, (RigAnimationLod)99));
+    }
+
+    [Fact]
     public void ProposesOnlyAfterReviewAndShowsConstantTrackDifferenceFromFittedBind()
     {
         var fixture = CreateFixture();

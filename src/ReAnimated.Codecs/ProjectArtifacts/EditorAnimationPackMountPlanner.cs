@@ -19,6 +19,7 @@ public static class EditorAnimationPackMountPlanner
         ReadOnlyMemory<byte> candidatePack,
         IReadOnlyDictionary<string, byte[]> animations,
         IReadOnlyDictionary<string, Rp6lAnimationScript> scripts,
+        bool allowUnownedReplacement = false,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
@@ -51,13 +52,17 @@ public static class EditorAnimationPackMountPlanner
         if (string.Equals(currentHash, candidateHash, StringComparison.OrdinalIgnoreCase))
             return new EditorAnimationPackMountPlan(candidatePack.ToArray(), false, 0);
 
-        if (!await IsOwnedActivePackAsync(root, ownerProjectId, currentHash, cancellationToken)
-                .ConfigureAwait(false))
+        bool owned = await IsOwnedActivePackAsync(
+                root, ownerProjectId, currentHash, cancellationToken)
+            .ConfigureAwait(false);
+        if (!allowUnownedReplacement && !owned)
         {
             throw new InvalidOperationException(
                 $"The existing {RelativePath} differs from this export and has no matching active receipt for this project. Use an isolated Developer Tools project or restore its prior owner before mounting the authored pack.");
         }
 
+        await ValidatePreservableInventoryAsync(destination, cancellationToken)
+            .ConfigureAwait(false);
         Rp6lAnimationLibrary existing = await Rp6lAnimationLibraryCodec.ExtractAsync(
                 destination,
                 cancellationToken: cancellationToken)
@@ -80,7 +85,46 @@ public static class EditorAnimationPackMountPlanner
         var updatedScriptNames = new HashSet<string>(scripts.Keys, StringComparer.OrdinalIgnoreCase);
         int preserved = existing.Animations.Keys.Count(name => !updatedAnimationNames.Contains(name)) +
                         existing.AnimationScripts.Keys.Count(name => !updatedScriptNames.Contains(name));
-        return new EditorAnimationPackMountPlan(mergedPack, true, preserved, currentHash);
+        return new EditorAnimationPackMountPlan(mergedPack, owned, preserved, currentHash)
+        {
+            ReplacesUnownedPack = !owned,
+        };
+    }
+
+    private static async Task ValidatePreservableInventoryAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        Rp6lArchive archive;
+        try
+        {
+            archive = await Rp6lArchive.OpenAsync(
+                path,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is EndOfStreamException or InvalidDataException)
+        {
+            throw new InvalidDataException(
+                "The existing canonical animation pack is malformed or contains an unpreservable resource inventory.",
+                exception);
+        }
+        foreach (Rp6lResourceDescriptor resource in archive.Resources)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            bool allowed = resource.ResourceType is
+                Rp6lResourceTypes.Animation or Rp6lResourceTypes.AnimationScript ||
+                resource.ResourceType == Rp6lResourceTypes.BuilderInformation &&
+                resource.Name is "_ANIMATION_" or "_ANIMATION_SCR_";
+            if (!allowed)
+                throw new InvalidDataException(
+                    $"The existing canonical animation pack contains unknown or unpreservable resource '{resource.Name}' (type {resource.ResourceType}).");
+            int expectedItems = resource.ResourceType == Rp6lResourceTypes.Animation ? 1 : 2;
+            if (resource.ResourceType is Rp6lResourceTypes.AnimationScript && resource.Items.Count != expectedItems ||
+                resource.ResourceType == Rp6lResourceTypes.Animation && resource.Items.Count != expectedItems ||
+                resource.ResourceType == Rp6lResourceTypes.BuilderInformation && resource.Items.Count != 1)
+                throw new InvalidDataException(
+                    $"The existing canonical animation pack resource '{resource.Name}' has an unpreservable item layout.");
+        }
     }
 
     private static async Task<bool> IsOwnedActivePackAsync(
@@ -133,4 +177,10 @@ public sealed record EditorAnimationPackMountPlan(
     byte[] Payload,
     bool ReplacesOwnedPack,
     int PreservedResourceCount,
-    string? ExistingSha256 = null);
+    string? ExistingSha256 = null)
+{
+    public bool ReplacesUnownedPack { get; init; }
+
+    public bool ReplacesExistingPack =>
+        ReplacesOwnedPack || ReplacesUnownedPack;
+}

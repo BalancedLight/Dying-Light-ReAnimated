@@ -142,9 +142,64 @@ public sealed partial class RigConformanceWizardViewModel
         var pendingSession = _bodyDetectionWork?.Session ?? _weightSnapshot?.Session;
         if ((_bodyDetectionWork is not null || _weightPreview is not null) && pendingSession?.EntryPath != selected.Path)
         { _setStatus("Apply or discard the pending authoring proposal before starting a different workflow."); return; }
-        var session = (pendingSession?.EntryPath == selected.Path ? pendingSession : RiggingSessions.Create(model.Package.Document, selected.Path)) with { Stage = StudioStage };
+        var session = (pendingSession?.EntryPath == selected.Path
+            ? pendingSession
+            : CreateStudioSession(model.Package.Document, selected.Path)) with { Stage = StudioStage };
         StudioMetadataRequested?.Invoke(this, new(model, session, true));
     }
+
+    private static RiggingSession CreateStudioSession(
+        ReAnimated.Core.ModelAuthoring.CustomModelDocument document,
+        RigStudioEntryPath path)
+    {
+        RiggingSession session = RiggingSessions.Create(document, path);
+        return session with
+        {
+            Components = session.Components
+                .Select(component => ClassifyDefaultComponent(component, session.Components.Length == 1))
+                .ToImmutableArray(),
+        };
+    }
+
+    private static RigGeometryComponent ClassifyDefaultComponent(
+        RigGeometryComponent component,
+        bool isOnlyComponent)
+    {
+        string name = component.DisplayName;
+        if (ContainsAny(name, "accessory", "weapon", "shield", "sword", "gun", "prop", "backpack", "pouch", "holster", "hat", "helmet", "hair"))
+        {
+            return component with
+            {
+                Kind = RigGeometryComponentKind.Accessory,
+                UseForAnatomy = false,
+            };
+        }
+
+        if (ContainsAny(name, "cloth", "clothing", "outfit", "shirt", "pants", "trouser", "skirt", "dress", "coat", "jacket", "armor", "glove", "boot", "shoe", "sleeve"))
+        {
+            return component with
+            {
+                Kind = RigGeometryComponentKind.Clothing,
+                UseForAnatomy = true,
+            };
+        }
+
+        if (isOnlyComponent || ContainsAny(name, "body", "torso", "skin", "upperbody", "lowerbody", "head", "face", "arm", "leg", "hand", "foot"))
+        {
+            return component with
+            {
+                Kind = RigGeometryComponentKind.Body,
+                UseForAnatomy = true,
+            };
+        }
+
+        // Unknown names remain included in geometry evidence until an author
+        // explicitly classifies them. This avoids silently dropping anatomy.
+        return component;
+    }
+
+    private static bool ContainsAny(string value, params string[] tokens) =>
+        tokens.Any(token => value.Contains(token, StringComparison.OrdinalIgnoreCase));
 
     private bool CanStartStudioWithEntry(RigStudioEntryPath path) =>
         HasModel && !HasStudioSession && !IsBusy &&

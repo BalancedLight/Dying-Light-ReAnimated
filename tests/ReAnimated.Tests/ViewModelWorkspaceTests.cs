@@ -245,7 +245,7 @@ public sealed class ViewModelWorkspaceTests : IDisposable
             null,
             0,
             "custom-rig",
-            [new ModelsWorkspaceEmbeddedStackPayload(selection, true)],
+            [new ModelsWorkspaceEmbeddedStackPayload(selection, true, true)],
             clipId,
             ProjectCustomModelPreviewMode.Dl1Output,
             true,

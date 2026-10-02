@@ -53,11 +53,15 @@ public sealed class AnimationExplorerViewModelTests : IDisposable
             viewModel.AssetBrowser.SelectedKindFilter);
         Assert.Same(item, viewModel.AssetBrowser.SelectedAsset);
         Assert.Contains(
-            "Select a base-game model to bind it and play",
+            "source is the rig that authored",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            "Use project model",
+            "compatible rigged project model",
+            viewModel.ExplorerSourceModelPickerPrompt,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            "different target separately",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
         Assert.True(

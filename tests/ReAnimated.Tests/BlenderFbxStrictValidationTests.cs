@@ -1588,7 +1588,7 @@ public sealed class BlenderFbxStrictValidationTests :
         LongArray(params long[] values) =>
         values.ToImmutableArray();
 
-    private static byte[] Serialize(
+    internal static byte[] Serialize(
         FbxBinaryDocument document)
     {
         using var stream = new MemoryStream();

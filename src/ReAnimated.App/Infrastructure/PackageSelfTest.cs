@@ -7,6 +7,8 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using ReAnimated.Cli;
+using ReAnimated.Core.Mathematics;
+using ReAnimated.Evaluation;
 
 namespace ReAnimated.App.Infrastructure;
 
@@ -18,7 +20,7 @@ public static class PackageSelfTest
         "DL_REANIMATED_PACKAGE_SELF_TEST.json";
     public const string Format =
         "dl-reanimated-package-self-test";
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
 
     private const string CandidateSha256Metadata =
         "DLReAnimatedCandidateSourceSha256";
@@ -34,6 +36,7 @@ public static class PackageSelfTest
     private static readonly string[] RequiredResourceSuffixes =
     [
         "Embedded.LICENSE",
+        "Embedded.THIRD_PARTY_NOTICES.md",
         "Embedded.README.md",
         "Embedded.Schemas.dlraproj.schema.json",
         "Embedded.Schemas.animation-library-build.schema.json",
@@ -147,6 +150,23 @@ public static class PackageSelfTest
         string sqliteVersion = await VerifySqliteAsync(cancellationToken)
             .ConfigureAwait(false);
 
+        // A release must execute the embedded ODE payload in the packaged
+        // process. The development fallback cannot satisfy this contact gate.
+        OpenDynamicsCollisionBackend ode = OpenDynamicsCollisionBackend.CreateRequired();
+        bool sphereContact = ode.TryContact(new(1.4, 0, 0), .5,
+            Vector3D.Zero, Vector3D.Zero, 1, Vector3D.UnitX, out SecondaryCollisionContact sphere);
+        bool capsuleContact = ode.TryContact(new(.7, 0, 0), .3,
+            new(0, 0, -1), new(0, 0, 1), .5, Vector3D.UnitX, out SecondaryCollisionContact capsule);
+        if (!sphereContact || !capsuleContact ||
+            Math.Abs(sphere.PenetrationDepth - .1) > 1e-8 ||
+            Math.Abs(capsule.PenetrationDepth - .1) > 1e-8 ||
+            Vector3D.Distance(sphere.Normal, Vector3D.UnitX) > 1e-8 ||
+            Vector3D.Distance(capsule.Normal, Vector3D.UnitX) > 1e-8 ||
+            ode.NativeContactQueryCount != 2)
+        {
+            throw new InvalidDataException("The packaged ODE backend failed its sphere/capsule contact check.");
+        }
+
         string[] resources =
             assembly.GetManifestResourceNames();
         foreach (string suffix in
@@ -222,7 +242,10 @@ public static class PackageSelfTest
                 .Order(StringComparer.Ordinal)
                 .ToArray(),
             sqliteVersion,
-            true);
+            true,
+            true,
+            ode.Identity,
+            ode.NativeContactQueryCount);
         string resultPath =
             Path.Combine(
                 outputDirectory,
@@ -321,7 +344,13 @@ public static class PackageSelfTest
         [property: JsonPropertyName("sqliteVersion")]
         string SqliteVersion,
         [property: JsonPropertyName("sqliteRoundTripVerified")]
-        bool SqliteRoundTripVerified);
+        bool SqliteRoundTripVerified,
+        [property: JsonPropertyName("odeCollisionVerified")]
+        bool OdeCollisionVerified,
+        [property: JsonPropertyName("odeCollisionBackendIdentity")]
+        string OdeCollisionBackendIdentity,
+        [property: JsonPropertyName("odeNativeContactQueryCount")]
+        long OdeNativeContactQueryCount);
 
     private static PackageProvenanceExpectation
         ParseProvenanceExpectation(

@@ -44,14 +44,19 @@ public static class RetargetMappingReview
     public static RetargetMappingReviewReport Analyze(
         RigDefinition source,
         RigDefinition target,
-        RetargetMap map)
+        RetargetMap map,
+        IEnumerable<int>? requiredTargetBoneIndices = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(map);
 
         CompatibilityReport compatibility =
-            RigCompatibilityAnalyzer.Analyze(source, target, map);
+            RigCompatibilityAnalyzer.Analyze(
+                source,
+                target,
+                map,
+                requiredTargetBoneIndices: requiredTargetBoneIndices);
         Dictionary<int, BoneMapEntry> currentEvidenceByTarget =
             RetargetSuggestionScorer.Score(source, target, map)
                 .Entries
@@ -71,10 +76,16 @@ public static class RetargetMappingReview
             BoneDefinition sourceBone = source.Bones[entry.SourceBoneIndex];
             BoneDefinition targetBone = target.Bones[entry.TargetBoneIndex];
             bool deterministicIdentity =
-                IsVerifiedDeterministicIdentity(
-                    source,
-                    target,
-                    entry);
+                entry.Method == BoneMappingMethod.ParentFollow
+                    ? RetargetMapBuilder.IsVerifiedParentFollowIdentity(
+                        source,
+                        target,
+                        map,
+                        entry)
+                    : IsVerifiedDeterministicIdentity(
+                        source,
+                        target,
+                        entry);
             bool automaticPolicy =
                 deterministicIdentity &&
                 IsVerifiedAutomaticPolicy(target, entry);
@@ -95,7 +106,8 @@ public static class RetargetMappingReview
                     currentEvidence);
             if (entry.Method is
                     BoneMappingMethod.DescriptorHash or
-                    BoneMappingMethod.ExactName &&
+                    BoneMappingMethod.ExactName or
+                    BoneMappingMethod.ParentFollow &&
                 !deterministicIdentity)
             {
                 diagnostics.Add(
@@ -229,6 +241,25 @@ public static class RetargetMappingReview
                     RetargetTransformComponentsCompatibility.FromLegacy(
                         RetargetMapBuilder.GetDefaultHelperComponentPolicy(
                             targetBone.Name));
+        }
+
+        if (entry.Method == BoneMappingMethod.ParentFollow)
+        {
+            return entry.TransferPolicy == RetargetTransferPolicy.Bind &&
+                entry.TransformComponents ==
+                    RetargetTransformComponents.All;
+        }
+
+        if (entry.Method == BoneMappingMethod.DescriptorHash)
+        {
+            return entry.TransferPolicy ==
+                    RetargetTransferPolicy.GlobalBindBasis &&
+                entry.TransformComponents ==
+                    RetargetTransformComponents.All ||
+                entry.TransferPolicy ==
+                    RetargetTransferPolicy.GlobalRotationDelta &&
+                entry.TransformComponents ==
+                    RetargetTransformComponents.Rotation;
         }
 
         return entry.TransferPolicy ==

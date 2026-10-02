@@ -14,7 +14,10 @@ public sealed record TerminalHelperClipTrackObservation(
     string ClipName,
     long FrameCount,
     int BoneIndex,
-    ImmutableArray<TransformTRS> Keys);
+    ImmutableArray<TransformTRS> Keys)
+{
+    public bool IncludedForExport { get; init; } = true;
+}
 
 /// <summary>Caller-supplied fit and skin evidence for one source helper bone.</summary>
 public sealed record TerminalHelperFitObservation(
@@ -67,8 +70,8 @@ public static class TerminalHelperChannelPolicyAuthoring
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(unmatchedEntityIds);
-        if (!Enum.IsDefined(retainedLodCandidate) || retainedLodCandidate == RigAnimationLod.Off)
-            throw new ArgumentOutOfRangeException(nameof(retainedLodCandidate), "Choose a retained LOD candidate; Off is not a retained candidate.");
+        if (!Enum.IsDefined(retainedLodCandidate))
+            throw new ArgumentOutOfRangeException(nameof(retainedLodCandidate), "Choose a defined animation LOD policy.");
 
         CustomModelDocument document = model.Package.Document;
         RiggingSession session = document.RiggingSession ?? throw new InvalidOperationException("A rigging session is required.");
@@ -101,10 +104,10 @@ public static class TerminalHelperChannelPolicyAuthoring
         foreach (BoneDefinition bone in rig.Bones)
             if (bone.ParentIndex >= 0) effectiveChildCounts[bone.ParentIndex]++;
         string effectiveRigFingerprint = ComputeRigFingerprint(rig);
-        var metadata = document.AnimationClips.Where(static clip => clip.Included && clip.DerivedMotion is null)
+        var metadata = document.AnimationClips.Where(static clip => clip.DerivedMotion is null)
             .ToDictionary(static clip => clip.Id);
         if (metadata.Keys.Any(id => !model.AnimationClips.ContainsKey(id)))
-            throw new InvalidDataException("Every included embedded clip must be decoded before helper tracks can be reviewed.");
+            throw new InvalidDataException("Every original embedded clip must be decoded before helper tracks can be reviewed, including takes excluded from export.");
 
         var result = ImmutableArray.CreateBuilder<TerminalHelperFitObservation>();
         for (int index = 0; index < document.Bones.Length; index++)
@@ -125,7 +128,8 @@ public static class TerminalHelperChannelPolicyAuthoring
                 if (!metadata.ContainsKey(clipId)) continue;
                 TransformTrack? track = clip.TransformTracks.FirstOrDefault(row => row.BoneIndex == rigIndex);
                 tracks.Add(new(clipId, clip.Name, clip.FrameCount, rigIndex,
-                    track?.Keyframes.Select(static key => key.Value).ToImmutableArray() ?? []));
+                    track?.Keyframes.Select(static key => key.Value).ToImmutableArray() ?? [])
+                { IncludedForExport = metadata[clipId].Included });
             }
             result.Add(new(sourceEntity.EntityId, index, rig.Bones[rigIndex].LocalBindPose,
                 unmatchedEntityIds.Contains(sourceEntity.EntityId), weights[rigIndex], retainedLodCandidate, tracks.ToImmutable())
@@ -192,7 +196,7 @@ public static class TerminalHelperChannelPolicyAuthoring
                 RigComponentOwner.BindInherited, RigComponentOwner.BindInherited, RigComponentOwner.BindInherited));
             rows.Add(new(entity.EntityId, entity.NativeName, TerminalHelperPolicyRowStatus.Proposed,
                 null, null, RigAnimationComponents.None, observation.RetainedLodCandidate,
-                "Candidate only: suggest bind-inherited POS/ROT/SCL and retained LOD " + observation.RetainedLodCandidate + ". " + evidence));
+                "Candidate only: suggest bind-inherited POS/ROT/SCL and animation LOD " + observation.RetainedLodCandidate + ". " + evidence));
         }
 
         return new(session.CreateJobToken(), document.Source.ContentSha256,
@@ -230,8 +234,8 @@ public static class TerminalHelperChannelPolicyAuthoring
         if (row.RenderWeightCount != 0) { reason = "The helper has nonzero render-weight assignments."; return false; }
         if (childCounts[boneIndex] != 0 || row.EffectiveChildNodeCount != 0) { reason = "The helper is not terminal in the effective hierarchy."; return false; }
         if (!IsUsableTransform(row.FittedLocalBind)) { reason = "Fitted bind transform is invalid."; return false; }
-        if (!Enum.IsDefined(row.RetainedLodCandidate) || row.RetainedLodCandidate == RigAnimationLod.Off)
-        { reason = "A retained LOD candidate is required."; return false; }
+        if (!Enum.IsDefined(row.RetainedLodCandidate))
+        { reason = "A defined animation LOD policy is required."; return false; }
         if (row.Tracks.IsDefaultOrEmpty) { reason = "No embedded clip track was observed."; return false; }
         if (row.Tracks.Any(track => track.BoneIndex != row.FittedRigBoneIndex || track.ClipId == Guid.Empty ||
             string.IsNullOrWhiteSpace(track.ClipName) || track.FrameCount <= 0 || track.Keys.IsDefaultOrEmpty ||
@@ -261,11 +265,14 @@ public static class TerminalHelperChannelPolicyAuthoring
                     ", ROT=" + RotationDifference(value.Rotation, bind.Rotation).ToString("G6", System.Globalization.CultureInfo.InvariantCulture) +
                     " rad, SCL=" + Distance(value.Scale, bind.Scale).ToString("G6", System.Globalization.CultureInfo.InvariantCulture) + ")");
         }
-        string diff = deltas.Count == 0
+        string diff = row.Tracks.IsDefaultOrEmpty
+            ? "No embedded tracks were observed; no track-to-bind comparison is available."
+            : deltas.Count == 0
             ? "All observed constant track values match fitted bind within tolerance; constancy does not establish safe discard."
             : "Nonzero constant-track versus fitted-bind differences are evidence: " + string.Join("; ", deltas) + ". Constancy does not establish safe discard.";
         return "Unmatched=" + row.IsUnmatchedToTarget + "; renderWeightAssignments=" + row.RenderWeightCount +
-            "; childNodes=" + childCounts[boneIndex] + "; constantTracks=" + row.Tracks.Length + ". " + diff;
+            "; childNodes=" + childCounts[boneIndex] + "; constantTracks=" + row.Tracks.Length +
+            "; takes excluded from export=" + row.Tracks.Count(static track => !track.IncludedForExport) + ". " + diff;
     }
 
     private static bool Near(TransformTRS left, TransformTRS right, double tolerance) =>
@@ -321,7 +328,7 @@ public static class TerminalHelperChannelPolicyAuthoring
             foreach (TerminalHelperClipTrackObservation track in row.Tracks.OrderBy(static item => item.ClipId))
             {
                 text.Append(':').Append(track.ClipId.ToString("N")).Append(':').Append(track.ClipName).Append(':')
-                    .Append(track.FrameCount).Append(':').Append(track.BoneIndex);
+                    .Append(track.FrameCount).Append(':').Append(track.BoneIndex).Append(':').Append(track.IncludedForExport);
                 foreach (TransformTRS key in track.Keys) text.Append(':').Append(TransformText(key));
             }
         }

@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using ReAnimated.App.Infrastructure;
@@ -6,6 +6,7 @@ using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Geometry;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Renderer.D3D11;
@@ -14,6 +15,92 @@ namespace ReAnimated.Tests;
 
 public sealed class CustomModelPreviewSessionTests
 {
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void FirstPersonSceneReplacementRetainsCurrentAttachmentAndLocalState()
+    {
+        FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
+        CustomModelPreviewSession session =
+            CustomModelPreviewAdapter.CreateSession(model, CustomModelPreviewMode.SourceFbx);
+        MeshRenderData source = session.Meshes[0];
+        MeshRenderData current = source with
+        {
+            LocalToWorld = System.Numerics.Matrix4x4.CreateTranslation(3, 4, 5),
+            IsSelected = true,
+            ProjectionRole = MeshProjectionRole.FppHands,
+            Tint = new System.Numerics.Vector4(0.2f, 0.4f, 0.6f, 1.0f),
+        };
+        MeshRenderData attachment = source with { Id = "attachment", LocalToWorld = System.Numerics.Matrix4x4.Identity };
+
+        MeshRenderData[] result = session.CreateFirstPersonSceneMeshes([current, attachment]);
+
+        MeshRenderData replaced = Assert.Single(result, mesh => mesh.Id == source.Id);
+        Assert.Equal(current.LocalToWorld, replaced.LocalToWorld);
+        Assert.Equal(current.IsSelected, replaced.IsSelected);
+        Assert.Equal(current.ProjectionRole, replaced.ProjectionRole);
+        Assert.Equal(current.Tint, replaced.Tint);
+        Assert.Same(attachment, Assert.Single(result, mesh => mesh.Id == attachment.Id));
+    }
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void WeightEvidenceUsesStableSourceJointIdentityAcrossReorderedOutputRig()
+    {
+        FbxModelAuthoringImportResult imported = CreateModel(
+            flipTextureCoordinateV: false);
+        ImmutableArray<CustomModelBone> bones =
+        [
+            PreviewBone(0, 1, "root", -1, BoneKind.Root, weighted: true),
+            PreviewBone(1, 3, "branch_b", 0, BoneKind.Deform, weighted: true),
+            PreviewBone(2, 2, "branch_a", 0, BoneKind.Deform, weighted: true),
+            PreviewBone(3, 4, "unused_branch", 0, BoneKind.Deform, weighted: false),
+            PreviewBone(4, 0, "unknown_branch", 0, BoneKind.Deform, weighted: false),
+        ];
+        CustomModelDocument document = imported.Package.Document with
+        {
+            Bones = bones,
+            RigSignature = CustomModelContractSignatures.ComputeRig(bones),
+        };
+        GeometrySourceComponent sourceGeometry = CreateWeightedSourceGeometry();
+        FbxModelSurface originalSurface = Assert.Single(imported.Surfaces);
+        imported = imported with
+        {
+            Package = imported.Package with { Document = document },
+            Rig = document.CreateRigDefinition(),
+            Surfaces =
+            [
+                originalSurface with { SourceGeometry = sourceGeometry },
+                originalSurface with
+                {
+                    Id = originalSurface.Id + "/duplicate-surface",
+                    SourceGeometry = sourceGeometry,
+                },
+            ],
+        };
+
+        CustomModelPreviewSession session =
+            CustomModelPreviewAdapter.CreateSession(
+                imported,
+                CustomModelPreviewMode.SourceFbx);
+
+        CustomModelBonePreviewEvidence branch =
+            session.GetBonePreviewEvidence("branch_a");
+        CustomModelBonePreviewEvidence sibling =
+            session.GetBonePreviewEvidence("branch_b");
+        CustomModelBonePreviewEvidence unused =
+            session.GetBonePreviewEvidence("unused_branch");
+        CustomModelBonePreviewEvidence unknown =
+            session.GetBonePreviewEvidence("unknown_branch");
+
+        Assert.Equal(2, imported.Rig!.GetBoneIndex("branch_a"));
+        Assert.Equal("root", branch.ParentBone);
+        Assert.Equal(2, branch.WeightedSourceControlPointCount);
+        Assert.Equal(1, sibling.WeightedSourceControlPointCount);
+        Assert.Equal(0, unused.WeightedSourceControlPointCount);
+        Assert.Null(unknown.WeightedSourceControlPointCount);
+    }
+
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelPreview")]
@@ -521,6 +608,59 @@ public sealed class CustomModelPreviewSessionTests
             [surface],
             ImmutableDictionary<Guid, AnimationClip>.Empty,
             CreateEmptyInspection());
+    }
+
+    private static CustomModelBone PreviewBone(
+        int index,
+        long fbxObjectId,
+        string name,
+        int parentIndex,
+        BoneKind kind,
+        bool weighted) => new()
+    {
+        Index = index,
+        FbxObjectId = fbxObjectId,
+        Name = name,
+        ParentIndex = parentIndex,
+        Kind = kind,
+        IsWeighted = weighted,
+        LocalBindTransform = index == 0
+            ? TransformTRS.Identity
+            : new TransformTRS(
+                new Vector3D(0, 1, 0),
+                QuaternionD.Identity,
+                Vector3D.One),
+        ExactLocalBindMatrix = index == 0
+            ? TransformMatrix.Identity
+            : TransformMatrix.CreateTranslation(new Vector3D(0, 1, 0)),
+    };
+
+    private static GeometrySourceComponent CreateWeightedSourceGeometry()
+    {
+        GeometrySourceInfluence[] influences =
+        [
+            new("skin", "cluster-branch-a", "2", 0, 1, 1.0, true),
+            new("skin", "cluster-branch-a", "2", 1, 1, 1.0, true),
+            new("skin", "cluster-branch-b", "3", 2, 2, 1.0, true),
+            new("skin", "cluster-root", "1", 3, 0, 1.0, true),
+        ];
+        ImmutableArray<GeometrySourceControlPointWeights> points =
+            influences.Select(influence =>
+                    new GeometrySourceControlPointWeights(
+                        [influence],
+                        RetainedWeight: influence.Weight,
+                        DiscardedWeight: 0.0))
+                .ToImmutableArray();
+        return new GeometrySourceComponent(
+            "shared-source-geometry",
+            Enumerable.Range(0, points.Length)
+                .Select(index => new Vector3D(index, 0, 0))
+                .ToImmutableArray())
+        {
+            Skinning = new GeometrySourceSkinning(
+                HasSkinDeformer: true,
+                ControlPoints: points),
+        };
     }
 
     private static FbxModelVertex Vertex(

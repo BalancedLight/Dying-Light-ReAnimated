@@ -96,20 +96,41 @@ public sealed class RigConformanceResult
         IEnumerable<RigConformedBone> bones,
         IEnumerable<RigConformanceWarning> warnings,
         RigRestPoseTransferResult restPoseTransfer)
+        : this(
+            (template ?? throw new ArgumentNullException(nameof(template))).TemplateId,
+            landmark,
+            conformanceStrength,
+            bones,
+            warnings,
+            restPoseTransfer)
     {
-        ArgumentNullException.ThrowIfNull(template);
+    }
+
+    private RigConformanceResult(
+        string templateId,
+        RigLandmarkSolution landmark,
+        double conformanceStrength,
+        IEnumerable<RigConformedBone> bones,
+        IEnumerable<RigConformanceWarning> warnings,
+        RigRestPoseTransferResult restPoseTransfer)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(templateId);
         ArgumentNullException.ThrowIfNull(landmark);
         ArgumentNullException.ThrowIfNull(bones);
         ArgumentNullException.ThrowIfNull(warnings);
         ArgumentNullException.ThrowIfNull(restPoseTransfer);
 
-        TemplateId = template.TemplateId;
+        TemplateId = templateId;
         Landmark = landmark;
         ConformanceStrength = conformanceStrength;
         Bones = bones.ToImmutableArray();
         Warnings = warnings.ToImmutableArray();
         RestPoseTransfer = restPoseTransfer;
     }
+
+    /// <summary>Creates the same fit result with a normalized output row table.</summary>
+    public RigConformanceResult WithBones(IEnumerable<RigConformedBone> bones) =>
+        new(TemplateId, Landmark, ConformanceStrength, bones, Warnings, RestPoseTransfer);
 
     public string TemplateId { get; }
 

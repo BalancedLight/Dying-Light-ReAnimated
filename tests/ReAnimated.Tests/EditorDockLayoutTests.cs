@@ -476,25 +476,7 @@ public sealed class EditorDockLayoutTests
         return path;
     }
 
-    private static void RunOnStaThread(Action action)
-    {
-        ExceptionDispatchInfo? captured = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                captured = ExceptionDispatchInfo.Capture(exception);
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        captured?.Throw();
-    }
+    private static void RunOnStaThread(Action action) => WpfTestDispatcher.Run(action);
 
     private static void DrainIdle(Dispatcher dispatcher)
     {

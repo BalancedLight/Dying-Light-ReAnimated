@@ -15,6 +15,7 @@ public enum BoneMappingMethod
     Manual,
     Composed,
     Distributed,
+    ParentFollow,
 }
 
 public enum MappingReviewOrigin
@@ -320,6 +321,19 @@ public static class RetargetMapBuilder
             sourceRoleIndex,
             targetRoleIndex);
 
+        // A required target deform leaf with no source identity may safely
+        // retain its own bind-local transform under an already matched
+        // canonical parent. Apply this before structural matching so a
+        // low-confidence lookalike cannot take ownership first.
+        AddCanonicalParentFollowMatches(
+            source,
+            target,
+            entries);
+        foreach (BoneMapEntry mapped in entries)
+        {
+            mappedTargets.Add(mapped.TargetBoneIndex);
+        }
+
         AddStructuralMatches(
             source,
             target,
@@ -336,15 +350,22 @@ public static class RetargetMapBuilder
             sourceRoleIndex,
             targetRoleIndex);
 
+        ImmutableArray<BoneMapEntry>.Builder automaticEntries =
+            ImmutableArray.CreateBuilder<BoneMapEntry>(
+                entries.Count + target.BoneCount);
+        foreach (BoneMapEntry entry in entries)
+        {
+            automaticEntries.Add(
+                ApplyAutomaticBodyTransferPolicy(
+                    entry,
+                    source,
+                    target));
+        }
+
         RetargetMap proposal = new(
             source.Id,
             target.Id,
-            entries
-                .Select(entry =>
-                    ApplyAutomaticBodyTransferPolicy(
-                        entry,
-                        source,
-                        target))
+            automaticEntries
                 .OrderBy(static entry => entry.TargetBoneIndex)
                 .ToImmutableArray());
         return RetargetSuggestionScorer.Score(source, target, proposal);
@@ -597,6 +618,36 @@ public static class RetargetMapBuilder
         RigDefinition source,
         RigDefinition target)
     {
+        if (entry.Method == BoneMappingMethod.ParentFollow)
+        {
+            return entry;
+        }
+
+        if (entry.MappingKind == RetargetMappingKind.Bone &&
+            entry.Method == BoneMappingMethod.DescriptorHash &&
+            HasUniqueDescriptorIdentity(
+                source,
+                target,
+                entry.SourceBoneIndex,
+                entry.TargetBoneIndex))
+        {
+            if (HasTargetCompatibleBindChain(
+                    source,
+                    target,
+                    entry))
+            {
+                return entry;
+            }
+
+            // The native descriptor proves bone identity, while a different
+            // bind chain calls for rotation-only bind-basis correction. Keep
+            // the target's fitted translation and scale as authored.
+            return CopyWithPolicy(
+                entry,
+                RetargetTransferPolicy.GlobalRotationDelta,
+                RetargetComponentPolicy.Rotation);
+        }
+
         if (entry.MappingKind != RetargetMappingKind.Bone ||
             HasTargetCompatibleBindChain(
                 source,
@@ -629,6 +680,235 @@ public static class RetargetMapBuilder
                 ? RetargetTransferPolicy.AnatomicalDirection
                 : RetargetTransferPolicy.RotationDelta,
             RetargetComponentPolicy.Rotation);
+    }
+
+    private static BoneMapEntry CopyWithPolicy(
+        BoneMapEntry entry,
+        RetargetTransferPolicy transferPolicy,
+        RetargetComponentPolicy componentPolicy) =>
+        new(
+            entry.SourceBoneIndex,
+            entry.TargetBoneIndex,
+            entry.Method,
+            entry.Confidence,
+            entry.IsLocked,
+            entry.IsReviewed,
+            entry.MappingKind,
+            transferPolicy,
+            componentPolicy,
+            entry.Evidence,
+            entry.ReviewOrigin,
+            entry.ScorerVersion,
+            entry.EvidenceFingerprint,
+            RetargetTransformComponentsCompatibility.FromLegacy(
+                componentPolicy));
+
+    private static bool HasUniqueDescriptorIdentity(
+        RigDefinition source,
+        RigDefinition target,
+        int sourceIndex,
+        int targetIndex)
+    {
+        if ((uint)sourceIndex >= (uint)source.BoneCount ||
+            (uint)targetIndex >= (uint)target.BoneCount ||
+            source.Bones[sourceIndex].DescriptorHash is not
+                { } descriptor ||
+            target.Bones[targetIndex].DescriptorHash != descriptor)
+        {
+            return false;
+        }
+
+        return source.Bones.Count(bone =>
+                   bone.DescriptorHash == descriptor) == 1 &&
+            target.Bones.Count(bone =>
+                bone.DescriptorHash == descriptor) == 1;
+    }
+
+    private static void AddCanonicalParentFollowMatches(
+        RigDefinition source,
+        RigDefinition target,
+        ImmutableArray<BoneMapEntry>.Builder entries)
+    {
+        Dictionary<int, BoneMapEntry> mappedByTarget = entries
+            .Where(static entry =>
+                entry.MappingKind == RetargetMappingKind.Bone)
+            .ToDictionary(static entry => entry.TargetBoneIndex);
+        HashSet<int> mappedTargets = entries
+            .Select(static entry => entry.TargetBoneIndex)
+            .ToHashSet();
+        HashSet<int> targetsWithChildren = target.Bones
+            .Where(static bone => bone.ParentIndex >= 0)
+            .Select(static bone => bone.ParentIndex)
+            .ToHashSet();
+
+        foreach (BoneDefinition leaf in target.Bones)
+        {
+            if (mappedTargets.Contains(leaf.Index) ||
+                !leaf.RequiredForExport ||
+                !IsParentFollowTargetKind(leaf, target) ||
+                leaf.ParentIndex < 0 ||
+                targetsWithChildren.Contains(leaf.Index) ||
+                source.Bones.Any(sourceBone =>
+                    leaf.DescriptorHash is { } descriptor &&
+                    sourceBone.DescriptorHash == descriptor ||
+                    string.Equals(
+                        NormalizeBoneName(sourceBone.Name),
+                        NormalizeBoneName(leaf.Name),
+                        StringComparison.Ordinal)) ||
+                leaf.SemanticRole is { Length: > 0 } semanticRole &&
+                !IsParentFollowTerminalMarker(leaf, target) &&
+                source.Bones.Any(sourceBone =>
+                    string.Equals(
+                        sourceBone.SemanticRole,
+                        semanticRole,
+                        StringComparison.OrdinalIgnoreCase)) ||
+                !mappedByTarget.TryGetValue(
+                    leaf.ParentIndex,
+                    out BoneMapEntry? parent) ||
+                parent.Method != BoneMappingMethod.DescriptorHash ||
+                !HasUniqueDescriptorIdentity(
+                    source,
+                    target,
+                    parent.SourceBoneIndex,
+                    parent.TargetBoneIndex))
+            {
+                continue;
+            }
+
+            entries.Add(new BoneMapEntry(
+                parent.SourceBoneIndex,
+                leaf.Index,
+                BoneMappingMethod.ParentFollow,
+                1.0,
+                mappingKind: RetargetMappingKind.Bone,
+                transferPolicy: RetargetTransferPolicy.Bind,
+                componentPolicy: RetargetComponentPolicy.FullTransform,
+                evidence:
+                [
+                    new MappingEvidence(
+                        MappingEvidenceKind.ParentChainAgreement,
+                        "This required target leaf has no source identity and retains its own bind-local transform beneath its uniquely descriptor-mapped parent."),
+                    new MappingEvidence(
+                        MappingEvidenceKind.TransferPolicyAgreement,
+                        "Parent-follow preserves the target leaf's local translation, rotation, and scale."),
+                ]));
+        }
+    }
+
+    private static bool IsParentFollowTargetKind(
+        BoneDefinition bone,
+        RigDefinition target) =>
+        bone.Kind == BoneKind.Deform ||
+        bone.Kind == BoneKind.Helper &&
+        IsParentFollowTerminalMarker(bone, target);
+
+    private static bool IsParentFollowTerminalMarker(
+        BoneDefinition bone,
+        RigDefinition target)
+    {
+        string name = bone.Name.Trim();
+        if (name.EndsWith("_End", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(":End", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith(" End", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("-End", StringComparison.OrdinalIgnoreCase) ||
+            name.EndsWith("EndSite", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (bone.Kind != BoneKind.Helper ||
+            bone.ParentIndex < 0)
+        {
+            return false;
+        }
+
+        string? leafRole =
+            HumanoidBoneSemanticClassifier.Classify(
+                bone.SemanticRole ?? bone.Name)?.Role;
+        string? parentRole =
+            HumanoidBoneSemanticClassifier.Classify(
+                target.Bones[bone.ParentIndex].SemanticRole ??
+                target.Bones[bone.ParentIndex].Name)?.Role;
+        if (leafRole is null || parentRole is null)
+        {
+            return false;
+        }
+
+        string[] leafParts = leafRole.Split('.');
+        string[] parentParts = parentRole.Split('.');
+        return leafParts.Length == 4 &&
+            parentParts.Length == 4 &&
+            leafParts[0] == "finger" &&
+            leafParts[3] == "4" &&
+            parentParts[3] == "3" &&
+            leafParts.Take(3).SequenceEqual(
+                parentParts.Take(3),
+                StringComparer.Ordinal);
+    }
+
+    internal static bool IsVerifiedParentFollowIdentity(
+        RigDefinition source,
+        RigDefinition target,
+        RetargetMap map,
+        BoneMapEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(target);
+        ArgumentNullException.ThrowIfNull(map);
+        ArgumentNullException.ThrowIfNull(entry);
+        if (entry.Method != BoneMappingMethod.ParentFollow ||
+            entry.MappingKind != RetargetMappingKind.Bone ||
+            entry.TransferPolicy != RetargetTransferPolicy.Bind ||
+            entry.TransformComponents != RetargetTransformComponents.All ||
+            (uint)entry.SourceBoneIndex >= (uint)source.BoneCount ||
+            (uint)entry.TargetBoneIndex >= (uint)target.BoneCount)
+        {
+            return false;
+        }
+
+        BoneDefinition leaf = target.Bones[entry.TargetBoneIndex];
+        if (!leaf.RequiredForExport ||
+            !IsParentFollowTargetKind(leaf, target) ||
+            leaf.ParentIndex < 0 ||
+            target.Bones.Any(bone =>
+                bone.ParentIndex == leaf.Index) ||
+            source.Bones.Any(sourceBone =>
+                leaf.DescriptorHash is { } descriptor &&
+                sourceBone.DescriptorHash == descriptor ||
+                string.Equals(
+                    NormalizeBoneName(sourceBone.Name),
+                    NormalizeBoneName(leaf.Name),
+                    StringComparison.Ordinal)) ||
+            leaf.SemanticRole is { Length: > 0 } semanticRole &&
+            !IsParentFollowTerminalMarker(leaf, target) &&
+            source.Bones.Any(sourceBone =>
+                string.Equals(
+                    sourceBone.SemanticRole,
+                    semanticRole,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return false;
+        }
+
+        BoneMapEntry? parent = map.Entries.SingleOrDefault(candidate =>
+            candidate.TargetBoneIndex == leaf.ParentIndex &&
+            candidate.MappingKind == RetargetMappingKind.Bone);
+        return parent is not null &&
+            parent.SourceBoneIndex == entry.SourceBoneIndex &&
+            parent.Method == BoneMappingMethod.DescriptorHash &&
+            (parent.TransferPolicy ==
+                 RetargetTransferPolicy.GlobalBindBasis &&
+             parent.TransformComponents ==
+                 RetargetTransformComponents.All ||
+             parent.TransferPolicy ==
+                 RetargetTransferPolicy.GlobalRotationDelta &&
+             parent.TransformComponents ==
+                 RetargetTransformComponents.Rotation) &&
+            HasUniqueDescriptorIdentity(
+                source,
+                target,
+                parent.SourceBoneIndex,
+                parent.TargetBoneIndex);
     }
 
     private static bool HasTargetCompatibleBindChain(
@@ -1027,10 +1307,12 @@ public static class RetargetMapBuilder
         NormalizeBoneName(targetName) switch
         {
             "REFCAMERA" => RetargetComponentPolicy.Translation,
-            "EYECAMERA" or "EYES" or "LHANDHOLDER" or "RHANDHOLDER" or
+            "EYECAMERA" or "EYES" or "LEYEPOS" or "REYEPOS" or
+            "LHANDHOLDER" or "RHANDHOLDER" or
             "PROPSHOLDER1" or "PROPSHOLDER2" or "FLASHLIGHT" =>
                 RetargetComponentPolicy.RotationTranslation,
-            "HEADEND" or "LNORMAL" or "LNORMAL2" or "RNORMAL" or
+            "HEADEND" or "HSPINE1" or "LEYE" or "REYE" or
+            "LNORMAL" or "LNORMAL2" or "RNORMAL" or
             "RNORMAL2" or "LFINGER01EXTRA" or "RFINGER01EXTRA" or
             "LFORETWIST" or "LFORETWIST1" or "LFORETWISTT" or
             "RFORETWIST" or "RFORETWIST1" or "RFORETWISTT" or

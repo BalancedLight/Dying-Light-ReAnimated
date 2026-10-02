@@ -24,16 +24,77 @@ internal static class Dl1ConformanceSessionTransfer
             ids[target] = id;
         }
         for (int index = 0; index < result.AuthoredHelpers.Length; index++) ids[result.Bones.Length + index] = result.AuthoredHelpers[index].Id;
+        var occupiedEntityIds = entities.Keys.ToHashSet();
+        var assignedOutputIds = new HashSet<Guid>();
+        foreach (Guid id in ids)
+        {
+            if (id == Guid.Empty)
+            {
+                continue;
+            }
+
+            if (!assignedOutputIds.Add(id))
+            {
+                throw new InvalidDataException(
+                    "Two retained conformance rows resolve to the same stable identity; conformance cannot replace either source identity safely.");
+            }
+            occupiedEntityIds.Add(id);
+        }
+
         for (int index = 0; index < ids.Length; index++)
         {
             var bone = effective[index];
             string key = index >= result.Bones.Length ? "authored:" + ids[index].ToString("N")
                 : bone.FbxObjectId == 0 ? "source-name:" + bone.Name : "fbx:" + bone.FbxObjectId.ToString(CultureInfo.InvariantCulture);
             if (ids[index] == Guid.Empty)
-                ids[index] = new Guid(SHA256.HashData(Encoding.UTF8.GetBytes(original.ModelId.ToString("N") + ":conformance:" + templateId + ":" + bone.Name)).AsSpan(0, 16));
+            {
+                RigEntityBinding[] matchingSourceEntities = entities.Values
+                    .Where(entity =>
+                        entity.OwnerAssetId == original.ModelId &&
+                        string.Equals(
+                            entity.SourceEntityId,
+                            key,
+                            StringComparison.Ordinal))
+                    .Take(2)
+                    .ToArray();
+                if (matchingSourceEntities.Length > 1)
+                {
+                    throw new InvalidDataException(
+                        "A source identity maps to multiple retained entities and cannot be resolved safely.");
+                }
+
+                if (matchingSourceEntities.Length == 1)
+                {
+                    Guid retainedId = matchingSourceEntities[0].EntityId;
+                    int retainedIndex = Array.FindIndex(ids, id => id == retainedId);
+                    if (retainedIndex >= 0)
+                    {
+                        throw new InvalidDataException(
+                            $"A source identity is already retained at output row {retainedIndex} and cannot also identify output row {index}.");
+                    }
+
+                    ids[index] = retainedId;
+                    assignedOutputIds.Add(retainedId);
+                    occupiedEntityIds.Add(retainedId);
+                }
+                else
+                {
+                    // Retained source and helper identities stay authoritative.
+                    // Only a truly source-less output row receives a new ID.
+                    // Preserve the legacy hash if free; deterministically salt
+                    // it only when that hash is already owned or allocated.
+                    ids[index] = CreateUniqueConformanceEntityId(
+                        original.ModelId,
+                        templateId,
+                        bone.Name,
+                        index,
+                        occupiedEntityIds);
+                    assignedOutputIds.Add(ids[index]);
+                }
+            }
             var existing = entities.GetValueOrDefault(ids[index]);
             if (entities.Values.Any(e => e.OwnerAssetId == original.ModelId && e.SourceEntityId == key && e.EntityId != ids[index]))
-                throw new InvalidDataException($"Conformance cannot reconcile the source identity for '{bone.Name}' without ambiguity.");
+                throw new InvalidDataException("Conformance cannot reconcile a source identity without ambiguity.");
             entities[ids[index]] = (existing ?? new() { EntityId = ids[index], OwnerAssetId = original.ModelId, Imported = false }) with
             {
                 NativeName = bone.Name, SourceEntityId = key,
@@ -41,7 +102,15 @@ internal static class Dl1ConformanceSessionTransfer
                     ? RigNativeEntityKind.Bone : RigNativeEntityKind.Helper,
             };
         }
-        var byId = ids.Select((id, index) => (id, index)).ToDictionary(x => x.id, x => x.index);
+        var byId = new Dictionary<Guid, int>();
+        for (int index = 0; index < ids.Length; index++)
+        {
+            if (!byId.TryAdd(ids[index], index))
+            {
+                throw new InvalidDataException(
+                    $"Conformance output rows {byId[ids[index]]} and {index} share one stable entity identity.");
+            }
+        }
         var removed = observed.Select(o => o.EntityId).Where(id => !byId.ContainsKey(id)).ToHashSet();
         if (session.WeightLocks.Any(l => removed.Contains(l.EntityId)))
             throw new InvalidOperationException("Conformance would drop a source influence with locked weights. Retain that bone or explicitly unlock it first.");
@@ -68,4 +137,33 @@ internal static class Dl1ConformanceSessionTransfer
         };
         return result with { RiggingSession = replacement };
     }
+
+    private static Guid CreateUniqueConformanceEntityId(
+        Guid modelId,
+        string templateId,
+        string boneName,
+        int effectiveIndex,
+        HashSet<Guid> occupiedEntityIds)
+    {
+        string seed = modelId.ToString("N") + ":conformance:" + templateId + ":" + boneName;
+        Guid candidate = HashToGuid(seed);
+        if (candidate != Guid.Empty && occupiedEntityIds.Add(candidate))
+        {
+            return candidate;
+        }
+
+        for (int collisionIndex = 0; ; collisionIndex++)
+        {
+            candidate = HashToGuid(
+                seed + ":output:" + effectiveIndex.ToString(CultureInfo.InvariantCulture) + ":" +
+                collisionIndex.ToString(CultureInfo.InvariantCulture));
+            if (candidate != Guid.Empty && occupiedEntityIds.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static Guid HashToGuid(string value) =>
+        new(SHA256.HashData(Encoding.UTF8.GetBytes(value)).AsSpan(0, 16));
 }

@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Codecs.CompactMesh;
+using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 
 namespace ReAnimated.Tests;
@@ -158,9 +159,73 @@ public sealed class Dl1BoneScriptPolicyTests
         try
         {
             var result = await Dl1SourceModelWriter.WriteAsync(new() { Model = model, ResourceName = "legacy_fixture", OutputDirectory = directory });
+            Assert.True(result.BoneScriptPolicies.IsDefault);
+            Dl1AuthoredRigContract contract = Assert.IsType<Dl1AuthoredRigContract>(result.AuthoredRigContract);
             string script = await File.ReadAllTextAsync(result.BoneScriptPath);
             Assert.Contains($"SetBoneAnimTrans(\"{model.Package.Document.Bones[0].Name}\", POS | ROT | SCL, LOD_OFF);", script);
             Assert.DoesNotContain("legacy_fixture.components.json", result.OutputSha256.Keys);
+
+            CompactMeshEntity[] entities = contract.Nodes.Select(node => new CompactMeshEntity(
+                node.PhysicalIndex,
+                node.Name,
+                0,
+                new CompactBounds(
+                    (float)node.Bounds.Center.X,
+                    (float)node.Bounds.Center.Y,
+                    (float)node.Bounds.Center.Z,
+                    (float)node.Bounds.HalfExtents.X,
+                    (float)node.Bounds.HalfExtents.Y,
+                    (float)node.Bounds.HalfExtents.Z),
+                (short)node.ParentPhysicalIndex,
+                node.IsDeform ? CompactMeshEntityType.Bone : CompactMeshEntityType.Helper,
+                0,
+                0,
+                ToCompactMatrix(node.LocalBindMatrix),
+                ToCompactMatrix(node.InverseGlobalReferenceMatrix),
+                0,
+                0)).ToArray();
+            var hierarchy = new CompactMeshDocument(
+                entities.Length,
+                entities.Count(static entity => entity.ParentIndex < 0),
+                0,
+                entities,
+                []);
+            Assert.Equal(
+                contract.Nodes.Length,
+                Dl1OfficialModelCompiler.ValidatePreparedRigReadBack(result, hierarchy).Length);
+
+            entities[0] = entities[0] with
+            {
+                LocalMatrix = entities[0].LocalMatrix with { M14 = entities[0].LocalMatrix.M14 + 0.01f },
+            };
+            Assert.Throws<InvalidDataException>(() => Dl1OfficialModelCompiler.ValidatePreparedRigReadBack(
+                result,
+                hierarchy with { Entities = entities }));
+
+            Dl1SourceModelBuildResult noRigSourceBuild = result with
+            {
+                AuthoredRigContract = null,
+                BoneScriptPolicies = default,
+            };
+            Assert.Empty(Dl1OfficialModelCompiler.ValidatePreparedRigReadBack(noRigSourceBuild, hierarchy));
+
+            Guid policyEntityId = Guid.NewGuid();
+            Dl1AuthoredRigNode policyNode = contract.Nodes[0];
+            Dl1ResolvedBoneScriptPolicy explicitPolicy = new(
+                policyEntityId,
+                policyNode.PhysicalIndex,
+                policyNode.Name,
+                RigAnimationComponents.None,
+                RigAnimationLod.Off,
+                Policy(policyEntityId, RigAnimationComponents.None, RigAnimationLod.Off));
+            Dl1SourceModelBuildResult inconsistentStudioSourceBuild = result with
+            {
+                AuthoredRigContract = null,
+                BoneScriptPolicies = [explicitPolicy],
+            };
+            InvalidDataException error = Assert.Throws<InvalidDataException>(() =>
+                Dl1OfficialModelCompiler.ValidatePreparedRigReadBack(inconsistentStudioSourceBuild, hierarchy));
+            Assert.Contains("prepared contract", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally { RpackTestData.DeleteTemporaryDirectory(directory); }
     }
@@ -207,4 +272,9 @@ public sealed class Dl1BoneScriptPolicyTests
             Assert.NotEqual(before, Dl1OfficialModelCompiler.CalculateInputFingerprint(replacement, "generic", "default", null));
         }
     }
+
+    private static CompactMatrix3x4 ToCompactMatrix(TransformMatrix matrix) => new(
+        (float)matrix.M11, (float)matrix.M12, (float)matrix.M13, (float)matrix.M14,
+        (float)matrix.M21, (float)matrix.M22, (float)matrix.M23, (float)matrix.M24,
+        (float)matrix.M31, (float)matrix.M32, (float)matrix.M33, (float)matrix.M34);
 }

@@ -737,7 +737,13 @@ public static class Dl1AuthoringPolicyEvaluator
         Dl1RootMotionPolicy rootMotion = policy.RootMotion;
         current = rootMotion.Mode switch
         {
-            AnimationRootMode.Recorded => current,
+            AnimationRootMode.Recorded =>
+                ApplyRecorded(
+                    sourcePose,
+                    firstSourcePose,
+                    current,
+                    first,
+                    rootMotion),
             AnimationRootMode.Bip01 =>
                 ApplyBip01(
                     sourcePose,
@@ -781,6 +787,37 @@ public static class Dl1AuthoringPolicyEvaluator
                 pose.Rig.Bones[accumulatorBoneIndex].LocalBindPose)
             : pose;
 
+    private static SkeletonPose ApplyRecorded(
+        SkeletonPose sourcePose,
+        SkeletonPose firstSourcePose,
+        SkeletonPose pose,
+        SkeletonPose firstPose,
+        Dl1RootMotionPolicy policy)
+    {
+        if (policy.IsDirectRigEvaluation || policy.TargetPoseOwnsTranslation)
+        {
+            // Direct native tracks and translation-owning mappings already
+            // carry their recorded travel. Preserve that ownership unchanged.
+            return pose;
+        }
+
+        // Rotation-only retargeting preserves the target's anatomy, but it
+        // cannot carry the source pelvis displacement. Recorded travel still
+        // needs one owner; write it to the selected root without rewriting the
+        // mapped pose rotations, scales, or child bind-local translations.
+        int sourceIndex = policy.SourceMotionBoneIndex;
+        Vector3D displacement =
+            sourcePose.GlobalMatrices[sourceIndex].Translation -
+            firstSourcePose.GlobalMatrices[sourceIndex].Translation;
+        int rootIndex = policy.TargetRootBoneIndex;
+        Vector3D firstRootPosition =
+            firstPose.GlobalMatrices[rootIndex].Translation;
+        return SetGlobalTranslationRotation(
+            pose,
+            rootIndex,
+            firstRootPosition + displacement,
+            ComputeGlobalRotation(pose, rootIndex));
+    }
     private static SkeletonPose ApplyBip01(
         SkeletonPose sourcePose,
         SkeletonPose firstSourcePose,

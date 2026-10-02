@@ -9,7 +9,12 @@ public sealed record SecondaryMotionParticleState(string Group, int Index, bool 
 public sealed record SecondaryMotionResult(
     ImmutableArray<TransformMatrix> Globals,
     ImmutableArray<SecondaryMotionParticleState> Particles,
-    ImmutableArray<string> Diagnostics);
+    ImmutableArray<string> Diagnostics)
+{
+    public string CollisionBackendIdentity { get; init; } = string.Empty;
+    public long NativeContactQueryCount { get; init; }
+    public bool UsesOpenDynamicsEngine { get; init; }
+}
 
 /// <summary>
 /// Deterministic, preview-only MPC approximation. Supply the physical model pose and actor placement:
@@ -31,12 +36,15 @@ public sealed class SecondaryMotionSession
     private readonly SecondaryMotionFrame? initializationPose;
     private readonly double initializationSeconds;
     private readonly int[]? initializationParents;
+    private readonly ISecondaryCollisionBackend collisionBackend;
     private GroupState[]? state;
     private long tick;
 
     public SecondaryMotionSession(SecondaryMotionDefinition definition, IEnumerable<string> boneNames,
         SecondaryMotionFrame? initializationPose = null, double initializationSeconds = 0.5,
-        IEnumerable<int>? parentIndices = null)
+        IEnumerable<int>? parentIndices = null,
+        ISecondaryCollisionBackend? collisionBackend = null,
+        bool requireOpenDynamicsCollisionBackend = false)
     {
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(boneNames);
@@ -45,6 +53,21 @@ public sealed class SecondaryMotionSession
         this.definition = definition;
         bones = names.Select((name, index) => (name, index)).ToDictionary(p => p.name, p => p.index, StringComparer.Ordinal);
         boneCount = names.Length;
+        if (collisionBackend is null)
+        {
+            if (OpenDynamicsCollisionBackend.TryCreate(out OpenDynamicsCollisionBackend? native, out string unavailableReason))
+                this.collisionBackend = native!;
+            else if (requireOpenDynamicsCollisionBackend)
+                throw new DllNotFoundException("The required ODE collision backend is unavailable: " + unavailableReason);
+            else
+                this.collisionBackend = new AnalyticSecondaryCollisionBackend(unavailableReason);
+        }
+        else
+        {
+            if (requireOpenDynamicsCollisionBackend && !collisionBackend.IsNative)
+                throw new ArgumentException("This preview requires the native ODE collision backend.", nameof(collisionBackend));
+            this.collisionBackend = collisionBackend;
+        }
         if (!double.IsFinite(initializationSeconds) || initializationSeconds < 0 || initializationSeconds > 2)
             throw new ArgumentOutOfRangeException(nameof(initializationSeconds));
         if (initializationPose is not null && (initializationPose.Globals.IsDefault || initializationPose.Globals.Length != boneCount ||
@@ -58,6 +81,12 @@ public sealed class SecondaryMotionSession
             initializationParents.Where((parent, index) => parent < -1 || parent >= index).Any()))
             throw new ArgumentException("Initialization parents must match the topological bone order.", nameof(parentIndices));
     }
+
+    public string CollisionBackendIdentity => collisionBackend.Identity;
+
+    public long NativeContactQueryCount => collisionBackend.NativeContactQueryCount;
+
+    public bool UsesOpenDynamicsEngine => collisionBackend.IsNative;
 
     public void Reset() { state = null; tick = 0; }
 
@@ -131,8 +160,23 @@ public sealed class SecondaryMotionSession
                     TransformMatrix.CreateTranslation(-targets[i]) * animatedWorld;
             }
         }
-        return new(globals.ToImmutableArray(), overlays.ToImmutable(),
-            definition.Groups.IsEmpty ? [] : [ApproximationLabel + ": sampled cloth contacts do not prove mesh collision or native runtime parity."]);
+        return new(globals.ToImmutableArray(), overlays.ToImmutable(), BuildDiagnostics())
+        {
+            CollisionBackendIdentity = collisionBackend.Identity,
+            NativeContactQueryCount = collisionBackend.NativeContactQueryCount,
+            UsesOpenDynamicsEngine = collisionBackend.IsNative,
+        };
+
+        ImmutableArray<string> BuildDiagnostics()
+        {
+            if (definition.Groups.IsEmpty) return [];
+            var diagnostics = ImmutableArray.CreateBuilder<string>(2);
+            diagnostics.Add(ApproximationLabel + ": sampled cloth motion does not prove native MPC behavior or game parity.");
+            diagnostics.Add(collisionBackend.IsNative
+                ? $"Contact backend: {collisionBackend.Identity}; {collisionBackend.NativeContactQueryCount} native dCollide query(s)."
+                : $"Contact backend: {collisionBackend.Identity}; native ODE contact is unavailable and the analytic development fallback is active.");
+            return diagnostics.MoveToImmutable();
+        }
 
         SecondaryMotionFrame Read(double time)
         {
@@ -244,14 +288,16 @@ public sealed class SecondaryMotionSession
                     foreach (var c in colliders)
                     {
                         Vector3D axis = c.End - c.Start;
-                        double u = axis.LengthSquared <= 1e-16 ? 0 : Math.Clamp(Vector3D.Dot(s.Position[i] - c.Start, axis) / axis.LengthSquared, 0, 1);
-                        Vector3D center = c.Start + axis * u;
-                        Vector3D offset = s.Position[i] - center;
-                        double radius = c.Radius + group.Particles[i].Radius * particleScale;
-                        if (offset.LengthSquared >= radius * radius) continue;
-                        if (!offset.TryNormalize(out Vector3D normal))
+                        double particleRadius = group.Particles[i].Radius * particleScale;
+                        if (!PointBoundsOverlap(s.Position[i], c.Start, c.End, c.Radius + particleRadius)) continue;
+                        Vector3D center = ClosestPoint(s.Position[i], c.Start, c.End);
+                        if (!collisionBackend.TryContact(s.Position[i], particleRadius, c.Start, c.End, c.Radius,
+                                targets[i] - center, out SecondaryCollisionContact contact))
+                            continue;
+                        Vector3D normal = contact.Normal;
+                        if ((s.Position[i] - center).LengthSquared <= 1e-16)
                             normal = CapsuleAxisFallback(axis, targets[i] - center);
-                        s.Position[i] = center + normal * radius;
+                        s.Position[i] += normal * contact.PenetrationDepth;
                         collided[i] = true;
                         contactNormals[i] += normal;
                     }
@@ -283,31 +329,20 @@ public sealed class SecondaryMotionSession
                             // interior samples still resolve the free portion of the link.
                             if (denominator < 0.04) continue;
                             double particleRadius = (group.Particles[link.First].Radius * a + group.Particles[link.Second].Radius * t) * particleScale;
+                            double contactRadius = c.Radius + particleRadius;
                             Vector3D point = s.Position[link.First] * a + s.Position[link.Second] * t;
                             Vector3D axis = c.End - c.Start;
-                            double u = axis.LengthSquared <= 1e-16 ? 0 : Math.Clamp(Vector3D.Dot(point - c.Start, axis) / axis.LengthSquared, 0, 1);
-                            Vector3D center = c.Start + axis * u;
-                            Vector3D offset = point - center;
-                            double radius = c.Radius + particleRadius;
-                            double distance = offset.Length;
-                            if (distance >= radius) continue;
-                            if (!offset.TryNormalize(out Vector3D normal, 1e-8))
-                            {
-                                // A segment through the exact center has no unique outward normal.
-                                // Use a stable perpendicular to the cloth segment, not a direction
-                                // along it that would merely collapse/stretch the edge through the body.
-                                Vector3D edge = s.Position[link.Second] - s.Position[link.First];
-                                Vector3D reference = targets[link.First] * a + targets[link.Second] * t - center;
-                                if (edge.LengthSquared > 1e-16) reference -= edge * (Vector3D.Dot(reference, edge) / edge.LengthSquared);
-                                if (!reference.TryNormalize(out normal, 1e-8))
-                                {
-                                    Vector3D candidate = Vector3D.Cross(edge, axis.LengthSquared > 1e-16 ? axis : Vector3D.UnitY);
-                                    if (!candidate.TryNormalize(out normal))
-                                        normal = Vector3D.Cross(edge, Vector3D.UnitZ).TryNormalize(out Vector3D alternative) ? alternative : Vector3D.UnitX;
-                                }
-                            }
-                            Vector3D correction = normal * ((radius - distance) / denominator);
-                            double maximumEndpointMove = Math.Min(radius * 0.5,
+                            Vector3D center = ClosestPoint(point, c.Start, c.End);
+                            Vector3D edge = s.Position[link.Second] - s.Position[link.First];
+                            Vector3D reference = targets[link.First] * a + targets[link.Second] * t - center;
+                            Vector3D normalHint = EdgeContactFallback(edge, axis, reference);
+                            if (!collisionBackend.TryContact(point, particleRadius, c.Start, c.End, c.Radius,
+                                    normalHint, out SecondaryCollisionContact contact))
+                                continue;
+                            Vector3D normal = contact.Normal;
+                            if ((point - center).LengthSquared <= 1e-16) normal = normalHint;
+                            Vector3D correction = normal * (contact.PenetrationDepth / denominator);
+                            double maximumEndpointMove = Math.Min(contactRadius * 0.5,
                                 Vector3D.Distance(s.Position[link.First], s.Position[link.Second]) * 0.25);
                             double requestedMove = correction.Length * Math.Max(massA * a, massB * t);
                             if (requestedMove > maximumEndpointMove && requestedMove > 1e-12)
@@ -354,6 +389,31 @@ public sealed class SecondaryMotionSession
         Vector3D leastAligned = Math.Abs(direction.X) <= Math.Abs(direction.Y) && Math.Abs(direction.X) <= Math.Abs(direction.Z)
             ? Vector3D.UnitX : Math.Abs(direction.Y) <= Math.Abs(direction.Z) ? Vector3D.UnitY : Vector3D.UnitZ;
         return Vector3D.Cross(direction, leastAligned).Normalized();
+    }
+
+    private static Vector3D ClosestPoint(Vector3D point, Vector3D start, Vector3D end)
+    {
+        Vector3D axis = end - start;
+        double lengthSquared = axis.LengthSquared;
+        double amount = lengthSquared <= 1e-16 ? 0 : Math.Clamp(Vector3D.Dot(point - start, axis) / lengthSquared, 0, 1);
+        return start + axis * amount;
+    }
+
+    private static bool PointBoundsOverlap(Vector3D point, Vector3D start, Vector3D end, double radius) =>
+        point.X >= Math.Min(start.X, end.X) - radius && point.X <= Math.Max(start.X, end.X) + radius &&
+        point.Y >= Math.Min(start.Y, end.Y) - radius && point.Y <= Math.Max(start.Y, end.Y) + radius &&
+        point.Z >= Math.Min(start.Z, end.Z) - radius && point.Z <= Math.Max(start.Z, end.Z) + radius;
+
+    private static Vector3D EdgeContactFallback(Vector3D edge, Vector3D axis, Vector3D reference)
+    {
+        if (edge.LengthSquared > 1e-16)
+            reference -= edge * (Vector3D.Dot(reference, edge) / edge.LengthSquared);
+        if (reference.TryNormalize(out Vector3D normal, 1e-8)) return normal;
+        Vector3D candidate = Vector3D.Cross(edge, axis.LengthSquared > 1e-16 ? axis : Vector3D.UnitY);
+        if (candidate.TryNormalize(out normal)) return normal;
+        return Vector3D.Cross(edge, Vector3D.UnitZ).TryNormalize(out Vector3D alternative)
+            ? alternative
+            : Vector3D.UnitX;
     }
 
     private static double ClosestSegmentParameter(Vector3D start, Vector3D end, Vector3D capsuleStart, Vector3D capsuleEnd)

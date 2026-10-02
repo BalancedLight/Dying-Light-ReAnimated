@@ -137,7 +137,7 @@ public sealed partial class RigConformanceWizardViewModel
         _stockHumanoidProposal.Rows.Any(row => row.Status == StockHumanoidPolicyRowStatus.Proposed ||
             StockHumanoidIncludeExisting && row.Status == StockHumanoidPolicyRowStatus.ExistingDecision);
     public bool CanPreviewStockChannelPolicies => !IsBusy && !IsStockPolicyPreviewRunning && _model is not null &&
-        _template is { } template && string.Equals(template.ProfileName, TemplateProfileName, StringComparison.Ordinal) &&
+        !string.IsNullOrWhiteSpace(TemplateProfileName) &&
         _model.Package.Document.RiggingSession is not null && _stockPolicySourcePicker is not null;
     public bool CanApplyReviewedStockPolicy => !IsBusy && !IsStockPolicyPreviewRunning && StockPolicyReviewed &&
         _stockPolicyProposal is not null && _stockPolicyPreviewToken is not null &&
@@ -339,7 +339,9 @@ public sealed partial class RigConformanceWizardViewModel
         _stockHumanoidProposal = null;
         StockHumanoidRows = [];
         StockHumanoidReviewed = false;
-        StockHumanoidStatus = message;
+        StockHumanoidStatus = StockHumanoidRootPosition is null || StockHumanoidRootRotation is null || StockHumanoidRootScale is null
+            ? "Choose root position, rotation, and scale, then preview the proposed channel choices."
+            : message;
         NotifyStockHumanoidState();
     }
 
@@ -490,13 +492,25 @@ public sealed partial class RigConformanceWizardViewModel
 
     private async Task PreviewStockChannelPoliciesAsync(CancellationToken commandToken)
     {
-        if (!CanPreviewStockChannelPolicies || _model is not { } model || _template is not { } template ||
+        if (!CanPreviewStockChannelPolicies || _model is not { } model ||
             _stockPolicySourcePicker is not { } picker || model.Package.Document.RiggingSession is not { } session)
             return;
         if (!session.MatchesSource(model.Package.Document.Source.ContentSha256))
         {
             StockPolicyPreviewRows = [];
             StockPolicyPreviewStatus = "The destination rigging session is stale for this source model.";
+            return;
+        }
+
+        // Resolve before opening a preview job: selecting a reference invalidates
+        // prior jobs, and must not cancel the job that is about to decode it.
+        if (_template is null || !string.Equals(_template.ProfileName, TemplateProfileName, StringComparison.Ordinal))
+            await ResolveTemplateAsync(commandToken).ConfigureAwait(true);
+        commandToken.ThrowIfCancellationRequested();
+        if (!ReferenceEquals(_model, model) || _template is not { } template ||
+            !string.Equals(template.ProfileName, TemplateProfileName, StringComparison.Ordinal))
+        {
+            StockPolicyPreviewStatus = "The source or selected template changed while its reference was loading.";
             return;
         }
 

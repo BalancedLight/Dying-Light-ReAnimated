@@ -1,0 +1,45 @@
+<UserControl x:Class="ReAnimated.App.Views.WelcomeWorkflowView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:infrastructure="clr-namespace:ReAnimated.App.Infrastructure">
+    <Grid Background="#1A2029">
+        <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+            <StackPanel MaxWidth="1500" Margin="22,18,22,20" HorizontalAlignment="Stretch">
+                <Image Width="500" Height="130" Stretch="Uniform" Source="/DLReAnimated;component/Assets/WelcomeWorkflow/reantext.png" />
+                <TextBlock Margin="0,10,0,0" HorizontalAlignment="Center" FontSize="27" Foreground="#F5F6F7" Text="Welcome to Dying Light ReAnimated" />
+                <TextBlock Margin="0,8,0,20" HorizontalAlignment="Center" FontSize="17" Foreground="#C8CDD5" Text="Choose a workflow for your project. You can change it later." />
+
+                <UniformGrid Columns="3" HorizontalAlignment="Stretch">
+                    <Border Margin="7" Padding="12" MinWidth="0" Background="#B8202732" BorderBrush="#4A5668" BorderThickness="1" CornerRadius="8">
+                        <StackPanel>
+                            <Image Height="210" Stretch="Uniform" Source="/DLReAnimated;component/Assets/WelcomeWorkflow/animations.png" />
+                            <TextBlock Margin="0,12,0,5" HorizontalAlignment="Center" FontSize="23" Foreground="#F5F6F7" Text="Just animations" />
+                            <TextBlock MinHeight="88" Foreground="#C8CDD5" TextAlignment="Center" TextWrapping="Wrap" Text="Author animation for existing Dying Light models. Browse stock rigs, bring in animation, retarget, preview, and export." />
+                            <Button Margin="0,12,0,0" Padding="18,10" HorizontalAlignment="Stretch" Content="Choose animations" Command="{Binding ChooseStartWorkflowCommand}" CommandParameter="{x:Static infrastructure:StartWorkflowMode.AnimationsOnly}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Margin="7" Padding="12" MinWidth="0" Background="#B8202732" BorderBrush="#B18A35" BorderThickness="2" CornerRadius="8">
+                        <StackPanel>
+                            <Image Height="210" Stretch="Uniform" Source="/DLReAnimated;component/Assets/WelcomeWorkflow/animations-and-models.png" />
+                            <TextBlock Margin="0,12,0,5" HorizontalAlignment="Center" FontSize="23" Foreground="#F5F6F7" Text="Animations and models" />
+                            <TextBlock MinHeight="88" Foreground="#C8CDD5" TextAlignment="Center" TextWrapping="Wrap" Text="Work with custom and base-game models, then author or retarget animations for them." />
+                            <Button Margin="0,12,0,0" Padding="18,10" HorizontalAlignment="Stretch" Content="Choose both" Command="{Binding ChooseStartWorkflowCommand}" CommandParameter="{x:Static infrastructure:StartWorkflowMode.ModelsAndAnimations}" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border Margin="7" Padding="12" MinWidth="0" Background="#B8202732" BorderBrush="#4A5668" BorderThickness="1" CornerRadius="8">
+                        <StackPanel>
+                            <Image Height="210" Stretch="Uniform" Source="/DLReAnimated;component/Assets/WelcomeWorkflow/just-models.png" />
+                            <TextBlock Margin="0,12,0,5" HorizontalAlignment="Center" FontSize="23" Foreground="#F5F6F7" Text="Just models" />
+                            <TextBlock MinHeight="88" Foreground="#C8CDD5" TextAlignment="Center" TextWrapping="Wrap" Text="Import custom models and map them to the Dying Light skeleton (recommended), or keep their original skeleton." />
+                            <Button Margin="0,12,0,0" Padding="18,10" HorizontalAlignment="Stretch" Content="Choose models" Command="{Binding ChooseStartWorkflowCommand}" CommandParameter="{x:Static infrastructure:StartWorkflowMode.ModelsOnly}" />
+                        </StackPanel>
+                    </Border>
+                </UniformGrid>
+
+                <TextBlock Margin="0,8,0,0" HorizontalAlignment="Center" Foreground="#AAB3BF" Text="Your project files and imported content stay available when you change workflows." TextWrapping="Wrap" />
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

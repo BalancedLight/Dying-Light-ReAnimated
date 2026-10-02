@@ -1,0 +1,19 @@
+{
+  "source": "Open Dynamics Engine",
+  "version": "0.16.6",
+  "archiveUrl": "https://bitbucket.org/odedevs/ode/downloads/ode-0.16.6.tar.gz",
+  "archiveSha256": "c91a28c6ff2650284784a79c726a380d6afec87ecf7a35c32a6be0c5b74513e8",
+  "licenseChoice": "BSD-3-Clause",
+  "precision": "double",
+  "wrapperAbi": 1,
+  "cmakeOptions": {
+    "BUILD_SHARED_LIBS": false,
+    "ODE_DOUBLE_PRECISION": true,
+    "ODE_WITH_OU": true,
+    "ODE_WITH_DEMOS": false,
+    "ODE_WITH_TESTS": false,
+    "ODE_WITH_OPCODE": false,
+    "ODE_WITH_GIMPACT": false,
+    "ODE_WITH_LIBCCD": false
+  }
+}

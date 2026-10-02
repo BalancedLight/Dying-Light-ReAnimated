@@ -17,7 +17,7 @@ public sealed partial class RigConformanceWizardViewModel
 {
     [ObservableProperty] private RigChannelLodChoice? _terminalHelperLodChoice;
     [ObservableProperty] private string _terminalHelperPolicyStatus =
-        "Choose a retained LOD, then preview unmatched terminal helpers against the exact stock reference.";
+        "Choose an animation LOD policy, then preview unmatched terminal helpers against the exact stock reference.";
     [ObservableProperty] private ImmutableArray<RigTerminalHelperPolicyPreviewRow> _terminalHelperPolicyRows = [];
     [ObservableProperty] private bool _terminalHelperPolicyReviewed;
 
@@ -29,7 +29,7 @@ public sealed partial class RigConformanceWizardViewModel
 
     public bool CanPreviewTerminalHelperPolicy =>
         !IsBusy && !IsStockPolicyPreviewRunning &&
-        TerminalHelperLodChoice is { Lod: not RigAnimationLod.Off } &&
+        TerminalHelperLodChoice is { } &&
         _model is { Rig: not null } &&
         _model.Package.Document.RiggingSession is { } session &&
         session.MatchesSource(_model.Package.Document.Source.ContentSha256) &&

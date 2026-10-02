@@ -25,6 +25,11 @@ public sealed record Dl1CustomModelPackageRequest
 
     public string SurfaceName { get; init; } = "default";
 
+    public CustomModelPerspective? Perspective { get; init; }
+    public ImmutableArray<string> RetainedMorphNames { get; init; } = [];
+    public ImmutableArray<string> DroppedMorphNames { get; init; } = [];
+
+
     public string? AnimationScriptAlias { get; init; }
 
     public ImmutableArray<CustomModelAnimationClip> AnimationSelections { get; init; } = [];
@@ -39,6 +44,12 @@ public sealed record Dl1CustomModelPackageRequest
         AnimationExporterOverride { get; init; }
 
     public string? CompilerWorkingDirectoryRoot { get; init; }
+    /// <summary>Reuse unchanged current materials without publishing a shared material database.</summary>
+    public bool ReuseVerifiedExistingMaterials { get; init; }
+    public string? ExistingMaterialDatabasePath { get; init; }
+    public string? ExistingMaterialSourceRoot { get; init; }
+    public string? ExistingCompiledMeshObjectPath { get; init; }
+
 
     public TimeSpan CompilerTimeout { get; init; } = TimeSpan.FromMinutes(10);
 }
@@ -160,6 +171,10 @@ public static class Dl1CustomModelPackageBuilder
                 AnimationScriptAlias = alias,
                 Timeout = request.CompilerTimeout,
                 WorkingDirectoryRoot = request.CompilerWorkingDirectoryRoot,
+                ReuseVerifiedExistingMaterials = request.ReuseVerifiedExistingMaterials,
+                ExistingMaterialDatabasePath = request.ExistingMaterialDatabasePath,
+                ExistingMaterialSourceRoot = request.ExistingMaterialSourceRoot,
+                ExistingCompiledMeshObjectPath = request.ExistingCompiledMeshObjectPath,
                 CharacterId = request.Model.Package.Document.BuildSettings.CharacterId,
             };
             Dl1OfficialModelCompilerResult compiled = await (
@@ -182,7 +197,7 @@ public static class Dl1CustomModelPackageBuilder
                     CustomModelAnimationLibraryExporter.ExportAsync(animationRequest, cancellationToken)).ConfigureAwait(false);
             }
 
-            ValidateStagedOutputs(request.Model, source, compiled, animations, alias, hasAnimations);
+            ValidateStagedOutputs(request.Model, source, compiled, animations, alias, hasAnimations, request.ReuseVerifiedExistingMaterials);
             ImmutableDictionary<string, string> hashes = await HashOutputsAsync(
                 staging,
                 cancellationToken).ConfigureAwait(false);
@@ -196,9 +211,16 @@ public static class Dl1CustomModelPackageBuilder
                     surfaceName,
                     animationScriptAlias = alias,
                     referenceExistingAnimationLibrary = stockReference,
+                    request.ReuseVerifiedExistingMaterials,
+                    compiled.VerifiedExistingMaterialFileHashes,
                     stockAnimationReference = stockBank,
                     runtimeAnimationBindingVerified = false,
                     nativeCompanionNotes = source.NativeCompanionNotes,
+                    perspective = request.Perspective?.ToString(),
+                    retainedMorphNames = request.RetainedMorphNames,
+                    droppedFromThisPerspectiveMorphNames = request.DroppedMorphNames,
+                    droppedMorphsRemainInEditableSource = !request.DroppedMorphNames.IsEmpty,
+
                     input = new
                     {
                         request.Model.Package.Document.ModelId,
@@ -252,6 +274,15 @@ public static class Dl1CustomModelPackageBuilder
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        if (request.Perspective is { } perspective && !Enum.IsDefined(perspective))
+            throw new ArgumentException("The model perspective is unsupported.", nameof(request));
+        if (request.RetainedMorphNames.IsDefault || request.DroppedMorphNames.IsDefault ||
+            request.RetainedMorphNames.Concat(request.DroppedMorphNames).Any(string.IsNullOrWhiteSpace) ||
+            request.RetainedMorphNames.Distinct(StringComparer.Ordinal).Count() != request.RetainedMorphNames.Length ||
+            request.DroppedMorphNames.Distinct(StringComparer.Ordinal).Count() != request.DroppedMorphNames.Length ||
+            request.RetainedMorphNames.Intersect(request.DroppedMorphNames, StringComparer.Ordinal).Any())
+            throw new ArgumentException("Perspective morph metadata must use disjoint initialized names.", nameof(request));
+
         if (!request.Model.Package.Document.Bones.IsEmpty)
         {
             _ = request.Model.Package.Document
@@ -275,7 +306,8 @@ public static class Dl1CustomModelPackageBuilder
         Dl1OfficialModelCompilerResult compiled,
         CustomModelAnimationLibraryResult? animations,
         string? alias,
-        bool hasAnimations)
+        bool hasAnimations,
+        bool reuseVerifiedExistingMaterials)
     {
         RequireNonEmpty(source.SourceMshPath, "Chrome source .msh");
         RequireNonEmpty(source.BoneScriptPath, "bone script .bscr");
@@ -304,7 +336,13 @@ public static class Dl1CustomModelPackageBuilder
         bool hasLocallyAuthoredMaterials = model.Package.Document.Materials.IsEmpty ||
             model.Package.Document.Materials.Any(static material =>
                 string.IsNullOrWhiteSpace(material.ExistingDl1MaterialReference));
-        if (hasLocallyAuthoredMaterials)
+        if (reuseVerifiedExistingMaterials)
+        {
+            if (compiled.VerifiedExistingMaterialFileHashes.Count == 0 || compiled.MaterialDatabasePath is not null || !compiled.MaterialDatabaseCompanionPaths.IsEmpty)
+                throw new InvalidDataException("Verified material reuse requires evidence and cannot export a shared material database.");
+            Dl1OfficialModelCompiler.VerifyMaterialReuseFilesAreCurrent(compiled.VerifiedExistingMaterialFileHashes);
+        }
+        else if (hasLocallyAuthoredMaterials)
         {
             RequireNonEmpty(compiled.MaterialDatabasePath, "compiled local_dx11.mp material database");
         }

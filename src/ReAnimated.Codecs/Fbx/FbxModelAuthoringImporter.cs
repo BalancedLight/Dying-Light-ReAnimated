@@ -91,7 +91,11 @@ public sealed record FbxModelAuthoringImportResult(
     RigDefinition? Rig,
     ImmutableArray<FbxModelSurface> Surfaces,
     ImmutableDictionary<Guid, AnimationClip> AnimationClips,
-    FbxStrictExportInspection Inspection);
+    FbxStrictExportInspection Inspection)
+{
+    /// <summary>Explicit ordered source LOD associations, retained for all-level authoring/export.</summary>
+    public ImmutableArray<FbxLodGroupEvidence> SourceLodGroups { get; init; } = [];
+}
 
 [Flags]
 public enum CustomModelReimportContractChange
@@ -178,6 +182,7 @@ public static class FbxModelAuthoringImporter
             CreateDeterministicGuid(SHA256.HashData(sourceBytes));
         FbxBinaryDocument binary = FbxBinaryReader.Read(sourceBytes, cancellationToken: cancellationToken);
         FbxSemanticScene scene = FbxSemanticScene.Parse(binary, cancellationToken);
+        ImmutableArray<FbxLodGroupEvidence> sourceLodGroups = FbxLodGroupEvidenceReader.Read(scene);
         FbxStrictExportInspection inspection = FbxStrictExportInspector.Inspect(binary, cancellationToken);
         TransformMatrix basis = FbxCoreAnimationAdapter.BuildGlobalSettingsBasis(scene.GlobalSettings);
         TransformMatrix inverseBasis = basis.InvertedAffine();
@@ -400,7 +405,10 @@ public static class FbxModelAuthoringImporter
             document,
             ImmutableArray.Create(sourceBytes),
             texturePayloads);
-        return new FbxModelAuthoringImportResult(package, rig, surfaces, clips, inspection);
+        return new FbxModelAuthoringImportResult(package, rig, surfaces, clips, inspection)
+        {
+            SourceLodGroups = sourceLodGroups,
+        };
     }
 
     /// <summary>
@@ -3142,7 +3150,7 @@ public static class FbxModelAuthoringImporter
         return new Guid(bytes);
     }
 
-    private static string ComputeMorphSignature(
+    internal static string ComputeMorphSignature(
         ImmutableArray<CustomModelMorphChannel> channels,
         ImmutableArray<FbxModelSurface> surfaces)
     {

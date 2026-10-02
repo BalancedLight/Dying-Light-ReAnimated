@@ -630,7 +630,7 @@ public sealed class ModelsWorkspacePersistenceTests
 
     [Fact]
     [Trait("Gate", "ViewModelWpf")]
-    public async Task AppliedConformanceKeepsSourceDecisionsWithoutResolvingAgainstOutputRig()
+    public async Task AppliedConformanceKeepsSourceDecisionsAndReopensCurrentRigForEditing()
     {
         using var viewModel = new ModelsWorkspaceViewModel(
             new NullProjectFileDialogs(),
@@ -771,7 +771,13 @@ public sealed class ModelsWorkspacePersistenceTests
         Assert.DoesNotContain("could not be solved",
             viewModel.Conformance.SolveStatus,
             StringComparison.OrdinalIgnoreCase);
-        Assert.False(viewModel.Conformance.ApplyConformanceCommand.CanExecute(null));
+        Assert.True(viewModel.Conformance.IsEditingAppliedOutputRig);
+        Assert.NotNull(viewModel.Conformance.Fit);
+        Assert.True(viewModel.Conformance.CanPlaceGuidedBodyJoints);
+        Assert.True(viewModel.Conformance.ApplyConformanceCommand.CanExecute(null));
+        Assert.Null(viewModel.Conformance.CreateSettings());
+        Assert.Contains(applied.Package.Document.RigConformance.RoleOverrides,
+            row => row.Role == "body.pelvis" && row.SourceBoneName == "CC_Base_Pelvis");
         Assert.True(viewModel.UndoHelperEditCommand.CanExecute(null));
 
         viewModel.UndoHelperEditCommand.Execute(null);

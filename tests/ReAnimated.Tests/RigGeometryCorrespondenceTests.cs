@@ -496,6 +496,82 @@ public sealed class RigGeometryCorrespondenceTests
         Assert.Equal("mixamorig:LeftHandIndex1", weightedProposal.SourceName);
     }
 
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    public void UnnamedFingerChainRetainsGeometryCandidatesForExplicitReview()
+    {
+        var (baseTemplate, baseRig, baseGeometry) = Fixture();
+        var entities = baseTemplate.Entities.ToList();
+        var bones = baseRig.Bones.ToList();
+        var globals = baseGeometry.GlobalBindMatrices.ToList();
+        var supports = baseGeometry.Supports.ToBuilder();
+        int targetParent = 6;
+        int sourceParent = 6;
+        int firstFingerSource = bones.Count;
+        var offset = new Vector3D(3, -2, 1);
+        for (int segment = 1; segment <= 2; segment++)
+        {
+            Vector3D targetPoint = new(.9 + .08 * segment, 1.4, .15);
+            Vector3D sourcePoint = targetPoint * 1.4 + offset;
+            int targetIndex = entities.Count;
+            int sourceIndex = bones.Count;
+            string role = $"finger.left.index.{segment}";
+            entities.Add(new Dl1RigTemplateEntity
+            {
+                Index = targetIndex,
+                Name = role,
+                SemanticRole = role,
+                ParentIndex = targetParent,
+                Kind = BoneKind.Deform,
+                IsDeform = true,
+                GlobalRestMatrix = TransformMatrix.CreateTranslation(targetPoint),
+                LocalRestMatrix = TransformMatrix.CreateTranslation(
+                    targetPoint - entities[targetParent].GlobalRestMatrix.Translation),
+            });
+            bones.Add(new BoneDefinition(
+                sourceIndex,
+                $"joint_{segment}",
+                sourceParent,
+                new TransformTRS(sourcePoint - globals[sourceParent].Translation,
+                    QuaternionD.Identity, Vector3D.One),
+                BoneKind.Deform));
+            globals.Add(TransformMatrix.CreateTranslation(sourcePoint));
+            supports.Add(new RigBoneGeometrySupport(
+                sourceIndex, 3, 1, sourcePoint, sourcePoint, sourcePoint));
+            targetParent = targetIndex;
+            sourceParent = sourceIndex;
+        }
+
+        var template = new Dl1RigTemplate(
+            "synthetic-fingers", "synthetic", new string('b', 64), entities);
+        var rig = new RigDefinition("unnamed-fingers", "Unnamed finger chain", bones);
+        var before = rig.Bones.ToArray();
+        var geometry = new RigGeometryEvidence(
+            new string('a', 64), "synthetic-current-binding",
+            rig.Bones.Select(static bone => bone.Name).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.ParentIndex).ToImmutableArray(),
+            rig.Bones.Select(static bone => bone.LocalBindPose).ToImmutableArray(),
+            globals.ToImmutableArray(), supports.ToImmutable());
+
+        RigCorrespondence result = RigCorrespondenceSolver.Solve(
+            template, rig, new() { GeometryEvidence = geometry });
+        for (int segment = 1; segment <= 2; segment++)
+        {
+            RigCorrespondenceRow row = result.Rows.Single(candidate =>
+                candidate.Role == $"finger.left.index.{segment}" &&
+                candidate.TemplateIndex >= 0);
+            Assert.Equal(RigBoneDisposition.Mapped, row.Disposition);
+            Assert.Equal(firstFingerSource + segment - 1, row.SourceBoneIndex);
+            Assert.True(row.WasAmbiguous, row.Evidence);
+            Assert.NotEmpty(row.Candidates);
+            Assert.All(row.Candidates, candidate => Assert.False(candidate.NameAgrees));
+            Assert.Contains("requires review", result.Ambiguities.Single(ambiguity =>
+                ambiguity.Role == row.Role).Reason);
+        }
+        Assert.Equal(before, rig.Bones.ToArray());
+        Assert.Equal(0, result.DroppedCount);
+    }
+
     internal static (Dl1RigTemplate Template, RigDefinition Rig, RigGeometryEvidence Geometry) Fixture()
     {
         (string Role, int Parent, Vector3D Position)[] joints = [

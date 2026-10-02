@@ -231,26 +231,5 @@ public sealed class ExportSelectionCheckBoxTests
     private static string FindRepositoryFile(params string[] relativeSegments) =>
         TestRepositoryPaths.FindRepositoryFile(relativeSegments);
 
-    private static void RunOnStaThread(Action action)
-    {
-        Exception? failure = null;
-        Thread thread = new(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        if (failure is not null)
-        {
-            throw failure;
-        }
-    }
+    private static void RunOnStaThread(Action action) => WpfTestDispatcher.Run(action);
 }

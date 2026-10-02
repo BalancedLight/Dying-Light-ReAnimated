@@ -331,6 +331,43 @@ public sealed class Dl1CustomModelPackageBuilderTests
         Assert.Contains("evidence boundary", legacyStatus, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task PerspectiveManifestRecordsMorphRemovalWithoutClaimingRuntimeBinding()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            var result = await Dl1CustomModelPackageBuilder.BuildAsync(CreateRequest(parent) with
+            {
+                Perspective = CustomModelPerspective.FirstPerson,
+                DroppedMorphNames = ["face_expression"],
+            });
+            using var manifest = JsonDocument.Parse(await File.ReadAllTextAsync(result.ManifestPath));
+            var root = manifest.RootElement;
+            Assert.Equal("FirstPerson", root.GetProperty("perspective").GetString());
+            Assert.Empty(root.GetProperty("retainedMorphNames").EnumerateArray());
+            Assert.Equal("face_expression", Assert.Single(root.GetProperty("droppedFromThisPerspectiveMorphNames").EnumerateArray()).GetString());
+            Assert.True(root.GetProperty("droppedMorphsRemainInEditableSource").GetBoolean());
+            Assert.False(root.GetProperty("runtimeAnimationBindingVerified").GetBoolean());
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task DuplicatePerspectiveMorphMetadataIsRejectedBeforePublishing()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            await Assert.ThrowsAsync<ArgumentException>(() => Dl1CustomModelPackageBuilder.BuildAsync(CreateRequest(parent) with
+            {
+                Perspective = CustomModelPerspective.FirstPerson,
+                DroppedMorphNames = ["face_expression", "face_expression"],
+            }));
+            Assert.Empty(Directory.EnumerateFileSystemEntries(parent));
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
     private static FbxModelAuthoringImportResult WithReceipt(
         FbxModelAuthoringImportResult model,
         CustomModelBuildState state,

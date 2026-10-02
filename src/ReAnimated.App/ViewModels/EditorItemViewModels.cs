@@ -2860,12 +2860,16 @@ public sealed class BoneMappingViewModel : ObservableObject
 public sealed class TargetBindReviewViewModel : ObservableObject
 {
     private bool _isReviewed;
+    private readonly bool _canReview;
 
     public TargetBindReviewViewModel(
         int targetBoneIndex,
         string targetBone,
         BoneKind boneKind,
-        bool isReviewed)
+        bool isReviewed,
+        string contextSummary = "",
+        bool canReview = true,
+        bool canPreserveWithParent = true)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(
             targetBoneIndex);
@@ -2875,6 +2879,9 @@ public sealed class TargetBindReviewViewModel : ObservableObject
         TargetBone = targetBone;
         BoneKind = boneKind;
         _isReviewed = isReviewed;
+        ContextSummary = contextSummary ?? string.Empty;
+        _canReview = canReview;
+        CanPreserveWithParent = canPreserveWithParent;
     }
 
     public int TargetBoneIndex { get; }
@@ -2882,6 +2889,12 @@ public sealed class TargetBindReviewViewModel : ObservableObject
     public string TargetBone { get; }
 
     public BoneKind BoneKind { get; }
+
+    public string ContextSummary { get; }
+
+    public bool CanReview => _canReview;
+
+    public bool CanPreserveWithParent { get; }
 
     public bool IsReviewed
     {

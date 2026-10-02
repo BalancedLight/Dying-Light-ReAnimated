@@ -1,7 +1,11 @@
+using System.Collections.Immutable;
 using ReAnimated.App.ViewModels;
+using ReAnimated.Codecs.Anm2;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.Project;
+using ReAnimated.DL1.Assets.Meshes;
+using ReAnimated.Evaluation;
 using ReAnimated.Retargeting;
 using ReAnimated.Retargeting.Mapping;
 
@@ -305,6 +309,44 @@ public sealed class RetargetCompatibilityTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "EditorUsability")]
+    public void ExplicitReviewSelectionsCanExcludeOptionalSceneCameraCoverage()
+    {
+        RigDefinition source = CreateRig(
+            "source",
+            ("root", -1, true));
+        RigDefinition target = CreateRig(
+            "target",
+            ("root", -1, true, BoneKind.Root),
+            ("scene_camera", 0, true, BoneKind.Camera));
+        RetargetMap mapping = new(
+            source.Id,
+            target.Id,
+            [new BoneMapEntry(0, 0, BoneMappingMethod.ExactName, 1.0)]);
+
+        RetargetMap reviewed =
+            MainWindowViewModel.ApplyExplicitReviewSelections(
+                source,
+                target,
+                mapping,
+                [new BoneMappingViewModel(
+                    "root",
+                    "root",
+                    1.0,
+                    BoneMappingMethod.ExactName.ToString())],
+                [],
+                requiredTargetBoneIndices: [0]);
+
+        Assert.Empty(reviewed.ReviewedTargetBindBoneIndices);
+        Assert.True(RetargetMappingReview.Analyze(
+            source,
+            target,
+            reviewed,
+            requiredTargetBoneIndices: [0]).IsReady);
+    }
+
+    [Fact]
     public void NameMapNormalizesFbxNamespaceAndReportsExactContract()
     {
         RigDefinition source = CreateRig(
@@ -351,6 +393,136 @@ public sealed class RetargetCompatibilityTests
         Assert.Equal(
             [1, 2],
             source.GetBoneIndices("hook").ToArray());
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "EditorUsability")]
+    public void GuidedPreviewRequiredCoverageMatchesStrictExportReadiness()
+    {
+        RigDefinition source = CreateRig(
+            "source",
+            ("root", -1, true));
+        RigDefinition target = CreateRig(
+            "target",
+            ("root", -1, true, BoneKind.Root),
+            ("scene_camera", 0, true, BoneKind.Camera));
+        RetargetMap mapping = new(
+            source.Id,
+            target.Id,
+            [
+                new BoneMapEntry(
+                    0,
+                    0,
+                    BoneMappingMethod.ExactName,
+                    1.0),
+            ]);
+        var clip = new AnimationClip(
+            "selected",
+            new FrameRate(30, 1),
+            1,
+            [new TransformTrack(0, [new TransformKeyframe(0, source.Bones[0].LocalBindPose)])]);
+        ImmutableArray<int> defaultRequired =
+            RigCompatibilityAnalyzer.GetRequiredTargetBoneIndices(target);
+        ImmutableArray<int> guidedRequired =
+            MainWindowViewModel.GetGuidedPreviewRequiredTargetBoneIndices(
+                source,
+                target,
+                clip,
+                mapping);
+
+        RetargetMappingReviewReport strict =
+            RetargetMappingReview.Analyze(source, target, mapping);
+        RetargetMappingReviewReport guided =
+            RetargetMappingReview.Analyze(
+                source,
+                target,
+                mapping,
+                requiredTargetBoneIndices: guidedRequired);
+
+        Assert.Equal([0, 1], defaultRequired.ToArray());
+        Assert.Equal(defaultRequired.ToArray(), guidedRequired.ToArray());
+        Assert.False(strict.IsReady);
+        Assert.False(guided.IsReady);
+        Assert.Equal(strict.IsReady, guided.IsReady);
+        Assert.Contains(
+            guided.Diagnostics,
+            diagnostic => diagnostic.Code ==
+                "required_target_unmapped" &&
+                diagnostic.TargetBoneName == "scene_camera");
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "EditorUsability")]
+    public void RequiredCoverageIncludesTrackedAuxiliaryAndBodyButExcludesOptionalUntrackedNodes()
+    {
+        RigDefinition source = CreateRig(
+            "source",
+            ("root", -1, true, BoneKind.Root),
+            ("scene_prop", 0, true, BoneKind.Prop));
+        RigDefinition target = CreateRig(
+            "target",
+            ("root", -1, true, BoneKind.Root),
+            ("scene_prop", 0, true, BoneKind.Prop),
+            ("spine", 0, true, BoneKind.Deform),
+            ("optional_prop", 0, false, BoneKind.Prop),
+            ("optional_camera", 0, false, BoneKind.Camera));
+        BoneMapEntry root = new(0, 0, BoneMappingMethod.ExactName, 1.0);
+        BoneMapEntry trackedProp = new(
+            1,
+            1,
+            BoneMappingMethod.ExactName,
+            1.0,
+            mappingKind: RetargetMappingKind.HelperOverride,
+            transferPolicy: RetargetTransferPolicy.RestRelative,
+            componentPolicy: RetargetMapBuilder.GetDefaultHelperComponentPolicy("scene_prop"));
+        RetargetMap mapping = new(source.Id, target.Id, [root, trackedProp]);
+        var clip = new AnimationClip(
+            "selected",
+            new FrameRate(30, 1),
+            1,
+            [
+                new TransformTrack(0, [new TransformKeyframe(0, source.Bones[0].LocalBindPose)]),
+                new TransformTrack(1, [new TransformKeyframe(0, source.Bones[1].LocalBindPose)]),
+            ]);
+
+        ImmutableArray<int> required =
+            MainWindowViewModel.GetGuidedPreviewRequiredTargetBoneIndices(
+                source,
+                target,
+                clip,
+                mapping);
+        RetargetMappingReviewReport strict =
+            RetargetMappingReview.Analyze(source, target, mapping);
+        RetargetMappingReviewReport guided =
+            RetargetMappingReview.Analyze(
+                source,
+                target,
+                mapping,
+                requiredTargetBoneIndices: required);
+
+        Assert.True(RetargetMappingReview.IsVerifiedDeterministicIdentity(
+            source, target, trackedProp));
+        Assert.Contains(1, clip.TransformTracks.Select(static track => track.BoneIndex));
+        Assert.Equal([0, 1, 2], required.ToArray());
+        Assert.DoesNotContain(3, required);
+        Assert.DoesNotContain(4, required);
+        Assert.False(strict.IsReady);
+        Assert.False(guided.IsReady);
+        Assert.Equal(strict.IsReady, guided.IsReady);
+        Assert.Contains(
+            guided.Diagnostics,
+            diagnostic => diagnostic.Code == "required_target_unmapped" &&
+                diagnostic.TargetBoneName == "spine");
+        Assert.DoesNotContain(
+            guided.Diagnostics,
+            diagnostic => diagnostic.Code == "required_target_unmapped" &&
+                diagnostic.TargetBoneName == "scene_prop");
+        Assert.DoesNotContain(
+            guided.Diagnostics,
+            diagnostic => diagnostic.Code == "required_target_unmapped" &&
+                diagnostic.TargetBoneName is "optional_prop" or "optional_camera");
     }
 
     [Fact]
@@ -1636,6 +1808,1415 @@ public sealed class RetargetCompatibilityTests
                         retargeted.LocalTransforms[1]
                             .Rotation),
                     1e-9));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ExactNativeDescriptorsUseRotationOnlyBindBasisAndRemainExportReady()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint armDescriptor = Dl1NameHash.Compute("arm_native");
+        var source = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    new TransformTRS(
+                        Vector3D.Zero,
+                        QuaternionD.Identity,
+                        new Vector3D(1.8, 0.9, 0.6)),
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "arm_native",
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0.4, 0.8, 0.0),
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: armDescriptor,
+                    semanticRole: "arm.left.upper"),
+            ]);
+        var target = new RigDefinition(
+            "prepared-target",
+            "prepared-target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    new TransformTRS(
+                        Vector3D.Zero,
+                        QuaternionD.Identity,
+                        new Vector3D(1.2, 1.0, 0.8)),
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "arm_native",
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0.0, 1.35, 0.0),
+                        QuaternionD.Identity,
+                        new Vector3D(0.75, 1.1, 1.0)),
+                    BoneKind.Deform,
+                    descriptorHash: armDescriptor,
+                    semanticRole: "arm.left.upper"),
+            ]);
+
+        RetargetMap map =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, map);
+
+        Assert.True(
+            review.IsReady,
+            string.Join(
+                Environment.NewLine,
+                review.Diagnostics.Select(static diagnostic =>
+                    diagnostic.Message)));
+        Assert.All(
+            map.Entries,
+            entry => Assert.Equal(
+                RetargetTransferPolicy.GlobalRotationDelta,
+                entry.TransferPolicy));
+        Assert.All(
+            map.Entries,
+            entry => Assert.Equal(
+                RetargetTransformComponents.Rotation,
+                entry.TransformComponents));
+
+        SkeletonPose targetBind = target.CreateBindPose();
+        SkeletonPose sourceBind = source.CreateBindPose();
+        SkeletonPose atBind = PoseRetargeter.Retarget(
+            sourceBind,
+            target,
+            map);
+        Assert.Equal(
+            targetBind.LocalTransforms[1].Translation,
+            atBind.LocalTransforms[1].Translation);
+        Assert.Equal(
+            targetBind.LocalTransforms[1].Scale,
+            atBind.LocalTransforms[1].Scale);
+
+        TransformTRS[] animatedSourceLocals =
+            sourceBind.LocalTransforms.ToArray();
+        animatedSourceLocals[1] = animatedSourceLocals[1] with
+        {
+            Rotation = QuaternionD.FromAxisAngle(
+                Vector3D.UnitZ,
+                Math.PI / 4.0),
+        };
+        SkeletonPose animatedTarget = PoseRetargeter.Retarget(
+            new SkeletonPose(source, animatedSourceLocals),
+            target,
+            map);
+        Assert.Equal(
+            targetBind.LocalTransforms[1].Translation,
+            animatedTarget.LocalTransforms[1].Translation);
+        Assert.Equal(
+            targetBind.LocalTransforms[1].Scale,
+            animatedTarget.LocalTransforms[1].Scale);
+        Assert.False(
+            targetBind.GlobalMatrices[1].NearlyEquals(
+                animatedTarget.GlobalMatrices[1]));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void RequiredTargetLeafFollowsCanonicalParentAndKeepsItsOwnBindLocal()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint parentDescriptor = Dl1NameHash.Compute("foot_native");
+        uint sourceExtraDescriptor = Dl1NameHash.Compute("source_extra_leaf");
+        uint targetLeafDescriptor = Dl1NameHash.Compute("target_required_leaf");
+        var source = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "foot_native",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitY,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor,
+                    semanticRole: "foot.left"),
+                new BoneDefinition(
+                    2,
+                    "source_extra_leaf",
+                    1,
+                    new TransformTRS(
+                        new Vector3D(0.0, 0.3, 0.1),
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: sourceExtraDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "prepared-target",
+            "prepared-target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "foot_native",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitY,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor,
+                    semanticRole: "foot.left"),
+                new BoneDefinition(
+                    2,
+                    "target_required_leaf",
+                    1,
+                    new TransformTRS(
+                        new Vector3D(0.15, 0.25, 0.05),
+                        QuaternionD.Identity,
+                        new Vector3D(0.9, 1.1, 1.0)),
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: targetLeafDescriptor),
+            ]);
+
+        RetargetMap map =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        BoneMapEntry leafMapping = Assert.Single(
+            map.Entries.Where(entry =>
+                entry.TargetBoneIndex == 2));
+        Assert.Equal(BoneMappingMethod.ParentFollow, leafMapping.Method);
+        Assert.Equal(1, leafMapping.SourceBoneIndex);
+        Assert.Equal(RetargetTransferPolicy.Bind, leafMapping.TransferPolicy);
+        Assert.Equal(
+            RetargetTransformComponents.All,
+            leafMapping.TransformComponents);
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, map);
+        Assert.True(
+            review.IsReady,
+            string.Join(
+                Environment.NewLine,
+                review.Diagnostics.Select(static diagnostic =>
+                    diagnostic.Message)));
+        Assert.Contains(
+            review.Diagnostics,
+            diagnostic =>
+                diagnostic.Code == "source_has_extra_bones" &&
+                diagnostic.Severity ==
+                    CompatibilityDiagnosticSeverity.Information);
+
+        TransformTRS[] animatedSourceLocals =
+            source.CreateBindPose().LocalTransforms.ToArray();
+        animatedSourceLocals[1] = animatedSourceLocals[1] with
+        {
+            Rotation = QuaternionD.FromAxisAngle(
+                Vector3D.UnitZ,
+                Math.PI / 3.0),
+        };
+        SkeletonPose targetBind = target.CreateBindPose();
+        SkeletonPose result = PoseRetargeter.Retarget(
+            new SkeletonPose(source, animatedSourceLocals),
+            target,
+            map);
+
+        Assert.Equal(
+            targetBind.LocalTransforms[2],
+            result.LocalTransforms[2]);
+        Assert.False(
+            targetBind.GlobalMatrices[2].NearlyEquals(
+                result.GlobalMatrices[2]));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void EyeAndSpineHelpersDoNotAcquireTargetBindScale()
+    {
+        Assert.Equal(
+            RetargetComponentPolicy.Rotation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("hspine1"));
+        Assert.Equal(
+            RetargetComponentPolicy.Rotation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("l_eye"));
+        Assert.Equal(
+            RetargetComponentPolicy.RotationTranslation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("l_eye_pos"));
+        Assert.Equal(
+            RetargetComponentPolicy.Rotation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("r_eye"));
+        Assert.Equal(
+            RetargetComponentPolicy.RotationTranslation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("r_eye_pos"));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ExactDescriptorsUseRotationOnlyBindBasisAndKeepTargetProportions()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint limbDescriptor = Dl1NameHash.Compute("limb_native");
+        var source = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    new TransformTRS(
+                        Vector3D.Zero,
+                        QuaternionD.Identity,
+                        new Vector3D(1.8, 0.9, 0.6)),
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "limb_native",
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0.4, 0.8, 0.0),
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: limbDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "prepared-target",
+            "prepared-target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    new TransformTRS(
+                        Vector3D.Zero,
+                        QuaternionD.Identity,
+                        new Vector3D(1.2, 1.0, 0.8)),
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "limb_native",
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0.0, 1.35, 0.0),
+                        QuaternionD.Identity,
+                        new Vector3D(0.75, 1.1, 1.0)),
+                    BoneKind.Deform,
+                    descriptorHash: limbDescriptor),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, mapping);
+        Assert.True(
+            review.IsReady,
+            string.Join(
+                Environment.NewLine,
+                review.Diagnostics.Select(static diagnostic =>
+                    diagnostic.Message)));
+        Assert.All(
+            mapping.Entries,
+            entry => Assert.Equal(
+                RetargetTransferPolicy.GlobalRotationDelta,
+                entry.TransferPolicy));
+        Assert.All(
+            mapping.Entries,
+            entry => Assert.Equal(
+                RetargetTransformComponents.Rotation,
+                entry.TransformComponents));
+
+        var clip = new AnimationClip(
+            "native-turn",
+            new FrameRate(30, 1),
+            2,
+            transformTracks:
+            [
+                new TransformTrack(
+                    1,
+                    [
+                        new TransformKeyframe(
+                            0,
+                            source.Bones[1].LocalBindPose),
+                        new TransformKeyframe(
+                            1,
+                            source.Bones[1].LocalBindPose with
+                            {
+                                Rotation = QuaternionD.FromAxisAngle(
+                                    Vector3D.UnitZ,
+                                    Math.PI / 4.0),
+                            }),
+                    ]),
+            ]);
+        SkeletonPose targetBind = target.CreateBindPose();
+        SkeletonPose sourceFrameZero = clip.SamplePose(source, 0.0);
+        SkeletonPose sourceFrameOne = clip.SamplePose(
+            source,
+            clip.FrameRate.SecondsForFrame(1));
+        SkeletonPose targetFrameZero = PoseRetargeter.Retarget(
+            sourceFrameZero,
+            target,
+            mapping);
+        SkeletonPose targetFrameOne = PoseRetargeter.Retarget(
+            sourceFrameOne,
+            target,
+            mapping);
+
+        for (int index = 0; index < target.BoneCount; index++)
+        {
+            Assert.Equal(
+                targetBind.LocalTransforms[index].Translation,
+                targetFrameZero.LocalTransforms[index].Translation);
+            Assert.Equal(
+                targetBind.LocalTransforms[index].Scale,
+                targetFrameZero.LocalTransforms[index].Scale);
+            Assert.Equal(
+                targetBind.LocalTransforms[index].Translation,
+                targetFrameOne.LocalTransforms[index].Translation);
+            Assert.Equal(
+                targetBind.LocalTransforms[index].Scale,
+                targetFrameOne.LocalTransforms[index].Scale);
+        }
+
+        Assert.False(
+            targetFrameZero.GlobalMatrices[1].NearlyEquals(
+                targetFrameOne.GlobalMatrices[1]));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void RequiredTargetLeafFollowsMappedParentAndRetainsItsBindLocal()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint parentDescriptor = Dl1NameHash.Compute("parent_native");
+        uint sourceExtraDescriptor = Dl1NameHash.Compute("source_extra_leaf");
+        uint targetLeafDescriptor = Dl1NameHash.Compute("required_target_leaf");
+        var source = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "parent_native",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitY,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "source_extra_leaf",
+                    0,
+                    new TransformTRS(
+                        new Vector3D(0.3, 0.2, 0.1),
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: sourceExtraDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "prepared-target",
+            "prepared-target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "parent_native",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitY,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "required_target_leaf",
+                    1,
+                    new TransformTRS(
+                        new Vector3D(0.15, 0.25, 0.05),
+                        QuaternionD.Identity,
+                        new Vector3D(0.9, 1.1, 1.0)),
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: targetLeafDescriptor),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        BoneMapEntry leaf = Assert.Single(mapping.Entries.Where(entry =>
+            entry.TargetBoneIndex == 2));
+        Assert.Equal(BoneMappingMethod.ParentFollow, leaf.Method);
+        Assert.Equal(1, leaf.SourceBoneIndex);
+        Assert.Equal(RetargetTransferPolicy.Bind, leaf.TransferPolicy);
+        Assert.Equal(
+            RetargetTransformComponents.All,
+            leaf.TransformComponents);
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, mapping);
+        Assert.True(
+            review.IsReady,
+            string.Join(
+                Environment.NewLine,
+                review.Diagnostics.Select(static diagnostic =>
+                    diagnostic.Message)));
+        Assert.Contains(
+            review.Diagnostics,
+            diagnostic =>
+                diagnostic.Code == "source_has_extra_bones" &&
+                diagnostic.Severity ==
+                    CompatibilityDiagnosticSeverity.Information);
+
+        var clip = new AnimationClip(
+            "parent-turn",
+            new FrameRate(30, 1),
+            2,
+            transformTracks:
+            [
+                new TransformTrack(
+                    1,
+                    [
+                        new TransformKeyframe(
+                            0,
+                            source.Bones[1].LocalBindPose),
+                        new TransformKeyframe(
+                            1,
+                            source.Bones[1].LocalBindPose with
+                            {
+                                Rotation = QuaternionD.FromAxisAngle(
+                                    Vector3D.UnitZ,
+                                    Math.PI / 3.0),
+                            }),
+                    ]),
+            ]);
+        SkeletonPose targetBind = target.CreateBindPose();
+        SkeletonPose first = PoseRetargeter.Retarget(
+            clip.SamplePose(source, 0.0),
+            target,
+            mapping);
+        SkeletonPose moving = PoseRetargeter.Retarget(
+            clip.SamplePose(
+                source,
+                clip.FrameRate.SecondsForFrame(1)),
+            target,
+            mapping);
+        Assert.Equal(
+            targetBind.LocalTransforms[2],
+            first.LocalTransforms[2]);
+        Assert.Equal(
+            targetBind.LocalTransforms[2],
+            moving.LocalTransforms[2]);
+        Assert.False(
+            first.GlobalMatrices[2].NearlyEquals(
+                moving.GlobalMatrices[2]));
+
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source,
+            target,
+            mapping,
+            AnimationRootMode.Recorded);
+        Dl1Anm2AuthoringSequence authored =
+            new Anm2EvaluationAdapter(new AnimationEvaluator())
+                .SampleAuthoredFrames(
+                    new EvaluationRequest(
+                        source,
+                        target,
+                        clip,
+                        0.0,
+                        PreviewProfile.RawAuthoring,
+                        mapping,
+                        purpose: EvaluationPurpose.Preview,
+                        dl1AuthoringPolicy: policy));
+        Assert.Equal(2, authored.Frames.Length);
+        Dl1Anm2TrackSample leafTrack = Assert.Single(
+            authored.Frames[1].Tracks.Where(track =>
+                track.BoneIndex == 2));
+        Assert.Equal(
+            targetBind.LocalTransforms[2],
+            leafTrack.LocalTransform);
+        Assert.Contains(
+            authored.Frames[1].Tracks,
+            track => track.DescriptorHash == targetLeafDescriptor);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ParentFollowCannotHideNonLeafOrSourceIdentityMappings()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint parentDescriptor = Dl1NameHash.Compute("parent_native");
+        uint leafDescriptor = Dl1NameHash.Compute("existing_source_leaf");
+        var source = new RigDefinition(
+            "source",
+            "source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "parent_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "existing_source_leaf",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: leafDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "target",
+            "target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "parent_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "nonleaf_target",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("nonleaf_target")),
+                new BoneDefinition(
+                    3,
+                    "child_target",
+                    2,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("child_target")),
+                new BoneDefinition(
+                    4,
+                    "existing_source_leaf",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: leafDescriptor),
+            ]);
+        var invalid = new RetargetMap(
+            source.Id,
+            target.Id,
+            [
+                new BoneMapEntry(
+                    0,
+                    0,
+                    BoneMappingMethod.DescriptorHash,
+                    1.0),
+                new BoneMapEntry(
+                    1,
+                    1,
+                    BoneMappingMethod.DescriptorHash,
+                    1.0),
+                new BoneMapEntry(
+                    1,
+                    2,
+                    BoneMappingMethod.ParentFollow,
+                    1.0,
+                    transferPolicy: RetargetTransferPolicy.Bind,
+                    componentPolicy: RetargetComponentPolicy.FullTransform),
+                new BoneMapEntry(
+                    1,
+                    4,
+                    BoneMappingMethod.ParentFollow,
+                    1.0,
+                    transferPolicy: RetargetTransferPolicy.Bind,
+                    componentPolicy: RetargetComponentPolicy.FullTransform),
+            ]);
+
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, invalid);
+
+        Assert.False(review.IsReady);
+        Assert.True(
+            review.Diagnostics.Count(diagnostic =>
+                diagnostic.Code ==
+                    "deterministic_mapping_identity_mismatch") >= 2);
+        Assert.Contains(
+            review.Diagnostics,
+            diagnostic =>
+                diagnostic.Code == "required_target_unmapped" &&
+                diagnostic.TargetBoneName == "child_target");
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ToeAndHeadTerminalLeavesMayFollowTheirVerifiedCanonicalParents()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint footDescriptor = Dl1NameHash.Compute("foot_native");
+        uint headDescriptor = Dl1NameHash.Compute("head_native");
+        var source = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "foot_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: footDescriptor,
+                    semanticRole: "foot.right"),
+                new BoneDefinition(
+                    2,
+                    "head_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: headDescriptor,
+                    semanticRole: "body.head"),
+            ]);
+        var target = new RigDefinition(
+            "prepared-target",
+            "prepared-target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "foot_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: footDescriptor,
+                    semanticRole: "foot.right"),
+                new BoneDefinition(
+                    2,
+                    "head_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: headDescriptor,
+                    semanticRole: "body.head"),
+                new BoneDefinition(
+                    3,
+                    "right_toe_end",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Helper,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("target_toe_end"),
+                    semanticRole: "foot.right"),
+                new BoneDefinition(
+                    4,
+                    "head_top_end",
+                    2,
+                    TransformTRS.Identity,
+                    BoneKind.Helper,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("target_head_end"),
+                    semanticRole: "body.head"),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        Assert.Equal(
+            2,
+            mapping.Entries.Count(entry =>
+                entry.Method == BoneMappingMethod.ParentFollow));
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, mapping);
+
+        Assert.True(
+            review.IsReady,
+            string.Join(
+                Environment.NewLine,
+                review.Diagnostics.Select(static diagnostic =>
+                    diagnostic.Message)));
+
+        var clip = new AnimationClip(
+            "terminal-parent-turn",
+            new FrameRate(30, 1),
+            2,
+            transformTracks:
+            [
+                new TransformTrack(
+                    1,
+                    [
+                        new TransformKeyframe(0, source.Bones[1].LocalBindPose),
+                        new TransformKeyframe(
+                            1,
+                            source.Bones[1].LocalBindPose with
+                            {
+                                Rotation = QuaternionD.FromAxisAngle(
+                                    Vector3D.UnitZ,
+                                    Math.PI / 4.0),
+                            }),
+                    ]),
+                new TransformTrack(
+                    2,
+                    [
+                        new TransformKeyframe(0, source.Bones[2].LocalBindPose),
+                        new TransformKeyframe(
+                            1,
+                            source.Bones[2].LocalBindPose with
+                            {
+                                Rotation = QuaternionD.FromAxisAngle(
+                                    Vector3D.UnitX,
+                                    Math.PI / 6.0),
+                            }),
+                    ]),
+            ]);
+        SkeletonPose targetBind = target.CreateBindPose();
+        SkeletonPose sourceFirst = clip.SamplePose(source, 0.0);
+        SkeletonPose sourceMoving = clip.SamplePose(
+            source,
+            clip.FrameRate.SecondsForFrame(1));
+        SkeletonPose targetFirst = PoseRetargeter.Retarget(
+            sourceFirst,
+            target,
+            mapping);
+        SkeletonPose targetMoving = PoseRetargeter.Retarget(
+            sourceMoving,
+            target,
+            mapping);
+        foreach (int leafIndex in new[] { 3, 4 })
+        {
+            Assert.Equal(
+                targetBind.LocalTransforms[leafIndex],
+                targetMoving.LocalTransforms[leafIndex]);
+            Assert.False(
+                targetFirst.GlobalMatrices[leafIndex].NearlyEquals(
+                    targetMoving.GlobalMatrices[leafIndex]));
+        }
+
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source,
+            target,
+            mapping,
+            AnimationRootMode.Recorded);
+        Dl1Anm2AuthoringSequence authored =
+            new Anm2EvaluationAdapter(new AnimationEvaluator())
+                .SampleAuthoredFrames(
+                    new EvaluationRequest(
+                        source,
+                        target,
+                        clip,
+                        0.0,
+                        PreviewProfile.RawAuthoring,
+                        mapping,
+                        purpose: EvaluationPurpose.Preview,
+                        dl1AuthoringPolicy: policy));
+        Assert.Equal(2, authored.Frames.Length);
+        foreach (int leafIndex in new[] { 3, 4 })
+        {
+            Assert.Contains(
+                authored.Frames[1].Tracks,
+                track =>
+                    track.BoneIndex == leafIndex &&
+                    track.DescriptorHash ==
+                        target.Bones[leafIndex].DescriptorHash);
+            Dl1Anm2TrackSample leafTrack = authored.Frames[1].Tracks
+                .Single(track => track.BoneIndex == leafIndex);
+            Assert.Equal(
+                targetBind.LocalTransforms[leafIndex],
+                leafTrack.LocalTransform);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void FourthFingerHelperFollowsItsMappedThirdSegmentParent()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("generic_root");
+        uint parentDescriptor = Dl1NameHash.Compute("generic_finger_parent");
+        uint leafDescriptor = Dl1NameHash.Compute("target_finger_leaf");
+        var source = new RigDefinition(
+            "source",
+            "source",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "left_hand_index3",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitX,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "target",
+            "target",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "left_hand_index3",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitX,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "left_hand_index4",
+                    1,
+                    new TransformTRS(
+                        new Vector3D(0.2, 0.0, 0.0),
+                        QuaternionD.Identity,
+                        new Vector3D(1.0, 0.9, 1.1)),
+                    BoneKind.Helper,
+                    requiredForExport: true,
+                    descriptorHash: leafDescriptor),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        BoneMapEntry leaf = Assert.Single(mapping.Entries.Where(entry =>
+            entry.TargetBoneIndex == 2));
+        Assert.Equal(BoneMappingMethod.ParentFollow, leaf.Method);
+        Assert.Equal(1, leaf.SourceBoneIndex);
+        Assert.True(
+            RetargetMappingReview.Analyze(
+                source,
+                target,
+                mapping).IsReady);
+
+        var clip = new AnimationClip(
+            "finger-parent-turn",
+            new FrameRate(30, 1),
+            2,
+            transformTracks:
+            [
+                new TransformTrack(
+                    1,
+                    [
+                        new TransformKeyframe(
+                            0,
+                            source.Bones[1].LocalBindPose),
+                        new TransformKeyframe(
+                            1,
+                            source.Bones[1].LocalBindPose with
+                            {
+                                Rotation = QuaternionD.FromAxisAngle(
+                                    Vector3D.UnitZ,
+                                    Math.PI / 4.0),
+                            }),
+                    ]),
+            ]);
+        SkeletonPose bind = target.CreateBindPose();
+        SkeletonPose first = PoseRetargeter.Retarget(
+            clip.SamplePose(source, 0.0),
+            target,
+            mapping);
+        SkeletonPose moving = PoseRetargeter.Retarget(
+            clip.SamplePose(
+                source,
+                clip.FrameRate.SecondsForFrame(1)),
+            target,
+            mapping);
+        Assert.Equal(bind.LocalTransforms[2], moving.LocalTransforms[2]);
+        Assert.False(
+            first.GlobalMatrices[2].NearlyEquals(
+                moving.GlobalMatrices[2]));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void FourthFingerHelperAuthoredFramesFollowTheMappedThirdSegment()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("generic_root");
+        uint parentDescriptor = Dl1NameHash.Compute("finger_parent");
+        uint leafDescriptor = Dl1NameHash.Compute("target_finger_leaf");
+        var source = new RigDefinition(
+            "source",
+            "source",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "left_hand_index3",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitX,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "target",
+            "target",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "left_hand_index3",
+                    0,
+                    new TransformTRS(
+                        Vector3D.UnitX,
+                        QuaternionD.Identity,
+                        Vector3D.One),
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "left_hand_index4",
+                    1,
+                    new TransformTRS(
+                        new Vector3D(0.2, 0.0, 0.0),
+                        QuaternionD.Identity,
+                        new Vector3D(1.0, 0.9, 1.1)),
+                    BoneKind.Helper,
+                    requiredForExport: true,
+                    descriptorHash: leafDescriptor),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        BoneMapEntry leaf = Assert.Single(mapping.Entries.Where(entry =>
+            entry.TargetBoneIndex == 2));
+        Assert.Equal(BoneMappingMethod.ParentFollow, leaf.Method);
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, mapping);
+        Assert.True(review.IsReady);
+
+        var clip = new AnimationClip(
+            "finger-parent-turn",
+            new FrameRate(30, 1),
+            2,
+            transformTracks:
+            [
+                new TransformTrack(
+                    1,
+                    [
+                        new TransformKeyframe(0, source.Bones[1].LocalBindPose),
+                        new TransformKeyframe(
+                            1,
+                            source.Bones[1].LocalBindPose with
+                            {
+                                Rotation = QuaternionD.FromAxisAngle(
+                                    Vector3D.UnitZ,
+                                    Math.PI / 4.0),
+                            }),
+                    ]),
+            ]);
+        SkeletonPose targetBind = target.CreateBindPose();
+        var policy = Dl1AuthoringPolicy.Create(
+            source,
+            target,
+            mapping,
+            AnimationRootMode.Recorded);
+        Dl1Anm2AuthoringSequence authored =
+            new Anm2EvaluationAdapter(new AnimationEvaluator())
+                .SampleAuthoredFrames(
+                    new EvaluationRequest(
+                        source,
+                        target,
+                        clip,
+                        0.0,
+                        PreviewProfile.RawAuthoring,
+                        mapping,
+                        purpose: EvaluationPurpose.Preview,
+                        dl1AuthoringPolicy: policy));
+        Assert.Equal(2, authored.Frames.Length);
+        Dl1Anm2TrackSample leafTrack = authored.Frames[1].Tracks
+            .Single(track => track.BoneIndex == 2);
+        Assert.Equal(leafDescriptor, leafTrack.DescriptorHash);
+        Assert.Equal(targetBind.LocalTransforms[2], leafTrack.LocalTransform);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void MismatchedFingerParentRoleDoesNotQualifyForParentFollow()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("generic_root");
+        uint leftParentDescriptor = Dl1NameHash.Compute("left_finger_parent");
+        uint rightParentDescriptor = Dl1NameHash.Compute("right_finger_parent");
+        var source = new RigDefinition(
+            "source",
+            "source",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "left_hand_index3",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: leftParentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "right_hand_index3",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: rightParentDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "target",
+            "target",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "left_hand_index3",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: leftParentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "right_hand_index4",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Helper,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("target_right_finger_leaf")),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+        Assert.DoesNotContain(
+            mapping.Entries,
+            entry =>
+                entry.TargetBoneIndex == 2 &&
+                entry.Method == BoneMappingMethod.ParentFollow);
+        Assert.False(
+            RetargetMappingReview.Analyze(
+                source,
+                target,
+                mapping).IsReady);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void SemanticGuessDoesNotMakeHeadBlendATerminalMarker()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("generic_root");
+        uint headDescriptor = Dl1NameHash.Compute("generic_head");
+        var source = new RigDefinition(
+            "source",
+            "source",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "generic_head",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: headDescriptor,
+                    semanticRole: "body.head"),
+            ]);
+        var target = new RigDefinition(
+            "target",
+            "target",
+            [
+                new BoneDefinition(
+                    0,
+                    "generic_root",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "generic_head",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: headDescriptor,
+                    semanticRole: "body.head"),
+                new BoneDefinition(
+                    2,
+                    "head_blend",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("target_head_blend"),
+                    semanticRole: "body.head"),
+            ]);
+
+        RetargetMap mapping =
+            RetargetMapBuilder.CreateSuggested(source, target);
+
+        Assert.DoesNotContain(
+            mapping.Entries,
+            entry =>
+                entry.TargetBoneIndex == 2 &&
+                entry.Method == BoneMappingMethod.ParentFollow);
+        Assert.False(
+            RetargetMappingReview.Analyze(
+                source,
+                target,
+                mapping).IsReady);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void ParentFollowRejectsNonLeafAndExistingSourceIdentity()
+    {
+        uint rootDescriptor = Dl1NameHash.Compute("root_native");
+        uint parentDescriptor = Dl1NameHash.Compute("parent_native");
+        uint existingLeafDescriptor = Dl1NameHash.Compute("existing_leaf");
+        var source = new RigDefinition(
+            "source",
+            "source",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "parent_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "existing_leaf",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: existingLeafDescriptor),
+            ]);
+        var target = new RigDefinition(
+            "target",
+            "target",
+            [
+                new BoneDefinition(
+                    0,
+                    "root_native",
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: rootDescriptor),
+                new BoneDefinition(
+                    1,
+                    "parent_native",
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: parentDescriptor),
+                new BoneDefinition(
+                    2,
+                    "unmapped_nonleaf",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("unmapped_nonleaf")),
+                new BoneDefinition(
+                    3,
+                    "nonleaf_child",
+                    2,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: Dl1NameHash.Compute("nonleaf_child")),
+                new BoneDefinition(
+                    4,
+                    "existing_leaf",
+                    1,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    requiredForExport: true,
+                    descriptorHash: existingLeafDescriptor),
+            ]);
+        var mapping = new RetargetMap(
+            source.Id,
+            target.Id,
+            [
+                new BoneMapEntry(
+                    0,
+                    0,
+                    BoneMappingMethod.DescriptorHash,
+                    1.0),
+                new BoneMapEntry(
+                    1,
+                    1,
+                    BoneMappingMethod.DescriptorHash,
+                    1.0),
+                new BoneMapEntry(
+                    1,
+                    2,
+                    BoneMappingMethod.ParentFollow,
+                    1.0,
+                    transferPolicy: RetargetTransferPolicy.Bind,
+                    componentPolicy: RetargetComponentPolicy.FullTransform),
+                new BoneMapEntry(
+                    1,
+                    4,
+                    BoneMappingMethod.ParentFollow,
+                    1.0,
+                    transferPolicy: RetargetTransferPolicy.Bind,
+                    componentPolicy: RetargetComponentPolicy.FullTransform),
+            ]);
+
+        RetargetMappingReviewReport review =
+            RetargetMappingReview.Analyze(source, target, mapping);
+
+        Assert.False(review.IsReady);
+        Assert.True(
+            review.Diagnostics.Count(diagnostic =>
+                diagnostic.Code ==
+                    "deterministic_mapping_identity_mismatch") >= 2);
+        Assert.Contains(
+            review.Diagnostics,
+            diagnostic =>
+                diagnostic.Code == "required_target_unmapped" &&
+                diagnostic.TargetBoneName == "nonleaf_child");
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void CanonicalHelperOverridesPreserveEyeAndSpineBindScale()
+    {
+        Assert.Equal(
+            RetargetComponentPolicy.Rotation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("hspine1"));
+        Assert.Equal(
+            RetargetComponentPolicy.Rotation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("l_eye"));
+        Assert.Equal(
+            RetargetComponentPolicy.RotationTranslation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("l_eye_pos"));
+        Assert.Equal(
+            RetargetComponentPolicy.Rotation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("r_eye"));
+        Assert.Equal(
+            RetargetComponentPolicy.RotationTranslation,
+            RetargetMapBuilder.GetDefaultHelperComponentPolicy("r_eye_pos"));
     }
 
     private static RigDefinition CreateRig(

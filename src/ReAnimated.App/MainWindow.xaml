@@ -118,7 +118,7 @@
                               CommandParameter="Animations"
                               Header="_Animations"
                               IsChecked="{Binding IsAnimationsWorkspace, Mode=OneWay}"
-                              ToolTip="Import clips and choose target models." />
+                              ToolTip="Import clips and choose target models." IsEnabled="{Binding IsAnimationWorkflowEnabled}" />
                     <MenuItem Command="{Binding SelectWorkspaceCommand}"
                               CommandParameter="Playback"
                               Header="_Playback"
@@ -127,7 +127,8 @@
                     <MenuItem Command="{Binding SelectWorkspaceCommand}"
                               CommandParameter="Retarget/Edit"
                               Header="_Retarget / Edit"
-                              IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}" />
+                              IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}"
+                              IsEnabled="{Binding IsRetargetWorkflowAvailable}" />
                     <MenuItem Command="{Binding SelectWorkspaceCommand}"
                               CommandParameter="Export"
                               Header="_Export"
@@ -255,7 +256,8 @@
                                       CommandParameter="Animations"
                                       Content="Animations"
                                       ToolTip="Import clips and choose target models."
-                                      IsChecked="{Binding IsAnimationsWorkspace, Mode=OneWay}" />
+                                      IsChecked="{Binding IsAnimationsWorkspace, Mode=OneWay}"
+                                      IsEnabled="{Binding IsAnimationWorkflowAvailable}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Playback"
                                       Content="Playback"
@@ -264,11 +266,13 @@
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Retarget/Edit"
                                       Content="Retarget / Edit"
-                                      IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}" />
+                                      IsChecked="{Binding IsRetargetWorkspace, Mode=OneWay}"
+                                      IsEnabled="{Binding IsRetargetWorkflowAvailable}" />
                         <ToggleButton Command="{Binding SelectWorkspaceCommand}"
                                       CommandParameter="Export"
                                       Content="Export"
                                       IsChecked="{Binding IsExportWorkspace, Mode=OneWay}" />
+                        <Button Margin="8,2,4,2" Padding="10,4" Content="Change workflow" Command="{Binding ChangeStartWorkflowCommand}" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,2"
@@ -545,46 +549,7 @@
                             <RowDefinition Height="*" MinHeight="230" />
                         </Grid.RowDefinitions>
 
-                        <StackPanel>
-                            <DockPanel x:Name="AnimationsActionsPane"
-                                       Margin="0,0,0,7">
-                                <WrapPanel DockPanel.Dock="Right">
-                                    <ToggleButton Content="Base-game animations"
-                                                  IsChecked="{Binding IsRetailAnimationBrowserVisible}"
-                                                  ToolTip="Search the indexed retail type-320 catalog and add a base-game clip to this project." />
-                                    <Button Command="{Binding ImportAnimationCommand}"
-                                            Content="Import animation..." />
-                                    <Button Command="{Binding AddAnimationTargetsCommand}"
-                                            Content="Add target to selected clip..."
-                                            ToolTip="Play the selected clip on another model." />
-                                    <Button Command="{Binding AssignAnimationLibraryCommand}"
-                                            Content="Assign SCR..." />
-                                    <Button Command="{Binding ActivateSelectedAnimationCommand}"
-                                            Content="Play" />
-                                    <Button Command="{Binding SelectWorkspaceCommand}"
-                                            CommandParameter="Retarget/Edit"
-                                            Content="Retarget / edit" />
-                                    <Button Command="{Binding RenameSelectedAnimationCommand}"
-                                            Content="Rename" />
-                                    <Button Command="{Binding DuplicateSelectedAnimationCommand}"
-                                            Content="Duplicate" />
-                                    <Button Command="{Binding RemoveSelectedAnimationCommand}"
-                                            Content="Remove" />
-                                </WrapPanel>
-                                <TextBlock FontSize="17"
-                                           FontWeight="SemiBold"
-                                           Text="Animation library" />
-                            </DockPanel>
 
-                            <!-- Importing a raw ANM2 from this surface asks
-                                 for a source model. Without the prompt here
-                                 the request was only visible on the base-game
-                                 browser, so the import stalled with no way to
-                                 answer it. -->
-                            <ContentControl Content="{Binding}"
-                                            ContentTemplate="{StaticResource SourceModelPickerTemplate}"
-                                            Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}" />
-                        </StackPanel>
 
                         <Grid Grid.Row="1">
                             <Grid.ColumnDefinitions>
@@ -806,7 +771,49 @@
                         <Border x:Name="AnimationsLibraryPane"
                                 Grid.Column="2"
                                 Style="{StaticResource PaneBorderStyle}">
-                            <DataGrid x:Name="AnimationLibraryTable"
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+                        <StackPanel>
+                            <StackPanel x:Name="AnimationsActionsPane"
+                                       Margin="0,0,0,7">
+                                <WrapPanel>
+                                    <ToggleButton Content="Base-game animations"
+                                                  IsChecked="{Binding IsRetailAnimationBrowserVisible}"
+                                                  ToolTip="Search the indexed retail type-320 catalog and add a base-game clip to this project." />
+                                    <Button Command="{Binding ImportAnimationCommand}"
+                                            Content="Import animation..." />
+                                    <Button Command="{Binding AddAnimationTargetsCommand}"
+                                            Content="Add target to selected clip..."
+                                            ToolTip="Play the selected clip on another model." />
+                                    <Button Command="{Binding AssignAnimationLibraryCommand}"
+                                            Content="Assign SCR..." />
+                                    <Button Command="{Binding ActivateSelectedAnimationCommand}"
+                                            Content="Play" />
+                                    <Button Command="{Binding SelectWorkspaceCommand}"
+                                            CommandParameter="Retarget/Edit"
+                                            Content="Retarget / edit" />
+                                    <Button Command="{Binding RenameSelectedAnimationCommand}"
+                                            Content="Rename" />
+                                    <Button Command="{Binding DuplicateSelectedAnimationCommand}"
+                                            Content="Duplicate" />
+                                    <Button Command="{Binding RemoveSelectedAnimationCommand}"
+                                            Content="Remove" />
+                                </WrapPanel>
+                            </StackPanel>
+
+                            <!-- Importing a raw ANM2 from this surface asks
+                                 for a source model. Without the prompt here
+                                 the request was only visible on the base-game
+                                 browser, so the import stalled with no way to
+                                 answer it. -->
+                            <ContentControl Content="{Binding}"
+                                            ContentTemplate="{StaticResource SourceModelPickerTemplate}"
+                                            Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        </StackPanel>
+                            <DataGrid x:Name="AnimationLibraryTable" Grid.Row="1"
                                       AlternationCount="2"
                                       AutoGenerateColumns="False"
                                       CanUserAddRows="False"
@@ -906,6 +913,7 @@
                                     <DataGridTextColumn Width="2*" MinWidth="180" Binding="{Binding Diagnostics}" Header="Status" IsReadOnly="True" />
                                 </DataGrid.Columns>
                             </DataGrid>
+                            </Grid>
                         </Border>
                         </Grid>
                     </Grid>
@@ -3465,6 +3473,10 @@
                                            IsVirtualizingDocument="True" />
             </Grid>
 
+            <views:WelcomeWorkflowView Grid.Row="2"
+                                       Panel.ZIndex="900"
+                                       Margin="8"
+                                       Visibility="{Binding IsWelcomeWorkflowVisible, Converter={StaticResource BooleanToVisibilityConverter}}" />
             <views:ModelsWorkspaceView x:Name="ModelsWorkspaceSurface"
                                        Grid.Row="2"
                                        Margin="8" />

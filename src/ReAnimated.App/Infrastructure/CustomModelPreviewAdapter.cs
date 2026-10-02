@@ -1,9 +1,11 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
+using System.Globalization;
 using System.IO;
 using System.Numerics;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
+using ReAnimated.Core.Geometry;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Renderer.D3D11;
@@ -20,6 +22,14 @@ public sealed record CustomModelPreviewPayload(
     IReadOnlyList<MeshRenderData> Meshes,
     SkeletonRenderData? Skeleton,
     ImmutableArray<string> Diagnostics);
+
+public sealed record CustomModelBonePreviewEvidence(
+    string? ParentBone,
+    int? WeightedSourceControlPointCount,
+    string SecondaryMotionOwnership)
+{
+    public bool HasDeclaredSecondaryMotion { get; init; }
+}
 
 /// <summary>
 /// One immutable prepared preview. Mesh conversion, texture decoding, and DL1
@@ -70,6 +80,229 @@ public sealed class CustomModelPreviewSession
     public CustomModelDocument Document => _model.Package.Document;
 
     public CustomModelPackage Package => _model.Package;
+
+    private ImmutableArray<MeshRenderData> _firstPersonMeshes;
+
+    public ImmutableArray<MeshRenderData> FirstPersonMeshes
+    {
+        get
+        {
+            if (_firstPersonMeshes.IsDefault)
+            {
+                CustomModelPerspectiveSelection selection = Document.FirstPersonVisibility ??
+                    FbxModelPerspectiveAuthoring.ProposeFirstPerson(_model).Selection;
+                FbxModelAuthoringImportResult visible = FbxModelPerspectiveAuthoring.Apply(_model, selection);
+                _firstPersonMeshes = CustomModelPreviewAdapter.CreateSession(visible, RequestedMode).Meshes;
+            }
+            return _firstPersonMeshes;
+        }
+    }
+
+
+    public MeshRenderData[] CreateFirstPersonSceneMeshes(IEnumerable<MeshRenderData> currentMeshes)
+    {
+        var originalIds = Meshes.Select(mesh => mesh.Id).ToHashSet(StringComparer.Ordinal);
+        var visible = FirstPersonMeshes.ToDictionary(mesh => mesh.Id, StringComparer.Ordinal);
+        return currentMeshes.SelectMany(mesh =>
+        {
+            if (!originalIds.Contains(mesh.Id)) return new[] { mesh };
+            return visible.TryGetValue(mesh.Id, out MeshRenderData? replacement)
+                ? new[] { replacement with { LocalToWorld = mesh.LocalToWorld, IsSelected = mesh.IsSelected,
+                    ProjectionRole = mesh.ProjectionRole, Tint = mesh.Tint, BaseColorTexture = mesh.BaseColorTexture } }
+                : Array.Empty<MeshRenderData>();
+        }).ToArray();
+    }
+
+    /// <summary>
+    /// Returns read-only source evidence for a target-bind review row. Weight
+    /// counts are based on distinct source geometry control points with a
+    /// retained influence for the named imported bone; authored simulation
+    /// is reported only when the document declares an explicit owner.
+    /// </summary>
+    public CustomModelBonePreviewEvidence GetBonePreviewEvidence(
+        string boneName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(boneName);
+        RigDefinition? rig = _model.Rig;
+        int index = rig?.GetBoneIndex(boneName) ?? -1;
+        string? parent = index >= 0 && rig is not null &&
+                         rig.Bones[index].ParentIndex >= 0
+            ? rig!.Bones[rig.Bones[index].ParentIndex].Name
+            : null;
+        int? weightedPoints = TryCountRetainedSourceControlPoints(
+            boneName,
+            rig,
+            index,
+            out int count)
+                ? count
+                : null;
+
+        string[] editorOwners = Document.SecondaryMotion.Groups
+            .Where(group => group.Particles.Any(particle =>
+                string.Equals(particle.ReferenceBoneName, boneName,
+                    StringComparison.Ordinal) ||
+                string.Equals(particle.DrivenBoneName, boneName,
+                    StringComparison.Ordinal)))
+            .Select(static group => group.Name)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        bool hasNativeSources = !Document.SecondaryMotion.NativeSources.IsEmpty;
+        string ownership = editorOwners.Length > 0
+            ? $"Editor preview group: {string.Join(", ", editorOwners)}"
+            : hasNativeSources
+                ? "No editor group owns this bone; native source records exist, but bone ownership is not resolved."
+                : "No declared secondary-motion owner.";
+        return new(parent, weightedPoints, ownership)
+        {
+            HasDeclaredSecondaryMotion = editorOwners.Length > 0 || hasNativeSources,
+        };
+    }
+
+    private bool TryCountRetainedSourceControlPoints(
+        string boneName,
+        RigDefinition? rig,
+        int rigBoneIndex,
+        out int count)
+    {
+        count = 0;
+        if (rig is null || rigBoneIndex < 0 || _model.Surfaces.IsEmpty)
+        {
+            return false;
+        }
+
+        ImmutableArray<CustomModelBone> effectiveBones;
+        try
+        {
+            effectiveBones = Document.CreateEffectiveBones();
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (effectiveBones.Length != rig.BoneCount ||
+            rigBoneIndex >= effectiveBones.Length)
+        {
+            return false;
+        }
+
+        CustomModelBone outputBone = effectiveBones[rigBoneIndex];
+        BoneDefinition runtimeBone = rig.Bones[rigBoneIndex];
+        if (!string.Equals(
+                outputBone.Name,
+                runtimeBone.Name,
+                StringComparison.Ordinal) ||
+            outputBone.ParentIndex != runtimeBone.ParentIndex ||
+            !string.Equals(
+                outputBone.Name,
+                boneName,
+                StringComparison.OrdinalIgnoreCase) ||
+            outputBone.FbxObjectId == 0 ||
+            effectiveBones.Count(candidate =>
+                candidate.FbxObjectId == outputBone.FbxObjectId) != 1)
+        {
+            return false;
+        }
+
+        // GeometrySourceInfluence.ImportedBoneIndex remains in the original
+        // imported-rig index space. FbxObjectId/JointId is the preserved exact
+        // source identity that survives a reordered or conformed output rig.
+        string sourceJointId = outputBone.FbxObjectId.ToString(
+            CultureInfo.InvariantCulture);
+        var components = new Dictionary<
+            string,
+            (ImmutableArray<Vector3D> Points, ImmutableArray<int> WeightedIndices)>(
+                StringComparer.Ordinal);
+        int? sourceImportedIndex = null;
+        foreach (FbxModelSurface surface in _model.Surfaces)
+        {
+            if (surface.SourceGeometry is not { } geometry ||
+                geometry.Skinning is not { } skinning ||
+                string.IsNullOrWhiteSpace(geometry.Id) ||
+                geometry.ControlPoints.IsDefault ||
+                skinning.ControlPoints.IsDefault ||
+                geometry.ControlPoints.Length != skinning.ControlPoints.Length)
+            {
+                return false;
+            }
+
+            try
+            {
+                skinning.Validate(geometry.ControlPoints.Length);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or
+                InvalidDataException or
+                OverflowException)
+            {
+                return false;
+            }
+
+            foreach (GeometrySourceInfluence influence in
+                     skinning.ControlPoints.SelectMany(
+                         static point => point.Influences))
+            {
+                if (!string.Equals(
+                        influence.JointId,
+                        sourceJointId,
+                        StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (sourceImportedIndex is int priorIndex &&
+                    priorIndex != influence.ImportedBoneIndex)
+                {
+                    return false;
+                }
+
+                sourceImportedIndex = influence.ImportedBoneIndex;
+            }
+
+            ImmutableArray<int> weightedIndices = Enumerable.Range(
+                    0,
+                    skinning.ControlPoints.Length)
+                .Where(controlPointIndex =>
+                    skinning.ControlPoints[controlPointIndex].Influences.Any(
+                        influence =>
+                            influence.Retained &&
+                            string.Equals(
+                                influence.JointId,
+                                sourceJointId,
+                                StringComparison.Ordinal)))
+                .ToImmutableArray();
+            if (components.TryGetValue(
+                    geometry.Id,
+                    out var existing))
+            {
+                if (!existing.Points.SequenceEqual(geometry.ControlPoints) ||
+                    !existing.WeightedIndices.SequenceEqual(weightedIndices))
+                {
+                    return false;
+                }
+
+                continue;
+            }
+
+            components.Add(
+                geometry.Id,
+                (geometry.ControlPoints, weightedIndices));
+        }
+
+        try
+        {
+            count = components.Values.Sum(static component =>
+                component.WeightedIndices.Length);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            count = 0;
+            return false;
+        }
+    }
 
     /// <summary>
     /// Converts an evaluated runtime-rig pose into the exact hierarchy and
@@ -416,9 +649,11 @@ public static class CustomModelPreviewAdapter
                 "The prepared DL1 rig does not match the imported draw-surface table.");
         }
 
-        var meshes = ImmutableArray.CreateBuilder<MeshRenderData>(imported.Surfaces.Length);
+        ImmutableHashSet<int> baseSurfaceIndexes = FbxModelLodLayout.GetBaseSurfaceIndexes(imported);
+        var meshes = ImmutableArray.CreateBuilder<MeshRenderData>(baseSurfaceIndexes.Count);
         for (int surfaceIndex = 0; surfaceIndex < imported.Surfaces.Length; surfaceIndex++)
         {
+            if (!baseSurfaceIndexes.Contains(surfaceIndex)) continue;
             FbxModelSurface surface = imported.Surfaces[surfaceIndex];
             MeshVertex[] vertices = surface.Vertices
                 .Select(vertex => ToRenderVertex(vertex, flipTextureCoordinateV))

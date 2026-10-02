@@ -341,7 +341,7 @@ public sealed class Dl1OfficialModelCompilerContractTests
                 Dl1OfficialModelCompiler.ValidateCompiledMaterialDatabasePreserves(
                     originalPath,
                     changedPath));
-            Assert.Contains("changed", error.Message, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("did not preserve", error.Message, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

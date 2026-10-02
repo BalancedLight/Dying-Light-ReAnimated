@@ -286,6 +286,27 @@ public static class RetargetSuggestionScorer
                     }
                 }
                 break;
+            case BoneMappingMethod.ParentFollow:
+                bool verifiedParentFollow =
+                    RetargetMapBuilder.IsVerifiedParentFollowIdentity(
+                        source,
+                        target,
+                        new RetargetMap(
+                            source.Id,
+                            target.Id,
+                            byTarget.Values),
+                        entry);
+                evidence.Add(new(
+                    verifiedParentFollow
+                        ? MappingEvidenceKind.ParentChainAgreement
+                        : MappingEvidenceKind.StructuralSignature,
+                    verifiedParentFollow
+                        ? "The required target leaf retains its bind-local transform below a uniquely descriptor-mapped parent."
+                        : "The target leaf or its mapped parent no longer satisfies the parent-follow policy."));
+                confidence = verifiedParentFollow
+                    ? 1.0
+                    : Math.Min(confidence, 0.69);
+                break;
             case BoneMappingMethod.Structural:
                 evidence.Add(new(
                     MappingEvidenceKind.StructuralSignature,
@@ -503,12 +524,27 @@ public static class RetargetSuggestionScorer
 
     private static bool IsSupportedAutomaticPolicy(BoneMapEntry entry) =>
         entry.MappingKind == RetargetMappingKind.Bone &&
-        ((entry.TransferPolicy == RetargetTransferPolicy.GlobalBindBasis &&
-          entry.TransformComponents == RetargetTransformComponents.All) ||
-         (entry.TransferPolicy is
-              RetargetTransferPolicy.AnatomicalDirection or
-              RetargetTransferPolicy.RotationDelta &&
-          entry.TransformComponents == RetargetTransformComponents.Rotation));
+        (entry.Method == BoneMappingMethod.ParentFollow
+            ? entry.TransferPolicy == RetargetTransferPolicy.Bind &&
+              entry.TransformComponents == RetargetTransformComponents.All
+            : entry.Method == BoneMappingMethod.DescriptorHash
+                ? entry.TransferPolicy ==
+                      RetargetTransferPolicy.GlobalBindBasis &&
+                  entry.TransformComponents ==
+                      RetargetTransformComponents.All ||
+                  entry.TransferPolicy ==
+                      RetargetTransferPolicy.GlobalRotationDelta &&
+                  entry.TransformComponents ==
+                      RetargetTransformComponents.Rotation
+                : entry.TransferPolicy ==
+                      RetargetTransferPolicy.GlobalBindBasis &&
+                  entry.TransformComponents ==
+                      RetargetTransformComponents.All ||
+                  entry.TransferPolicy is
+                      RetargetTransferPolicy.AnatomicalDirection or
+                      RetargetTransferPolicy.RotationDelta &&
+                  entry.TransformComponents ==
+                      RetargetTransformComponents.Rotation);
 
     private static BoneMapEntry Copy(
         BoneMapEntry entry,

@@ -260,6 +260,7 @@ public partial class App : Application, IDisposable
             try
             {
                 await viewModel.OpenWorkspaceAsync(projectPath);
+                viewModel.ApplyStartWorkflowAfterProjectOpen();
             }
             catch (Exception exception)
             {

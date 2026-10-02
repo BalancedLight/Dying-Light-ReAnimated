@@ -7,11 +7,11 @@
              MinHeight="0">
     <Grid>
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="250" MinWidth="215" />
-            <ColumnDefinition Width="5" />
+            <ColumnDefinition x:Name="SettingsColumn" Width="0" MinWidth="0" />
+            <ColumnDefinition x:Name="SettingsSplitterColumn" Width="0" />
             <ColumnDefinition Width="*" MinWidth="360" />
             <ColumnDefinition Width="5" />
-            <ColumnDefinition Width="460" MinWidth="400" />
+            <ColumnDefinition x:Name="InspectorColumn" Width="380" MinWidth="300" />
         </Grid.ColumnDefinitions>
 
         <Border x:Name="AuthoringSettingsPane"
@@ -201,13 +201,13 @@
             </ScrollViewer>
         </Border>
 
-        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" />
+        <GridSplitter x:Name="SettingsSplitter" Grid.Column="1" Width="5" HorizontalAlignment="Stretch" />
 
         <Grid Grid.Column="2">
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" />
                 <RowDefinition Height="5" />
-                <RowDefinition Height="285" MinHeight="180" />
+                <RowDefinition x:Name="TimelineRow" Height="60" MinHeight="60" />
             </Grid.RowDefinitions>
             <views:ViewportPane x:Name="AuthoringViewportPane"
                                 xmlns:views="clr-namespace:ReAnimated.App.Views"
@@ -217,11 +217,18 @@
                                  xmlns:views="clr-namespace:ReAnimated.App.Views"
                                   Grid.Row="2"
                                   DataContext="{Binding Timeline}" />
+            <DockPanel x:Name="GuidedTransport" Grid.Row="2" Margin="10">
+                <Button DockPanel.Dock="Left" Content="Frame model" Command="{Binding FrameModelCommand}" />
+                <Button DockPanel.Dock="Left" Content="Play / pause" Command="{Binding Timeline.TogglePlaybackCommand}" IsEnabled="{Binding CanPlayGuidedEmbeddedAnimation}" />
+                <Slider Minimum="0" Maximum="{Binding Timeline.EndFrame}" Value="{Binding Timeline.CurrentFrame, Mode=TwoWay}" VerticalAlignment="Center" />
+            </DockPanel>
         </Grid>
 
         <GridSplitter Grid.Column="3" Width="5" HorizontalAlignment="Stretch" />
 
         <Border Grid.Column="4" Style="{StaticResource PaneBorderStyle}">
+            <Grid>
+            <views:GuidedModelSetupView x:Name="GuidedSetupPane" xmlns:views="clr-namespace:ReAnimated.App.Views"/>
             <TabControl x:Name="AuthoringInspectorTabs">
                 <TabItem x:Name="AuthoringConformTab"
                          Header="Setup"
@@ -284,6 +291,7 @@
                 </TabItem>
 
             </TabControl>
+            </Grid>
         </Border>
     </Grid>
 </UserControl>

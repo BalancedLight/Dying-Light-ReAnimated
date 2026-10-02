@@ -66,11 +66,27 @@ public sealed class CompatibilityReport
 
 public static class RigCompatibilityAnalyzer
 {
+    /// <summary>
+    /// Returns all target nodes declared RequiredForExport. Body export emits
+    /// every descriptor-bearing target bone, so clip sparsity cannot exempt a
+    /// required node from mapping or reviewed target-bind ownership.
+    /// </summary>
+    public static ImmutableArray<int> GetRequiredTargetBoneIndices(
+        RigDefinition target)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return target.Bones
+            .Where(static bone => bone.RequiredForExport)
+            .Select(static bone => bone.Index)
+            .ToImmutableArray();
+    }
+
     public static CompatibilityReport Analyze(
         RigDefinition source,
         RigDefinition target,
         RetargetMap map,
-        IEnumerable<int>? reviewedTargetBindBones = null)
+        IEnumerable<int>? reviewedTargetBindBones = null,
+        IEnumerable<int>? requiredTargetBoneIndices = null)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentNullException.ThrowIfNull(target);
@@ -79,6 +95,16 @@ public static class RigCompatibilityAnalyzer
             (reviewedTargetBindBones ??
              map.ReviewedTargetBindBoneIndices)
             .ToHashSet();
+        HashSet<int> requiredTargets = requiredTargetBoneIndices is null
+            ? GetRequiredTargetBoneIndices(target).ToHashSet()
+            : requiredTargetBoneIndices.ToHashSet();
+        if (requiredTargets.Any(index =>
+                (uint)index >= (uint)target.BoneCount))
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(requiredTargetBoneIndices),
+                "A required target bone is outside the target rig.");
+        }
         if (targetBindBones.Any(
                 targetBoneIndex =>
                     (uint)targetBoneIndex >= (uint)target.BoneCount))
@@ -217,7 +243,7 @@ public static class RigCompatibilityAnalyzer
 
         int[] missingRequired = target.Bones
             .Where(bone =>
-                bone.RequiredForExport &&
+                requiredTargets.Contains(bone.Index) &&
                 !mappedTargets.Contains(bone.Index) &&
                 !targetBindBones.Contains(bone.Index))
             .Select(static bone => bone.Index)
@@ -225,7 +251,7 @@ public static class RigCompatibilityAnalyzer
         int[] bindFallback = target.Bones
             .Where(bone =>
                 !mappedTargets.Contains(bone.Index) &&
-                (!bone.RequiredForExport ||
+                (!requiredTargets.Contains(bone.Index) ||
                  targetBindBones.Contains(bone.Index)))
             .Select(static bone => bone.Index)
             .ToArray();
@@ -246,7 +272,7 @@ public static class RigCompatibilityAnalyzer
 
         foreach (int targetIndex in bindFallback)
         {
-            bool required = target.Bones[targetIndex].RequiredForExport;
+            bool required = requiredTargets.Contains(targetIndex);
             diagnostics.Add(
                 new(
                     required
@@ -278,6 +304,13 @@ public static class RigCompatibilityAnalyzer
             if (targetParent < 0 ||
                 !sourceByTarget.TryGetValue(targetParent, out int expectedSourceParent))
             {
+                continue;
+            }
+
+            if (entry.Method == BoneMappingMethod.ParentFollow)
+            {
+                // This required target leaf intentionally retains its local bind
+                // transform under the already mapped canonical target parent.
                 continue;
             }
 

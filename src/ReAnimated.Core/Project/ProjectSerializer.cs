@@ -979,6 +979,21 @@ public static class ProjectSerializer
                 .ToImmutableArray(),
         };
 
+    /// <summary>
+    /// Returns the exact mapping-row provenance normalization used by schema-3
+    /// persistence so callers that compute row fingerprints before saving can
+    /// hash the same rows that a reload and exporter will observe.
+    /// </summary>
+    public static ImmutableArray<ProjectBoneMapping>
+        NormalizeMappingProvenanceForPersistence(
+            IEnumerable<ProjectBoneMapping> mappings)
+    {
+        ArgumentNullException.ThrowIfNull(mappings);
+        return mappings
+            .Select(NormalizeBoneMappingProvenance)
+            .ToImmutableArray();
+    }
+
     private static ProjectBoneMapping NormalizeBoneMappingProvenance(
         ProjectBoneMapping mapping)
     {

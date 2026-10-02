@@ -122,6 +122,64 @@ public sealed class ConformanceHelperPreservationTests
         }
         _ = Dl1CustomModelRigPreparer.Prepare(result);
     }
+    [Fact]
+    public void SourceLessHelperBranchMatchingTemplateNameSharesOneStablePreviewIdentity()
+    {
+        var (source, fit) = Fixture(false, true);
+        RigConformedBone templateCamera = fit.Bones.Single(static bone => bone.Name == "eyecamera");
+        int extraIndex = fit.Bones.Length;
+        RigConformedBone duplicate = templateCamera with
+        {
+            Index = extraIndex,
+            TemplateIndex = -1,
+            SourceBoneIndex = -1,
+            Disposition = RigBoneDisposition.Extra,
+            Kind = BoneKind.Helper,
+            IsDeform = false,
+        };
+        RigConformedBone descendant = duplicate with
+        {
+            Index = extraIndex + 1,
+            Name = "preview_helper_tip",
+            ParentIndex = extraIndex,
+            Position = duplicate.Position + new Vector3D(0.03, 0.01, 0),
+        };
+        RigConformanceResult branchFit = fit.WithBones(fit.Bones.Add(duplicate).Add(descendant));
+        TransformMatrix sourceTipGlobal = Dl1RigConformanceApplier.CreateRigDefinition(branchFit)
+            .CreateBindPose().GlobalMatrices[extraIndex + 1];
+
+        Dl1RigConformanceApplyResult applied = Dl1RigConformanceApplier.ApplyDetailed(source, branchFit);
+        ImmutableArray<CustomModelBone> effective = applied.Model.Package.Document.CreateEffectiveBones();
+        CustomModelBone camera = Assert.Single(effective, static bone => bone.Name == "eyecamera");
+        CustomModelBone tip = Assert.Single(effective, static bone => bone.Name == "preview_helper_tip");
+        Assert.Equal(camera.Index, tip.ParentIndex);
+        Assert.Equal(extraIndex, applied.FitToEffective.Length - 2);
+        Assert.Equal(applied.FitToEffective[templateCamera.Index], applied.FitToEffective[extraIndex]);
+        Assert.True(applied.Model.Rig!.CreateBindPose().GlobalMatrices[tip.Index].NearlyEquals(sourceTipGlobal, 1e-8));
+        ImmutableArray<CustomModelAuthoredHelper> sourceHelpers = source.Package.Document.AuthoredHelpers;
+        ImmutableArray<CustomModelAuthoredHelper> outputHelpers = applied.Model.Package.Document.AuthoredHelpers;
+        Assert.Equal(sourceHelpers.Length, outputHelpers.Length);
+        TransformMatrix[] sourceGlobals = source.Rig!.CreateBindPose().GlobalMatrices.ToArray();
+        TransformMatrix[] outputGlobals = applied.Model.Rig!.CreateBindPose().GlobalMatrices.ToArray();
+        foreach (CustomModelAuthoredHelper original in sourceHelpers)
+        {
+            CustomModelAuthoredHelper retained = Assert.Single(outputHelpers, helper => helper.Id == original.Id);
+            Assert.Equal(original.Name, retained.Name);
+            Assert.Equal(original.Kind, retained.Kind);
+            int expectedParent = applied.SourceToEffective[original.ParentNodeIndex];
+            Assert.Equal(expectedParent, retained.ParentNodeIndex);
+            int sourceBone = source.Rig!.GetBoneIndex(original.Name);
+            int outputBone = applied.Model.Rig!.GetBoneIndex(retained.Name);
+            TransformMatrix expectedGlobal = branchFit.RestPoseTransfer.SkinningTransforms[sourceBone] * sourceGlobals[sourceBone];
+            Assert.True(expectedGlobal.NearlyEquals(outputGlobals[outputBone], 1e-7), original.Name);
+        }
+        Assert.Equal(source.Surfaces[0].Vertices.Select(static vertex => vertex.BoneWeights),
+            applied.Model.Surfaces[0].Vertices.Select(static vertex => vertex.BoneWeights));
+
+        _ = ReAnimated.App.Infrastructure.CustomModelPreviewAdapter.CreateSession(applied.Model,
+            ReAnimated.App.Infrastructure.CustomModelPreviewMode.Dl1Output);
+        Assert.Equal(effective.Length, RiggingSessions.ObserveSourceHierarchy(applied.Model.Package.Document).Length);
+    }
 
     [Fact]
     public void WeightedAuthoredHelperIsNotFoldedWhenSourceExtrasAreDropped()

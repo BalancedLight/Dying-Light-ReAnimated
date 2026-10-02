@@ -1,12 +1,15 @@
 using System.Collections.Immutable;
 using System.Numerics;
+using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Anm2;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.Project;
+using ReAnimated.DL1.Assets.Meshes;
 using ReAnimated.Evaluation;
 using ReAnimated.Renderer.D3D11;
+using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.Tests;
 
@@ -63,6 +66,189 @@ public sealed class AnimationPlaybackCorrectnessTests
             AnimationSourceRoles.Facial |
             AnimationSourceRoles.Auxiliary,
             result.Partition.Roles);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void NativeDescriptorRigMovesAndImportedNameRigIsRejected()
+    {
+        const string nativeBoneName = "native_root";
+        const string importedBoneName = "imported_root";
+        uint nativeDescriptor = Dl1NameHash.Compute(nativeBoneName);
+        var nativeRig = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    nativeBoneName,
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: nativeDescriptor),
+            ]);
+        var importedRig = new RigDefinition(
+            "imported-target",
+            "imported-target",
+            [
+                new BoneDefinition(
+                    0,
+                    importedBoneName,
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: Dl1NameHash.Compute(importedBoneName)),
+            ]);
+        Anm2Clip source = CreateAnm2([nativeDescriptor], frameCount: 3);
+
+        Anm2PartitionedImportResult native =
+            Anm2TrackPartitioner.Partition(
+                source,
+                nativeRig,
+                new FrameRate(30, 1));
+        Anm2PartitionedImportResult imported =
+            Anm2TrackPartitioner.Partition(
+                source,
+                importedRig,
+                new FrameRate(30, 1));
+
+        Assert.True(MainWindowViewModel.HasSufficientBodyTrackCoverage(
+            source.TrackDescriptors.Length,
+            native.Partition));
+        Assert.False(MainWindowViewModel.HasSufficientBodyTrackCoverage(
+            source.TrackDescriptors.Length,
+            imported.Partition));
+        Assert.True(MainWindowViewModel.HasMovingBodyMotion(
+            native.BodyClip,
+            nativeRig));
+        Assert.False(MainWindowViewModel.HasMovingBodyMotion(
+            imported.CombinedClip,
+            importedRig));
+        Assert.True(MainWindowViewModel.HasMovingEvaluatedTargetMotion(
+            nativeRig,
+            nativeRig,
+            native.BodyClip,
+            mapping: null,
+            directBinding: null));
+        Assert.Empty(imported.CombinedClip.TransformTracks);
+
+        SkeletonPose first = native.BodyClip.SamplePose(
+            nativeRig,
+            0.0);
+        SkeletonPose later = native.BodyClip.SamplePose(
+            nativeRig,
+            2.0 / 30.0);
+        Assert.False(first.GlobalMatrices[0].NearlyEquals(
+            later.GlobalMatrices[0]));
+
+        SkeletonRenderData sourceSkeleton =
+            CorePreviewAdapter.ToRenderSkeleton(later);
+        SkeletonRenderData targetSkeleton =
+            CorePreviewAdapter.ToRenderSkeleton(
+                importedRig.CreateBindPose());
+        MeshRenderData[] sourceMeshes =
+        [
+            CreateSkinnedTriangle("source-piece"),
+            CreateSkinnedTriangle("source-detail"),
+        ];
+        MeshRenderData[] targetMeshes =
+        [
+            CreateSkinnedTriangle("target-piece"),
+            CreateSkinnedTriangle("target-detail"),
+        ];
+        Assert.All(
+            sourceMeshes,
+            mesh => Assert.True(RenderMeshValidation.TryValidate(
+                mesh,
+                sourceSkeleton,
+                out _)));
+        Assert.All(
+            targetMeshes,
+            mesh => Assert.True(RenderMeshValidation.TryValidate(
+                mesh,
+                targetSkeleton,
+                out _)));
+        Assert.All(
+            sourceMeshes.Concat(targetMeshes),
+            mesh => Assert.False(RenderMeshValidation.TryValidate(
+                mesh,
+                skeleton: null,
+                out _)));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void AStaticMappedTrackCannotHideAnUnmappedMovingTrack()
+    {
+        const string mappedBoneName = "shared_root";
+        const string movingBoneName = "native_motion";
+        uint mappedDescriptor = Dl1NameHash.Compute(mappedBoneName);
+        uint movingDescriptor = Dl1NameHash.Compute(movingBoneName);
+        var sourceRig = new RigDefinition(
+            "native-source",
+            "native-source",
+            [
+                new BoneDefinition(
+                    0,
+                    mappedBoneName,
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: mappedDescriptor),
+                new BoneDefinition(
+                    1,
+                    movingBoneName,
+                    0,
+                    TransformTRS.Identity,
+                    BoneKind.Deform,
+                    descriptorHash: movingDescriptor),
+            ]);
+        var targetRig = new RigDefinition(
+            "prepared-target",
+            "prepared-target",
+            [
+                new BoneDefinition(
+                    0,
+                    mappedBoneName,
+                    -1,
+                    TransformTRS.Identity,
+                    BoneKind.Root,
+                    descriptorHash: mappedDescriptor),
+            ]);
+        Anm2Clip source = CreateAnm2(
+            [mappedDescriptor, movingDescriptor],
+            frameCount: 3,
+            staticTrackIndices: new HashSet<int> { 0 });
+        Anm2PartitionedImportResult partition =
+            Anm2TrackPartitioner.Partition(
+                source,
+                sourceRig,
+                new FrameRate(30, 1));
+        var map = new RetargetMap(
+            sourceRig.Id,
+            targetRig.Id,
+            [
+                new BoneMapEntry(
+                    0,
+                    0,
+                    BoneMappingMethod.ExactName,
+                    1.0),
+            ]);
+
+        Assert.True(MainWindowViewModel.HasSufficientBodyTrackCoverage(
+            source.TrackDescriptors.Length,
+            partition.Partition));
+        Assert.True(MainWindowViewModel.HasMovingBodyMotion(
+            partition.BodyClip,
+            sourceRig));
+        Assert.False(MainWindowViewModel.HasMovingEvaluatedTargetMotion(
+            sourceRig,
+            targetRig,
+            partition.BodyClip,
+            map,
+            directBinding: null));
     }
 
     [Fact]
@@ -447,7 +633,8 @@ public sealed class AnimationPlaybackCorrectnessTests
 
     private static Anm2Clip CreateAnm2(
         ImmutableArray<uint> descriptors,
-        int frameCount)
+        int frameCount,
+        HashSet<int>? staticTrackIndices = null)
     {
         var frames = ImmutableArray.CreateBuilder<Anm2Frame>(frameCount);
         for (int frame = 0; frame < frameCount; frame++)
@@ -458,7 +645,9 @@ public sealed class AnimationPlaybackCorrectnessTests
                             0,
                             0,
                             0,
-                            frame + (track * 0.1f),
+                            staticTrackIndices?.Contains(track) == true
+                                ? 0.0f
+                                : frame + (track * 0.1f),
                             0,
                             0,
                             1,
@@ -487,6 +676,35 @@ public sealed class AnimationPlaybackCorrectnessTests
                 .ToImmutableArray());
         return Anm2Reader.Read(payload, "generated");
     }
+
+    private static MeshRenderData CreateSkinnedTriangle(string id) =>
+        new(
+            id,
+            new MeshVertex[]
+            {
+                new MeshVertex(
+                    Vector3.Zero,
+                    Vector3.UnitZ,
+                    Vector2.Zero,
+                    Vector4.UnitX,
+                    Vector4.Zero),
+                new MeshVertex(
+                    Vector3.UnitX,
+                    Vector3.UnitZ,
+                    Vector2.Zero,
+                    Vector4.UnitX,
+                    Vector4.Zero),
+                new MeshVertex(
+                    Vector3.UnitY,
+                    Vector3.UnitZ,
+                    Vector2.Zero,
+                    Vector4.UnitX,
+                    Vector4.Zero),
+            },
+            new uint[] { 0, 1, 2 },
+            Matrix4x4.Identity,
+            new[] { Matrix4x4.Identity },
+            true);
 
     private static MeshRenderData CreateTriangle(string id) =>
         new(

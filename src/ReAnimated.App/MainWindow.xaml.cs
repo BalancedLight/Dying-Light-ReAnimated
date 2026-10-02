@@ -33,6 +33,8 @@ public partial class MainWindow : Window
     private bool _pendingViewportLayout;
     private bool _pendingDockLayout;
     private bool _pendingDockReset;
+    private bool _pendingGuidedSecondaryMotionSetup;
+    private bool _pendingGuidedMappingReview;
 
     public MainWindow(
         MainWindowViewModel viewModel,
@@ -48,6 +50,7 @@ public partial class MainWindow : Window
         // surface. Keep its view model explicit so commands remain valid while
         // panes are hidden, tabbed, auto-hidden, or hosted by a floating window.
         ModelsWorkspaceSurface.DataContext = _viewModel.Models;
+        _viewModel.Models.SetGuidedPreviewReviewContext(_viewModel);
 
         // Dock content is reparented beneath AvalonDock layout items, whose
         // DataContext is not MainWindow's DataContext. Give every pane whose
@@ -67,6 +70,8 @@ public partial class MainWindow : Window
             Dispatcher,
             ApplyQueuedShellLayout);
         _viewModel.PropertyChanged += OnViewModelPropertyChanged;
+        _viewModel.GuidedSecondaryMotionSetupRequested += OnGuidedSecondaryMotionSetupRequested;
+        _viewModel.GuidedMappingReviewRequested += OnGuidedMappingReviewRequested;
         ApplyWorkspaceSurfaceLayout();
         Loaded += OnWindowLoaded;
         Closing += OnWindowClosing;
@@ -111,10 +116,34 @@ public partial class MainWindow : Window
         CompositionTarget.Rendering -= OnCompositionRendering;
         _autosave.AutosaveCompleted -= OnAutosaveCompleted;
         _viewModel.PropertyChanged -= OnViewModelPropertyChanged;
+        _viewModel.GuidedSecondaryMotionSetupRequested -= OnGuidedSecondaryMotionSetupRequested;
+        _viewModel.GuidedMappingReviewRequested -= OnGuidedMappingReviewRequested;
         _autosave.Dispose();
         Loaded -= OnWindowLoaded;
         Closing -= OnWindowClosing;
         Closed -= OnWindowClosed;
+    }
+
+    private void OnGuidedSecondaryMotionSetupRequested(object? sender, EventArgs args)
+    {
+        if (_isClosing) return;
+        _pendingGuidedSecondaryMotionSetup = true;
+        _pendingGuidedMappingReview = false;
+        QueueShellLayout(
+            workspaceSurfaceChanged: false,
+            viewportLayoutChanged: false,
+            dockLayoutChanged: true);
+    }
+
+    private void OnGuidedMappingReviewRequested(object? sender, EventArgs args)
+    {
+        if (_isClosing) return;
+        _pendingGuidedMappingReview = true;
+        _pendingGuidedSecondaryMotionSetup = false;
+        QueueShellLayout(
+            workspaceSurfaceChanged: false,
+            viewportLayoutChanged: false,
+            dockLayoutChanged: true);
     }
 
     private void OnViewModelPropertyChanged(
@@ -133,6 +162,10 @@ public partial class MainWindow : Window
             string.Equals(
                 args.PropertyName,
                 nameof(MainWindowViewModel.IsAnimationWorkspaceSurfaceVisible),
+                StringComparison.Ordinal) ||
+            string.Equals(
+                args.PropertyName,
+                nameof(MainWindowViewModel.IsWelcomeWorkflowVisible),
                 StringComparison.Ordinal) ||
             string.Equals(
                 args.PropertyName,
@@ -234,6 +267,18 @@ public partial class MainWindow : Window
             workspaceSurfaceChanged,
             viewportLayoutChanged,
             dockLayoutChanged || resetDockLayout);
+        if (_pendingGuidedSecondaryMotionSetup)
+        {
+            _pendingGuidedSecondaryMotionSetup = false;
+            if (_viewModel.IsRetargetWorkspace)
+                _dockController.SetPaneVisible("retarget.secondary-motion", true);
+        }
+        if (_pendingGuidedMappingReview)
+        {
+            _pendingGuidedMappingReview = false;
+            if (_viewModel.IsRetargetWorkspace)
+                _dockController.SetPaneVisible("retarget.mapping", true);
+        }
     }
 
     private void ApplyShellLayout(
@@ -266,7 +311,9 @@ public partial class MainWindow : Window
             EditorRootGrid.Children.Add(AnimationWorkspaceSurface);
         }
 
-        AnimationWorkspaceSurface.Visibility = Visibility.Visible;
+        AnimationWorkspaceSurface.Visibility = _viewModel.IsWelcomeWorkflowVisible
+            ? Visibility.Hidden
+            : Visibility.Visible;
 
         EditorRootGrid.InvalidateMeasure();
         EditorRootGrid.InvalidateArrange();
@@ -284,7 +331,6 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.Models, "models.browser", "Base-game model browser", Detach(ModelsRetailBrowserPane), 240, 220),
             Pane(EditorDockWorkflow.Models, "models.preview", "Model preview", Detach(ModelsPreviewPane), 320, 240),
 
-            Pane(EditorDockWorkflow.Animations, "animations.actions", "Animation actions", Detach(AnimationsActionsPane), 300, 80),
             Pane(EditorDockWorkflow.Animations, "animations.preview", "Source preview", Detach(AnimationsSourcePreviewPane), 320, 220, _viewModel.SourceViewport),
             Pane(EditorDockWorkflow.Animations, "animations.timeline", "Source timeline", Detach(AnimationsSourceTimelinePane), 340, 170, _viewModel.Timeline),
             Pane(EditorDockWorkflow.Animations, "animations.details", "Animation details", Detach(AnimationsDetailsPane), 240, 180),

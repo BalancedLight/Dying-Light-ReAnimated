@@ -60,8 +60,8 @@ public sealed partial class RigConformanceWizardViewModel
     /// ordering, so the viewport draws its gizmo on the right bone.
     /// </summary>
     public int SelectedBoneIndex =>
-        SelectedLandmark is { } landmark && Fit is { } fit
-            ? IndexOf(fit, landmark.BoneName)
+        SelectedJointBoneName is { } selected && Fit is { } fit
+            ? IndexOf(fit, selected)
             : -1;
 
     private static int IndexOf(RigConformanceResult fit, string boneName)
@@ -89,8 +89,8 @@ public sealed partial class RigConformanceWizardViewModel
         }
 
         RigConformedBone bone = fit.Bones[boneIndex];
-        if (SelectedLandmark is { } selected &&
-            !string.Equals(selected.BoneName, bone.Name, StringComparison.OrdinalIgnoreCase))
+        if (SelectedJointBoneName is { } selected &&
+            !string.Equals(selected, bone.Name, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
@@ -159,7 +159,7 @@ public sealed partial class RigConformanceWizardViewModel
         Solve();
     }
 
-    private static bool IsLandmarkBone(string boneName)
+    private bool IsLandmarkBone(string boneName)
     {
         foreach ((string bone, _, _, _) in LandmarkSequence)
         {
@@ -169,7 +169,8 @@ public sealed partial class RigConformanceWizardViewModel
             }
         }
 
-        return false;
+        return FittedFingerJoints.Any(joint => string.Equals(
+            joint.BoneName, boneName, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>

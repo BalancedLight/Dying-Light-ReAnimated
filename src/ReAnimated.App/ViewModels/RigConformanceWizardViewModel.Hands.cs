@@ -164,7 +164,11 @@ public sealed partial class RigConformanceWizardViewModel
         ClearHandBinding();
         NotifyHands(); HandPreviewChanged?.Invoke(this, EventArgs.Empty);
     }
-    partial void OnHandSideChanged(RigHandSide value) { if (!_restoringHand) RestoreHands(); }
+    partial void OnHandSideChanged(RigHandSide value)
+    {
+        OnPropertyChanged(nameof(SelectedHandFingerJoints));
+        if (!_restoringHand) RestoreHands();
+    }
     partial void OnHandComponentChanged(ContactComponentChoice? value) => InvalidateHandDetection();
     partial void OnHandResolutionChanged(int value) => InvalidateHandDetection();
     partial void OnHandExpectedDigitsChanged(int value) => InvalidateHandDetection();

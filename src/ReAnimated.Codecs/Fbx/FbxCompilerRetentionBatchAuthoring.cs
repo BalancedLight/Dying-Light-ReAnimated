@@ -67,8 +67,30 @@ public static class FbxCompilerRetentionBatchAuthoring
         if (requestedBuilder.Count == 0)
             throw new ArgumentException("Select at least one retention parent explicitly.", nameof(parentEntityIds));
 
-        // Sorting makes the result and generated helper ordering stable for equivalent explicit selections.
-        ImmutableArray<Guid> ordered = requestedBuilder.ToImmutable().Order().ToImmutableArray();
+        // Validate every requested parent against the untouched source before
+        // composing candidates. Applying a deeper child first would create a
+        // helper dependency that makes its selected ancestor appear ineligible.
+        ImmutableArray<StructuralNodeReview> originalReviews =
+            FbxStructuralHelperAuthoring.Inspect(model, cancellationToken);
+        Dictionary<Guid, StructuralNodeReview> reviews = originalReviews
+            .ToDictionary(static row => row.EntityId);
+        foreach (Guid parentId in requestedBuilder)
+        {
+            if (!reviews.TryGetValue(parentId, out StructuralNodeReview? review))
+                throw new InvalidOperationException("A retention parent is not present in the original prepared hierarchy.");
+            if (!review.CanAddRetentionHelper)
+                throw new InvalidOperationException($"Retention parent '{review.Name}' is not eligible in the original hierarchy.");
+        }
+        Dl1PreparedAuthoredRig originalPrepared = Dl1CustomModelRigPreparer.Prepare(model, cancellationToken);
+        Dictionary<int, int> depths = originalPrepared.Contract.Nodes.ToDictionary(
+            static node => node.SourceBoneIndex,
+            node => Depth(node, originalPrepared.Contract.Nodes));
+        ImmutableArray<Guid> ordered = requestedBuilder
+            .Select(parentId => reviews[parentId])
+            .OrderBy(review => depths.GetValueOrDefault(review.SourceIndex, int.MaxValue))
+            .ThenBy(static review => review.EntityId)
+            .Select(static review => review.EntityId)
+            .ToImmutableArray();
         CustomModelDocument originalDocument = model.Package.Document;
         RiggingSession originalSession = originalDocument.RiggingSession
             ?? throw new InvalidOperationException("Start a studio session before proposing compiler retention.");
@@ -116,5 +138,17 @@ public static class FbxCompilerRetentionBatchAuthoring
         if (document.ModelId != modelId || document.RiggingSession is not { } session ||
             session.Id != sessionId || session.OwnerModelId != modelId)
             throw new InvalidOperationException("The retention batch no longer targets the current model and studio session.");
+    }
+
+    private static int Depth(Dl1AuthoredRigNode node, ImmutableArray<Dl1AuthoredRigNode> nodes)
+    {
+        int depth = 0;
+        int parent = node.ParentPhysicalIndex;
+        while (parent >= 0)
+        {
+            depth++;
+            parent = nodes[parent].ParentPhysicalIndex;
+        }
+        return depth;
     }
 }

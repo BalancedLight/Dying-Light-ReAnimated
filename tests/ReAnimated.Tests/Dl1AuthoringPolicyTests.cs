@@ -9,6 +9,235 @@ namespace ReAnimated.Tests;
 
 public sealed class Dl1AuthoringPolicyTests
 {
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void RecordedDirectEvaluationPreservesRootTranslationAndMatchesPreviewExport()
+    {
+        RootPolicyFixture fixture = CreateRootPolicyFixture();
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            fixture.Rig,
+            fixture.Rig,
+            null,
+            AnimationRootMode.Recorded);
+        AnimationEvaluator evaluator = new();
+
+        EvaluationFrame export = evaluator.Evaluate(new EvaluationRequest(
+            fixture.Rig,
+            fixture.Rig,
+            fixture.Clip,
+            1.0,
+            PreviewProfile.RawAuthoring,
+            purpose: EvaluationPurpose.Export,
+            dl1AuthoringPolicy: policy));
+        EvaluationFrame preview = evaluator.Evaluate(new EvaluationRequest(
+            fixture.Rig,
+            fixture.Rig,
+            fixture.Clip,
+            1.0,
+            PreviewProfile.RawAuthoring,
+            purpose: EvaluationPurpose.Preview,
+            dl1AuthoringPolicy: policy));
+
+        AssertVectorNear(
+            new Vector3D(2.0, 2.0, -3.0),
+            export.AuthoredPose.LocalTransforms[0].Translation);
+        AssertMatrixNear(
+            export.AuthoredPose.GlobalMatrices[0],
+            preview.AuthoredPose.GlobalMatrices[0],
+            1e-9);
+        AssertMatrixNear(
+            export.AuthoredPose.GlobalMatrices[1],
+            preview.AuthoredPose.GlobalMatrices[1],
+            1e-9);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void CrossRigRotationOnlyPelvisCarriesVerticalTravelOnceAndPreservesRootBasis()
+    {
+        TransformTRS sourceBind = new(
+            new Vector3D(2.0, 1.0, 3.0),
+            QuaternionD.Identity,
+            Vector3D.One);
+        RigDefinition source = new(
+            "source-pelvis-travel",
+            "Source pelvis travel",
+            [new BoneDefinition(0, "source_pelvis", -1, sourceBind, BoneKind.Root,
+                descriptorHash: 0x01010101, semanticRole: "body.pelvis")]);
+        QuaternionD targetRotation = QuaternionD.FromAxisAngle(
+            Vector3D.UnitY,
+            17.0 * Math.PI / 180.0);
+        Vector3D targetScale = new(1.2, 0.9, 1.1);
+        TransformTRS targetRootBind = new(
+            new Vector3D(-4.0, 2.0, -6.0),
+            targetRotation,
+            targetScale);
+        RigDefinition target = new(
+            "target-root-pelvis",
+            "Target root pelvis",
+            [
+                new BoneDefinition(0, "target_root", -1, targetRootBind, BoneKind.Root,
+                    descriptorHash: 0x10101010, semanticRole: "root.skeletal"),
+                new BoneDefinition(1, "target_pelvis", 0,
+                    new TransformTRS(Vector3D.UnitY, QuaternionD.Identity, Vector3D.One),
+                    BoneKind.Deform, descriptorHash: 0x20202020,
+                    semanticRole: "body.pelvis"),
+            ]);
+        QuaternionD animatedRotation = QuaternionD.FromAxisAngle(
+            Vector3D.UnitX,
+            31.0 * Math.PI / 180.0);
+        var clip = new AnimationClip(
+            "cross-rig-vertical-travel",
+            new FrameRate(1, 1),
+            2,
+            [new TransformTrack(0,
+            [
+                new TransformKeyframe(0, sourceBind),
+                new TransformKeyframe(1, new TransformTRS(
+                    new Vector3D(5.0, 4.0, 8.0), animatedRotation, Vector3D.One)),
+            ])]);
+        var mapping = new RetargetMap(
+            source.Id,
+            target.Id,
+            [new BoneMapEntry(
+                0,
+                1,
+                BoneMappingMethod.Manual,
+                1.0,
+                isReviewed: true,
+                transferPolicy: RetargetTransferPolicy.CopyLocal,
+                componentPolicy: RetargetComponentPolicy.Rotation)],
+            reviewedTargetBindBoneIndices: [0]);
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source,
+            target,
+            mapping,
+            AnimationRootMode.Bip01,
+            targetRootBoneName: "target_root");
+        AnimationEvaluator evaluator = new();
+        EvaluationFrame export = evaluator.Evaluate(new EvaluationRequest(
+            source, target, clip, 1.0, PreviewProfile.RawAuthoring, mapping,
+            purpose: EvaluationPurpose.Export,
+            dl1AuthoringPolicy: policy));
+        EvaluationFrame preview = evaluator.Evaluate(new EvaluationRequest(
+            source, target, clip, 1.0, PreviewProfile.RawAuthoring, mapping,
+            purpose: EvaluationPurpose.Preview,
+            dl1AuthoringPolicy: policy));
+
+        AssertVectorNear(targetRootBind.Translation + new Vector3D(3.0, 3.0, 5.0),
+            export.AuthoredPose.LocalTransforms[0].Translation);
+        AssertRotationNear(targetRotation,
+            export.AuthoredPose.LocalTransforms[0].Rotation);
+        AssertVectorNear(targetScale,
+            export.AuthoredPose.LocalTransforms[0].Scale);
+        AssertVectorNear(Vector3D.UnitY,
+            export.AuthoredPose.LocalTransforms[1].Translation);
+        AssertMatrixNear(export.AuthoredPose.GlobalMatrices[0],
+            preview.AuthoredPose.GlobalMatrices[0], 1e-9);
+        AssertMatrixNear(export.AuthoredPose.GlobalMatrices[1],
+            preview.AuthoredPose.GlobalMatrices[1], 1e-9);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void CrossRigSameBoneRecordedRotationOnlyPreservesDownwardPelvisTravel()
+    {
+        TransformTRS sourceBind = new(
+            new Vector3D(1.0, 3.0, -2.0), QuaternionD.Identity, Vector3D.One);
+        TransformTRS targetBind = new(
+            new Vector3D(-2.0, 5.0, 4.0),
+            QuaternionD.FromAxisAngle(Vector3D.UnitZ, 12.0 * Math.PI / 180.0),
+            Vector3D.One);
+        RigDefinition source = new("same-source-pelvis", "Same source pelvis", [
+            new BoneDefinition(0, "source_pelvis", -1, sourceBind, BoneKind.Root,
+                descriptorHash: 0x11000001, semanticRole: "body.pelvis")]);
+        RigDefinition target = new("same-target-pelvis", "Same target pelvis", [
+            new BoneDefinition(0, "target_pelvis", -1, targetBind, BoneKind.Root,
+                descriptorHash: 0x22000001, semanticRole: "body.pelvis")]);
+        var clip = new AnimationClip("downward-pelvis", new FrameRate(1, 1), 2, [
+            new TransformTrack(0, [
+                new TransformKeyframe(0, sourceBind),
+                new TransformKeyframe(1, sourceBind with
+                {
+                    Translation = new Vector3D(2.5, 0.25, -3.5),
+                    Rotation = QuaternionD.FromAxisAngle(Vector3D.UnitX, 19.0 * Math.PI / 180.0),
+                }),
+            ])]);
+        var mapping = new RetargetMap(source.Id, target.Id, [new BoneMapEntry(
+            0, 0, BoneMappingMethod.Manual, 1.0, isReviewed: true,
+            transferPolicy: RetargetTransferPolicy.CopyLocal,
+            componentPolicy: RetargetComponentPolicy.Rotation)]);
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source, target, mapping, AnimationRootMode.Recorded,
+            targetRootBoneName: "target_pelvis");
+        AnimationEvaluator evaluator = new();
+        EvaluationFrame export = evaluator.Evaluate(new EvaluationRequest(
+            source, target, clip, 1.0, PreviewProfile.RawAuthoring, mapping,
+            purpose: EvaluationPurpose.Export, dl1AuthoringPolicy: policy));
+        EvaluationFrame preview = evaluator.Evaluate(new EvaluationRequest(
+            source, target, clip, 1.0, PreviewProfile.RawAuthoring, mapping,
+            purpose: EvaluationPurpose.Preview, dl1AuthoringPolicy: policy));
+        Vector3D sourceDelta = new Vector3D(2.5, 0.25, -3.5) - sourceBind.Translation;
+        Vector3D targetDelta = export.AuthoredPose.GlobalMatrices[0].Translation -
+            targetBind.Translation;
+
+        AssertVectorNear(sourceDelta, targetDelta);
+        AssertMatrixNear(export.AuthoredPose.GlobalMatrices[0],
+            preview.AuthoredPose.GlobalMatrices[0], 1e-9);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "CodecEvaluation")]
+    public void CrossRigRecordedTranslationOwningPelvisAppliesMappedGlobalTravelOnce()
+    {
+        TransformTRS sourceBind = new(new Vector3D(0.5, 2.0, 1.5), QuaternionD.Identity, Vector3D.One);
+        RigDefinition source = new("translation-source", "Translation source", [
+            new BoneDefinition(0, "source_pelvis", -1, sourceBind, BoneKind.Root,
+                descriptorHash: 0x31000001, semanticRole: "body.pelvis")]);
+        TransformTRS targetRootBind = new(new Vector3D(-3.0, 1.0, 4.0),
+            QuaternionD.Identity, Vector3D.One);
+        TransformTRS targetPelvisBind = new(new Vector3D(0.0, 1.2, 0.0), QuaternionD.Identity, Vector3D.One);
+        RigDefinition target = new("translation-target", "Translation target", [
+            new BoneDefinition(0, "target_root", -1, targetRootBind, BoneKind.Root,
+                descriptorHash: 0x32000001, semanticRole: "root.skeletal"),
+            new BoneDefinition(1, "target_pelvis", 0, targetPelvisBind, BoneKind.Deform,
+                descriptorHash: 0x32000002, semanticRole: "body.pelvis")]);
+        Vector3D animatedTranslation = new Vector3D(-1.0, -0.75, 3.25);
+        var clip = new AnimationClip("translation-owning-pelvis", new FrameRate(1, 1), 2, [
+            new TransformTrack(0, [
+                new TransformKeyframe(0, sourceBind),
+                new TransformKeyframe(1, sourceBind with { Translation = animatedTranslation }),
+            ])]);
+        var mapping = new RetargetMap(source.Id, target.Id, [new BoneMapEntry(
+            0, 1, BoneMappingMethod.Manual, 1.0, isReviewed: true,
+            transferPolicy: RetargetTransferPolicy.CopyLocal,
+            componentPolicy: RetargetComponentPolicy.FullTransform)]);
+        Dl1AuthoringPolicy policy = Dl1AuthoringPolicy.Create(
+            source, target, mapping, AnimationRootMode.Recorded,
+            targetRootBoneName: "target_root");
+        Assert.True(policy.RootMotion.TargetPoseOwnsTranslation);
+        AnimationEvaluator evaluator = new();
+        EvaluationFrame export = evaluator.Evaluate(new EvaluationRequest(
+            source, target, clip, 1.0, PreviewProfile.RawAuthoring, mapping,
+            purpose: EvaluationPurpose.Export, dl1AuthoringPolicy: policy));
+        EvaluationFrame preview = evaluator.Evaluate(new EvaluationRequest(
+            source, target, clip, 1.0, PreviewProfile.RawAuthoring, mapping,
+            purpose: EvaluationPurpose.Preview, dl1AuthoringPolicy: policy));
+        Vector3D targetBindGlobal = target.CreateBindPose().GlobalMatrices[1].Translation;
+        Vector3D targetDelta = export.AuthoredPose.GlobalMatrices[1].Translation - targetBindGlobal;
+
+        Vector3D sourceDelta = targetRootBind.Translation + animatedTranslation - targetBindGlobal;
+        Assert.True(
+            (sourceDelta - targetDelta).Length <= 1e-9,
+            $"sourceDelta={sourceDelta}; targetDelta={targetDelta}; targetBindGlobal={targetBindGlobal}");
+        AssertMatrixNear(export.AuthoredPose.GlobalMatrices[1],
+            preview.AuthoredPose.GlobalMatrices[1], 1e-9);
+    }
+
     // Python oracle:
     // tests/test_auto_root_cached_sparse.py::
     // test_two_turn_root_policies_remove_or_transfer_heading_and_preserve_tilt

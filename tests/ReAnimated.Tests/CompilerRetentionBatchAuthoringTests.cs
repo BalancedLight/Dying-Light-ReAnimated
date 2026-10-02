@@ -25,7 +25,19 @@ public sealed class CompilerRetentionBatchAuthoringTests
         Assert.True(preview.HasChanges);
         Assert.Equal(source.Package.Document.ModelId, preview.ModelId);
         Assert.Equal(source.Package.Document.RiggingSession!.Id, preview.SessionId);
-        Assert.Equal(selection.Order().ToArray(), preview.ParentEntityIds);
+        var depthBySource = before.ToDictionary(
+            static node => node.SourceBoneIndex,
+            node =>
+            {
+                int depth = 0;
+                int parent = node.ParentPhysicalIndex;
+                while (parent >= 0) { depth++; parent = before[parent].ParentPhysicalIndex; }
+                return depth;
+            });
+        Assert.Equal(
+            eligible.OrderBy(row => depthBySource[row.SourceIndex]).ThenBy(row => row.EntityId)
+                .Select(static row => row.EntityId).ToArray(),
+            preview.ParentEntityIds);
         Assert.Equal(2, preview.AddedHelperCount);
         Assert.Equal(2, preview.AddedHelperIds.Distinct().Count());
         Assert.Equal(2, preview.Candidate.Package.Document.RiggingSession!.Recipe.Helpers
@@ -45,6 +57,42 @@ public sealed class CompilerRetentionBatchAuthoringTests
         Assert.Equal(source.Package.Document.Bones, applied.Package.Document.Bones);
         Assert.Equal(source.Surfaces, applied.Surfaces);
         Assert.Equal(source.AnimationClips, applied.AnimationClips);
+    }
+
+    [Fact]
+    public void NestedUnusedBonesAreProcessedParentFirstWhenChildIdentifierSortsFirst()
+    {
+        FbxModelAuthoringImportResult source = SourceWithTwoEligibleNodes(nested: true);
+        var rows = FbxStructuralHelperAuthoring.Inspect(source);
+        var parent = rows.Single(row => row.Name == "Child");
+        var child = rows.Single(row => row.Name == "SyntheticChild");
+        Assert.True(parent.CanAddRetentionHelper);
+        Assert.True(child.CanAddRetentionHelper);
+        Assert.True(child.EntityId.CompareTo(parent.EntityId) < 0);
+        var before = Dl1CustomModelRigPreparer.Prepare(source).Contract.Nodes;
+        var parentNode = before.Single(node => node.SourceBoneIndex == parent.SourceIndex);
+        var childNode = before.Single(node => node.SourceBoneIndex == child.SourceIndex);
+        Assert.Equal(parentNode.PhysicalIndex, childNode.ParentPhysicalIndex);
+
+        var preview = FbxCompilerRetentionBatchAuthoring.Preview(source, [child.EntityId, parent.EntityId]);
+
+        Assert.Equal<Guid>([parent.EntityId, child.EntityId], preview.ParentEntityIds);
+        Assert.Equal(2, preview.AddedHelperCount);
+        Assert.True(FbxCompilerRetentionBatchAuthoring.TryApply(source, preview, out var applied));
+        var after = Dl1CustomModelRigPreparer.Prepare(applied).Contract.Nodes;
+        foreach (var original in before)
+        {
+            var retained = after.Single(node => node.SourceBoneIndex == original.SourceBoneIndex);
+            Assert.Equal(original.Name, retained.Name);
+            Assert.Equal(original.IsDeform, retained.IsDeform);
+            Assert.True(original.LocalBindMatrix.NearlyEquals(retained.LocalBindMatrix, 1e-9));
+            Assert.True(original.InverseGlobalReferenceMatrix.NearlyEquals(retained.InverseGlobalReferenceMatrix, 1e-9));
+            Assert.Equal(original.Bounds, retained.Bounds);
+        }
+        Assert.Equal<CustomModelBone>(source.Package.Document.Bones, applied.Package.Document.Bones);
+        Assert.Equal<FbxModelSurface>(source.Surfaces, applied.Surfaces);
+        Assert.Equal(source.AnimationClips, applied.AnimationClips);
+        Assert.Equal<byte>(source.Package.SourceFbx, applied.Package.SourceFbx);
     }
 
     [Fact]
@@ -109,7 +157,7 @@ public sealed class CompilerRetentionBatchAuthoringTests
         Assert.Same(staleSession, unchanged);
     }
 
-    private static FbxModelAuthoringImportResult SourceWithTwoEligibleNodes()
+    private static FbxModelAuthoringImportResult SourceWithTwoEligibleNodes(bool nested = false)
     {
         FbxModelAuthoringImportResult source = CompilerRetentionAuthoringTests.Source();
         CustomModelDocument document = source.Package.Document;
@@ -119,7 +167,7 @@ public sealed class CompilerRetentionBatchAuthoringTests
             Index = document.Bones.Length,
             FbxObjectId = 0,
             Name = "SyntheticChild",
-            ParentIndex = 0,
+            ParentIndex = nested ? document.Bones.Single(bone => bone.Name == "Child").Index : 0,
             LocalBindTransform = new(new(0, 2, 0), QuaternionD.Identity, Vector3D.One),
             ExactLocalBindMatrix = TransformMatrix.CreateTranslation(new(0, 2, 0)),
             Kind = BoneKind.Deform,
@@ -136,6 +184,23 @@ public sealed class CompilerRetentionBatchAuthoringTests
         };
         document = document with { RigSignature = CustomModelContractSignatures.ComputeRig(document.CreateEffectiveBones()) };
         document = document with { RiggingSession = RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig) };
+        if (nested)
+        {
+            RiggingSession session = document.RiggingSession!;
+            Guid oldParent = session.Recipe.Entities.Single(entity => entity.NativeName == "Child").EntityId;
+            Guid oldChild = session.Recipe.Entities.Single(entity => entity.NativeName == "SyntheticChild").EntityId;
+            Guid parentId = Guid.Parse("ffffffff-ffff-ffff-ffff-ffffffffffff");
+            Guid childId = Guid.Parse("00000001-0000-0000-0000-000000000000");
+            Guid Remap(Guid id) => id == oldParent ? parentId : id == oldChild ? childId : id;
+            document = document with { RiggingSession = session with { Recipe = session.Recipe with
+            {
+                Entities = session.Recipe.Entities.Select(entity => entity with { EntityId = Remap(entity.EntityId) }).ToImmutableArray(),
+                Assignments = session.Recipe.Assignments.Select(row => row with { EntityId = Remap(row.EntityId) }).ToImmutableArray(),
+                Helpers = session.Recipe.Helpers.Select(row => row with { EntityId = Remap(row.EntityId), ParentEntityId = Remap(row.ParentEntityId) }).ToImmutableArray(),
+                ComponentPolicies = session.Recipe.ComponentPolicies.Select(row => row with { EntityId = Remap(row.EntityId) }).ToImmutableArray(),
+                FramePolicies = session.Recipe.FramePolicies.Select(row => row with { EntityId = Remap(row.EntityId) }).ToImmutableArray(),
+            } } };
+        }
         var surfaces = source.Surfaces.Select(surface => surface with
         {
             PaletteBoneIndices = surface.PaletteBoneIndices.Select(index => index >= oldBoneCount ? index + 1 : index).ToImmutableArray(),

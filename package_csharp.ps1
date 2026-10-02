@@ -9,6 +9,21 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+function Get-PackageFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString(
+            $sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
+
 function Get-CandidateInputRelativePaths {
     param(
         [Parameter(Mandatory = $true)]
@@ -63,6 +78,7 @@ function Get-CandidateInputRelativePaths {
             "Directory.Build.props",
             "Directory.Packages.props",
             "LICENSE",
+            "THIRD_PARTY_NOTICES.md",
             "README.md",
             "build_csharp.ps1",
             "global.json",
@@ -74,7 +90,8 @@ function Get-CandidateInputRelativePaths {
             "src",
             "tests\ReAnimated.Tests",
             "tests\fixtures",
-            "schemas")) {
+            "schemas",
+            "tools\native")) {
         $treeRoot = Join-Path $resolvedRoot $relativeRoot
         if (-not (Test-Path -LiteralPath $treeRoot -PathType Container)) {
             throw "Required C# candidate input directory is missing: $treeRoot"
@@ -710,13 +727,18 @@ function Invoke-PackageSelfTest {
         Get-Content -LiteralPath $resultPath -Raw |
             ConvertFrom-Json
     if ($result.format -ne "dl-reanimated-package-self-test" -or
-        [int]$result.schemaVersion -ne 3 -or
+        [int]$result.schemaVersion -ne 4 -or
         $result.processArchitecture -ne "X64") {
         throw "The package self-test report has an invalid identity or process architecture."
     }
     if ($result.sqliteRoundTripVerified -ne $true -or
         [string]::IsNullOrWhiteSpace([string]$result.sqliteVersion)) {
         throw "The package self-test did not verify the native SQLite provider and data round-trip."
+    }
+    if ($result.odeCollisionVerified -ne $true -or
+        [long]$result.odeNativeContactQueryCount -ne 2 -or
+        -not ([string]$result.odeCollisionBackendIdentity).Contains("ODE 0.16.6")) {
+        throw "The packaged executable did not verify the required bundled ODE sphere/capsule contacts."
     }
     if (-not [bool]$result.provenanceVerified -or
         [string]$result.candidateSourceSha256 -ne
@@ -837,23 +859,20 @@ function Invoke-PackageSelfTest {
         [long]$result.helperLength -ne $helperFile.Length) {
         throw "The extracted Blender helper length does not match the package self-test report."
     }
-    $actualHelperHash = (Get-FileHash `
-        -LiteralPath $helperPath `
-        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHelperHash = Get-PackageFileSha256 -Path $helperPath
     if ($result.helperSha256 -notmatch '^[0-9a-f]{64}$' -or
         $result.helperSha256 -ne $actualHelperHash) {
         throw "The extracted Blender helper hash does not match the package self-test report."
     }
-    $expectedHelperHash = (Get-FileHash `
-        -LiteralPath ([System.IO.Path]::GetFullPath(
-            $ExpectedHelperPath)) `
-        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $expectedHelperHash = Get-PackageFileSha256 -Path ([System.IO.Path]::GetFullPath(
+        $ExpectedHelperPath))
     if ($actualHelperHash -ne $expectedHelperHash) {
         throw "The packaged Blender helper does not match the reviewed source helper."
     }
 
     $requiredResourceSuffixes = @(
         "Embedded.LICENSE"
+        "Embedded.THIRD_PARTY_NOTICES.md"
         "Embedded.README.md"
         "Embedded.Schemas.dlraproj.schema.json"
         "Embedded.Schemas.animation-library-build.schema.json"
@@ -1135,12 +1154,8 @@ try {
     finally {
         $zip.Dispose()
     }
-    $executableHash = (Get-FileHash `
-        -LiteralPath $stagedExecutable `
-        -Algorithm SHA256).Hash.ToLowerInvariant()
-    $zipHash = (Get-FileHash `
-        -LiteralPath $resolvedStageZipPath `
-        -Algorithm SHA256).Hash.ToLowerInvariant()
+    $executableHash = Get-PackageFileSha256 -Path $stagedExecutable
+    $zipHash = Get-PackageFileSha256 -Path $resolvedStageZipPath
     $hashLines = @(
         "# dl-reanimated-provenance-schema: 1"
         "# git-head: {0}" -f $candidateProvenance.GitHead
@@ -1327,9 +1342,17 @@ try {
     Write-Host "Created $resolvedHashPath"
 }
 finally {
-    if (($replacementCommitted -or $rollbackCompleted) -and
+    if ($replacementCommitted -and
         (Test-Path -LiteralPath $resolvedStageRoot -PathType Container)) {
-        Remove-Item -LiteralPath $resolvedStageRoot -Recurse -Force
+        try {
+            Remove-Item -LiteralPath $resolvedStageRoot -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning (
+                "Package staging cleanup failed; preserving diagnostics at " +
+                "'$resolvedStageRoot'. Original package result was not replaced: " +
+                $_.Exception.Message)
+        }
     }
     elseif (Test-Path -LiteralPath $resolvedStageRoot -PathType Container) {
         Write-Warning `

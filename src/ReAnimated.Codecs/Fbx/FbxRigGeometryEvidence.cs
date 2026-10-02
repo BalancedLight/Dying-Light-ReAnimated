@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using ReAnimated.Core.Geometry;
 using ReAnimated.Core.Mathematics;
 
@@ -35,12 +36,13 @@ public static class FbxRigGeometryEvidence
         foreach (var surface in model.Surfaces)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            string component = surface.SourceGeometry?.Id ?? surface.Id;
+            string component = surface.SourceGeometry?.Id ?? ResolveDocumentComponentId(surface, document);
             if (selections is not null)
             {
                 if (!selections.TryGetValue(component, out var selection)) throw new InvalidDataException("Current geometry component decisions need reconciliation.");
                 if (!selection.Included || !selection.UseForAnatomy) continue;
             }
+            string pointComponent = surface.SourceGeometry?.Id ?? surface.Id;
             if (surface.Indices.Length % 3 != 0) throw new InvalidDataException("Current geometry contains an incomplete triangle.");
             triangleCount += surface.Indices.Length / 3;
             if (triangleCount > TriangleSpatialIndex.MaximumTriangleCount) throw new InvalidDataException("Current geometry exceeds correspondence triangle limits.");
@@ -66,7 +68,7 @@ public static class FbxRigGeometryEvidence
                 double total = vertex.BoneWeights.Sum();
                 if (vertex.BoneWeights.Length > 0 && (!double.IsFinite(total) || total <= 0)) throw new InvalidDataException("Current skin weight total is invalid.");
                 int point = surface.SourceCorners.Length == surface.Vertices.Length ? surface.SourceCorners[vertexIndex].ControlPointIndex : vertexIndex;
-                string pointComponent = surface.SourceCorners.Length == surface.Vertices.Length ? component : surface.Id;
+                string supportComponent = surface.SourceCorners.Length == surface.Vertices.Length ? pointComponent : surface.Id;
                 for (int i = 0; i < vertex.BoneWeights.Length; i++)
                 {
                     int paletteIndex = vertex.BoneIndices[i];
@@ -77,7 +79,7 @@ public static class FbxRigGeometryEvidence
                     if ((uint)bone >= (uint)rig.BoneCount) throw new InvalidDataException("Current skin palette refers to a missing bone.");
                     if (weight == 0) continue;
                     if (!regions.TryGetValue(bone, out var region)) regions.Add(bone, region = new());
-                    region.Add(pointComponent, point, vertex.Position, area * (weight / total));
+                    region.Add(supportComponent, point, vertex.Position, area * (weight / total));
                 }
             }
         }
@@ -87,6 +89,26 @@ public static class FbxRigGeometryEvidence
             regions.OrderBy(static pair => pair.Key).Select(static pair => pair.Value.Finish(pair.Key)).ToImmutableArray());
         evidence.Validate(rig);
         return evidence;
+    }
+
+    private static string ResolveDocumentComponentId(FbxModelSurface surface, ReAnimated.Core.ModelAuthoring.CustomModelDocument document)
+    {
+        var matches = document.Meshes
+            .Where(mesh => string.Equals(mesh.Name, surface.MeshName, StringComparison.Ordinal))
+            .Take(2)
+            .ToArray();
+        if (matches.Length == 1)
+        {
+            ReAnimated.Core.ModelAuthoring.CustomModelMeshPart mesh = matches[0];
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"fbx:{mesh.ModelObjectId}:{mesh.GeometryObjectId}");
+        }
+
+        throw new InvalidDataException(
+            matches.Length == 0
+                ? $"Surface '{surface.Id}' has no source geometry identity and does not match a document component name."
+                : $"Surface '{surface.Id}' has no source geometry identity and its document component name is ambiguous.");
     }
 
     private sealed class Accumulator

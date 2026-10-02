@@ -323,6 +323,90 @@ public sealed class CustomModelSchema2MorphTests
 
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
+    public void CompilerVerifierMatchesPreparedSurfaceNameCaseInsensitively()
+    {
+        FbxModelAuthoringImportResult source = CreateMorphModel();
+        var target = new CompiledMorphTargetDeltas(
+            0,
+            0,
+            [
+                new Vector3((float)(Half)0.12345f, 0.0f, 0.0f),
+                new Vector3(0.0f, 0.25f, 0.0f),
+                new Vector3(0.0f, 0.0f, -0.5f),
+            ]);
+        CompiledMeshGeometryDocument geometry = CreateCompiledMorphGeometry(target);
+        CompiledMeshSurface surface = geometry.Surfaces.Single();
+        geometry = geometry with
+        {
+            Surfaces = [surface with { Name = surface.Name.ToUpperInvariant() }],
+        };
+
+        ImmutableArray<Dl1PreparedMorphSurfaceExpectation> prepared =
+        [
+            new(
+                "generic_morph_model_GenericMesh_p00",
+                0,
+                3,
+                [new Dl1PreparedMorphTargetExpectation("generic_smile", [
+                    new Vector3D((double)(Half)0.12345f, 0.0, 0.0),
+                    new Vector3D(0.0, 0.25, 0.0),
+                    new Vector3D(0.0, 0.0, -0.5),
+                ])]),
+        ];
+        Dl1OfficialModelCompiler.ValidateCompiledMorphOutput(source, geometry, prepared);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    public void CompilerVerifierRejectsDifferentPreparedSurfaceName()
+    {
+        FbxModelAuthoringImportResult source = CreateMorphModel();
+        var target = new CompiledMorphTargetDeltas(0, 0, [Vector3.Zero, Vector3.Zero, Vector3.Zero]);
+        var geometry = CreateCompiledMorphGeometry(target);
+        ImmutableArray<Dl1PreparedMorphSurfaceExpectation> prepared = [new("different_geometry", 0, 3, [])];
+        var error = Assert.Throws<InvalidDataException>(() =>
+            Dl1OfficialModelCompiler.ValidateCompiledMorphOutput(source, geometry, prepared));
+        Assert.Contains("omitted prepared geometry", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    public void CompilerVerifierRejectsPreparedSurfaceDifferentLod()
+    {
+        FbxModelAuthoringImportResult source = CreateMorphModel();
+        var target = new CompiledMorphTargetDeltas(0, 0, [Vector3.Zero, Vector3.Zero, Vector3.Zero]);
+        CompiledMeshGeometryDocument geometry = CreateCompiledMorphGeometry(target);
+        geometry = geometry with { Surfaces = [geometry.Surfaces.Single() with { LodIndex = 1 }] };
+        ImmutableArray<Dl1PreparedMorphSurfaceExpectation> prepared =
+        [new("generic_morph_model_GenericMesh_p00", 0, 3, [])];
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => Dl1OfficialModelCompiler.ValidateCompiledMorphOutput(source, geometry, prepared));
+        Assert.Contains("omitted prepared geometry", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    public void CompilerVerifierRejectsAmbiguousCaseFoldedSurfaceIdentity()
+    {
+        FbxModelAuthoringImportResult source = CreateMorphModel();
+        var target = new CompiledMorphTargetDeltas(0, 0, [Vector3.Zero, Vector3.Zero, Vector3.Zero]);
+        CompiledMeshGeometryDocument geometry = CreateCompiledMorphGeometry(target);
+        CompiledMeshSurface surface = geometry.Surfaces.Single();
+        geometry = geometry with
+        {
+            Surfaces = [surface, surface with { Name = surface.Name.ToUpperInvariant(), EntityIndex = 3 }],
+        };
+        ImmutableArray<Dl1PreparedMorphSurfaceExpectation> prepared =
+        [new("generic_morph_model_GenericMesh_p00", 0, 3, [])];
+
+        InvalidDataException error = Assert.Throws<InvalidDataException>(
+            () => Dl1OfficialModelCompiler.ValidateCompiledMorphOutput(source, geometry, prepared));
+        Assert.Contains("ambiguous case-insensitive geometry identity", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelPackage")]
     public void AuthoredHelpersReparentByStableNameAcrossReimport()
     {

@@ -43,26 +43,7 @@ public sealed class TreeViewSelectionTests
         });
     }
 
-    private static void RunOnStaThread(Action action)
-    {
-        ExceptionDispatchInfo? capturedException = null;
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                action();
-            }
-            catch (Exception exception)
-            {
-                capturedException =
-                    ExceptionDispatchInfo.Capture(exception);
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join();
-        capturedException?.Throw();
-    }
+    private static void RunOnStaThread(Action action) => WpfTestDispatcher.Run(action);
 
     private sealed class SelectionProbe
     {

@@ -1,6 +1,7 @@
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 
 namespace ReAnimated.App.ViewModels;
@@ -10,6 +11,7 @@ public sealed partial class ModelsWorkspaceViewModel
     [ObservableProperty] private Dl1DeploymentInspection? _deploymentInspection;
     [ObservableProperty] private string _deploymentInspectionStatus="Check this model's installed files and authoring identity. Active Player resources and gameplay require separate evidence.";
     public IAsyncRelayCommand CheckInstalledDeploymentCommand { get; private set; }=null!;
+    internal Func<string, string, string, FbxModelAuthoringImportResult, CancellationToken, Task<Dl1DeploymentInspection?>>? DeploymentInspectionResolver { get; set; }
     public bool CanCheckInstalledDeployment=>HasModel&&!IsBusy&&!string.IsNullOrWhiteSpace(DeveloperToolsProjectRoot);
 
     private void InitializeDeploymentInspection() => CheckInstalledDeploymentCommand =
@@ -26,14 +28,20 @@ public sealed partial class ModelsWorkspaceViewModel
         DeploymentInspection=null;DeploymentInspectionStatus="Checking this model's deployment receipt and installed files…";
         try
         {
+            var inspectionOverride=DeploymentInspectionResolver;
             var result=await Task.Run(async ()=>
             {
+                if(inspectionOverride is not null) return await inspectionOverride(root,resource,character,model,token).ConfigureAwait(false);
                 var receipt=Dl1DeveloperToolsProjectDeployer.LoadLatestActiveReceipt(root,resource,character);
                 token.ThrowIfCancellationRequested();
                 return receipt is null?null:await Dl1DeveloperToolsProjectDeployer.InspectDeploymentAsync(receipt,root,model,cancellationToken:token).ConfigureAwait(false);
             },token);
             EnsureCurrent(generation,token);
-            if(revision!=Volatile.Read(ref _authoringRevision)||root!=DeveloperToolsProjectRoot||_model?.Package.Document.ModelId!=model.Package.Document.ModelId)
+            string currentResource=Dl1SourceModelWriter.SanitizeName(ResourceName,55);
+            string currentCharacter=string.IsNullOrWhiteSpace(CharacterId)?currentResource:CharacterId.Trim();
+            if(revision!=Volatile.Read(ref _authoringRevision)||root!=DeveloperToolsProjectRoot||
+                _model?.Package.Document.ModelId!=model.Package.Document.ModelId||!ReferenceEquals(_model,model)||
+                !string.Equals(resource,currentResource,StringComparison.Ordinal)||!string.Equals(character,currentCharacter,StringComparison.Ordinal))
             {DeploymentInspectionStatus="The model or project changed during inspection. Check the current selection again.";return;}
             DeploymentInspection=result;
             DeploymentInspectionStatus=result is null?"No valid active deployment receipt matches this model and character in the selected project.":

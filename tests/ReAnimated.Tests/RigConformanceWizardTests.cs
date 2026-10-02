@@ -68,6 +68,7 @@ public sealed class RigConformanceWizardTests
         Assert.True(wizard.CanAdvance);
         Assert.True(wizard.CanApply);
         Assert.NotNull(wizard.Fit);
+        Assert.Equal(0.0, wizard.Fit!.ConformanceStrength);
         Assert.True(wizard.MappedCount > 0);
         Assert.True(wizard.SynthesizedCount > 0);
         Assert.NotEmpty(wizard.Mappings);
@@ -148,12 +149,22 @@ public sealed class RigConformanceWizardTests
         wizard.Mappings.Single(row => row.Name == "pelvis")
             .SelectedSourceName = "CC_Base_Pelvis";
 
-        wizard.Mappings.Single(row => row.Name == "bip01")
-            .SelectedSourceName = "CC_Base_Pelvis";
+        RigConformanceMappingItemViewModel root = wizard.Mappings.Single(row => row.Name == "bip01");
+        Assert.DoesNotContain("CC_Base_Pelvis", root.Candidates);
+        root.SelectedSourceName = "CC_Base_Pelvis";
 
         Assert.Equal("RL_BoneRoot", wizard.Mappings.Single(row => row.Name == "bip01").SourceName);
         Assert.Equal("CC_Base_Pelvis", wizard.Mappings.Single(row => row.Name == "pelvis").SourceName);
-        Assert.Contains("already assigned", wizard.MappingEditStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("already assigned to body.pelvis", wizard.MappingEditStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(wizard.Mappings.Single(row => row.Name == "pelvis"), wizard.GuidedMappingReviewRows);
+        Assert.Contains(wizard.Mappings.Single(row => row.Name == "bip01"), wizard.GuidedEditableMappingRows);
+
+        RigConformanceMappingItemViewModel owner = wizard.GuidedMappingReviewRows.Single(row => row.Name == "pelvis");
+        Assert.Contains("CC_Base_Hip", owner.Candidates);
+        owner.SelectedSourceName = "CC_Base_Hip";
+
+        Assert.Contains("now free", wizard.MappingEditStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("CC_Base_Pelvis", wizard.Mappings.Single(row => row.Name == "bip01").Candidates);
     }
 
     [Fact]
@@ -545,6 +556,169 @@ public sealed class RigConformanceWizardTests
         Assert.Contains("l_hand", names);
         Assert.NotNull(conformed.Package.Document.RigConformance);
         conformed.Package.Document.Validate();
+    }
+
+    [Fact]
+    public async Task GuidedPreparationAutomaticallyMatchesAndReportsUsableNextSteps()
+    {
+        RigConformanceWizardViewModel wizard = new(
+            (profile, _) => Task.FromResult(CreateResolution(profile)),
+            static _ => { });
+        FbxModelAuthoringImportResult model = CreateModel();
+        RiggingSession session = RiggingSessions.Create(model.Package.Document, RigStudioEntryPath.AdaptExistingRig);
+        wizard.SetModel(model with
+        {
+            Package = model.Package with { Document = model.Package.Document with { RiggingSession = session } },
+        });
+
+        GuidedFitPreparationResult result = await wizard.PrepareGuidedFitAsync();
+
+        Assert.True(result.CanApply, result.Reason);
+        Assert.NotNull(wizard.Fit);
+        Assert.Equal(0.0, wizard.Fit!.ConformanceStrength);
+        Assert.True(wizard.CanPlaceGuidedBodyJoints);
+        Assert.True(wizard.CanPreviewGuidedFit);
+        Assert.True(wizard.CanApplyGuidedFit);
+        Assert.Equal(RigConformanceStage.Refine, wizard.Stage);
+        Assert.Contains("apply", result.RecommendedActions[0], StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NewAdaptSessionAutoClassifiesUnambiguousBodyAndAccessoryComponents()
+    {
+        var wizard = new RigConformanceWizardViewModel(
+            (profile, _) => Task.FromResult(CreateResolution(profile)),
+            static _ => { });
+        FbxModelAuthoringImportResult model = CreateModel();
+        CustomModelDocument document = model.Package.Document with
+        {
+            Meshes = model.Package.Document.Meshes.Add(model.Package.Document.Meshes[0] with
+            {
+                Name = "Weapon",
+                ModelObjectId = 901,
+                GeometryObjectId = 902,
+            }),
+        };
+        document.Validate();
+        wizard.SetModel(model with { Package = model.Package with { Document = document } });
+        StudioMetadataEventArgs? started = null;
+        wizard.StudioMetadataRequested += (_, args) => started = args;
+
+        wizard.StartAdaptStudioCommand.Execute(null);
+
+        Assert.NotNull(started);
+        RigGeometryComponent body = started.Session.Components.Single(component => component.DisplayName == "Body");
+        RigGeometryComponent weapon = started.Session.Components.Single(component => component.DisplayName == "Weapon");
+        Assert.Equal(RigGeometryComponentKind.Body, body.Kind);
+        Assert.True(body.UseForAnatomy);
+        Assert.Equal(RigComponentBindingMode.KeepSource, body.BindingMode);
+        Assert.Equal(RigGeometryComponentKind.Accessory, weapon.Kind);
+        Assert.False(weapon.UseForAnatomy);
+    }
+
+    [Fact]
+    public void AppliedOutputCanBeReopenedAndEditedWithoutReplayingOrReplacingSourceDecisions()
+    {
+        RigConformanceWizardViewModel wizard = CreateResolvedWizard();
+        wizard.Mappings.Single(row => row.Name == "pelvis").SelectedSourceName = "CC_Base_Pelvis";
+        CustomModelRigConformance sourceSettings = Assert.IsType<CustomModelRigConformance>(wizard.CreateSettings());
+        FbxModelAuthoringImportResult applied = Dl1RigConformanceApplier.Apply(
+            CreateModel(), wizard.Fit!, sourceSettings);
+
+        wizard.SetModel(applied);
+
+        Assert.True(wizard.IsEditingAppliedOutputRig);
+        Assert.NotNull(wizard.Fit);
+        Assert.True(wizard.CanApplyGuidedFit);
+        Assert.Null(wizard.CreateSettings());
+        Assert.Equal(sourceSettings.RoleOverrides, applied.Package.Document.RigConformance!.RoleOverrides);
+        Assert.Equal("pelvis", wizard.Mappings.Single(row => row.Name == "pelvis").SourceName);
+
+        FbxModelAuthoringImportResult unchanged = Dl1RigConformanceApplier.Apply(
+            applied, wizard.Fit!, wizard.CreateSettings());
+        Assert.Equal(sourceSettings.RoleOverrides, unchanged.Package.Document.RigConformance!.RoleOverrides);
+        FbxModelSurface originalSurface = Assert.Single(applied.Surfaces);
+        FbxModelSurface unchangedSurface = Assert.Single(unchanged.Surfaces);
+        for (int index = 0; index < originalSurface.Vertices.Length; index++)
+            Assert.Equal(originalSurface.Vertices[index].Position, unchangedSurface.Vertices[index].Position);
+
+        Vector3D position = wizard.TryGetBonePosition("l_forearm")!.Value;
+        wizard.MirrorEdits = false;
+        wizard.SetBonePosition("l_forearm", position with { Y = position.Y + 0.04 });
+        Assert.True(wizard.HasOverride("l_forearm"));
+        Assert.True(wizard.CanPreviewGuidedFit);
+
+        FbxModelAuthoringImportResult adjusted = Dl1RigConformanceApplier.Apply(
+            applied, wizard.Fit!, wizard.CreateSettings());
+        Assert.Equal(sourceSettings.RoleOverrides, adjusted.Package.Document.RigConformance!.RoleOverrides);
+        Assert.True(adjusted.Package.Document.RigConformance.MatchesAppliedOutputRig(
+            adjusted.Rig!, adjusted.Package.Document.Source.ContentSha256));
+        FbxModelSurface beforeSurface = Assert.Single(unchanged.Surfaces);
+        FbxModelSurface afterSurface = Assert.Single(adjusted.Surfaces);
+        Assert.Equal(beforeSurface.Vertices.Length, afterSurface.Vertices.Length);
+        for (int index = 0; index < beforeSurface.Vertices.Length; index++)
+        {
+            Assert.Equal(beforeSurface.Vertices[index].BoneIndices.ToArray(), afterSurface.Vertices[index].BoneIndices.ToArray());
+            Assert.Equal(beforeSurface.Vertices[index].BoneWeights.ToArray(), afterSurface.Vertices[index].BoneWeights.ToArray());
+        }
+    }
+
+    [Fact]
+    public void FittedFingerJointCanBeSelectedAndPlacedThroughTheViewportGizmo()
+    {
+        FbxModelAuthoringImportResult model = CreateModel();
+        RigDefinition originalRig = model.Rig!;
+        int handIndex = originalRig.GetBoneIndex("CC_Base_L_Hand");
+        var fingerBone = new BoneDefinition(
+            originalRig.BoneCount,
+            "CC_Base_L_Index1",
+            handIndex,
+            new TransformTRS(new Vector3D(0.04, 0, 0), QuaternionD.Identity, Vector3D.One),
+            BoneKind.Deform);
+        var rig = new RigDefinition(
+            "source:finger-test",
+            "Synthetic finger rig",
+            originalRig.Bones.Add(fingerBone));
+        var customFinger = new CustomModelBone
+        {
+            Index = fingerBone.Index,
+            FbxObjectId = 9001,
+            Name = fingerBone.Name,
+            ParentIndex = fingerBone.ParentIndex,
+            LocalBindTransform = fingerBone.LocalBindPose,
+            ExactLocalBindMatrix = fingerBone.LocalBindPose.ToMatrix(),
+            Kind = BoneKind.Deform,
+            IsWeighted = false,
+        };
+        CustomModelDocument document = model.Package.Document with
+        {
+            Bones = model.Package.Document.Bones.Add(customFinger),
+        };
+        document = document with { RigSignature = CustomModelContractSignatures.ComputeRig(document.Bones) };
+        document.Validate();
+        model = model with { Rig = rig, Package = model.Package with { Document = document } };
+
+        RigConformanceWizardViewModel wizard = new(
+            (profile, _) => Task.FromResult(CreateResolution(profile)),
+            static _ => { });
+        wizard.SetModel(model);
+        wizard.ResolveTemplateCommand.Execute(null);
+        RigConformanceLandmarkViewModel finger = Assert.Single(wizard.FittedFingerJoints);
+        Assert.Equal("CC_Base_L_Index1", finger.BoneName);
+
+        wizard.SelectedFittedFingerJoint = finger;
+
+        Assert.Equal(IndexOf(wizard, finger.BoneName), wizard.SelectedBoneIndex);
+        Vector3D start = wizard.TryGetBonePosition(finger.BoneName)!.Value;
+        int index = wizard.SelectedBoneIndex;
+        IRenderTranslationGizmoTarget target = wizard.GizmoTarget;
+        var binding = new TranslationGizmoBinding(index, TranslationGizmoAxis.Y, RenderGizmoSpace.Global);
+        Assert.True(target.TryBeginTranslationGizmoDrag(new RenderTranslationGizmoDragStart(binding, new Vector3(0, 1, 0))));
+        Assert.True(target.UpdateTranslationGizmoDrag(new RenderTranslationGizmoDragUpdate(binding, new Vector3(0, 0.02f, 0), 0.02f)));
+        target.CompleteTranslationGizmoDrag(commit: true);
+
+        Assert.Equal(start.Y + 0.02, wizard.TryGetBonePosition(finger.BoneName)!.Value.Y, 5);
+        Assert.True(wizard.HasOverride(finger.BoneName));
     }
 
 

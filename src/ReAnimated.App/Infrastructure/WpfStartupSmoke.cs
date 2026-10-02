@@ -137,6 +137,9 @@ internal sealed class WpfStartupSmoke
         // smoke takes ownership of both animation viewports. The Models surface
         // is physically detached while Browse is active, so this catches the
         // exact regression where it returned without its command DataContext.
+        // Enter the same combined workflow a first-time user chooses before
+        // measuring the real animation viewports. Smoke storage is isolated.
+        viewModel.ChooseStartWorkflowCommand.Execute(StartWorkflowMode.ModelsAndAnimations);
         viewModel.ActiveWorkspaceMode = "Models";
 
         window.WindowStartupLocation =

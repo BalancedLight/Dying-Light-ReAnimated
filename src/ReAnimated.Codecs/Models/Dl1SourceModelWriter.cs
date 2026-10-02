@@ -1,10 +1,12 @@
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Numerics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
@@ -28,6 +30,10 @@ public sealed record Dl1SourceModelBuildRequest
     public string? AnimationScriptAlias { get; init; }
 }
 
+public sealed record Dl1PreparedMorphTargetExpectation(string Name, ImmutableArray<Vector3D> PositionDeltas);
+public sealed record Dl1PreparedMorphSurfaceExpectation(string NodeName, int LodIndex, int VertexCount,
+    ImmutableArray<Dl1PreparedMorphTargetExpectation> MorphTargets);
+
 public sealed record Dl1SourceModelBuildResult(
     string ResourceName,
     string SourceMshPath,
@@ -49,6 +55,12 @@ public sealed record Dl1SourceModelBuildResult(
     public ImmutableArray<Dl1ResolvedBoneScriptPolicy> BoneScriptPolicies { get; init; }
     [JsonIgnore]
     public Dl1AuthoredRigContract? AuthoredRigContract { get; init; }
+    [JsonIgnore]
+    public ImmutableArray<Dl1PreparedSkinningSurfaceExpectation> PreparedSkinningExpectations { get; init; } = [];
+    [JsonIgnore]
+    public ImmutableArray<Dl1PreparedPhysicalNodeExpectation> PreparedPhysicalNodeExpectations { get; init; } = [];
+    [JsonIgnore]
+    public ImmutableArray<Dl1PreparedMorphSurfaceExpectation> PreparedMorphExpectations { get; init; } = [];
 }
 
 /// <summary>
@@ -98,6 +110,8 @@ public static class Dl1SourceModelWriter
         Dl1NativeCompanionBuild companions = Dl1NativeCompanionWriter.Build(
             request.Model.Package.Document, resourceName, prepared.BoneNames);
         byte[] msh = BuildMsh(prepared);
+        ImmutableArray<Dl1PreparedPhysicalNodeExpectation> preparedPhysicalNodeExpectations =
+            BuildPreparedPhysicalNodeExpectations(prepared);
         byte[] chr = Dl1ChrV4Codec.Build(
             Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(
                 BuildChrObjects(prepared),
@@ -197,13 +211,13 @@ public static class Dl1SourceModelWriter
             {
                 bones = prepared.BoneNames.Length,
                 helpers = prepared.HelperCount,
-                drawSurfaces = prepared.GeometryNodes.Length,
+                drawSurfaces = prepared.GeometryNodes.Sum(static node => node.Lods.Length),
+                sourceLodGroups = request.Model.SourceLodGroups.Length,
                 physicalNodes = prepared.Nodes.Length,
                 characterObjects = prepared.Nodes.Length,
                 materials = prepared.MaterialNames.Length,
                 morphChannels = request.Model.Package.Document.MorphChannels.Length,
-                morphSurfaceBindings = request.Model.Surfaces.Count(
-                    static surface => !surface.MorphTargets.IsEmpty),
+                morphSurfaceBindings = prepared.GeometryNodes.Sum(static node => node.Lods.Count(static lod => !lod.MorphTargets.IsEmpty)),
                 materialSourceFiles = prepared.MaterialFiles.Count,
                 nativeCompanionFiles = companions.Files.Count,
             },
@@ -281,8 +295,116 @@ public static class Dl1SourceModelWriter
             NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
             BoneScriptPolicies = componentPolicies,
             AuthoredRigContract = prepared.RigContract,
+            PreparedSkinningExpectations = BuildCompiledSkinningExpectations(prepared),
+            PreparedPhysicalNodeExpectations = preparedPhysicalNodeExpectations,
+            PreparedMorphExpectations = prepared.GeometryNodes.SelectMany(node => node.Lods.Select((lod, index) =>
+                new Dl1PreparedMorphSurfaceExpectation(node.Name, index, lod.Positions.Length,
+                    lod.MorphTargets.Select(target => new Dl1PreparedMorphTargetExpectation(target.Name, target.PositionDeltas)).ToImmutableArray()))).ToImmutableArray(),
             NativeCompanionNotes = companions.Notes,
         };
+    }
+
+    private static ImmutableArray<Dl1PreparedPhysicalNodeExpectation> BuildPreparedPhysicalNodeExpectations(
+        PreparedSourceModel model)
+    {
+        var expectations = ImmutableArray.CreateBuilder<Dl1PreparedPhysicalNodeExpectation>(
+            model.Nodes.Length);
+        for (int physicalIndex = 0; physicalIndex < model.Nodes.Length; physicalIndex++)
+        {
+            SourceNode node = model.Nodes[physicalIndex];
+            expectations.Add(new(
+                physicalIndex,
+                node.Name,
+                checked((short)node.ParentIndex),
+                node.Type,
+                Dl1PreparedPhysicalNodeReadBackValidator.MapSourceMshType(node.Type),
+                ToCompactMatrix(node.LocalMatrix),
+                ToCompactMatrix(node.ReferenceMatrix),
+                new CompactBounds(
+                    (float)node.Bounds.Center.X,
+                    (float)node.Bounds.Center.Y,
+                    (float)node.Bounds.Center.Z,
+                    (float)node.Bounds.HalfExtents.X,
+                    (float)node.Bounds.HalfExtents.Y,
+                    (float)node.Bounds.HalfExtents.Z)));
+        }
+
+        return expectations.MoveToImmutable();
+    }
+
+    private static CompactMatrix3x4 ToCompactMatrix(TransformMatrix matrix) => new(
+        (float)matrix.M11, (float)matrix.M12, (float)matrix.M13, (float)matrix.M14,
+        (float)matrix.M21, (float)matrix.M22, (float)matrix.M23, (float)matrix.M24,
+        (float)matrix.M31, (float)matrix.M32, (float)matrix.M33, (float)matrix.M34);
+
+    private static ImmutableArray<Dl1PreparedSkinningSurfaceExpectation> BuildCompiledSkinningExpectations(
+        PreparedSourceModel model)
+    {
+        var expectations = ImmutableArray.CreateBuilder<Dl1PreparedSkinningSurfaceExpectation>(
+            model.GeometryNodes.Length);
+        foreach (SourceNode node in model.GeometryNodes)
+        {
+            for (int lodIndex = 0; lodIndex < node.Lods.Length; lodIndex++)
+            {
+                SourceLod lod = node.Lods[lodIndex];
+                bool isSkinned = node.Type == NodeSkinnedMesh;
+                if (isSkinned && lod.Skin.Length != lod.Positions.Length ||
+                    !isSkinned && !lod.Skin.IsEmpty)
+                {
+                    throw new InvalidDataException(
+                        $"Prepared geometry node '{node.Name}' has inconsistent skin rows for compiled read-back.");
+                }
+
+                var vertices = ImmutableArray.CreateBuilder<Dl1PreparedSkinVertexExpectation>(
+                    lod.Positions.Length);
+                for (int vertexIndex = 0; vertexIndex < lod.Positions.Length; vertexIndex++)
+                {
+                    var influences = ImmutableArray.CreateBuilder<Dl1PreparedSkinInfluenceExpectation>();
+                    if (isSkinned)
+                    {
+                        SkinVertex skin = lod.Skin[vertexIndex];
+                        short[] quantized = QuantizeWeights(skin.Weights.AsSpan());
+                        var byEntity = new Dictionary<int, double>();
+                        for (int influenceIndex = 0; influenceIndex < quantized.Length; influenceIndex++)
+                        {
+                            if (quantized[influenceIndex] <= 0)
+                                continue;
+                            SourceSubset subset = lod.Subsets.Single(part => vertexIndex >= part.FirstVertex && vertexIndex < part.FirstVertex + part.VertexCount);
+                            int localPaletteIndex = skin.BoneIndices[influenceIndex];
+                            if ((uint)localPaletteIndex >= (uint)subset.Palette.Length)
+                                throw new InvalidDataException(
+                                    $"Prepared geometry node '{node.Name}' vertex {vertexIndex} has a source influence outside its physical palette.");
+                            int entityIndex = subset.Palette[localPaletteIndex];
+                            byEntity[entityIndex] = byEntity.GetValueOrDefault(entityIndex) +
+                                (quantized[influenceIndex] / 32767.0);
+                        }
+
+                        foreach ((int entityIndex, double weight) in byEntity.OrderBy(static pair => pair.Key))
+                            influences.Add(new(entityIndex, weight));
+                    }
+
+                    Vector3D position = lod.Positions[vertexIndex];
+                    vertices.Add(new(
+                        new Vector3((float)position.X, (float)position.Y, (float)position.Z),
+                        influences.ToImmutable())
+                    {
+                        Normal = new Vector3((float)lod.Normals[vertexIndex].X, (float)lod.Normals[vertexIndex].Y, (float)lod.Normals[vertexIndex].Z),
+                        TextureCoordinate0 = new Vector2((float)lod.Uvs[vertexIndex].U, (float)lod.Uvs[vertexIndex].V),
+                    });
+                }
+
+                expectations.Add(new(
+                    node.Name,
+                    LodIndex: lodIndex,
+                    isSkinned,
+                    lod.Positions.Length,
+                    lod.Indices.Select(checkedIndex => checked((int)checkedIndex)).Distinct().Order().ToImmutableArray(),
+                    lod.Subsets.Select(subset => new Dl1PreparedSkinSubsetExpectation(subset.Palette, subset.IndexCount)
+                    { DeclaredMaterialSlotIndex = checked((ushort)subset.MaterialIndex), DeclaredMaterialReference = model.MaterialNames[subset.MaterialIndex], FirstIndex = subset.FirstIndex }).ToImmutableArray(),
+                    vertices.ToImmutable()) { IndexBuffer = lod.Indices });
+            }
+        }
+        return expectations.ToImmutable();
     }
 
     private static ImmutableArray<Dl1ChrV4ObjectTransform> BuildChrObjects(
@@ -374,7 +496,7 @@ public static class Dl1SourceModelWriter
                 node.InverseGlobalReferenceMatrix,
                 new Bounds(node.Bounds.Center, node.Bounds.HalfExtents),
                 NodeAnimated,
-                null));
+                []));
             boneNames.Add(node.Name);
         }
 
@@ -391,53 +513,49 @@ public static class Dl1SourceModelWriter
             resourceName,
             cancellationToken);
 
-        var geometryNodes = ImmutableArray.CreateBuilder<SourceNode>(model.Surfaces.Length);
+        ImmutableArray<FbxModelLodNodeLayout> layout = FbxModelLodLayout.Create(model);
+        var geometryNodes = ImmutableArray.CreateBuilder<SourceNode>(layout.Length);
         var usedNames = nodes.Select(static node => node.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        for (int surfaceIndex = 0; surfaceIndex < model.Surfaces.Length; surfaceIndex++)
+        for (int nodeIndex = 0; nodeIndex < layout.Length; nodeIndex++)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            FbxModelSurface surface = model.Surfaces[surfaceIndex];
-            if (surface.Vertices.IsEmpty || surface.Indices.IsEmpty || surface.Indices.Length % 3 != 0)
+            FbxModelLodNodeLayout sourceNode = layout[nodeIndex];
+            var lods = ImmutableArray.CreateBuilder<SourceLod>(sourceNode.Levels.Length);
+            foreach (FbxModelLodLevelLayout level in sourceNode.Levels)
             {
-                throw new InvalidDataException($"Surface '{surface.Id}' has no complete triangle geometry.");
-            }
+                var draws = ImmutableArray.CreateBuilder<SourceLod>();
+                foreach (int surfaceIndex in level.SurfaceIndexes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    FbxModelSurface surface = model.Surfaces[surfaceIndex];
+                    if (surface.Vertices.IsEmpty || surface.Indices.IsEmpty || surface.Indices.Length % 3 != 0)
+                    {
+                        throw new InvalidDataException($"Surface '{surface.Id}' has no complete triangle geometry.");
+                    }
 
-            if (surface.Vertices.Length > MaximumVertices || surface.Indices.Any(index => index >= surface.Vertices.Length))
-            {
-                throw new InvalidDataException($"Surface '{surface.Id}' exceeds the source-MSH uint16 vertex contract.");
-            }
+                    if (surface.Vertices.Length > MaximumVertices || surface.Indices.Any(index => index >= surface.Vertices.Length))
+                    {
+                        throw new InvalidDataException($"Surface '{surface.Id}' exceeds the source-MSH uint16 vertex contract.");
+                    }
 
-            if (surface.PaletteBoneIndices.Length > MaximumPaletteEntries)
-            {
-                throw new InvalidDataException($"Surface '{surface.Id}' exceeds the 256-entry skin-palette contract.");
-            }
+                    if (surface.PaletteBoneIndices.Length > MaximumPaletteEntries)
+                    {
+                        throw new InvalidDataException($"Surface '{surface.Id}' exceeds the 256-entry skin-palette contract.");
+                    }
 
-            int materialIndex = materialIndexById.TryGetValue(surface.MaterialId, out int resolvedMaterial)
-                ? resolvedMaterial
-                : 0;
-            ImmutableArray<int> physicalPalette = authoredRig is null
-                ? surface.PaletteBoneIndices.IsEmpty
-                    ? []
-                    : throw new InvalidDataException(
-                        $"Surface '{surface.Id}' has a skin palette but the custom model has no authored rig.")
-                : authoredRig.Surfaces[surfaceIndex].PhysicalPalette;
-            string nodeName = UniqueName(
-                SanitizeName($"{resourceName}_{surface.MeshName}_p{surfaceIndex:00}", 63),
-                usedNames);
-            SourceLod lod = BuildLod(
-                surface,
-                materialIndex,
-                physicalPalette,
-                document.BuildSettings.FlipTextureCoordinateV);
-            geometryNodes.Add(new SourceNode(
-                nodeName,
-                surface.IsSkinned ? NodeSkinnedMesh : NodeMesh,
-                -1,
-                TransformMatrix.Identity,
-                TransformMatrix.Identity,
-                ComputeBounds(surface.Vertices.Select(static vertex => vertex.Position)),
-                surface.IsSkinned ? NodeAnimated : 0,
-                lod));
+                    int materialIndex = materialIndexById.TryGetValue(surface.MaterialId, out int resolvedMaterial) ? resolvedMaterial : 0;
+                    ImmutableArray<int> physicalPalette = authoredRig is null
+                        ? surface.PaletteBoneIndices.IsEmpty ? [] : throw new InvalidDataException($"Surface '{surface.Id}' has a skin palette without an authored rig.")
+                        : authoredRig.Surfaces[surfaceIndex].PhysicalPalette;
+                    draws.Add(BuildLod(surface, materialIndex, physicalPalette, document.BuildSettings.FlipTextureCoordinateV));
+                }
+                lods.Add(CombineLodDraws(draws.ToImmutable(), sourceNode.Name, level.LodIndex));
+            }
+            bool skinned = model.Surfaces[sourceNode.Levels[0].SurfaceIndexes[0]].IsSkinned;
+            string nodeName = UniqueName(SanitizeName($"{resourceName}_{sourceNode.Name}_p{nodeIndex:00}", 63), usedNames);
+            geometryNodes.Add(new SourceNode(nodeName, skinned ? NodeSkinnedMesh : NodeMesh,
+                -1, TransformMatrix.Identity, TransformMatrix.Identity,
+                ComputeBounds(lods.SelectMany(static lod => lod.Positions)),
+                skinned ? NodeAnimated : 0, lods.ToImmutable()));
         }
 
         foreach (SourceNode geometryNode in geometryNodes)
@@ -456,7 +574,7 @@ public static class Dl1SourceModelWriter
             TransformMatrix.Identity,
             modelBounds,
             0,
-            null));
+            []));
 
         if (nodes.Count == 0 || nodes.Count > MaximumPhysicalNodes)
         {
@@ -532,8 +650,7 @@ public static class Dl1SourceModelWriter
             bitangents,
             uvs,
             surface.Indices,
-            materialIndex,
-            physicalPalette,
+            [new SourceSubset(materialIndex, 0, surface.Indices.Length, physicalPalette, 0, positions.Length)],
             skin,
             surface.MorphTargets.Select(target =>
             {
@@ -558,6 +675,37 @@ public static class Dl1SourceModelWriter
                     target.Name,
                     target.PositionDeltas);
             }).ToImmutableArray());
+    }
+
+    private static SourceLod CombineLodDraws(ImmutableArray<SourceLod> draws, string nodeName, int lodIndex)
+    {
+        if (draws.Length == 1) return draws[0];
+        int vertexCount = checked(draws.Sum(static draw => draw.Positions.Length));
+        if (vertexCount > MaximumVertices)
+            throw new InvalidDataException($"LOD group '{nodeName}' level {lodIndex} has {vertexCount} expanded vertices; native uint16 indices support at most {MaximumVertices}. No level was discarded.");
+        var subsets = ImmutableArray.CreateBuilder<SourceSubset>();
+        var indices = ImmutableArray.CreateBuilder<uint>();
+        int vertexOffset = 0;
+        int indexOffset = 0;
+        foreach (SourceLod draw in draws)
+        {
+            subsets.AddRange(draw.Subsets.Select(subset => subset with {
+                FirstIndex = checked(subset.FirstIndex + indexOffset), FirstVertex = checked(subset.FirstVertex + vertexOffset) }));
+            indices.AddRange(draw.Indices.Select(index => checked(index + (uint)vertexOffset)));
+            vertexOffset = checked(vertexOffset + draw.Positions.Length);
+            indexOffset = checked(indexOffset + draw.Indices.Length);
+        }
+        string[] targetNames = draws.SelectMany(static draw => draw.MorphTargets).Select(static target => target.Name)
+            .Distinct(StringComparer.Ordinal).ToArray();
+        var targets = targetNames.Select(name => new SourceMorphTarget(name,
+            draws.SelectMany(draw => draw.MorphTargets.SingleOrDefault(target => target.Name == name)?.PositionDeltas
+                ?? Enumerable.Repeat(Vector3D.Zero, draw.Positions.Length).ToImmutableArray()).ToImmutableArray())).ToImmutableArray();
+        return new SourceLod(draws.SelectMany(static draw => draw.Positions).ToImmutableArray(),
+            draws.SelectMany(static draw => draw.Normals).ToImmutableArray(),
+            draws.SelectMany(static draw => draw.Tangents).ToImmutableArray(),
+            draws.SelectMany(static draw => draw.Bitangents).ToImmutableArray(),
+            draws.SelectMany(static draw => draw.Uvs).ToImmutableArray(), indices.ToImmutable(), subsets.ToImmutable(),
+            draws.SelectMany(static draw => draw.Skin).ToImmutableArray(), targets);
     }
 
     private static byte[] BuildMsh(PreparedSourceModel model)
@@ -587,7 +735,7 @@ public static class Dl1SourceModelWriter
         FixedName(node.Name).CopyTo(payload.AsSpan(4, 64));
         BinaryPrimitives.WriteInt16LittleEndian(payload.AsSpan(68, 2), checked((short)node.ParentIndex));
         BinaryPrimitives.WriteUInt16LittleEndian(payload.AsSpan(70, 2), checked((ushort)descendantCount));
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(72, 4), node.Lod is null ? 0u : 1u);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(72, 4), checked((uint)node.Lods.Length));
         WriteMatrix3X4(payload.AsSpan(76, 48), node.LocalMatrix);
         WriteMatrix3X4(payload.AsSpan(124, 48), node.ReferenceMatrix);
         WriteSingle(payload.AsSpan(172, 4), node.Bounds.Center.X);
@@ -597,7 +745,7 @@ public static class Dl1SourceModelWriter
         WriteSingle(payload.AsSpan(188, 4), node.Bounds.HalfExtents.Y);
         WriteSingle(payload.AsSpan(192, 4), node.Bounds.HalfExtents.Z);
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(196, 4), node.Flags);
-        return PackChunk(0x0003, payload, node.Lod is null ? [] : [BuildLodChunk(node.Lod)]);
+        return PackChunk(0x0003, payload, node.Lods.Select(BuildLodChunk).ToArray());
     }
 
     private static byte[] BuildLodChunk(SourceLod lod)
@@ -641,21 +789,25 @@ public static class Dl1SourceModelWriter
         }
 
         children.Add(PackChunk(0x140, indices));
-        byte[] subset = new byte[12 + (lod.Palette.Length * 2)];
-        BinaryPrimitives.WriteUInt16LittleEndian(subset.AsSpan(0, 2), checked((ushort)lod.MaterialIndex));
-        BinaryPrimitives.WriteUInt32LittleEndian(subset.AsSpan(2, 4), 0);
-        BinaryPrimitives.WriteUInt32LittleEndian(subset.AsSpan(6, 4), checked((uint)lod.Indices.Length));
-        BinaryPrimitives.WriteUInt16LittleEndian(subset.AsSpan(10, 2), checked((ushort)lod.Palette.Length));
-        for (int index = 0; index < lod.Palette.Length; index++)
+        var subsetRecords = new List<byte[]>();
+        foreach (SourceSubset part in lod.Subsets)
         {
-            BinaryPrimitives.WriteUInt16LittleEndian(subset.AsSpan(12 + (index * 2), 2), checked((ushort)lod.Palette[index]));
+            byte[] subset = new byte[12 + (part.Palette.Length * 2)];
+            BinaryPrimitives.WriteUInt16LittleEndian(subset.AsSpan(0, 2), checked((ushort)part.MaterialIndex));
+            BinaryPrimitives.WriteUInt32LittleEndian(subset.AsSpan(2, 4), checked((uint)part.FirstIndex));
+            BinaryPrimitives.WriteUInt32LittleEndian(subset.AsSpan(6, 4), checked((uint)part.IndexCount));
+            BinaryPrimitives.WriteUInt16LittleEndian(subset.AsSpan(10, 2), checked((ushort)part.Palette.Length));
+            for (int index = 0; index < part.Palette.Length; index++)
+                BinaryPrimitives.WriteUInt16LittleEndian(subset.AsSpan(12 + (index * 2), 2), checked((ushort)part.Palette[index]));
+            subsetRecords.Add(subset);
         }
-
-        children.Add(PackChunk(0x151, subset));
+        // One packed table holds the variable-length material/palette records
+        // for all subsets. Repeating the chunk loses the declared table count.
+        children.Add(PackChunk(0x151, subsetRecords.SelectMany(static record => record).ToArray()));
         byte[] payload = new byte[16];
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(0, 4), checked((uint)lod.Positions.Length));
         BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(4, 4), checked((uint)lod.Indices.Length));
-        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8, 4), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(payload.AsSpan(8, 4), checked((uint)lod.Subsets.Length));
         BinaryPrimitives.WriteUInt32LittleEndian(
             payload.AsSpan(12, 4),
             checked((uint)lod.MorphTargets.Length));
@@ -1151,6 +1303,9 @@ public static class Dl1SourceModelWriter
         string Name,
         ImmutableArray<Vector3D> PositionDeltas);
 
+    private sealed record SourceSubset(int MaterialIndex, int FirstIndex, int IndexCount,
+        ImmutableArray<int> Palette, int FirstVertex, int VertexCount);
+
     private sealed record SourceLod(
         ImmutableArray<Vector3D> Positions,
         ImmutableArray<Vector3D> Normals,
@@ -1158,8 +1313,7 @@ public static class Dl1SourceModelWriter
         ImmutableArray<Vector3D> Bitangents,
         ImmutableArray<(double U, double V)> Uvs,
         ImmutableArray<uint> Indices,
-        int MaterialIndex,
-        ImmutableArray<int> Palette,
+        ImmutableArray<SourceSubset> Subsets,
         ImmutableArray<SkinVertex> Skin,
         ImmutableArray<SourceMorphTarget> MorphTargets);
 
@@ -1171,7 +1325,7 @@ public static class Dl1SourceModelWriter
         TransformMatrix ReferenceMatrix,
         Bounds Bounds,
         uint Flags,
-        SourceLod? Lod);
+        ImmutableArray<SourceLod> Lods);
 
     private sealed record PreparedSourceModel(
         ImmutableArray<string> MaterialNames,

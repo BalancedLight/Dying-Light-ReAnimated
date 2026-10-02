@@ -8,6 +8,21 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+
+function Get-RendererGoldenFileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString(
+            $sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
+}
 $repositoryRoot = [IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot ".."))
 $artifactsRoot = [IO.Path]::GetFullPath(
@@ -254,9 +269,7 @@ try {
                 "$expectedBitmapBytes.")
         }
 
-        $actualHash = (
-            Get-FileHash -LiteralPath $capturePath -Algorithm SHA256
-        ).Hash.ToLowerInvariant()
+        $actualHash = Get-RendererGoldenFileSha256 -Path $capturePath
         if ($actualHash -ne $stage.bmpSha256) {
             throw (
                 "Stage '$($stage.name)' bitmap hash differs from its " +

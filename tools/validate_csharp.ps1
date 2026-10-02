@@ -55,8 +55,16 @@ function Get-StringSha256 {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).
-        Hash.ToLowerInvariant()
+    $sha = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString(
+            $sha.ComputeHash($stream))).Replace("-", "").ToLowerInvariant()
+    }
+    finally {
+        $stream.Dispose()
+        $sha.Dispose()
+    }
 }
 
 function Write-AtomicJson {
@@ -138,6 +146,7 @@ function Get-GateInputs {
             "Directory.Build.props",
             "Directory.Packages.props",
             "global.json",
+            "THIRD_PARTY_NOTICES.md",
             "tools\validate_csharp.ps1")) {
         & $addFile (Join-Path $repositoryRoot $relative)
     }
@@ -357,7 +366,8 @@ $codecRoots = @(
     "src\ReAnimated.Codecs",
     "src\ReAnimated.DL1.Assets",
     "src\ReAnimated.Retargeting",
-    "src\ReAnimated.Evaluation")
+    "src\ReAnimated.Evaluation",
+    "tools\native")
 $viewModelRoots = @(
     $codecRoots +
     @("src\ReAnimated.App"))
@@ -370,7 +380,8 @@ $testRoot = @("tests\ReAnimated.Tests")
 $testProjectInputs = @(
     "tests\ReAnimated.Tests\ReAnimated.Tests.csproj",
     "tests\ReAnimated.Tests\RendererGlobalUsings.cs",
-    "tests\ReAnimated.Tests\PlaybackTestData.cs")
+    "tests\ReAnimated.Tests\PlaybackTestData.cs",
+    "tests\ReAnimated.Tests\WpfTestDispatcher.cs")
 
 function Select-TestInputFiles {
     param([Parameter(Mandatory = $true)][string]$NamePattern)
@@ -397,19 +408,27 @@ $focusedCodecTests = @(Select-TestInputFiles (
     "Anm2Codec|EvaluationPipeline|CustomModelAuthoring)Tests$"))
 $focusedViewModelTests = @(Select-TestInputFiles (
     "^(AnimationExplorerViewModel|ViewModelTimeline|" +
-    "CoreAnimationProject|TransactionalPlayback)Tests$"))
+    "CoreAnimationProject|TransactionalPlayback|GuidedModelSetup|GuidedModelFeature|StartWorkflow)Tests$"))
+$guidedWorkflowInputs = @(
+    "tests\ReAnimated.Tests\RigConformanceWizardTests.cs",
+    "tests\ReAnimated.Tests\GeneratedBodyWorkflowTests.cs",
+    "tests\ReAnimated.Tests\AnatomicalDetectionWorkflowTests.cs",
+    "tests\ReAnimated.Tests\AnatomicalVolumeFixtures.cs")
+$focusedViewModelTests += $guidedWorkflowInputs
+
 $focusedRendererTests = @(Select-TestInputFiles (
     "^(RendererSceneSource|LinkedTargetExternalPreview|" +
     "RendererCpuReference|RendererGpuSkinning)Tests$"))
 $hermeticCodecTests = @(Select-TestInputFiles (
     "(Anm2|AnimationScr|AnimationDocument|AuthoringPolicy|CoreAnimation|Evaluation|" +
-    "Retarget|RootMotion|Mimic|Morph|IkConstraint|Fbx|CustomModel)"))
+    "Retarget|RootMotion|Mimic|Morph|IkConstraint|Fbx|CustomModel|Secondary|OpenDynamics|TerminalHelperChannelPolicyAuthoring|RigConformance|ConformanceHelper|Dl1ConformanceSessionTransferIdentity|Dl1CompiledSkinningReadBack|Dl1CompiledChrIdentity|Dl1PreparedPhysicalNodeReadBackValidator|Dl1MaterialCompilerSerializationGate|Dl1RigidIndexedSkinning|Dl1OfficialCompilerSkinningReadBackAcceptance|CompilerRetentionAuthoring|CompilerRetentionBatchAuthoring|CanonicalFingerCorrespondence)"))
 $hermeticViewModelTests = @(Select-TestInputFiles (
-    "^(AnimationExplorerViewModel|ViewModel.*|EditorUsability.*|" +
-    "FppControlSurface.*|FacialPreviewPolicyViewModel.*|" +
+    "^(AnimationExplorerViewModel|MainWindowViewModelPlaybackFraming|RigChannelPolicyView|RigChannelPolicyWorkflow|ViewModel.*|EditorUsability.*|" +
+    "FppControlSurface.*|FppModelBasis|FacialPreviewPolicyViewModel.*|" +
     "AttachmentAuthoring.*|AppPersistence.*|ComboBoxTemplate.*|" +
-    "TreeViewSelection.*|RigConformanceWizard|RigGeometryCorrespondenceWizard|" +
-    "StudioWorkflowNavigation|PlaybackReadiness|EditorDockLayout)Tests$"))
+    "TreeViewSelection.*|RigConformanceWizard|RigGeometryCorrespondence|RigGeometryCorrespondenceWizard|" +
+    "StudioWorkflowNavigation|PlaybackReadiness|EditorDockLayout|GuidedModelSetup|GuidedModelFeature|StartWorkflow|ModelsWorkspaceConformancePreviewOwnership|ModelsWorkspaceConformanceViewport|GuidedExtraBonePreservation|GuidedPreviewReviewDraft|GuidedPreviewReviewView|GuidedPreviewReviewPersistence|RigConformanceView)Tests$"))
+$hermeticViewModelTests += $guidedWorkflowInputs
 $hermeticRendererTests = @(Select-TestInputFiles (
     "^(Renderer(?!AuthoringStageGolden)|" +
     "LinkedTargetExternalPreview)"))
@@ -483,7 +502,11 @@ $hermeticCodecFilter =
     "FullyQualifiedName~Evaluation|FullyQualifiedName~Retarget|" +
     "FullyQualifiedName~RootMotion|FullyQualifiedName~Mimic|" +
     "FullyQualifiedName~Morph|FullyQualifiedName~IkConstraint|" +
-    "FullyQualifiedName~Fbx|FullyQualifiedName~CustomModel)&" +
+    "FullyQualifiedName~Fbx|FullyQualifiedName~CustomModel|" +
+    "FullyQualifiedName~Secondary|FullyQualifiedName~OpenDynamics|FullyQualifiedName~TerminalHelperChannelPolicyAuthoring|" +
+    "FullyQualifiedName~RigConformance|FullyQualifiedName~ConformanceHelper|FullyQualifiedName~Dl1ConformanceSessionTransferIdentity|FullyQualifiedName~Dl1CompiledSkinningReadBack|FullyQualifiedName~Dl1CompiledChrIdentity|FullyQualifiedName~Dl1MaterialCompilerSerializationGate|FullyQualifiedName~Dl1RigidIndexedSkinning|FullyQualifiedName~Dl1OfficialCompilerSkinningReadBackAcceptance|" +
+    "FullyQualifiedName~CompilerRetentionAuthoringTests|FullyQualifiedName~CompilerRetentionBatchAuthoringTests|FullyQualifiedName~CanonicalFingerCorrespondence|" +
+    "FullyQualifiedName~Dl1PreparedPhysicalNodeReadBackValidatorTests)&" +
     $externalControlExclusions
 
 $focusedGates = @(
@@ -498,7 +521,7 @@ $focusedGates = @(
         -Name "focused-viewmodel-wpf" `
         -Category "ViewModel/WPF" `
         -Action "test" `
-        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModelTimelineTests|FullyQualifiedName~CoreAnimationProjectTests|FullyQualifiedName~TransactionalPlaybackTests" `
+        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModelTimelineTests|FullyQualifiedName~CoreAnimationProjectTests|FullyQualifiedName~TransactionalPlaybackTests|FullyQualifiedName~GuidedModelSetupTests|FullyQualifiedName~GuidedModelFeatureTests|FullyQualifiedName~StartWorkflowTests" `
         -InputRoots @($viewModelRoots) `
         -InputFiles @($testProjectInputs + $focusedViewModelTests)),
     (New-Gate `
@@ -529,7 +552,7 @@ $hermeticGates = @(
         -Name "hermetic-viewmodel-wpf" `
         -Category "ViewModel/WPF" `
         -Action "test" `
-        -Filter "FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModel|FullyQualifiedName~EditorUsability|FullyQualifiedName~FppControlSurface|FullyQualifiedName~FacialPreviewPolicy|FullyQualifiedName~AttachmentAuthoring|FullyQualifiedName~AppPersistence|FullyQualifiedName~ComboBoxTemplate|FullyQualifiedName~TreeViewSelection|FullyQualifiedName~RigConformanceWizardTests|FullyQualifiedName~RigGeometryCorrespondenceWizardTests|FullyQualifiedName~StudioWorkflowNavigationTests|FullyQualifiedName~PlaybackReadinessTests|FullyQualifiedName~EditorDockLayoutTests" `
+        -Filter "FullyQualifiedName~MainWindowViewModelPlaybackFramingTests|FullyQualifiedName~RigChannelPolicyViewTests|FullyQualifiedName~RigChannelPolicyWorkflowTests|FullyQualifiedName~AnimationExplorerViewModelTests|FullyQualifiedName~ViewModel|FullyQualifiedName~EditorUsability|FullyQualifiedName~FppControlSurface|FullyQualifiedName~FppModelBasis|FullyQualifiedName~FacialPreviewPolicy|FullyQualifiedName~AttachmentAuthoring|FullyQualifiedName~AppPersistence|FullyQualifiedName~ComboBoxTemplate|FullyQualifiedName~TreeViewSelection|FullyQualifiedName~RigConformanceWizardTests|FullyQualifiedName~RigGeometryCorrespondenceTests|FullyQualifiedName~RigGeometryCorrespondenceWizardTests|FullyQualifiedName~StudioWorkflowNavigationTests|FullyQualifiedName~PlaybackReadinessTests|FullyQualifiedName~EditorDockLayoutTests|FullyQualifiedName~ModelsWorkspaceConformancePreviewOwnershipTests|FullyQualifiedName~ModelsWorkspaceConformanceViewportTests|FullyQualifiedName~GuidedExtraBonePreservationTests|FullyQualifiedName~GuidedPreviewReviewDraftTests|FullyQualifiedName~GuidedPreviewReviewViewTests|FullyQualifiedName~GuidedPreviewReviewPersistenceTests|FullyQualifiedName~RigConformanceViewTests|FullyQualifiedName~GuidedModelSetupTests|FullyQualifiedName~GuidedModelFeatureTests|FullyQualifiedName~StartWorkflowTests" `
         -InputRoots @($viewModelRoots) `
         -InputFiles @($testProjectInputs + $hermeticViewModelTests)),
     (New-Gate `

@@ -414,8 +414,6 @@ public sealed class WorkflowDockController
     private LayoutPanel BuildAnimationsLayout(
         Dictionary<string, EditorDockPaneDefinition> panes)
     {
-        LayoutAnchorablePane actions = Pane(panes, "animations.actions");
-        actions.DockHeight = new GridLength(105.0);
         LayoutAnchorablePane preview = Pane(panes, "animations.preview");
         LayoutAnchorablePane details = Pane(panes, "animations.details");
         details.DockWidth = new GridLength(330.0);
@@ -433,7 +431,6 @@ public sealed class WorkflowDockController
             library);
         return Split(
             Orientation.Vertical,
-            actions,
             top,
             bottom);
     }

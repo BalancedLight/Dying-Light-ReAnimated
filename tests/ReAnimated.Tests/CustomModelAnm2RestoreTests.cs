@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
+using System.Reflection;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Anm2;
@@ -153,6 +154,65 @@ public sealed class CustomModelAnm2RestoreTests : IDisposable
         var advanced = viewModel.TargetViewport.SceneSource.CaptureFrame()
             .Skeleton!.Bones.ToArray();
         Assert.False(initial.SequenceEqual(advanced));
+
+        var editedDocument = CustomModelHelperAuthoring.DuplicateAsHelper(imported.Package.Document,
+            0, CustomModelAuthoredHelperKind.Helper, "pending_attachment");
+        var editedTarget = imported with { Package = imported.Package with { Document = editedDocument },
+            Rig = editedDocument.CreateRigDefinition() };
+        viewModel.Models.CommitProjectRestore(new PreparedModelsWorkspaceRestore(editedTarget,
+            targetPath, new ProjectModelsWorkspaceState { PackageAssetId = targetAsset.Id }));
+        typeof(ModelsWorkspaceViewModel).GetField("_authoringRevision",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(viewModel.Models, 1L);
+        var refresh = typeof(MainWindowViewModel).GetMethod(
+            "SynchronizeModelsWorkspaceProjectInBackgroundAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        await Assert.IsAssignableFrom<Task>(refresh.Invoke(viewModel, [Task.CompletedTask, CancellationToken.None]));
+        Assert.Equal(targetRig.BoneCount + 1,
+            viewModel.TargetViewport.SceneSource.CaptureFrame().Skeleton!.Bones.Count);
+        Assert.Equal(TargetBindingStatus.NeedsReview, viewModel.ActiveTargetBindingStatus);
+        var addedBind = Assert.Single(viewModel.RequiredTargetBindReviews,
+            row => row.TargetBone == "pending_attachment");
+        Assert.False(addedBind.IsReviewed);
+        Assert.Empty(dialogs.Failures);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task SameModelAuthoringRefreshesTargetHelperDomainWithoutReopeningProject()
+    {
+        string path = CreateProject();
+        byte[] originalSource = File.ReadAllBytes(Path.Combine(_directory, "model.dlrmodel"));
+        await using var assets = CreateAssets();
+        var dialogs = new NoDialogs();
+        await using var viewModel = CreateViewModel(dialogs, assets);
+        await viewModel.OpenWorkspaceAsync(path);
+        Assert.Empty(dialogs.Failures);
+        int originalBones = viewModel.TargetViewport.SceneSource.CaptureFrame().Skeleton!.Bones.Count;
+        ProjectModelEntry target = Assert.Single(viewModel.CurrentProject.Models);
+        var imported = FbxModelAuthoringImporter.ImportPackage(CustomModelPackageSerializer.Load(
+            Path.Combine(_directory, "model.dlrmodel")));
+        var document = CustomModelHelperAuthoring.DuplicateAsHelper(imported.Package.Document, 0,
+            CustomModelAuthoredHelperKind.Helper, "control_attachment");
+        var edited = imported with { Package = imported.Package with { Document = document },
+            Rig = document.CreateRigDefinition() };
+        viewModel.Models.CommitProjectRestore(new PreparedModelsWorkspaceRestore(edited,
+            "model.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = target.AssetId }));
+        // Restore establishes the fixture snapshot at revision zero. This
+        // edited snapshot represents the next authoring revision.
+        typeof(ModelsWorkspaceViewModel).GetField("_authoringRevision",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(viewModel.Models, 1L);
+        var refresh = typeof(MainWindowViewModel).GetMethod(
+            "SynchronizeModelsWorkspaceProjectInBackgroundAsync", BindingFlags.Instance | BindingFlags.NonPublic)!;
+
+        await Assert.IsAssignableFrom<Task>(refresh.Invoke(viewModel, [Task.CompletedTask, CancellationToken.None]));
+
+        var skeleton = viewModel.TargetViewport.SceneSource.CaptureFrame().Skeleton!;
+        Assert.Equal(originalBones + 1, skeleton.Bones.Count);
+        Assert.Contains(skeleton.Bones, bone => bone.Name == "control_attachment");
+        Assert.Equal(TargetBindingStatus.Direct, viewModel.ActiveTargetBindingStatus);
+        Assert.NotEmpty(viewModel.TargetViewport.SceneSource.CaptureFrame().Meshes);
+        Assert.Equal(originalSource, File.ReadAllBytes(Path.Combine(_directory, "model.dlrmodel")));
+        Assert.Empty(dialogs.Failures);
     }
 
     [Fact]

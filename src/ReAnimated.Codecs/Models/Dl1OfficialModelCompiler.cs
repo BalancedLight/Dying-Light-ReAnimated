@@ -65,6 +65,11 @@ public sealed record Dl1OfficialModelCompilerRequest
     /// </summary>
     public string? ExistingMaterialSourceRoot { get; init; }
 
+    /// <summary>Verify unchanged current materials for a geometry-only update without running the material compiler or publishing shared databases.</summary>
+    public bool ReuseVerifiedExistingMaterials { get; init; }
+    /// <summary>Current ordinary mesh whose material layout, skin and morph features must be preserved.</summary>
+    public string? ExistingCompiledMeshObjectPath { get; init; }
+
     public TimeSpan Timeout { get; init; } = TimeSpan.FromMinutes(10);
 
     /// <summary>Optional private staging root for isolated compiler jobs; no machine path is embedded in the project.</summary>
@@ -85,6 +90,11 @@ public sealed record Dl1OfficialModelCompilerResult(
     public ImmutableArray<string> Warnings { get; init; } = [];
 
     public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
+
+    /// <summary>Native reference/debug database companions required for subsequent SDK updates.</summary>
+    public ImmutableArray<string> MaterialDatabaseCompanionPaths { get; init; } = [];
+    /// <summary>Exact current material inputs that must remain unchanged through publication.</summary>
+    public ImmutableDictionary<string, string> VerifiedExistingMaterialFileHashes { get; init; } = ImmutableDictionary<string, string>.Empty;
 
     /// <summary>Loose FED/MPCloth and PHX sources accompanying this compiled model.</summary>
     public ImmutableArray<string> NativeCompanionPaths { get; init; } = [];
@@ -120,6 +130,22 @@ public sealed record Dl1OfficialModelCompilerEvidence
     public required int VerifiedMorphChannelCount { get; init; }
 
     public required int VerifiedMorphBindingCount { get; init; }
+
+    public string? SkinningReadBackContractFingerprint { get; init; }
+
+    public int VerifiedSkinningSurfaceCount { get; init; }
+
+    public int VerifiedSkinningSubsetCount { get; init; }
+
+    public int VerifiedSkinningVertexCount { get; init; }
+
+    public int VerifiedSkinningInfluenceCount { get; init; }
+
+    public ImmutableArray<Dl1CompiledSkinSubsetMaterialReadBack> SkinningMaterialReadBack { get; init; } = [];
+
+    public Dl1CompiledChrIdentityReadBackEvidence? ChrIdentityReadBack { get; init; }
+
+    public Dl1PreparedPhysicalNodeReadBackEvidence? PreparedPhysicalNodeReadBack { get; init; }
 
     public required CompiledMorphDeltaFormat? MorphDeltaFormat { get; init; }
     public ImmutableArray<Dl1BoneScriptReadBack> BoneScriptReadBack { get; init; } = [];
@@ -162,7 +188,7 @@ public static class Dl1OfficialModelCompiler
     public const string MaterialExportWarning =
         "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-stock-material-sources-v23";
+        "dl-reanimated-csharp-model-compiler-chr-skin-material-serialization-physical-node-all-lod-readback-prepared-surface-identity-material-byte-residual-attributed-triangles-sdk-material-graph-padding-v35";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -227,6 +253,19 @@ public static class Dl1OfficialModelCompiler
             receipt.InputFingerprint,
             expectedInputFingerprint,
             StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static ImmutableArray<Dl1CompiledRigNodeReadBack> ValidatePreparedRigReadBack(
+        Dl1SourceModelBuildResult sourceBuild,
+        CompactMeshDocument hierarchy)
+    {
+        ArgumentNullException.ThrowIfNull(sourceBuild);
+        ArgumentNullException.ThrowIfNull(hierarchy);
+        if (sourceBuild.AuthoredRigContract is { } contract)
+            return Dl1CompiledRigValidator.Validate(contract, hierarchy);
+        if (!sourceBuild.BoneScriptPolicies.IsDefault)
+            throw new InvalidDataException("Studio compilation requires the source writer's prepared contract.");
+        return [];
     }
 
     public static string CalculateInputFingerprint(
@@ -309,7 +348,10 @@ public static class Dl1OfficialModelCompiler
         string jobId = Guid.NewGuid().ToString("N");
         string jobDirectory = Path.Combine(jobContainer, jobId);
         string workshopDirectory = Path.Combine(jobDirectory, "Workshop");
-        string projectName = $"_DLReAnimatedModelImporter_{jobId[..8]}";
+        // This is a disposable local bootstrap folder and the compiler's -dn
+        // value. Keep it short because it prefixes every staged source/output
+        // path; public resource and character names remain unchanged.
+        string projectName = $"_dlrm_{jobId[..8]}";
         string projectDirectory = Path.Combine(workshopDirectory, projectName);
         string virtualDirectory = $"data/characters/{characterId}";
         string virtualMshPath = $"{virtualDirectory}/{resourceName}.msh";
@@ -319,6 +361,7 @@ public static class Dl1OfficialModelCompiler
         string rsrcPath = Path.Combine(projectDirectory, "model_resources.rsrc");
         string rulesPath = Path.Combine(projectDirectory, "model_resource.rules");
         string outputName = $"{resourceName}_pc.rpack";
+        string? ownedSdkMaterialDirectory = null;
         var compilerLog = new StringBuilder();
         var warnings = ImmutableArray.CreateBuilder<string>();
         bool completedSuccessfully = false;
@@ -411,8 +454,22 @@ public static class Dl1OfficialModelCompiler
                     stagedSourceDirectory,
                     $"{Path.GetFileNameWithoutExtension(reference)}.dmt")))
                 .ToArray();
+            ImmutableDictionary<string, string> reusedMaterialFiles = ImmutableDictionary<string, string>.Empty;
+            CompiledMeshGeometryDocument? previousMaterialGeometry = null;
+            if (request.ReuseVerifiedExistingMaterials)
+            {
+                if (request.ExistingMaterialDatabasePath is null || request.ExistingMaterialSourceRoot is null || request.ExistingCompiledMeshObjectPath is null)
+                    throw new InvalidDataException("Verified material reuse requires the current database, material source root, and compiled mesh.");
+                reusedMaterialFiles = ValidateMaterialReuseSources(stagedSourceDirectory,
+                    Path.Combine(request.ExistingMaterialSourceRoot, "data", "characters", characterId),
+                    sourceBuild.CustomMaterialReferences, sourceBuild.TextureSourceFiles, request.ExistingMaterialDatabasePath);
+                string priorObject = Path.GetFullPath(request.ExistingCompiledMeshObjectPath);
+                reusedMaterialFiles = reusedMaterialFiles.Add(priorObject, await Sha256FileAsync(priorObject, cancellationToken).ConfigureAwait(false));
+                previousMaterialGeometry = await ReadMaterialReuseGeometryAsync(priorObject, resourceName,
+                    Path.Combine(jobDirectory, "PriorMaterialCache"), cancellationToken).ConfigureAwait(false);
+            }
             string? fullMaterialBuildDirectory = null;
-            if (locallyAuthoredMaterialReferences.Length > 0 &&
+            if (!request.ReuseVerifiedExistingMaterials && locallyAuthoredMaterialReferences.Length > 0 &&
                 !string.IsNullOrWhiteSpace(request.ExistingMaterialSourceRoot))
             {
                 fullMaterialBuildDirectory = "data/characters/_dlr_material_build";
@@ -444,22 +501,56 @@ public static class Dl1OfficialModelCompiler
                     "local_dx11.mp");
                 Directory.CreateDirectory(Path.GetDirectoryName(compiledMaterialDatabase)!);
                 File.Copy(existingMaterialDatabasePath, compiledMaterialDatabase, overwrite: true);
+                if (!request.ReuseVerifiedExistingMaterials)
+                {
+                // The SDK update initializer routes its database to the tool installation's
+                // game folder even when source -gamedir is isolated. Own a fresh output folder,
+                // stage the complete native graph there, then copy validated products back.
+                string sdkRoot = Path.GetDirectoryName(materialCompilerPath)!;
+                string sdkDirectory = Path.GetFullPath(Path.Combine(sdkRoot, projectName));
+                if (!string.Equals(Path.GetDirectoryName(sdkDirectory), Path.GetFullPath(sdkRoot), StringComparison.OrdinalIgnoreCase) ||
+                    Directory.Exists(sdkDirectory) || File.Exists(sdkDirectory))
+                    throw new InvalidDataException("The fresh SDK material output directory is not available.");
+                Directory.CreateDirectory(Path.Combine(sdkDirectory, "assets_pc"));
+                ownedSdkMaterialDirectory = sdkDirectory;
+                string snapshotDirectory = Path.GetDirectoryName(existingMaterialDatabasePath)!;
+                foreach (string name in MaterialDatabaseFileNames)
+                {
+                    string input = name == "local_dx11.mp" ? existingMaterialDatabasePath : Path.Combine(snapshotDirectory, name);
+                    if (!File.Exists(input))
+                    {
+                        if (name is "local_dx11.mp" or "local_dx11_refs.mp" or "local_dx11_debug.mp")
+                            throw new InvalidDataException("Incremental material updates require the matching native main, reference, and debug databases.");
+                        continue;
+                    }
+                    File.Copy(input, Path.Combine(sdkDirectory, "assets_pc", name));
+                }
+                }
+
             }
 
-            if (locallyAuthoredMaterialReferences.Length > 0)
+            if (!request.ReuseVerifiedExistingMaterials && locallyAuthoredMaterialReferences.Length > 0)
             {
                 try
                 {
                     AppendBounded(compilerLog, "Material compiler stage\r\n");
-                    ProcessResult materialProcess = await RunCompilerStageAsync(
-                        materialCompilerPath,
-                        CreateMaterialCompilerCommand(
-                            projectDirectory,
-                            workshopDirectory,
-                            fullMaterialBuildDirectory ?? virtualDirectory,
-                            forceRebuild: fullMaterialBuildDirectory is not null || existingMaterialDatabasePath is null),
-                        projectDirectory,
+                    string sharedTemplateOutput = Path.Combine(
+                        Path.GetDirectoryName(materialCompilerPath)
+                            ?? throw new InvalidOperationException("The material compiler path has no parent directory."),
+                        "MeConvTemplates_dx11.dll");
+                    ProcessResult materialProcess = await Dl1MaterialCompilerSerializationGate.RunAsync(
+                        sharedTemplateOutput,
                         request.Timeout,
+                        (stageTimeout, stageCancellationToken) => RunCompilerStageAsync(
+                            materialCompilerPath,
+                            CreateMaterialCompilerCommand(
+                                projectDirectory,
+                                workshopDirectory,
+                                fullMaterialBuildDirectory ?? virtualDirectory,
+                                forceRebuild: fullMaterialBuildDirectory is not null || existingMaterialDatabasePath is null),
+                            projectDirectory,
+                            stageTimeout,
+                            stageCancellationToken),
                         cancellationToken).ConfigureAwait(false);
                     AppendBounded(compilerLog, materialProcess.Output);
                     if (materialProcess.ExitCode != 0)
@@ -472,6 +563,15 @@ public static class Dl1OfficialModelCompiler
                         projectDirectory,
                         "Assets_PC",
                         "local_dx11.mp");
+                    if (ownedSdkMaterialDirectory is not null)
+                    {
+                        foreach (string name in MaterialDatabaseFileNames)
+                        {
+                            string emitted = Path.Combine(ownedSdkMaterialDirectory, "assets_pc", name);
+                            if (File.Exists(emitted))
+                                File.Copy(emitted, Path.Combine(projectDirectory, "Assets_PC", name), overwrite: true);
+                        }
+                    }
                 }
                 catch (Exception exception) when (
                     fullMaterialBuildDirectory is null &&
@@ -622,6 +722,9 @@ public static class Dl1OfficialModelCompiler
             int verifiedIndexCount;
             int verifiedMorphChannelCount;
             int verifiedMorphBindingCount;
+            Dl1CompiledSkinningReadBackEvidence? skinningReadBack = null;
+            Dl1CompiledChrIdentityReadBackEvidence? chrIdentityReadBack = null;
+            Dl1PreparedPhysicalNodeReadBackEvidence? preparedPhysicalNodeReadBack = null;
             ImmutableArray<Dl1BoneScriptReadBack> boneScriptReadBack = [];
             ImmutableArray<Dl1CompiledRigNodeReadBack> rigReadBack = [];
             await using (var verificationCache = new Rp6lChunkCache(
@@ -645,12 +748,14 @@ public static class Dl1OfficialModelCompiler
                         $"The compiled mesh '{resourceName}' has an invalid compact hierarchy. " +
                         "No model RPack was published.");
                 }
+                preparedPhysicalNodeReadBack = Dl1PreparedPhysicalNodeReadBackValidator.Validate(
+                    sourceBuild.PreparedPhysicalNodeExpectations,
+                    hierarchy);
                 if (!sourceBuild.BoneScriptPolicies.IsDefault)
                 {
                     boneScriptReadBack = Dl1CompiledBoneScriptValidator.Validate(hierarchy, sourceBuild.BoneScriptPolicies);
-                    rigReadBack = Dl1CompiledRigValidator.Validate(sourceBuild.AuthoredRigContract
-                        ?? throw new InvalidDataException("Studio compilation requires the source writer's prepared contract."), hierarchy);
                 }
+                rigReadBack = ValidatePreparedRigReadBack(sourceBuild, hierarchy);
 
                 byte[] variantDefinitions = await archive.ReadItemBytesAsync(
                     requestedMesh.Items[1],
@@ -699,6 +804,23 @@ public static class Dl1OfficialModelCompiler
                         "No model RPack was published.");
                 }
 
+                if (previousMaterialGeometry is not null)
+                    ValidateMaterialReuseFeatures(GetMaterialReuseFeatures(previousMaterialGeometry), GetMaterialReuseFeatures(geometry));
+
+                skinningReadBack = Dl1CompiledSkinningReadBackValidator.Validate(
+                    sourceBuild.PreparedSkinningExpectations,
+                    geometry,
+                    hierarchy.Entities.Count,
+                    sourceBuild.PreparedMorphExpectations);
+                byte[] chrBytes = await File.ReadAllBytesAsync(
+                    sourceBuild.CharacterDefinitionPath,
+                    cancellationToken).ConfigureAwait(false);
+                Dl1ChrV4Document sourceChr = Dl1ChrV4Codec.Parse(chrBytes);
+                chrIdentityReadBack = Dl1CompiledChrIdentityValidator.Validate(
+                    sourceChr,
+                    hierarchy,
+                    geometry);
+
                 var clothReadBackInputs = new List<(string ResourceName, NativePhxDocument Document)>();
                 foreach (string name in sourceBuild.NativeCompanionFiles.Where(name =>
                              name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
@@ -710,8 +832,8 @@ public static class Dl1OfficialModelCompiler
                 warnings.AddRange(Dl1CompiledClothReadBackValidator.Validate(hierarchy, geometry, clothReadBackInputs));
 
                 verifiedShadingVertexCount = Dl1CompiledShadingValidator.Validate(
-                    request.Model.Surfaces.Length, geometry.Surfaces, vertexData);
-                ValidateCompiledMorphOutput(request.Model, geometry);
+                    sourceBuild.PreparedSkinningExpectations.Length, geometry.Surfaces, vertexData);
+                ValidateCompiledMorphOutput(request.Model, geometry, sourceBuild.PreparedMorphExpectations, skinningReadBack.VertexCorrespondence);
 
                 verifiedEntityCount = hierarchy.Entities.Count;
                 verifiedSurfaceCount = geometry.Surfaces.Count;
@@ -721,12 +843,20 @@ public static class Dl1OfficialModelCompiler
                 verifiedMorphBindingCount = geometry.MorphBindings.Count;
             }
 
+            Dl1CompiledSkinningReadBackEvidence skinningEvidence = skinningReadBack ??
+                throw new InvalidOperationException("Compiled skinning read-back did not produce evidence.");
+            Dl1CompiledChrIdentityReadBackEvidence chrIdentityEvidence = chrIdentityReadBack ??
+                throw new InvalidOperationException("Compiled CHR identity read-back did not produce evidence.");
+            Dl1PreparedPhysicalNodeReadBackEvidence preparedPhysicalNodeReadBackEvidence = preparedPhysicalNodeReadBack ??
+                throw new InvalidOperationException("Prepared physical-node read-back did not produce evidence.");
+
             string outputDirectory = Path.GetDirectoryName(outputRpackPath)
                 ?? throw new InvalidOperationException("The model RPack output path has no parent directory.");
             Directory.CreateDirectory(outputDirectory);
             string outputObjectPath = Path.Combine(outputDirectory, $"{resourceName}.msh_obj");
             string rawObjectPath = Path.Combine(outputDirectory, $"{resourceName}.msh_compiler_obj");
-            string? outputMaterialDatabasePath = compiledMaterialDatabase is null
+            VerifyMaterialReuseFilesAreCurrent(reusedMaterialFiles);
+            string? outputMaterialDatabasePath = request.ReuseVerifiedExistingMaterials || compiledMaterialDatabase is null
                 ? null
                 : Path.Combine(outputDirectory, "local_dx11.mp");
             // The console compiler emits zero-offset, compiler-addressed units.
@@ -761,6 +891,17 @@ public static class Dl1OfficialModelCompiler
                     outputMaterialDatabasePath,
                     cancellationToken).ConfigureAwait(false);
             }
+
+            var outputMaterialCompanions = ImmutableArray.CreateBuilder<string>();
+            if (!request.ReuseVerifiedExistingMaterials && compiledMaterialDatabase is not null)
+                foreach (string name in MaterialDatabaseFileNames.Skip(1))
+                {
+                    string emitted = Path.Combine(Path.GetDirectoryName(compiledMaterialDatabase)!, name);
+                    if (!File.Exists(emitted)) continue;
+                    string output = Path.Combine(outputDirectory, name);
+                    await PublishFileAtomicallyAsync(emitted, output, cancellationToken).ConfigureAwait(false);
+                    outputMaterialCompanions.Add(output);
+                }
 
             ImmutableArray<Dl1OfficialCompilerDependencySidecar> dependencySidecars =
                 await Dl1OfficialCompilerDependencySidecarCodec.PublishEmittedAsync(
@@ -847,6 +988,8 @@ public static class Dl1OfficialModelCompiler
                                 sha256 = outputMaterialDatabaseSha256!,
                             },
                     }.Where(static output => output is not null),
+                    materialReuse = new { request.ReuseVerifiedExistingMaterials, verifiedExistingMaterialFileHashes = reusedMaterialFiles, materialFeaturesVerified = previousMaterialGeometry is not null },
+                    materialDatabaseCompanions = outputMaterialCompanions.Select(path => new { path = Path.GetFileName(path), sha256 = Sha256(File.ReadAllBytes(path)) }),
                     resources = archive.Resources.Select(static resource => new
                     {
                         resource.Name,
@@ -867,6 +1010,15 @@ public static class Dl1OfficialModelCompiler
                         morphEncoding = verifiedMorphBindingCount == 0
                             ? null
                             : CompiledMorphDeltaFormat.PcHalf4.ToString(),
+                        skinningReadBackContractFingerprint = skinningEvidence.ContractFingerprint,
+                        skinningSurfaces = skinningEvidence.VerifiedSurfaceCount,
+                        skinningSubsets = skinningEvidence.VerifiedSubsetCount,
+                        skinningVertices = skinningEvidence.VerifiedVertexCount,
+                        skinningInfluences = skinningEvidence.VerifiedInfluenceCount,
+                        skinningMaterials = skinningEvidence.MaterialSlots,
+                        chrIdentityReadBack = chrIdentityEvidence,
+                        preparedPhysicalNodeReadBack = preparedPhysicalNodeReadBackEvidence,
+                        preparedPhysicalNodeCount = preparedPhysicalNodeReadBackEvidence.VerifiedNodeCount,
                         customMaterials = sourceBuild.CustomMaterialReferences.Length,
                         textures = sourceBuild.TextureSourceFiles.Length,
                         nativeCompanionFiles = nativeCompanionPaths.Count,
@@ -900,6 +1052,8 @@ public static class Dl1OfficialModelCompiler
             {
                 Warnings = warnings.ToImmutable(),
                 CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
+                MaterialDatabaseCompanionPaths = outputMaterialCompanions.ToImmutable(),
+                VerifiedExistingMaterialFileHashes = reusedMaterialFiles,
                 NativeCompanionPaths = nativeCompanionPaths.ToImmutable(),
                 RawCompiledMeshObjectPath = rawObjectPath,
                 DependencySidecars = dependencySidecars,
@@ -917,6 +1071,14 @@ public static class Dl1OfficialModelCompiler
                         verifiedMorphChannelCount,
                     VerifiedMorphBindingCount =
                         verifiedMorphBindingCount,
+                    SkinningReadBackContractFingerprint = skinningEvidence.ContractFingerprint,
+                    VerifiedSkinningSurfaceCount = skinningEvidence.VerifiedSurfaceCount,
+                    VerifiedSkinningSubsetCount = skinningEvidence.VerifiedSubsetCount,
+                    VerifiedSkinningVertexCount = skinningEvidence.VerifiedVertexCount,
+                    VerifiedSkinningInfluenceCount = skinningEvidence.VerifiedInfluenceCount,
+                    SkinningMaterialReadBack = skinningEvidence.MaterialSlots,
+                    ChrIdentityReadBack = chrIdentityEvidence,
+                    PreparedPhysicalNodeReadBack = preparedPhysicalNodeReadBackEvidence,
                     MorphDeltaFormat = verifiedMorphBindingCount == 0
                         ? null
                         : CompiledMorphDeltaFormat.PcHalf4,
@@ -936,6 +1098,18 @@ public static class Dl1OfficialModelCompiler
         }
         finally
         {
+            if (ownedSdkMaterialDirectory is not null)
+            {
+                string sdkRoot = Path.GetFullPath(Path.GetDirectoryName(materialCompilerPath)!);
+                string owned = Path.GetFullPath(ownedSdkMaterialDirectory);
+                if (string.Equals(Path.GetDirectoryName(owned), sdkRoot, StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(Path.GetFileName(owned), projectName, StringComparison.Ordinal) &&
+                    Directory.Exists(owned) &&
+                    (File.GetAttributes(owned) & FileAttributes.ReparsePoint) == 0 &&
+                    !Directory.EnumerateFileSystemEntries(owned, "*", SearchOption.AllDirectories)
+                        .Any(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0))
+                    Directory.Delete(owned, recursive: true);
+            }
             if (completedSuccessfully)
             {
                 DeleteOwnedJobDirectory(jobContainer, jobDirectory);
@@ -989,7 +1163,10 @@ public static class Dl1OfficialModelCompiler
         string jobId = Guid.NewGuid().ToString("N");
         string jobDirectory = Path.Combine(jobContainer, jobId);
         string workshopDirectory = Path.Combine(jobDirectory, "Workshop");
-        string projectName = $"_DLReAnimatedAnimationImporter_{jobId[..8]}";
+        // This is a disposable local bootstrap folder and the compiler's -dn
+        // value. Keep it short because it prefixes every staged animation
+        // path; public animation/resource names remain unchanged.
+        string projectName = $"_dlra_{jobId[..8]}";
         string projectDirectory = Path.Combine(workshopDirectory, projectName);
         string animationDirectory = Path.Combine(projectDirectory, "data", "characters", "animations");
         string rulesPath = Path.Combine(projectDirectory, "animation_resource.rules");
@@ -1721,6 +1898,119 @@ public static class Dl1OfficialModelCompiler
         _ = customTextureReferences;
     }
 
+    internal static ImmutableDictionary<string, string> ValidateMaterialReuseSources(
+        string stagedSourceDirectory, string currentSourceDirectory,
+        IEnumerable<string> materialReferences, IEnumerable<string> textureSourceFiles,
+        string materialDatabasePath)
+    {
+        var hashes = ImmutableDictionary.CreateBuilder<string, string>(StringComparer.OrdinalIgnoreCase);
+        string database = Path.GetFullPath(materialDatabasePath);
+        hashes.Add(database, Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(database))));
+        Dictionary<uint, CompiledMaterialRecord> records;
+        using (var stream = File.OpenRead(database)) records = ReadCompiledMaterialRecords(stream);
+        var textureNames = textureSourceFiles.Select(name => SafeFileName(name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        string[] references = materialReferences.ToArray();
+        if (references.Length == 0) throw new InvalidDataException("Material reuse requires a named material inventory.");
+        foreach (string reference in references)
+        {
+            string file = Path.GetFileNameWithoutExtension(SafeFileName(reference)) + ".dmt";
+            string staged = Path.Combine(stagedSourceDirectory, file);
+            string current = Path.GetFullPath(Path.Combine(currentSourceDirectory, file));
+            CompareSource(staged, current);
+            uint key = ComputeCompiledResourceHash(reference);
+            if (!records.TryGetValue(key, out CompiledMaterialRecord? record))
+                throw new InvalidDataException("A reused material ID is absent from the current compiled database.");
+            using var xmlReader = System.Xml.XmlReader.Create(staged, new System.Xml.XmlReaderSettings {
+                DtdProcessing = System.Xml.DtdProcessing.Prohibit, XmlResolver = null, MaxCharactersInDocument = 1024 * 1024 });
+            var document = System.Xml.Linq.XDocument.Load(xmlReader);
+            var expectedTextures = new HashSet<uint>();
+            foreach (var element in document.Descendants().Where(e => e.Name.LocalName.EndsWith("_tex", StringComparison.OrdinalIgnoreCase)))
+            {
+                string name = element.Value.Trim().Trim('"');
+                if (name.Length == 0) continue;
+                name = SafeFileName(name);
+                if (!textureNames.Contains(name)) throw new InvalidDataException("A reused material references a new texture source.");
+                CompareSource(Path.Combine(stagedSourceDirectory, name), Path.GetFullPath(Path.Combine(currentSourceDirectory, name)));
+                expectedTextures.Add(ComputeCompiledResourceHash(name));
+            }
+            if (!expectedTextures.SetEquals(record.TextureNameHashes))
+                throw new InvalidDataException("A reused material's compiled texture contract differs from its current source.");
+        }
+        foreach (string name in textureNames)
+            CompareSource(Path.Combine(stagedSourceDirectory, name), Path.GetFullPath(Path.Combine(currentSourceDirectory, name)));
+        return hashes.ToImmutable();
+
+        static string SafeFileName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.Contains('/') || name.Contains('\\') || name.Contains(':') || name is "." or ".." || name.Any(c => c < 32 || c > 126))
+                throw new InvalidDataException("Material reuse accepts only safe source filenames.");
+            return name;
+        }
+        void CompareSource(string staged, string current)
+        {
+            if (!File.Exists(staged) || !File.Exists(current)) throw new InvalidDataException("A reused material source is missing.");
+            if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0) throw new InvalidDataException("A reused source must be an ordinary file.");
+            string proposed = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(staged)));
+            string existing = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(current)));
+            if (!proposed.Equals(existing, StringComparison.Ordinal)) throw new InvalidDataException("A reused material or texture source changed.");
+            hashes[current] = existing;
+        }
+    }
+
+    internal static void VerifyMaterialReuseFilesAreCurrent(IReadOnlyDictionary<string, string> files)
+    {
+        foreach ((string path, string expected) in files)
+            if (!File.Exists(path) || !Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path))).Equals(expected, StringComparison.Ordinal))
+                throw new InvalidDataException("A verified existing material input changed before publication.");
+    }
+
+    internal static void ValidateMaterialReuseFeatures(IReadOnlyDictionary<string, string[]> previous, IReadOnlyDictionary<string, string[]> updated)
+    {
+        if (previous.Count == 0 || previous.Count != updated.Count)
+            throw new InvalidDataException("Material reuse cannot add or remove a material feature contract.");
+        foreach ((string name, string[] features) in previous)
+            if (!updated.TryGetValue(name, out string[]? proposed) || !features.ToHashSet(StringComparer.Ordinal).SetEquals(proposed))
+                throw new InvalidDataException($"Reused material '{name}' changed its compiled vertex-layout, skin, or morph feature contract.");
+    }
+
+    private static Dictionary<string, string[]> GetMaterialReuseFeatures(CompiledMeshGeometryDocument geometry)
+    {
+        if (!geometry.MaterialDatabase.HasCompleteSlotNames) throw new InvalidDataException("Material reuse requires complete compiled material names.");
+        var features = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (CompiledMeshSurface surface in geometry.Surfaces)
+        {
+            string layout = surface.VertexLayout.Stride + ":" + string.Join(";", surface.VertexLayout.Elements.Select(e => $"{e.RawFormat},{e.RawSemantic},{e.Channel},{e.ByteOffset},{e.ByteSize}"));
+            var morphs = geometry.MorphBindings.Where(m => m.EntityIndex == surface.EntityIndex && m.LodIndex == surface.LodIndex).ToArray();
+            string morph = string.Join(";", morphs.Select(m => $"{m.DeltaFormat},{m.DeltaByteStride},{m.MorphChannelIndexes.Count}").Order(StringComparer.Ordinal));
+            foreach (CompiledMeshSubmesh subset in surface.Submeshes)
+            {
+                if (subset.DeclaredMaterialSlotIndex is not { } slot || slot >= geometry.MaterialDatabase.DeclaredSlotCount)
+                    throw new InvalidDataException("Material reuse requires named subset material slots.");
+                var entry = geometry.MaterialDatabase.Entries.Single(e => e.Index == slot);
+                string name = NormalizeCompiledResourceName(entry.DatabaseName);
+                if (!features.TryGetValue(name, out var values)) features[name] = values = new(StringComparer.Ordinal);
+                values.Add($"load={entry.RawLoadValue};layout={layout};skin={subset.BonePaletteEntityIndexes.Count > 0};morph={morph}");
+            }
+        }
+        return features.ToDictionary(p => p.Key, p => p.Value.Order(StringComparer.Ordinal).ToArray(), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static async Task<CompiledMeshGeometryDocument> ReadMaterialReuseGeometryAsync(string path, string resourceName, string cachePath, CancellationToken cancellationToken)
+    {
+        var archive = await Rp6lArchive.OpenAsync(path, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var mesh = archive.Resources.Single(r => r.Name.Equals(resourceName, StringComparison.OrdinalIgnoreCase) && r.ResourceType == Rp6lResourceTypes.Mesh);
+        await using var cache = new Rp6lChunkCache(new Rp6lChunkCacheOptions { CacheDirectory = cachePath });
+        byte[] metadata = await archive.ReadItemBytesAsync(mesh.Items[0], cache, cancellationToken: cancellationToken).ConfigureAwait(false);
+        byte[] variants = await archive.ReadItemBytesAsync(mesh.Items[1], cache, cancellationToken: cancellationToken).ConfigureAwait(false);
+        byte[] vertices = await archive.ReadItemBytesAsync(mesh.Items[3], cache, maximumBytes: 512 * 1024 * 1024, cancellationToken: cancellationToken).ConfigureAwait(false);
+        byte[] indices = await archive.ReadItemBytesAsync(mesh.Items[4], cache, maximumBytes: 512 * 1024 * 1024, cancellationToken: cancellationToken).ConfigureAwait(false);
+        var result = CompiledMeshGeometryDecoder.Decode(metadata, variants, vertices, indices, retailResourceName: resourceName, cancellationToken: cancellationToken);
+        if (result.Diagnostics.Any(d => d.Severity == CompactMeshDiagnosticSeverity.Error)) throw new InvalidDataException("The current mesh material feature baseline is invalid.");
+        return result;
+    }
+
+    private static readonly string[] MaterialDatabaseFileNames = ["local_dx11.mp", "local_dx11_refs.mp", "local_dx11_debug.mp", "local_dx11_refs_debug.mp"];
+
     internal static void ValidateCompiledMaterialDatabasePreserves(
         string previousDatabasePath,
         string updatedDatabasePath)
@@ -1739,6 +2029,7 @@ public static class Dl1OfficialModelCompiler
             updated = ReadCompiledMaterialRecords(stream);
         }
 
+        ValidateCompiledDatabaseGraphPreserves(previousDatabasePath, updatedDatabasePath);
         uint[] missing = previous.Keys.Where(hash => !updated.ContainsKey(hash)).Take(16).ToArray();
         uint[] changed = previous
             .Where(pair => updated.TryGetValue(pair.Key, out CompiledMaterialRecord? value) &&
@@ -1757,6 +2048,85 @@ public static class Dl1OfficialModelCompiler
                 $"({missing.Length} missing and {changed.Length} changed record(s) in the bounded report). " +
                 "The Developer Tools project was not modified.");
         }
+    }
+
+    private static void ValidateCompiledDatabaseGraphPreserves(string previousPath, string updatedPath)
+    {
+        var previous = ReadCompiledDatabaseGraph(previousPath);
+        var updated = ReadCompiledDatabaseGraph(updatedPath);
+        foreach ((string container, Dictionary<uint, string> records) in previous)
+            foreach ((uint key, string hash) in records)
+                if (!updated.TryGetValue(container, out var target) ||
+                    !target.TryGetValue(key, out string? actual) || !string.Equals(hash, actual, StringComparison.Ordinal))
+                    throw new InvalidDataException($"The compiled material graph did not preserve {container} record 0x{key:X8}.");
+    }
+
+    private static Dictionary<string, Dictionary<uint, string>> ReadCompiledDatabaseGraph(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        byte[] header = ReadExactlyAt(stream, 0, 16);
+        if (BinaryPrimitives.ReadUInt32LittleEndian(header) != 0x4D444241 ||
+            BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(12)) != 0)
+            throw new InvalidDataException("The compiled material graph has an invalid header.");
+        int count = ReadBoundedCompiledCount(header.AsSpan(4), 128, "graph container");
+        long offset = BinaryPrimitives.ReadUInt32LittleEndian(header.AsSpan(8));
+        ValidateCompiledRange(offset, checked(count * 48), stream.Length, "graph container table");
+        byte[] table = ReadExactlyAt(stream, offset, checked(count * 48));
+        var result = new Dictionary<string, Dictionary<uint, string>>(StringComparer.OrdinalIgnoreCase);
+        int totalRecords = 0;
+        long totalLogicalBytes = 0;
+        for (int i = 0; i < count; i++)
+        {
+            var row = table.AsSpan(i * 48, 48);
+            int end = row[..32].IndexOf((byte)0);
+            if (end < 1 || row[(end + 1)..32].ContainsAnyExcept((byte)0) || !IsPrintableCompiledAscii(row[..end]))
+                throw new InvalidDataException("The compiled graph container name is invalid.");
+            string name = Encoding.ASCII.GetString(row[..end]);
+            int entries = ReadBoundedCompiledCount(row[32..], 1_000_000, "graph record");
+            if (BinaryPrimitives.ReadUInt32LittleEndian(row[36..]) != entries || BinaryPrimitives.ReadUInt32LittleEndian(row[44..]) != 0)
+                throw new InvalidDataException("The compiled graph container layout is unsupported.");
+            totalRecords = checked(totalRecords + entries);
+            if (totalRecords > 1_000_000) throw new InvalidDataException("The compiled graph record limit was exceeded.");
+            long recordsOffset = BinaryPrimitives.ReadUInt32LittleEndian(row[40..]);
+            ValidateCompiledRange(recordsOffset, checked(entries * 16), stream.Length, "graph records");
+            byte[] rows = ReadExactlyAt(stream, recordsOffset, checked(entries * 16));
+            var inventory = new Dictionary<uint, string>();
+            uint previousKey = 0;
+            for (int j = 0; j < entries; j++)
+            {
+                var record = rows.AsSpan(j * 16, 16);
+                uint key = BinaryPrimitives.ReadUInt32LittleEndian(record);
+                long start = BinaryPrimitives.ReadUInt32LittleEndian(record[4..]);
+                int logical = ReadBoundedCompiledCount(record[8..], 1_048_576, "graph logical byte");
+                int stored = ReadBoundedCompiledCount(record[12..], 1_048_576, "graph stored byte");
+                if (logical > stored || (j > 0 && key <= previousKey)) throw new InvalidDataException("Invalid compiled graph inventory row.");
+                ValidateCompiledRange(start, stored, stream.Length, "graph payload");
+                totalLogicalBytes = checked(totalLogicalBytes + logical);
+                if (totalLogicalBytes > 512L * 1024 * 1024) throw new InvalidDataException("The compiled graph payload budget was exceeded.");
+                byte[] payload = ReadExactlyAt(stream, start, logical);
+                ReadOnlySpan<byte> semantic = payload;
+                if (name.Equals("input_attributes", StringComparison.OrdinalIgnoreCase))
+                {
+                    int meaningful = payload.Length == 0 ? 0 : checked(1 + 4 * payload[0]);
+                    if (meaningful == 0 || meaningful > payload.Length || (payload.Length != meaningful && payload.Length != ((meaningful + 7) & ~7)) || semantic[meaningful..].ContainsAnyExcept((byte)0))
+                        throw new InvalidDataException("The input attribute record has invalid count or nonzero padding.");
+                    semantic = semantic[..meaningful];
+                }
+                if (name.Equals("strings", StringComparison.OrdinalIgnoreCase))
+                {
+                    int stringEnd = semantic.IndexOf((byte)0);
+                    int meaningful = stringEnd + 1;
+                    if (stringEnd < 0 || (payload.Length != meaningful && payload.Length != ((meaningful + 3) & ~3)) ||
+                        semantic[meaningful..].ContainsAnyExcept((byte)0))
+                        throw new InvalidDataException("The native string record has missing termination or invalid padding.");
+                    semantic = semantic[..meaningful];
+                }
+                inventory.Add(key, Convert.ToHexStringLower(SHA256.HashData(semantic)));
+                previousKey = key;
+            }
+            if (!result.TryAdd(name, inventory)) throw new InvalidDataException("The compiled graph repeats a container.");
+        }
+        return result;
     }
 
     private static Dictionary<uint, CompiledMaterialRecord> ReadCompiledMaterialRecords(FileStream stream)
@@ -2191,7 +2561,9 @@ public static class Dl1OfficialModelCompiler
 
     internal static void ValidateCompiledMorphOutput(
         FbxModelAuthoringImportResult source,
-        CompiledMeshGeometryDocument compiled)
+        CompiledMeshGeometryDocument compiled,
+        ImmutableArray<Dl1PreparedMorphSurfaceExpectation> prepared = default,
+        ImmutableArray<Dl1CompiledSkinVertexCorrespondence> correspondence = default)
     {
         ValidateCompiledSpeechOrder(source.Package.Document.MorphChannels.Select(channel => channel.Name),
             compiled.MorphChannels.Select(channel => channel.Name));
@@ -2213,44 +2585,42 @@ public static class Dl1OfficialModelCompiler
                 $"[{string.Join(", ", actualChannelNames)}]. No model RPack was published.");
         }
 
-        for (int surfaceIndex = 0; surfaceIndex < source.Surfaces.Length; surfaceIndex++)
+        int count = prepared.IsDefault ? source.Surfaces.Length : prepared.Length;
+        for (int surfaceIndex = 0; surfaceIndex < count; surfaceIndex++)
         {
-            FbxModelSurface expectedSurface = source.Surfaces[surfaceIndex];
-            if (expectedSurface.MorphTargets.IsEmpty)
+            Dl1PreparedMorphSurfaceExpectation expectedLod = prepared.IsDefault
+                ? new(string.Empty, 0, source.Surfaces[surfaceIndex].Vertices.Length,
+                    source.Surfaces[surfaceIndex].MorphTargets.Select(target => new Dl1PreparedMorphTargetExpectation(target.Name, target.PositionDeltas)).ToImmutableArray())
+                : prepared[surfaceIndex];
+            CompiledMeshSurface? compiledSurface = prepared.IsDefault
+                ? surfaceIndex < compiled.Surfaces.Count ? compiled.Surfaces[surfaceIndex] : null
+                : compiled.Surfaces
+                    .Where(surface => surface.LodIndex == expectedLod.LodIndex &&
+                        string.Equals(surface.Name, expectedLod.NodeName, StringComparison.OrdinalIgnoreCase))
+                    .ToArray() switch
+                {
+                    [] => null,
+                    [var only] => only,
+                    _ => throw new InvalidDataException(
+                        $"The official compiler emitted ambiguous case-insensitive geometry identity '{expectedLod.NodeName}' LOD {expectedLod.LodIndex}. No model RPack was published."),
+                };
+            if (compiledSurface is null)
+                throw new InvalidDataException($"The official compiler omitted prepared geometry '{expectedLod.NodeName}' LOD {expectedLod.LodIndex}. No model RPack was published.");
+            CompiledNodeMorphBinding[] bindings = compiled.MorphBindings
+                .Where(binding => binding.EntityIndex == compiledSurface.EntityIndex && binding.LodIndex == compiledSurface.LodIndex).ToArray();
+            if (expectedLod.MorphTargets.IsEmpty)
             {
+                if (bindings.Any(static binding => binding.TargetDeltas.Count != 0))
+                    throw new InvalidDataException($"The official compiler added morph targets to '{compiledSurface.Name}' LOD {compiledSurface.LodIndex}.");
                 continue;
             }
-
-            if (surfaceIndex >= compiled.Surfaces.Count)
-            {
-                throw new InvalidDataException(
-                    $"The official compiler omitted morph-bearing draw surface {surfaceIndex}. " +
-                    "No model RPack was published.");
-            }
-
-            CompiledMeshSurface compiledSurface = compiled.Surfaces[surfaceIndex];
-            CompiledNodeMorphBinding[] bindings = compiled.MorphBindings
-                .Where(binding =>
-                    binding.EntityIndex == compiledSurface.EntityIndex &&
-                    binding.LodIndex == compiledSurface.LodIndex)
-                .ToArray();
             if (bindings.Length != 1)
-            {
-                throw new InvalidDataException(
-                    $"The official compiler emitted {bindings.Length} morph bindings for " +
-                    $"surface '{compiledSurface.Name}'; exactly one is required. " +
-                    "No model RPack was published.");
-            }
-
+                throw new InvalidDataException($"The official compiler emitted {bindings.Length} morph bindings for '{compiledSurface.Name}' LOD {compiledSurface.LodIndex}; exactly one is required. No model RPack was published.");
             CompiledNodeMorphBinding binding = bindings[0];
-            if (binding.VertexCount != expectedSurface.Vertices.Length ||
-                binding.TargetDeltas.Count != expectedSurface.MorphTargets.Length)
-            {
-                throw new InvalidDataException(
-                    $"The official compiler changed morph dimensions for surface " +
-                    $"'{compiledSurface.Name}'. No model RPack was published.");
-            }
-
+            if (binding.VertexCount != expectedLod.VertexCount || binding.TargetDeltas.Count != expectedLod.MorphTargets.Length)
+                throw new InvalidDataException($"The official compiler changed morph dimensions for '{compiledSurface.Name}' LOD {compiledSurface.LodIndex}. No model RPack was published.");
+            if (binding.TargetDeltas.Select(target => target.MorphChannelIndex).Distinct().Count() != binding.TargetDeltas.Count)
+                throw new InvalidDataException($"The official compiler duplicated a morph target for '{compiledSurface.Name}' LOD {compiledSurface.LodIndex}.");
             if (binding.DeltaFormat != CompiledMorphDeltaFormat.PcHalf4)
             {
                 throw new InvalidDataException(
@@ -2269,7 +2639,7 @@ public static class Dl1OfficialModelCompiler
 
                 string targetName = compiled.MorphChannels[
                     actualTarget.MorphChannelIndex].Name;
-                FbxModelMorphTarget expectedTarget = expectedSurface.MorphTargets
+                Dl1PreparedMorphTargetExpectation expectedTarget = expectedLod.MorphTargets
                     .SingleOrDefault(target => string.Equals(
                         target.Name,
                         targetName,
@@ -2289,7 +2659,15 @@ public static class Dl1OfficialModelCompiler
                      vertexIndex++)
                 {
                     Vector3 actual = actualTarget.PositionDeltas[vertexIndex];
-                    CoreVector3 expected = expectedTarget.PositionDeltas[vertexIndex];
+                    int sourceVertexIndex = vertexIndex;
+                    if (!correspondence.IsDefaultOrEmpty)
+                    {
+                        var match = correspondence.SingleOrDefault(row => row.NodeName == compiledSurface.Name &&
+                            row.LodIndex == compiledSurface.LodIndex && row.CompiledVertexIndex == vertexIndex);
+                        if (match is null) throw new InvalidDataException("Compiled morph vertex has no verified source correspondence.");
+                        sourceVertexIndex = match.SourceVertexIndex;
+                    }
+                    CoreVector3 expected = expectedTarget.PositionDeltas[sourceVertexIndex];
                     try
                     {
                         ValidateHalfMorphComponent(

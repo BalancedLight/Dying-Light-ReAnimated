@@ -39,7 +39,8 @@ public enum CustomModelPackageOpenDecision
 
 internal sealed record ModelsWorkspaceEmbeddedStackPayload(
     CustomModelAnimationClip Selection,
-    bool IsDecoded);
+    bool IsDecoded,
+    bool HasTemporalMovement);
 
 internal sealed record ModelsWorkspacePersistencePayload(
     Guid ModelId,
@@ -371,6 +372,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         };
         ModelBatch.PropertyChanged += OnModelBatchPropertyChanged;
         RestoreLatestDeploymentActions();
+        InitializeGuidedSetup();
     }
 
     public ModelBatchViewModel ModelBatch { get; }
@@ -1059,7 +1061,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         string path,
         CustomModelRigMode rigMode,
         bool addAsNewModel,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool applyGuidedAnimationDefaults = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ModelsWorkspaceSessionSnapshot previous = CaptureProjectSession();
@@ -1154,6 +1157,10 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 imported = preview.Replacement;
             }
 
+            imported = ApplyGuidedImportAnimationDefaults(
+                imported,
+                applyGuidedAnimationDefaults && !isReimport);
+
             EnsureCurrent(generation, token);
             _ = CustomModelPreviewAdapter.CreateSession(
                 imported, SelectedPreviewMode.Mode);
@@ -1228,7 +1235,18 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
-        await ImportPathAsync(path, SelectedRigMode);
+        CustomModelSkeletonChoice choice = HasModel
+            ? (_guidedUsesDl1Rig ? CustomModelSkeletonChoice.MapToDl1 : CustomModelSkeletonChoice.KeepOriginal)
+            : Conformance.IsAdvancedSetupMode ? CustomModelSkeletonChoice.KeepOriginal : _fileDialogs.SelectCustomModelSkeleton();
+        if (choice == CustomModelSkeletonChoice.Cancel) return;
+        bool startGuidedFromNewFbx = !HasModel && IsGuidedImport && !Conformance.IsAdvancedSetupMode;
+        await ImportPathCoreAsync(
+            path,
+            SelectedRigMode,
+            addAsNewModel: false,
+            CancellationToken.None,
+            applyGuidedAnimationDefaults: startGuidedFromNewFbx);
+        if (HasModel && !Conformance.IsAdvancedSetupMode) await BeginGuidedSetupAsync(choice);
     }
 
     private async Task ImportNewFbxAsync()
@@ -1249,7 +1267,15 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
-        await ImportPathAsNewModelAsync(path, SelectedRigMode);
+        CustomModelSkeletonChoice choice = _fileDialogs.SelectCustomModelSkeleton();
+        if (choice == CustomModelSkeletonChoice.Cancel) return;
+        await ImportPathCoreAsync(
+            path,
+            SelectedRigMode,
+            addAsNewModel: true,
+            CancellationToken.None,
+            applyGuidedAnimationDefaults: !Conformance.IsAdvancedSetupMode);
+        if (HasModel && !Conformance.IsAdvancedSetupMode) await BeginGuidedSetupAsync(choice);
     }
 
     private async Task OpenPackageAsync()
@@ -1595,6 +1621,24 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
+        bool assignedGuidedAnimationAlias = false;
+        if (IsGuidedExport && !ReferenceExistingAnimationLibrary && string.IsNullOrWhiteSpace(AnimationScriptAlias))
+        {
+            var currentSelections = Animations.Select(static animation => animation.ToContract()).ToImmutableArray();
+            string? defaultAlias = ResolveGuidedPackageAnimationAlias(
+                currentSelections,
+                savedAlias: null,
+                referenceExistingAnimationLibrary: false,
+                resourceName: string.IsNullOrWhiteSpace(ResourceName)
+                    ? _model.Package.Document.Name
+                    : ResourceName);
+            if (!string.IsNullOrWhiteSpace(defaultAlias))
+            {
+                AnimationScriptAlias = defaultAlias;
+                assignedGuidedAnimationAlias = true;
+            }
+        }
+
         long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
         try
         {
@@ -1603,6 +1647,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 throw new InvalidOperationException("The custom-model authoring document is no longer available.");
             long buildRevision = Volatile.Read(ref _authoringRevision);
             string resourceName = Dl1SourceModelWriter.SanitizeName(ResourceName, 55);
+            var animationSelections = GetGuidedPackageAnimationSelections(buildModel);
+            string? packageAnimationAlias = ResolveGuidedPackageAnimationAlias(
+                animationSelections,
+                AnimationScriptAlias,
+                ReferenceExistingAnimationLibrary,
+                resourceName);
             BuildStatus = "Building and validating the complete DL1 model package in staging...";
             Dl1CustomModelPackageResult result = await Dl1CustomModelPackageBuilder.BuildAsync(
                 new Dl1CustomModelPackageRequest
@@ -1613,10 +1663,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     RetailData0PakPath = _getRetailData0PakPath(),
                     ResourceName = resourceName,
                     SurfaceName = SurfaceName,
-                    AnimationScriptAlias = string.IsNullOrWhiteSpace(AnimationScriptAlias)
-                        ? null
-                        : AnimationScriptAlias.Trim(),
-                    AnimationSelections = buildModel.Package.Document.AnimationClips,
+                    AnimationScriptAlias = packageAnimationAlias,
+                    AnimationSelections = animationSelections,
                 },
                 token);
             EnsureCurrentGeneration(generation);
@@ -1647,6 +1695,10 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 : $"Complete DL1 model + {result.AnimationLibrary.AnimationNames.Length:N0} animation(s): {result.PackageDirectory}";
             if (result.StockAnimationReference is { } stock)
                 BuildStatus += $" References existing bank {stock.BankName}; no replacement animation bank was generated. Runtime binding still requires Player verification.";
+            else if (result.AnimationLibrary is not null && assignedGuidedAnimationAlias)
+                BuildStatus += $" Uses {packageAnimationAlias} as the animation-script identity; this default is now saved with the model.";
+            if (result.AnimationLibrary is not null && GuidedIncludedPoseOnlyTakeCount > 0)
+                BuildStatus += $" Includes {GuidedIncludedPoseOnlyTakeCount} checked pose-only take(s); uncheck them in Export to omit the local animation library.";
             BuildStatus += " " + string.Join(" ", result.SourceModel.NativeCompanionNotes);
             if (!currentDraftMatchesBuild)
             {
@@ -2317,7 +2369,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             package.Document.AnimationClips
                 .Select(clip => new ModelsWorkspaceEmbeddedStackPayload(
                     clip,
-                    _model.AnimationClips.ContainsKey(clip.Id)))
+                    _model.AnimationClips.ContainsKey(clip.Id),
+                    _model.AnimationClips.TryGetValue(clip.Id, out AnimationClip? decoded) &&
+                        MainWindowViewModel.AnimationContainsTemporalMovement([decoded])))
                 .ToImmutableArray(),
             SelectedAnimation?.Id,
             SelectedPreviewMode.Mode == CustomModelPreviewMode.SourceFbx
@@ -3432,6 +3486,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     private void OnAnimationItemPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {
         MarkAuthoringChanged();
+        NotifyGuidedExportState();
         ExportAnimationRpackCommand.NotifyCanExecuteChanged();
         InvalidateDeploymentPreflight();
         if (args.PropertyName is nameof(CustomModelAnimationClipItemViewModel.FrameRateNumerator) or

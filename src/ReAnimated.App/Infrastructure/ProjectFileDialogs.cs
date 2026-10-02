@@ -8,6 +8,8 @@ using ReAnimated.Codecs.Models;
 
 namespace ReAnimated.App.Infrastructure;
 
+public enum CustomModelSkeletonChoice { MapToDl1, KeepOriginal, Cancel }
+
 public enum LocalAnm2SourceBindingDecision
 {
     ConfirmSuggested,
@@ -115,6 +117,8 @@ public sealed record AnimationTargetSelection(
 public interface IProjectFileDialogService
 {
     string? ShowOpenProjectDialog(string? initialPath);
+
+    CustomModelSkeletonChoice SelectCustomModelSkeleton() => CustomModelSkeletonChoice.KeepOriginal;
 
     /// <summary>
     /// Surfaces a failed operation where the operator cannot miss it. A one
@@ -337,7 +341,7 @@ public interface IProjectFileDialogService
         string? currentPath);
 }
 
-public sealed class WindowsProjectFileDialogService :
+public sealed partial class WindowsProjectFileDialogService :
     IProjectFileDialogService
 {
     private const string ProjectFilter =

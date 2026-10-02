@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Codecs.ProjectArtifacts;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Core.Project;
@@ -93,8 +94,9 @@ public sealed record Dl1DeveloperToolsDeploymentRequest
 
     /// <summary>
     /// Mount a copy of the authored animation pack at the conventional Editor
-    /// project-data path. The destination must be absent or still owned by an
-    /// earlier deployment; an unrelated project pack is never replaced.
+    /// project-data path. An existing pack requires receipt ownership or an
+    /// explicit backup-and-replace resolution; preservable unrelated animations
+    /// and scripts are merged into the replacement.
     /// </summary>
     public bool InstallProjectDataAnimationRpack { get; init; }
 
@@ -102,6 +104,22 @@ public sealed record Dl1DeveloperToolsDeploymentRequest
         ImmutableDictionary<string, Dl1DeploymentConflictResolution>.Empty.WithComparers(StringComparer.OrdinalIgnoreCase);
 
     public TimeSpan CompilerTimeout { get; init; } = TimeSpan.FromMinutes(10);
+    /// <summary>Optional short compiler job root for native SDK path limits.</summary>
+    public string? CompilerWorkingDirectoryRoot { get; init; }
+    /// <summary>
+    /// Rebuilds existing material sources by default. When false, updates the
+    /// existing compiled database incrementally and still validates preservation.
+    /// </summary>
+    public bool RebuildExistingMaterialSources { get; init; } = true;
+    /// <summary>Geometry-only update using unchanged current material sources and verified compiled features; writes no shared databases.</summary>
+    public bool ReuseVerifiedExistingMaterials { get; init; }
+
+    /// <summary>
+    /// Optional matching native database graph used only when installed reference/debug
+    /// companions are absent. Its main database must exactly match the live snapshot.
+    /// </summary>
+    public string? MaterialDatabaseBootstrapDirectory { get; init; }
+
 
     internal Func<Dl1SourceModelBuildRequest, CancellationToken, Task<Dl1SourceModelBuildResult>>?
         SourceWriterOverride { get; init; }
@@ -394,7 +412,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 await SnapshotMaterialDatabaseAsync(
                     existingMaterialDatabase,
                     jobDirectory,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    request.ReuseVerifiedExistingMaterials ? null : request.MaterialDatabaseBootstrapDirectory).ConfigureAwait(false);
             var modelCompilerRequest = new Dl1OfficialModelCompilerRequest
             {
                 Model = GetDeploymentModel(request),
@@ -406,8 +425,11 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 SurfaceName = validated.SurfaceName,
                 AnimationScriptAlias = validated.AnimationLibraryName,
                 AnimationLibrary = request.ReferenceExistingAnimationLibrary ? null : source.Library,
+                WorkingDirectoryRoot = request.CompilerWorkingDirectoryRoot,
                 ExistingMaterialDatabasePath = materialDatabaseSnapshot?.SnapshotPath,
-                ExistingMaterialSourceRoot = materialDatabaseSnapshot is null ? null : validated.ProjectRoot,
+                ExistingMaterialSourceRoot = materialDatabaseSnapshot is null || (!request.RebuildExistingMaterialSources && !request.ReuseVerifiedExistingMaterials) ? null : validated.ProjectRoot,
+                ReuseVerifiedExistingMaterials = request.ReuseVerifiedExistingMaterials,
+                ExistingCompiledMeshObjectPath = request.ReuseVerifiedExistingMaterials ? Path.Combine(validated.ProjectRoot, "assets_pc", "characters", validated.CharacterId, validated.ModelResourceName + ".msh_obj") : null,
                 Timeout = request.CompilerTimeout,
             };
             Dl1OfficialModelCompilerResult modelCompiler = await (
@@ -474,6 +496,13 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             }
 
             ValidatePreparedDeployment(validated, completeArtifacts, source.Library);
+            if (request.ReuseVerifiedExistingMaterials)
+            {
+                if (modelCompiler.VerifiedExistingMaterialFileHashes.Count == 0 || completeArtifacts.Any(a => a.Role == Dl1DeploymentArtifactRole.Shared))
+                    throw new InvalidDataException("Verified material reuse cannot publish a shared database or omit verification evidence.");
+                Dl1OfficialModelCompiler.VerifyMaterialReuseFilesAreCurrent(modelCompiler.VerifiedExistingMaterialFileHashes);
+                await EnsureMaterialDatabaseSnapshotIsCurrentAsync(existingMaterialDatabase, materialDatabaseSnapshot, cancellationToken).ConfigureAwait(false);
+            }
             return await CommitAsync(
                 request,
                 validated,
@@ -967,14 +996,44 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 Required: true,
                 "Project-owned animation runtime RPack for loader registration and playback"));
 
-            if (request.InstallProjectDataAnimationRpack)
+            if (request.InstallProjectDataAnimationRpack || HasAcceptedProjectDataPackReplacement(request))
             {
+                string destination = ResolveProjectPath(validated.ProjectRoot, ProjectDataAnimationRpackRelativePath);
+                bool acceptedReplacement = HasAcceptedProjectDataPackReplacement(request);
+                Dictionary<string, string> owned = LoadOwnedHashes(validated.ProjectRoot, cancellationToken);
+                bool ownedExistingPack = File.Exists(destination) &&
+                    owned.TryGetValue(ProjectDataAnimationRpackRelativePath, out string? ownedHash) &&
+                    HashesEqual(Sha256File(destination), ownedHash);
+                string stagedPackPath = runtimePackPath;
+                string? expectedPreimage = null;
+                if (File.Exists(destination) && (acceptedReplacement || ownedExistingPack))
+                {
+                    AnimationScrSections sections = AnimationScrCodec.Build(library.Sequences);
+                    EditorAnimationPackMountPlan mount = await EditorAnimationPackMountPlanner.PrepareAsync(
+                        validated.ProjectRoot,
+                        deploymentModel.Package.Document.ModelId,
+                        runtimePackBytes,
+                        library.Animations.ToDictionary(
+                            static animation => animation.Name,
+                            static animation => animation.Payload,
+                            StringComparer.OrdinalIgnoreCase),
+                        new Dictionary<string, Rp6lAnimationScript>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            [library.AnimationScriptName] = new(sections.RecordsAndNames, sections.IndexAndNames),
+                        },
+                        allowUnownedReplacement: acceptedReplacement || ownedExistingPack,
+                        cancellationToken: cancellationToken).ConfigureAwait(false);
+                    stagedPackPath = Path.Combine(jobDirectory, "animation-project-data.rpack");
+                    await File.WriteAllBytesAsync(stagedPackPath, mount.Payload, cancellationToken).ConfigureAwait(false);
+                    expectedPreimage = mount.ExistingSha256;
+                }
                 artifacts.Add(new StagedArtifact(
                     ProjectDataAnimationRpackRelativePath,
                     Dl1DeploymentArtifactRole.ProjectDataAnimationPack,
-                    runtimePackPath,
+                    stagedPackPath,
                     Required: true,
-                    "Conventional project-data animation RPack for Editor discovery"));
+                    "Merged conventional project-data animation RPack; unrelated animation inventory is retained",
+                    expectedPreimage));
             }
 
             if (request.ExportPortableAnimationRpack)
@@ -1019,7 +1078,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 validated.ProjectRoot,
                 "assets_pc",
                 "local_dx11.mp");
-            if (source.CustomMaterialReferences.Length > 0 || File.Exists(existingMaterialDatabase))
+            if (!request.ReuseVerifiedExistingMaterials && (source.CustomMaterialReferences.Length > 0 || File.Exists(existingMaterialDatabase)))
             {
                 artifacts.Add(StagedArtifact.Placeholder(
                     "assets_pc/local_dx11.mp",
@@ -1027,6 +1086,10 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     required: true,
                     "Shared material database updated or preserved by the official compiler"));
             }
+            if (!request.ReuseVerifiedExistingMaterials && source.CustomMaterialReferences.Length > 0)
+                foreach (string name in new[] { "local_dx11_refs.mp", "local_dx11_debug.mp", "local_dx11_refs_debug.mp" })
+                    artifacts.Add(StagedArtifact.Placeholder("assets_pc/" + name, Dl1DeploymentArtifactRole.Shared,
+                        required: true, "Native material update reference/debug companion"));
             foreach (PreparedCustomModelAnimation animation in library.Animations)
             {
                 artifacts.Add(StagedArtifact.Placeholder(
@@ -1139,6 +1202,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 modelCompiler.MaterialDatabasePath,
                 Required: true,
                 "Shared material database updated or preserved by the official compiler"));
+        }
+        foreach (string path in modelCompiler.MaterialDatabaseCompanionPaths)
+        {
+            string name = Path.GetFileName(path);
+            if (name is not ("local_dx11_refs.mp" or "local_dx11_debug.mp" or "local_dx11_refs_debug.mp"))
+                throw new InvalidDataException("Unexpected native material database companion name.");
+            artifacts.Add(new StagedArtifact("assets_pc/" + name, Dl1DeploymentArtifactRole.Shared,
+                path, Required: true, "Native material update reference/debug companion"));
         }
         foreach ((string name, string path) in animationCompiler.CompiledObjectPaths)
         {
@@ -1299,16 +1370,18 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                     cancellationToken).ConfigureAwait(false);
         foreach (Dl1ProjectAnimationRpackConflict conflict in rpackConflicts)
         {
-            // The prior deployment's conventional pack may be replaced only
-            // while its bytes still match a receipt-owned artifact. Other
-            // active packs remain identity conflicts.
-            if (request.InstallProjectDataAnimationRpack &&
-                string.Equals(conflict.RelativePath, ProjectDataAnimationRpackRelativePath,
+            // Waive this collision only when a real canonical replacement is
+            // staged and is authorized by receipt ownership or explicit review.
+            // Other active packs remain identity conflicts.
+            if (string.Equals(conflict.RelativePath, ProjectDataAnimationRpackRelativePath,
                     StringComparison.OrdinalIgnoreCase) &&
-                owned.TryGetValue(ProjectDataAnimationRpackRelativePath, out string? ownedPackHash) &&
-                File.Exists(ResolveProjectPath(validated.ProjectRoot, ProjectDataAnimationRpackRelativePath)) &&
-                HashesEqual(Sha256File(ResolveProjectPath(validated.ProjectRoot,
-                    ProjectDataAnimationRpackRelativePath)), ownedPackHash))
+                effectiveArtifacts.Any(static artifact =>
+                    artifact.Role == Dl1DeploymentArtifactRole.ProjectDataAnimationPack) &&
+                (HasAcceptedProjectDataPackReplacement(request) ||
+                 (owned.TryGetValue(ProjectDataAnimationRpackRelativePath, out string? ownedPackHash) &&
+                  File.Exists(ResolveProjectPath(validated.ProjectRoot, ProjectDataAnimationRpackRelativePath)) &&
+                  HashesEqual(Sha256File(ResolveProjectPath(validated.ProjectRoot,
+                      ProjectDataAnimationRpackRelativePath)), ownedPackHash))))
             {
                 continue;
             }
@@ -1330,11 +1403,19 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 owned.TryGetValue(staged.RelativePath, out string? ownedHash) &&
                 string.Equals(existingHash, ownedHash, StringComparison.OrdinalIgnoreCase);
             if (staged.Role == Dl1DeploymentArtifactRole.ProjectDataAnimationPack &&
-                existingHash is not null && !isOwned)
+                existingHash is not null && !isOwned && !HasAcceptedProjectDataPackReplacement(request))
             {
                 conflicts.Add(new Dl1DeveloperToolsDeploymentConflict(
                     staged.RelativePath,
                     $"Existing project animation pack '{staged.RelativePath}' is not owned by an active deployment and cannot be replaced.",
+                    CanSkip: false));
+            }
+            if (staged.ExpectedExistingSha256 is not null &&
+                !HashesEqual(existingHash, staged.ExpectedExistingSha256))
+            {
+                conflicts.Add(new Dl1DeveloperToolsDeploymentConflict(
+                    staged.RelativePath,
+                    $"Existing project animation pack '{staged.RelativePath}' changed after its merge was prepared.",
                     CanSkip: false));
             }
             Dl1DeploymentArtifactDisposition disposition;
@@ -1438,7 +1519,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 artifact.RelativePath.StartsWith(
                     $"{AnimationRefreshDirectoryRelativePath}/packages/",
                     StringComparison.OrdinalIgnoreCase))?.RelativePath,
-            ProjectDataAnimationRpackRelativePath = request.InstallProjectDataAnimationRpack
+            ProjectDataAnimationRpackRelativePath = effectiveArtifacts.Any(static artifact =>
+                artifact.Role == Dl1DeploymentArtifactRole.ProjectDataAnimationPack)
                 ? ProjectDataAnimationRpackRelativePath
                 : null,
             AnimationContentManifestRelativePath = effectiveArtifacts
@@ -2443,7 +2525,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
     private static async Task<MaterialDatabaseSnapshot?> SnapshotMaterialDatabaseAsync(
         string livePath,
         string jobDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? bootstrapDirectory = null)
     {
         if (!File.Exists(livePath))
         {
@@ -2452,7 +2535,9 @@ public static partial class Dl1DeveloperToolsProjectDeployer
 
         RejectReparsePoint(livePath);
         string originalHash = await Sha256FileAsync(livePath, cancellationToken).ConfigureAwait(false);
-        string snapshotPath = Path.Combine(jobDirectory, "existing-local_dx11.mp");
+        string snapshotDirectory = Path.Combine(jobDirectory, "existing-materials");
+        Directory.CreateDirectory(snapshotDirectory);
+        string snapshotPath = Path.Combine(snapshotDirectory, "local_dx11.mp");
         await PublishFileAtomicallyAsync(livePath, snapshotPath, cancellationToken).ConfigureAwait(false);
         string snapshotHash = await Sha256FileAsync(snapshotPath, cancellationToken).ConfigureAwait(false);
         if (!HashesEqual(originalHash, snapshotHash))
@@ -2461,7 +2546,33 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 "The existing Developer Tools material database changed while it was being snapshotted.");
         }
 
-        return new MaterialDatabaseSnapshot(snapshotPath, originalHash);
+        string liveDirectory = Path.GetDirectoryName(livePath)!;
+        string[] names = ["local_dx11_refs.mp", "local_dx11_debug.mp", "local_dx11_refs_debug.mp"];
+        string companionSource = liveDirectory;
+        if (names.Take(2).Any(name => !File.Exists(Path.Combine(liveDirectory, name))) && bootstrapDirectory is not null)
+        {
+            companionSource = Path.GetFullPath(bootstrapDirectory);
+            string baseline = Path.Combine(companionSource, "local_dx11.mp");
+            RejectReparsePoint(baseline);
+            if (!HashesEqual(originalHash, await Sha256FileAsync(baseline, cancellationToken).ConfigureAwait(false)))
+                throw new InvalidDataException("The bootstrap material graph does not match the live main database.");
+        }
+        var originalCompanions = ImmutableDictionary.CreateBuilder<string, string?>(StringComparer.OrdinalIgnoreCase);
+        foreach (string name in names)
+        {
+            string liveCompanion = Path.Combine(liveDirectory, name);
+            originalCompanions[name] = File.Exists(liveCompanion)
+                ? await Sha256FileAsync(liveCompanion, cancellationToken).ConfigureAwait(false) : null;
+            string source = Path.Combine(companionSource, name);
+            if (File.Exists(source))
+            {
+                RejectReparsePoint(source);
+                if (new FileInfo(source).Length > 256L * 1024 * 1024)
+                    throw new InvalidDataException("The material database companion exceeds its bounded size.");
+                await PublishFileAtomicallyAsync(source, Path.Combine(snapshotDirectory, name), cancellationToken).ConfigureAwait(false);
+            }
+        }
+        return new MaterialDatabaseSnapshot(snapshotPath, originalHash, originalCompanions.ToImmutable());
     }
 
     private static async Task EnsureMaterialDatabaseSnapshotIsCurrentAsync(
@@ -2472,6 +2583,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         string? currentHash = File.Exists(livePath)
             ? await Sha256FileAsync(livePath, cancellationToken).ConfigureAwait(false)
             : null;
+        if (snapshot is not null)
+            foreach ((string name, string? expected) in snapshot.OriginalCompanionHashes)
+            {
+                string path = Path.Combine(Path.GetDirectoryName(livePath)!, name);
+                string? actual = File.Exists(path) ? await Sha256FileAsync(path, cancellationToken).ConfigureAwait(false) : null;
+                if (!HashesEqual(expected, actual))
+                    throw new InvalidOperationException("A native material database companion changed during deployment preparation.");
+            }
         if (!HashesEqual(currentHash, snapshot?.OriginalSha256))
         {
             throw new InvalidOperationException(
@@ -3053,7 +3172,10 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 relative.StartsWith("assets_pc/", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(relative, "assets_pc/local_dx11.mp", StringComparison.OrdinalIgnoreCase),
             Dl1DeploymentArtifactRole.Shared =>
-                string.Equals(relative, "assets_pc/local_dx11.mp", StringComparison.OrdinalIgnoreCase),
+                string.Equals(relative, "assets_pc/local_dx11.mp", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(relative, "assets_pc/local_dx11_refs.mp", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(relative, "assets_pc/local_dx11_debug.mp", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(relative, "assets_pc/local_dx11_refs_debug.mp", StringComparison.OrdinalIgnoreCase),
             Dl1DeploymentArtifactRole.PortableOnly =>
                 string.Equals(
                     relative,
@@ -3234,12 +3356,17 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         string AnimationLibraryName,
         bool ReferenceExistingAnimationLibrary = false);
 
+    private static bool HasAcceptedProjectDataPackReplacement(Dl1DeveloperToolsDeploymentRequest request) =>
+        request.ConflictResolutions.TryGetValue(ProjectDataAnimationRpackRelativePath, out Dl1DeploymentConflictResolution resolution) &&
+        resolution == Dl1DeploymentConflictResolution.BackUpAndReplace;
+
     private sealed record StagedArtifact(
         string RelativePath,
         Dl1DeploymentArtifactRole Role,
         string? StagedPath,
         bool Required,
-        string Description)
+        string Description,
+        string? ExpectedExistingSha256 = null)
     {
         public static StagedArtifact Placeholder(
             string relativePath,
@@ -3261,7 +3388,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
 
     private sealed record MaterialDatabaseSnapshot(
         string SnapshotPath,
-        string OriginalSha256);
+        string OriginalSha256,
+        ImmutableDictionary<string, string?> OriginalCompanionHashes);
 
     private enum DeploymentTransactionArtifactState
     {
