@@ -131,7 +131,8 @@ internal static class WpfTestDispatcher
             return;
         }
 
-        var application = new ReAnimated.App.App();
+        // Keep the real compiled resources without starting windows, autosave or renderers.
+        var application = new ReAnimated.App.App(startDesktop: false);
         application.InitializeComponent();
         application.ShutdownMode = ShutdownMode.OnExplicitShutdown;
         _application = application;
