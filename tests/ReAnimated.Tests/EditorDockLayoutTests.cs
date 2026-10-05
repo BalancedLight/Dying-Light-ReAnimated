@@ -1,5 +1,6 @@
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Media;
 using System.Windows.Threading;
 using AvalonDock;
 using AvalonDock.Layout;
@@ -10,6 +11,23 @@ namespace ReAnimated.Tests;
 
 public sealed class EditorDockLayoutTests
 {
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void DispatcherLoadsApplicationResourcesWithoutStartingDesktop()
+    {
+        RunOnStaThread(() =>
+        {
+            Application application = Assert.IsType<ReAnimated.App.App>(Application.Current);
+            // Application queues OnStartup at Send priority, even without Run.
+            application.Dispatcher.Invoke(DispatcherPriority.Background, new Action(static () => { }));
+
+            Assert.Null(application.MainWindow);
+            Assert.Empty(application.Windows.Cast<Window>());
+            Assert.IsType<SolidColorBrush>(application.FindResource("AccentBrush"));
+        });
+    }
+
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
@@ -575,9 +593,8 @@ public sealed class EditorDockLayoutTests
 
     private static void DrainIdle(Dispatcher dispatcher)
     {
-        var frame = new DispatcherFrame();
-        _ = dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle,
-            new Action(() => frame.Continue = false));
-        Dispatcher.PushFrame(frame);
+        DispatcherOperation operation = dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle,
+            new Action(static () => { }));
+        Assert.Equal(DispatcherOperationStatus.Completed, operation.Wait(TimeSpan.FromSeconds(10)));
     }
 }

@@ -9,6 +9,7 @@ namespace ReAnimated.App;
 
 public partial class App : Application, IDisposable
 {
+    private readonly bool _startDesktop;
     private readonly WpfStartupSmoke? _startupSmoke;
     private readonly DesktopStartupOptions? _startupOptions;
     private readonly FatalCrashPresentationGate _fatalCrashPresentation =
@@ -24,8 +25,10 @@ public partial class App : Application, IDisposable
 
     internal App(
         WpfStartupSmoke? startupSmoke = null,
-        DesktopStartupOptions? startupOptions = null)
+        DesktopStartupOptions? startupOptions = null,
+        bool startDesktop = true)
     {
+        _startDesktop = startDesktop;
         _startupSmoke = startupSmoke;
         _startupOptions = startupOptions;
     }
@@ -33,6 +36,9 @@ public partial class App : Application, IDisposable
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        // Application queues startup even when a resource-only host never calls Run.
+        if (!_startDesktop) return;
+
         AppPaths paths = AppPaths.CreateDefault();
         JsonWorkspaceStateStore recoveryStore =
             new(paths.AutosaveFile);

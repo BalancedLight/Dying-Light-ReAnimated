@@ -285,7 +285,11 @@ public sealed class GuidedModelSetupTests
                 },
             },
         };
-        using var workspace = CreateWorkspace(model: source);
+        // The canceled output picker must be reached without an installed compiler.
+        // Only file existence is checked before the picker; this file is never executed.
+        var dialogs = new NoDialogs(typeof(GuidedModelSetupTests).Assembly.Location);
+        using var workspace = CreateWorkspace(model: source, fileDialogs: dialogs);
+        workspace.SelectModelCompilerCommand.Execute(null);
         workspace.AnimationScriptAlias = "pose_bank";
         workspace.SetGuidedPreviewHandler(static () => Task.FromResult(true));
 
@@ -299,6 +303,7 @@ public sealed class GuidedModelSetupTests
         Assert.True(workspace.IsGuidedExport);
         Assert.DoesNotContain("pose-only", workspace.GuidedStatus, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("pose_bank", workspace.AnimationScriptAlias);
+        Assert.Equal(1, dialogs.OutputDirectoryRequests);
         Assert.Contains("parent folder for the complete DL1 model package", workspace.GuidedStatus, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -350,9 +355,10 @@ public sealed class GuidedModelSetupTests
         Assert.Equal(selection, Assert.Single(payload.EmbeddedStacks).Selection);
     }
 
-    private static ModelsWorkspaceViewModel CreateWorkspace(bool withModel = false, FbxModelAuthoringImportResult? model = null)
+    private static ModelsWorkspaceViewModel CreateWorkspace(bool withModel = false, FbxModelAuthoringImportResult? model = null,
+        IProjectFileDialogService? fileDialogs = null)
     {
-        var workspace = new ModelsWorkspaceViewModel(new NoDialogs(), static _ => { },
+        var workspace = new ModelsWorkspaceViewModel(fileDialogs ?? new NoDialogs(), static _ => { },
             static _ => Task.CompletedTask, static () => null,
             resolveRigTemplate: (profile, _) => Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)),
             captureAuthoredLayer: static (model, _) => model);
@@ -416,9 +422,17 @@ public sealed class GuidedModelSetupTests
         };
     }
 
-    private sealed class NoDialogs : IProjectFileDialogService
+    private sealed class NoDialogs(string? compilerExecutablePath = null) : IProjectFileDialogService
     {
+        public int OutputDirectoryRequests { get; private set; }
+
         public string? ShowOpenProjectDialog(string? initialPath) => null;
         public string? ShowSaveProjectDialog(string suggestedName, string? currentPath) => null;
+        public string? ShowOpenDl1DeveloperToolsCompilerDialog(string? initialPath) => compilerExecutablePath;
+        public string? ShowSelectCustomModelOutputDirectory(string? initialPath)
+        {
+            OutputDirectoryRequests++;
+            return null;
+        }
     }
 }
