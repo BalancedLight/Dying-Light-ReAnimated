@@ -559,7 +559,8 @@ $hermeticGates = @(
         -Action "test" `
         -Filter $hermeticCodecFilter `
         -InputRoots @($codecRoots + @("tests\fixtures")) `
-        -InputFiles @($testProjectInputs + $hermeticCodecTests)),
+        -InputFiles @($testProjectInputs + $hermeticCodecTests + @(
+            "tests\ReAnimated.Tests\RpackTestData.cs"))),
     (New-Gate `
         -Name "hermetic-viewmodel-wpf" `
         -Category "ViewModel/WPF" `
