@@ -420,7 +420,7 @@ $focusedRendererTests = @(Select-TestInputFiles (
     "^(RendererSceneSource|LinkedTargetExternalPreview|" +
     "RendererCpuReference|RendererGpuSkinning)Tests$"))
 $hermeticCodecTests = @(Select-TestInputFiles (
-    "(Anm2|AnimationScr|AnimationDocument|AuthoringPolicy|CoreAnimation|Evaluation|" +
+    "(Dl1CharacterImport|Anm2|AnimationScr|AnimationDocument|AuthoringPolicy|CoreAnimation|Evaluation|" +
     "Retarget|RootMotion|Mimic|Morph|IkConstraint|Fbx|CustomModel|Secondary|OpenDynamics|TerminalHelperChannelPolicyAuthoring|RigConformance|ConformanceHelper|Dl1ConformanceSessionTransferIdentity|Dl1CompiledSkinningReadBack|Dl1CompiledChrIdentity|Dl1PreparedPhysicalNodeReadBackValidator|Dl1MaterialCompilerSerializationGate|Dl1RigidIndexedSkinning|Dl1OfficialCompilerSkinningReadBackAcceptance|CompilerRetentionAuthoring|CompilerRetentionBatchAuthoring|CanonicalFingerCorrespondence)"))
 $hermeticViewModelTests = @(Select-TestInputFiles (
     "^(AnimationExplorerViewModel|MainWindowViewModelPlaybackFraming|RigChannelPolicyView|RigChannelPolicyWorkflow|ViewModel.*|EditorUsability.*|" +
@@ -496,7 +496,7 @@ $focusedCodecFilter =
     "FullyQualifiedName~CustomModelAuthoringTests)&" +
     $externalControlExclusions
 $hermeticCodecFilter =
-    "(FullyQualifiedName~Anm2|FullyQualifiedName~AnimationScr|" +
+    "(FullyQualifiedName~Dl1CharacterImportTests|FullyQualifiedName~Anm2|FullyQualifiedName~AnimationScr|" +
     "FullyQualifiedName~AnimationDocument|" +
     "FullyQualifiedName~AuthoringPolicy|FullyQualifiedName~CoreAnimation|" +
     "FullyQualifiedName~Evaluation|FullyQualifiedName~Retarget|" +
