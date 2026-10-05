@@ -542,6 +542,18 @@ $focusedGates = @(
 
 $hermeticGates = @(
     (New-Gate `
+        -Name "hermetic-cli-dispatch" `
+        -Category "CLI/package contract" `
+        -Action "test" `
+        -Filter "FullyQualifiedName~CliDispatchTests|FullyQualifiedName~PackageCliDispatchContractTests" `
+        -InputRoots @($viewModelRoots + @("src\ReAnimated.Cli")) `
+        -InputFiles @($testProjectInputs + @(
+            "package_csharp.ps1",
+            "tests\ReAnimated.Tests\CliDispatchTests.cs",
+            "tests\ReAnimated.Tests\PackageCliDispatchContractTests.cs",
+            "tests\ReAnimated.Tests\RpackTestData.cs",
+            "tests\ReAnimated.Tests\TestRepositoryPaths.cs"))),
+    (New-Gate `
         -Name "hermetic-codec-evaluation" `
         -Category "codec/evaluation" `
         -Action "test" `
