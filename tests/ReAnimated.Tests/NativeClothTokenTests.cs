@@ -17,9 +17,7 @@ public sealed class NativeClothTokenTests
     }
 
     [Theory]
-    [InlineData("plain")]
-    [InlineData("slash\\quote\"combined")]
-    [InlineData("\u03a9")]
+    [MemberData(nameof(ReplacementValues))]
     public void ReplacementEscapesAndReparsesLiteral(string value)
     {
         var syntax = Dl1ClothCodec.Parse("Unknown(\"old\")");
@@ -27,6 +25,13 @@ public sealed class NativeClothTokenTests
         var updated = syntax.ReplaceQuotedArguments(new Dictionary<NativeClothQuotedArgument, string> { [token] = value });
         Assert.Equal(value, updated.Commands.Single().QuotedArguments.Single().Value);
     }
+
+    public static IEnumerable<object[]> ReplacementValues() =>
+    [
+        ["plain"],
+        [new string(['s', 'l', 'a', 's', 'h', '\\', 'q', 'u', 'o', 't', 'e', '"', 'c', 'o', 'm', 'b', 'i', 'n', 'e', 'd'])],
+        ["Ω"],
+    ];
 
     [Fact]
     public void StaleOrForgedTokensCannotChangeUnrelatedText()

@@ -1,4 +1,4 @@
-using System.Collections.Immutable;
+﻿using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text.Json;
 using ReAnimated.Codecs.CompactMesh;
@@ -35,7 +35,9 @@ public sealed record Dl1CompiledChrIdentityReadBackEvidence(
 /// Verifies CHR object identity and the source-writer's object-order contract,
 /// then joins compiled skin variants by name. This proves the current generated
 /// CHR-to-compact table binding order; it does not compare or validate transforms.
-/// Variant feature bits, material substitutions, entity flag bits, and opaque
+/// Source skin names may be supplied separately because CHR transform variants and
+/// .skn material/visibility skins are different systems. Variant feature bits,
+/// material substitutions, entity flag bits, and opaque
 /// overrides are preserved as evidence without interpretation.
 /// </summary>
 public static class Dl1CompiledChrIdentityValidator
@@ -49,7 +51,8 @@ public static class Dl1CompiledChrIdentityValidator
     public static Dl1CompiledChrIdentityReadBackEvidence Validate(
         Dl1ChrV4Document sourceChr,
         CompactMeshDocument compiledHierarchy,
-        CompiledMeshGeometryDocument compiledGeometry)
+        CompiledMeshGeometryDocument compiledGeometry,
+        IEnumerable<string>? sourceSkinNames = null)
     {
         ArgumentNullException.ThrowIfNull(sourceChr);
         ArgumentNullException.ThrowIfNull(compiledHierarchy);
@@ -102,12 +105,12 @@ public static class Dl1CompiledChrIdentityValidator
         if (compiledGeometry.SkinDefinitions.Count == 0)
             throw new InvalidDataException("The compiled mesh has no exact decoded skin-definition table for CHR variant comparison.");
 
-        string[] sourceVariantNames = sourceChr.Variants.Select(static variant => variant.Name).ToArray();
+        string[] sourceVariantNames = (sourceSkinNames ?? sourceChr.Variants.Select(static variant => variant.Name)).ToArray();
         string[] compiledVariantNames = compiledGeometry.SkinDefinitions.Select(static skin => skin.Name).ToArray();
-        var sourceVariants = new Dictionary<string, Dl1ChrV4Variant>(IdentityComparer);
-        foreach (Dl1ChrV4Variant variant in sourceChr.Variants)
+        var sourceVariants = new HashSet<string>(IdentityComparer);
+        foreach (string variant in sourceVariantNames)
         {
-            if (!sourceVariants.TryAdd(variant.Name, variant))
+            if (!sourceVariants.Add(variant))
                 throw new InvalidDataException("Source CHR variant identities are ambiguous.");
         }
 
@@ -122,8 +125,8 @@ public static class Dl1CompiledChrIdentityValidator
         if (compiledGeometry.VariantNames.Count != compiledVariantNames.Length ||
             !decodedNameSet.SetEquals(compiledVariantSet) ||
             sourceVariants.Count != compiledVariantSet.Count ||
-            sourceVariants.Keys.Except(compiledVariantSet, IdentityComparer).Any() ||
-            compiledVariantSet.Except(sourceVariants.Keys, IdentityComparer).Any())
+            sourceVariants.Except(compiledVariantSet, IdentityComparer).Any() ||
+            compiledVariantSet.Except(sourceVariants, IdentityComparer).Any())
         {
             throw new InvalidDataException(
                 $"Compiled skin variant identities differ from source CHR (source [{string.Join(", ", sourceVariantNames)}], " +
@@ -137,7 +140,7 @@ public static class Dl1CompiledChrIdentityValidator
         {
             if ((uint)skin.Index >= (uint)compiledGeometry.SkinDefinitions.Count ||
                 !compiledSkinIndexes.Add(skin.Index) ||
-                !sourceVariants.TryGetValue(skin.Name, out Dl1ChrV4Variant? sourceVariant))
+                !sourceVariants.TryGetValue(skin.Name, out string? sourceVariant))
             {
                 throw new InvalidDataException("A compiled skin row cannot be uniquely joined to a source CHR variant.");
             }
@@ -165,7 +168,7 @@ public static class Dl1CompiledChrIdentityValidator
 
             variantRows.Add(new(
                 skin.Index,
-                sourceVariant.Name,
+                sourceVariant,
                 skin.Name,
                 skin.RawFeatures,
                 skin.SurfaceOverrideCount,

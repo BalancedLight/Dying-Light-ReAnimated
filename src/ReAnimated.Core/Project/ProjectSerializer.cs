@@ -181,7 +181,7 @@ public static class ProjectSerializer
         }
     }
 
-    public static string SaveAtomic(DlraProject project, string path)
+    public static string SaveAtomic(DlraProject project, string path, bool overwrite = true)
     {
         ArgumentNullException.ThrowIfNull(project);
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
@@ -202,7 +202,10 @@ public static class ProjectSerializer
             throw new ArgumentException("The project path must have a parent directory.", nameof(path));
         }
 
-        EnsureExistingTargetCanBeReplaced(fullPath);
+        if (overwrite)
+            EnsureExistingTargetCanBeReplaced(fullPath);
+        else if (File.Exists(fullPath) || Directory.Exists(fullPath))
+            throw new IOException("The output already exists. Choose a new path.");
         Directory.CreateDirectory(directory);
         string tempPath = Path.Combine(
             directory,
@@ -222,7 +225,7 @@ public static class ProjectSerializer
                 stream.Flush(flushToDisk: true);
             }
 
-            File.Move(tempPath, fullPath, overwrite: true);
+            File.Move(tempPath, fullPath, overwrite);
             return fullPath;
         }
         finally

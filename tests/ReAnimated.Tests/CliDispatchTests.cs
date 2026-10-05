@@ -13,6 +13,7 @@ public sealed class CliDispatchTests
         "inspect-fbx",
         "inspect-rpack",
         "inspect-fed",
+        "inspect-source-msh",
         "new-project",
         "validate-project",
         "discover-dl1",
@@ -23,6 +24,10 @@ public sealed class CliDispatchTests
         "conform-model",
         "deploy-model",
         "batch-models",
+        "bind-player-appearance",
+        "character",
+        "material-graph",
+        "app",
     ];
 
     [Fact]

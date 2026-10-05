@@ -28,6 +28,8 @@ public sealed record Dl1SourceModelBuildRequest
     /// stock script for an exact custom bind.
     /// </summary>
     public string? AnimationScriptAlias { get; init; }
+    /// <summary>Explicit diagnostic output only; this never grants complete or game-ready status.</summary>
+    public bool AllowIncompleteCharacterDiagnostics { get; init; }
 }
 
 public sealed record Dl1PreparedMorphTargetExpectation(string Name, ImmutableArray<Vector3D> PositionDeltas);
@@ -61,12 +63,15 @@ public sealed record Dl1SourceModelBuildResult(
     public ImmutableArray<Dl1PreparedPhysicalNodeExpectation> PreparedPhysicalNodeExpectations { get; init; } = [];
     [JsonIgnore]
     public ImmutableArray<Dl1PreparedMorphSurfaceExpectation> PreparedMorphExpectations { get; init; } = [];
+    public string? SkinDefinitionSourcePath { get; init; }
+    public ImmutableArray<Dl1SkinGenerationDefinition> PreparedSkinDefinitions { get; init; } = [];
 }
 
 /// <summary>
 /// Writes the documented Chrome source-MSH, structured CHR v4 character
 /// definition, and companion scripts consumed by Techland's editor compiler.
-/// Compact .skn/.msh_obj products remain outputs of the official compiler.
+/// Text .skn definitions are source sidecars, distinct from compact .skn/.msh_obj
+/// products emitted by the official compiler.
 /// </summary>
 public static class Dl1SourceModelWriter
 {
@@ -93,7 +98,19 @@ public static class Dl1SourceModelWriter
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        CharacterActorSourceAuthoring.RevalidateAll(request.Model.Package);
+        CharacterMaterialFallbackAuthoring.Revalidate(request.Model.Package);
+        CharacterTextureFallbackAuthoring.Revalidate(request.Model.Package);
+        CharacterFacialAssociationAuthoring.Revalidate(request.Model.Package);
         ValidateMorphInventory(request.Model);
+        if (!request.AllowIncompleteCharacterDiagnostics)
+        {
+            var expressionBlockers = MorphAuthoringEvidence.ExportBlockers(request.Model).AddRange(CharacterBodyRegionAuthoring.ExportBlockers(request.Model));
+            if (!expressionBlockers.IsEmpty)
+                throw new InvalidDataException("Character expression export is blocked: " + string.Join("; ", expressionBlockers));
+        }
+        if (!request.AllowIncompleteCharacterDiagnostics && request.Model.Package.Document.CharacterResources is { } inventory && !inventory.IsDependencyComplete)
+            throw new InvalidDataException("Complete character export is blocked: " + string.Join("; ", inventory.ExportBlockers));
         ArgumentException.ThrowIfNullOrWhiteSpace(request.OutputDirectory);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.ResourceName);
         ArgumentException.ThrowIfNullOrWhiteSpace(request.SurfaceName);
@@ -107,15 +124,14 @@ public static class Dl1SourceModelWriter
         PreparedSourceModel prepared = Prepare(request.Model, resourceName, surfaceName, cancellationToken);
         ImmutableArray<Dl1ResolvedBoneScriptPolicy> componentPolicies = request.Model.Package.Document.RiggingSession is not null && prepared.RigContract is not null
             ? Dl1BoneScriptPolicyResolver.Resolve(request.Model.Package.Document, prepared.RigContract) : default;
-        Dl1NativeCompanionBuild companions = Dl1NativeCompanionWriter.Build(
-            request.Model.Package.Document, resourceName, prepared.BoneNames);
+        Dl1NativeCompanionBuild companions = Dl1NativeCompanionWriter.BuildPreservedPackage(
+            request.Model.Package, resourceName, prepared.BoneNames);
         byte[] msh = BuildMsh(prepared);
         ImmutableArray<Dl1PreparedPhysicalNodeExpectation> preparedPhysicalNodeExpectations =
             BuildPreparedPhysicalNodeExpectations(prepared);
-        byte[] chr = Dl1ChrV4Codec.Build(
-            Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(
-                BuildChrObjects(prepared),
-                "default"));
+        byte[] chr = BuildCharacterDefinition(request.Model.Package, BuildChrObjects(prepared));
+        ImmutableArray<Dl1SkinGenerationDefinition> skins=Dl1CharacterSkinAuthoring.FromInventory(request.Model.Package.Document.CharacterResources,prepared.MaterialNames);
+        string? skinSource=skins.IsEmpty?null:Dl1SkinDefinitionCodec.GenerateCanonical(skins).Write();
         string bscr = BuildBoneScript(prepared.BoneNames, componentPolicies);
         string? animationScriptAlias = string.IsNullOrWhiteSpace(request.AnimationScriptAlias)
             ? null
@@ -126,7 +142,7 @@ public static class Dl1SourceModelWriter
         string blocked =
             "DL ReAnimated generated bounded DL1 source-model compiler inputs.\r\n" +
             "The following requested products are intentionally not fabricated:\r\n" +
-            "  - .skn\r\n" +
+            "  - compiled binary .skn (the text skin sidecar is a distinct source input)\r\n" +
             "  - .msh_obj\r\n" +
             "Use Techland's matching Dying Light Developer Tools compiler to create its compact output.\r\n" +
             "A future built-in writer must pass installed-build structural and runtime validation first.\r\n";
@@ -138,6 +154,7 @@ public static class Dl1SourceModelWriter
             [$"{resourceName}.bscr"] = Encoding.UTF8.GetBytes(bscr),
             ["BLOCKED_OUTPUTS.txt"] = Encoding.UTF8.GetBytes(blocked),
         };
+        if(skinSource is not null) files[$"{resourceName}.skn"]=Encoding.UTF8.GetBytes(skinSource);
         if (!componentPolicies.IsDefault)
             files[$"{resourceName}.components.json"] = JsonSerializer.SerializeToUtf8Bytes(new
             {
@@ -189,7 +206,7 @@ public static class Dl1SourceModelWriter
             {
                 state = CustomModelBuildState.CompilerReady.ToString(),
                 sourceMsh = "Chrome source MSH for the official Techland compiler",
-                characterDefinition = "Structured DL1 CHR v4 with one default variant in exact physical object order",
+                characterDefinition = "Structured DL1 CHR v4 with all original transform variants when available in exact physical object order",
                 boneScript = componentPolicies.IsDefault ? "Per-entity POS/ROT, plus root SCL" : "Explicit per-entity studio component and LOD decisions",
                 animationScript = ascr is null ? "not authored" : "explicit user-supplied alias",
                 materials = "Techland DMT sources with user-owned diffuse/normal/specular DDS dependencies",
@@ -241,6 +258,7 @@ public static class Dl1SourceModelWriter
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string stagedPath = Path.Combine(temporaryDirectory, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(stagedPath)!);
                 await File.WriteAllBytesAsync(stagedPath, bytes, cancellationToken).ConfigureAwait(false);
             }
 
@@ -250,6 +268,7 @@ public static class Dl1SourceModelWriter
                 cancellationToken.ThrowIfCancellationRequested();
                 string stagedPath = Path.Combine(temporaryDirectory, relativePath);
                 string finalPath = Path.Combine(outputDirectory, relativePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(finalPath)!);
                 File.Move(stagedPath, finalPath, overwrite: true);
             }
         }
@@ -292,6 +311,8 @@ public static class Dl1SourceModelWriter
             ])
         {
             CapabilityDiagnostics = capabilityDiagnostics,
+            SkinDefinitionSourcePath=skinSource is null?null:Path.Combine(outputDirectory,$"{resourceName}.skn"),
+            PreparedSkinDefinitions=skins,
             NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
             BoneScriptPolicies = componentPolicies,
             AuthoredRigContract = prepared.RigContract,
@@ -464,6 +485,20 @@ public static class Dl1SourceModelWriter
         }
     }
 
+    private static byte[] BuildCharacterDefinition(CustomModelPackage package, IEnumerable<Dl1ChrV4ObjectTransform> objects)
+    {
+        var ordered = objects.ToImmutableArray();
+        var records = package.Document.CharacterResources?.Resources.Where(r => !r.IsOriginalArchive && r.EntryPath is not null &&
+            Path.GetExtension(r.LogicalName).Equals(".chr", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
+        if (records.Length > 1) throw new InvalidDataException("Multiple character definitions need an explicit selected output definition.");
+        if (records.Length == 0) return Dl1ChrV4Codec.Build(Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(ordered,"default"));
+        var original = Dl1ChrV4Codec.Parse(package.CompanionPayloads[records[0].EntryPath!].AsSpan());
+        var indexes = original.ObjectNames.Select((name,index) => (name,index)).ToDictionary(r=>r.name,r=>r.index,StringComparer.Ordinal);
+        if (original.ObjectNames.Any(name=>!ordered.Any(o=>o.Name==name))) throw new InvalidDataException("Original CHR object references are missing from the emitted hierarchy.");
+        return Dl1ChrV4Codec.Build(new(ordered.Select(o=>o.Name).ToImmutableArray(), original.Variants.Select(v=>v with
+            { ObjectTransforms = ordered.Select(o=>indexes.TryGetValue(o.Name,out int index)?v.ObjectTransforms[index]:o.LocalTransform).ToImmutableArray() }).ToImmutableArray()));
+    }
+
     private static PreparedSourceModel Prepare(
         FbxModelAuthoringImportResult model,
         string resourceName,
@@ -551,7 +586,13 @@ public static class Dl1SourceModelWriter
                 lods.Add(CombineLodDraws(draws.ToImmutable(), sourceNode.Name, level.LodIndex));
             }
             bool skinned = model.Surfaces[sourceNode.Levels[0].SurfaceIndexes[0]].IsSkinned;
-            string nodeName = UniqueName(SanitizeName($"{resourceName}_{sourceNode.Name}_p{nodeIndex:00}", 63), usedNames);
+            string nodeName;
+            if (document.Source.Kind == CustomModelSourceKind.StockCharacter)
+            {
+                nodeName = RequireExactResourceName(sourceNode.Name, 63, "original mesh entity");
+                if (!usedNames.Add(nodeName)) throw new InvalidDataException($"Original mesh entity '{nodeName}' conflicts with another output entity; rename requires a reviewed reference transaction.");
+            }
+            else nodeName = UniqueName(SanitizeName($"{resourceName}_{sourceNode.Name}_p{nodeIndex:00}", 63), usedNames);
             geometryNodes.Add(new SourceNode(nodeName, skinned ? NodeSkinnedMesh : NodeMesh,
                 -1, TransformMatrix.Identity, TransformMatrix.Identity,
                 ComputeBounds(lods.SelectMany(static lod => lod.Positions)),
@@ -1338,3 +1379,5 @@ public static class Dl1SourceModelWriter
         ImmutableArray<SourceNode> GeometryNodes,
         Dl1AuthoredRigContract? RigContract);
 }
+
+

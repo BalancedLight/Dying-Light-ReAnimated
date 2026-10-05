@@ -15,6 +15,7 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
 
     private readonly Rp6lChunkCache _chunkCache;
     private readonly bool _ownsChunkCache;
+    private readonly IReadOnlyList<Dl1RetailProviderDiagnostic> _diagnostics;
 
     private Dl1RetailProviderSet(
         Rp6lChunkCache chunkCache,
@@ -27,14 +28,23 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
         _ownsChunkCache = ownsChunkCache;
         Providers = providers;
         RpackProvider = rpackProvider;
-        Diagnostics = diagnostics;
+        _diagnostics = diagnostics;
     }
 
     public IReadOnlyList<IRetailAssetProvider> Providers { get; }
 
     public RpackAssetProvider RpackProvider { get; }
 
-    public IReadOnlyList<Dl1RetailProviderDiagnostic> Diagnostics { get; }
+    public RpackEffectAssetProvider RpackEffectProvider =>
+        Providers.OfType<RpackEffectAssetProvider>().Single();
+
+    public IReadOnlyList<Dl1RetailProviderDiagnostic> Diagnostics => _diagnostics
+        .Concat(RpackEffectProvider.SourceErrors.Select(static error =>
+            new Dl1RetailProviderDiagnostic("rpack-effect-invalid", error.Path,
+                error.ResourceIndex is { } index
+                    ? $"Resource {index} ({error.ResourceName}): {error.Message}"
+                    : error.Message)))
+        .ToArray();
 
     public static Dl1RetailProviderSet Create(
         string installPath,
@@ -154,6 +164,8 @@ public sealed class Dl1RetailProviderSet : IAsyncDisposable
             limits,
             installId);
         providers.Add(rpackProvider);
+        providers.Add(new RpackEffectAssetProvider(
+            "dl1-rpack-effects", rpackProvider, effectiveCache, installId));
         if (paks.Count > 0)
         {
             providers.Add(new ZipPakAssetProvider(

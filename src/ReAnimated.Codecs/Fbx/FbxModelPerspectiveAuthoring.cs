@@ -92,7 +92,13 @@ public static class FbxModelPerspectiveAuthoring
         ImmutableArray<FbxModelSurface> surfaces = model.Surfaces
             .SelectMany(surface => FilterSurface(surface, selection))
             .ToImmutableArray();
-        return model with { Surfaces = surfaces };
+        var ids=surfaces.Select(s=>s.Id).ToHashSet(StringComparer.Ordinal);
+        var nativeLods=model.SourceCharacterLods.Select(node=>node with { Levels=node.Levels.Select(level=>level with
+            { SurfaceIds=level.SurfaceIds.Where(ids.Contains).ToImmutableArray() }).ToImmutableArray() })
+            .Where(node=>node.Levels.Any(level=>!level.SurfaceIds.IsEmpty)).ToImmutableArray();
+        if(nativeLods.Any(node=>node.Levels.Any(level=>level.SurfaceIds.IsEmpty)))
+            throw new InvalidDataException("The FPP selection removes an entire LOD from a retained mesh. Review visibility consistently across all its LODs.");
+        return model with { Surfaces = surfaces, SourceCharacterLods=nativeLods };
     }
 
     /// <summary>Creates an export-only FPP view; the editable source model is unchanged.</summary>
@@ -121,6 +127,7 @@ public static class FbxModelPerspectiveAuthoring
             MorphChannels = channels,
             MorphSignature = FbxModelAuthoringImporter.ComputeMorphSignature(channels, visible.Surfaces),
             FacialPresets = facial,
+            MorphAuthoringRecords=sourceDocument.MorphAuthoringRecords.Where(r=>channels.Any(c=>c.Name==r.Name)).Select(r=>r with {TargetChannelSlot=channels.Single(c=>c.Name==r.Name).Index}).ToImmutableArray(),
         };
         exportDocument.Validate();
         ImmutableDictionary<Guid, AnimationClip> clips = model.AnimationClips

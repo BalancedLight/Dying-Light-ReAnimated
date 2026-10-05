@@ -16,6 +16,27 @@ public partial class ModelsWorkspaceView : UserControl
         ApplySetupMode();
     }
 
+    private void OnOpenFaceExpressions(object sender, RoutedEventArgs args)
+    {
+        CharacterFaceExpressions.IsExpanded = true;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded,
+            new Action(() =>
+            {
+                CharacterSystemsScroll.UpdateLayout();
+                Point location = CharacterFaceExpressions.TranslatePoint(new Point(0, 0), CharacterSystemsScroll);
+                CharacterSystemsScroll.ScrollToVerticalOffset(CharacterSystemsScroll.VerticalOffset + location.Y);
+            }));
+    }
+    private void OnOpenCharacterCompanions(object sender, RoutedEventArgs args)
+    {
+        CharacterCompanionAuthoringPanel.IsExpanded = true;
+        _ = Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(() =>
+        {
+            CharacterSystemsScroll.UpdateLayout();
+            Point location = CharacterCompanionAuthoringPanel.TranslatePoint(new Point(0, 0), CharacterSystemsScroll);
+            CharacterSystemsScroll.ScrollToVerticalOffset(CharacterSystemsScroll.VerticalOffset + location.Y);
+        }));
+    }
     private void OnWorkspaceChanged(object sender, DependencyPropertyChangedEventArgs args)
     {
         if (args.OldValue is ModelsWorkspaceViewModel previous) previous.Conformance.PropertyChanged -= OnSetupModeChanged;

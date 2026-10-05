@@ -22,6 +22,7 @@ public enum Dl1DeploymentArtifactRole
     PortableOnly,
     ManifestOwned,
     ProjectDataAnimationPack,
+    CharacterCompanionSource,
 }
 
 public enum Dl1DeploymentConflictResolution
@@ -904,8 +905,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
         {
             throw new InvalidDataException("The source writer did not produce the required model ASCR redirect.");
         }
-        Dl1NativeCompanionBuild expectedCompanions = Dl1NativeCompanionWriter.Build(
-            deploymentModel.Package.Document, validated.ModelResourceName,
+        Dl1NativeCompanionBuild expectedCompanions = Dl1NativeCompanionWriter.BuildPreservedPackage(
+            deploymentModel.Package, validated.ModelResourceName,
             deploymentModel.Package.Document.CreateEffectiveBones().Select(bone => bone.Name));
         foreach ((string name, byte[] bytes) in expectedCompanions.Files)
         {
@@ -950,6 +951,14 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 sourcePath,
                 Required: true,
                 $"Model source {fileName}"));
+        }
+
+        foreach(string name in source.NativeCompanionFiles.Where(n=>n.StartsWith("character-resources/",StringComparison.Ordinal)))
+        {
+            string relative=NormalizeRelativePath(Dl1NativeCompanionWriter.PreservedVirtualPath(name));
+            ValidateReceiptArtifactRolePath(Dl1DeploymentArtifactRole.CharacterCompanionSource,relative,validated.CharacterId,validated.ModelResourceName,validated.AnimationLibraryName);
+            artifacts.Add(new StagedArtifact(relative,Dl1DeploymentArtifactRole.CharacterCompanionSource,Path.Combine(modelSourceDirectory,name),
+                Required:true,"Preserved original character companion "+relative));
         }
 
         if (!request.ReferenceExistingAnimationLibrary)
@@ -1173,6 +1182,13 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 textureObjectPath,
                 Required: true,
                 "Official compiler texture object"));
+        }
+
+        foreach(var (resourceName,path) in modelCompiler.DetachedMeshObjectPaths)
+        {
+            string relative=NormalizeRelativePath("assets_pc/characters/"+validated.CharacterId+"/"+resourceName+".msh_obj");
+            ValidateReceiptArtifactRolePath(Dl1DeploymentArtifactRole.Compiled,relative,validated.CharacterId,validated.ModelResourceName,validated.AnimationLibraryName);
+            artifacts.Add(new StagedArtifact(relative,Dl1DeploymentArtifactRole.Compiled,path,Required:true,"Retained detached mesh object"));
         }
 
         foreach (Dl1OfficialCompilerDependencySidecar sidecar in modelCompiler.DependencySidecars)
@@ -3166,6 +3182,8 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 relative.StartsWith($"data/characters/{character}/", StringComparison.OrdinalIgnoreCase) ||
                 relative.StartsWith("data/characters/animations/", StringComparison.OrdinalIgnoreCase) ||
                 IsOwnedNativePhysicsPath(relative, model),
+            Dl1DeploymentArtifactRole.CharacterCompanionSource=>relative.StartsWith("data/",StringComparison.OrdinalIgnoreCase) &&
+                Path.GetExtension(relative).ToLowerInvariant() is ".scr" or ".phx" or ".bel" or ".def" or ".mpcloth" or ".fed" or ".ascr" or ".bscr" or ".fx",
             Dl1DeploymentArtifactRole.Compiled =>
                 relative.StartsWith($"assets_pc/characters/{character}/", StringComparison.OrdinalIgnoreCase) ||
                 relative.StartsWith("assets_pc/characters/animations/", StringComparison.OrdinalIgnoreCase) ||

@@ -1007,12 +1007,15 @@ public sealed class ModelsWorkspacePersistenceTests
     {
         MethodInfo method = typeof(MainWindowViewModel).GetMethod(
                 "PersistModelsWorkspaceAsync",
-                BindingFlags.Instance | BindingFlags.NonPublic) ??
+                BindingFlags.Instance | BindingFlags.NonPublic,
+                binder: null,
+                types: [typeof(DlraProject), typeof(string), typeof(bool), typeof(CancellationToken)],
+                modifiers: null) ??
             throw new InvalidOperationException(
                 "Models-workspace persistence entry point was not found.");
         object? invocation = method.Invoke(
             viewModel,
-            [project, projectPath, CancellationToken.None]);
+            [project, projectPath, true, CancellationToken.None]);
         Task<DlraProject> task = Assert.IsAssignableFrom<Task<DlraProject>>(
             invocation);
         return await task;

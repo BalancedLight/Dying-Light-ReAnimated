@@ -600,6 +600,7 @@ public sealed class EditorUsabilitySurfaceTests
         Assert.Collection(
             inspectorTabHeaders,
             header => Assert.Equal("Setup", header),
+            header => Assert.Equal("Character", header),
             header => Assert.Equal("Bones", header),
             header => Assert.Equal("Materials", header),
             header => Assert.Equal("Clips", header),
@@ -817,10 +818,33 @@ public sealed class EditorUsabilitySurfaceTests
                 "src",
                 "ReAnimated.App",
                 "App.xaml.cs"));
-        Assert.Contains(
-            "_ = InitializeWorkspaceAsync(viewModel);",
-            applicationStartup,
+        int startupMethod = applicationStartup.IndexOf(
+            "protected override void OnStartup", StringComparison.Ordinal);
+        int readinessMethod = applicationStartup.IndexOf(
+            "private async Task CompleteAppControlStartupAsync", StringComparison.Ordinal);
+        Assert.True(startupMethod >= 0);
+        Assert.True(readinessMethod > startupMethod);
+        string startupBody = applicationStartup[startupMethod..readinessMethod];
+        int windowShown = startupBody.IndexOf("window.Show();", StringComparison.Ordinal);
+        int workspaceInitialization = startupBody.IndexOf(
+            "Task workspaceInitialization = _startupSmoke is null", StringComparison.Ordinal);
+        int readinessScheduled = startupBody.IndexOf(
+            "_ = CompleteAppControlStartupAsync(workspaceInitialization, installedBuildInitialization);",
             StringComparison.Ordinal);
+        Assert.True(windowShown >= 0);
+        Assert.True(workspaceInitialization > windowShown);
+        Assert.True(readinessScheduled > workspaceInitialization);
+        Assert.Contains("? InitializeWorkspaceAsync(viewModel) : Task.CompletedTask;",
+            startupBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("await ", startupBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(".GetAwaiter()", startupBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Wait(", startupBody, StringComparison.Ordinal);
+        int initializationCompleted = applicationStartup.IndexOf(
+            "await Task.WhenAll(workspace, installedBuild);", readinessMethod, StringComparison.Ordinal);
+        int controlsReady = applicationStartup.IndexOf(
+            "_appControlReady = true;", readinessMethod, StringComparison.Ordinal);
+        Assert.True(initializationCompleted > readinessMethod);
+        Assert.True(controlsReady > initializationCompleted);
         // Startup opens the requested project before restoring its catalog,
         // so the catalog uses that project's retail roots.
         int projectOpen = applicationStartup.IndexOf(

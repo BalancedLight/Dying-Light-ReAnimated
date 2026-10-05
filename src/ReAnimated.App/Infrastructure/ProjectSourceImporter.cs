@@ -9,7 +9,7 @@ public sealed record ImportedProjectSource(
     string ProjectRelativePath,
     string Sha256);
 
-public static class ProjectSourceImporter
+public static partial class ProjectSourceImporter
 {
     /// <summary>
     /// Atomic writes here and in <see cref="PendingProjectAssetStore"/> stage
@@ -287,6 +287,10 @@ public static class ProjectSourceImporter
         string sourcePath,
         string destinationPath,
         CancellationToken cancellationToken)
+        => await CopyAtomicAsync(sourcePath, destinationPath, null, cancellationToken).ConfigureAwait(false);
+
+    private static async Task CopyAtomicAsync(string sourcePath, string destinationPath,
+        string? expectedSha256, CancellationToken cancellationToken)
     {
         string destinationDirectory =
             Path.GetDirectoryName(destinationPath)
@@ -323,6 +327,11 @@ public static class ProjectSourceImporter
                 destination.Flush(flushToDisk: true);
             }
 
+            if (expectedSha256 is not null && !string.Equals(
+                    await ComputeSha256Async(temporaryPath, cancellationToken).ConfigureAwait(false),
+                    expectedSha256, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("The source asset changed while being copied.");
+            cancellationToken.ThrowIfCancellationRequested();
             File.Move(temporaryPath, destinationPath, overwrite: false);
         }
         finally

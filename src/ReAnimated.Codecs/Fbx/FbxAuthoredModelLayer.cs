@@ -14,6 +14,7 @@ public static class FbxAuthoredModelLayer
     public static FbxModelAuthoringImportResult Capture(FbxModelAuthoringImportResult model, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(model);
+        if (model.Package.Document.GeometryRevision is not null) return ReAnimated.Codecs.Models.ModelGeometryRevisionCodec.Capture(model);
         model.Package.Document.Validate();
         var reference = model.Package.Document.AuthoredLayer ?? new AuthoredModelLayerReference {
             SourceRigMode = CustomModelRigMode.Auto, SourceIgnoreMorphChannels = model.Package.Document.IgnoreMorphChannels,
@@ -89,7 +90,9 @@ public static class FbxAuthoredModelLayer
     }
 
     public static FbxModelAuthoringImportResult DecodeSource(CustomModelPackage package, AuthoredModelLayerReference reference, CancellationToken cancellationToken = default) =>
-        FbxModelAuthoringImporter.Import(package.SourceFbx.AsSpan(), package.Document.Source.OriginalFileName,
+        package.Document.Source.Kind == CustomModelSourceKind.StockCharacter
+            ? ReAnimated.Codecs.Models.DecodedCharacterSnapshotCodec.DecodeSource(package, cancellationToken)
+            : FbxModelAuthoringImporter.Import(package.SourceFbx.AsSpan(), package.Document.Source.OriginalFileName,
             new() { RigMode = reference.SourceRigMode, IgnoreMorphChannels = reference.SourceIgnoreMorphChannels, DecodeAnimationClips = false }, cancellationToken);
 
     /// <summary>Replays onto a fresh source decode after validating both source and target contracts.</summary>

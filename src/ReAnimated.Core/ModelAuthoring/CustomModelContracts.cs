@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Text;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
@@ -107,8 +107,11 @@ public sealed record CustomModelImportDiagnostic
     }
 }
 
+public enum CustomModelSourceKind { BinaryFbx, StockCharacter }
+
 public sealed record CustomModelSourceIdentity
 {
+    public CustomModelSourceKind Kind { get; init; }
     public string OriginalFileName { get; init; } = string.Empty;
 
     public string ContentSha256 { get; init; } = string.Empty;
@@ -120,13 +123,14 @@ public sealed record CustomModelSourceIdentity
     internal void Validate(string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(OriginalFileName, parameterName);
-        if (!string.Equals(Path.GetExtension(OriginalFileName), ".fbx", StringComparison.OrdinalIgnoreCase))
+        if (!Enum.IsDefined(Kind)) throw new ArgumentException("Unsupported model source kind.", parameterName);
+        if (Kind == CustomModelSourceKind.BinaryFbx && !string.Equals(Path.GetExtension(OriginalFileName), ".fbx", StringComparison.OrdinalIgnoreCase))
         {
             throw new ArgumentException("Custom models must retain a binary FBX source snapshot.", parameterName);
         }
 
         ProjectAssetReference.ValidateSha256(ContentSha256, parameterName);
-        if (FbxVersion <= 0)
+        if (Kind == CustomModelSourceKind.BinaryFbx && FbxVersion <= 0)
         {
             throw new ArgumentOutOfRangeException(parameterName, "FBX versions must be positive.");
         }
@@ -206,8 +210,11 @@ public sealed record CustomModelBone
 
     public bool IsWeighted { get; init; }
 
+    public Dl1AuthoredBoneBounds? LocalBounds { get; init; }
+
     internal void Validate(int expectedIndex, string parameterName)
     {
+        if (LocalBounds is { } bounds && !bounds.IsFiniteAndNonNegative) throw new ArgumentException("Bone bounds must be finite and nonnegative.", parameterName);
         if (Index != expectedIndex || ParentIndex >= Index || ParentIndex < -1)
         {
             throw new ArgumentException("Custom-model bones must use a topological contiguous order.", parameterName);
@@ -660,12 +667,12 @@ public sealed record CustomModelBuildSettings
 
 /// <summary>
 /// Portable metadata stored inside a .dlrmodel container. The package
-/// embeds only user-owned source FBX and explicitly supplied texture bytes.
-/// Retail DL1 resources remain fingerprint references.
+/// retains immutable source bytes, editable data, texture previews and explicit
+/// companion custody. Stock resources belong to local user packages, not public fixtures.
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 7;
+    public const int CurrentSchemaVersion = 8;
 
     public const string EmptyMorphSignature =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -683,6 +690,8 @@ public sealed record CustomModelDocument
     public CustomModelRigMode RigMode { get; init; } = CustomModelRigMode.Auto;
 
     public CustomModelSourceIdentity Source { get; init; } = new();
+
+    public CharacterResourceInventory? CharacterResources { get; init; }
 
     public CustomModelAxisSystem AxisSystem { get; init; } = new();
 
@@ -717,6 +726,8 @@ public sealed record CustomModelDocument
     /// <summary>Source-linked geometry/binding edits, separate from the immutable embedded FBX.</summary>
     public AuthoredModelLayerReference? AuthoredLayer { get; init; }
 
+    public ModelGeometryRevisionReference? GeometryRevision { get; init; }
+
     public CustomModelCameraMetadata Camera { get; init; } = new();
 
     /// <summary>Editable FPP geometry choices; the embedded source and full TPP geometry remain intact.</summary>
@@ -724,6 +735,8 @@ public sealed record CustomModelDocument
 
 
     public ImmutableArray<CustomModelMorphChannel> MorphChannels { get; init; } = [];
+
+    public ImmutableArray<MorphAuthoringRecord> MorphAuthoringRecords { get; init; }=[];
 
     public FacialPresetLibrary FacialPresets { get; init; } = new();
 
@@ -756,6 +769,17 @@ public sealed record CustomModelDocument
 
         ArgumentException.ThrowIfNullOrWhiteSpace(Name);
         Source.Validate(nameof(Source));
+        CharacterResources?.Validate();
+        GeometryRevision?.Validate();
+        if(MorphAuthoringRecords.IsDefault) throw new ArgumentException("Expression provenance must be initialized.");
+        foreach(var expression in MorphAuthoringRecords)
+        {
+            expression.Validate();
+            if(!MorphChannels.Any(c=>c.Index==expression.TargetChannelSlot && c.Name==expression.Name && c.DescriptorHash==expression.DescriptorHash))
+                throw new ArgumentException("Expression provenance differs from the target channel mapping.");
+        }
+        if (Source.Kind == CustomModelSourceKind.StockCharacter && CharacterResources is null)
+            throw new ArgumentException("Stock character packages require a companion-resource inventory.");
         AxisSystem.Validate(nameof(AxisSystem));
         ProjectAssetReference.ValidateSha256(RigSignature, nameof(RigSignature));
         ProjectAssetReference.ValidateSha256(MorphSignature, nameof(MorphSignature));
@@ -1044,6 +1068,10 @@ public sealed record CustomModelPackage(
     ImmutableArray<byte> SourceFbx,
     ImmutableDictionary<string, ImmutableArray<byte>> TexturePayloads)
 {
+    /// <summary>Backend-neutral decoded stock geometry, separately hashed from original retail bytes.</summary>
+    public ImmutableArray<byte> DecodedCharacterPayload { get; init; } = [];
+    public ImmutableArray<byte> GeometryRevisionPayload { get; init; } = [];
+    public ImmutableDictionary<string, ImmutableArray<byte>> CompanionPayloads { get; init; } = ImmutableDictionary<string, ImmutableArray<byte>>.Empty;
     public ImmutableArray<byte> AuthoredLayerPayload { get; init; } = [];
     public ImmutableDictionary<Guid, ImmutableArray<byte>> DerivedAnimationPayloads { get; init; } =
         ImmutableDictionary<Guid, ImmutableArray<byte>>.Empty;

@@ -178,7 +178,7 @@ public static class Dl1CustomModelRigPreparer
             depthFirstSource.Select(sourceIndex => studioPolicies[sourceIndex]).ToImmutableArray();
         ImmutableArray<bool> generateFrames = physicalPolicies.IsDefault ? default :
             physicalPolicies.Select(static p => p.FramePolicy == RigFramePolicy.GeneratedDeform && p.SolvedGlobalFrame is null).ToImmutableArray();
-        bool preserveSourceFrames = model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
+        bool preserveSourceFrames = model.Package.Document.Source.Kind == CustomModelSourceKind.StockCharacter || model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary;
         HashSet<string> secondaryBones = model.Package.Document.SecondaryMotion.Groups
             .SelectMany(group => group.Particles)
             .Where(particle => particle.DrivenBoneName is not null)
@@ -227,7 +227,7 @@ public static class Dl1CustomModelRigPreparer
             RigEntityFramePolicy? policy = physicalPolicies.IsDefault ? null : physicalPolicies[physicalIndex];
             TransformMatrix global = authoredGlobals[physicalIndex];
             TransformMatrix reference = global.InvertedAffine();
-            Dl1AuthoredBoneBounds nodeBounds = bounds[physicalIndex];
+            Dl1AuthoredBoneBounds nodeBounds = sourceBone.LocalBounds ?? bounds[physicalIndex];
             if (policy is not null)
             {
                 bool unchangedBasis = policy.FramePolicy == RigFramePolicy.PreserveSource &&
@@ -269,6 +269,7 @@ public static class Dl1CustomModelRigPreparer
                 GlobalBindMatrix = global,
                 InverseGlobalReferenceMatrix = reference,
                 Bounds = nodeBounds,
+                BoundsWereExplicitlyRetained=sourceBone.LocalBounds is not null,
                 DescriptorHash = descriptor,
             });
         }

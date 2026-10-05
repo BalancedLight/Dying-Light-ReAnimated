@@ -1,6 +1,6 @@
 namespace ReAnimated.DL1.Assets.Catalog;
 
-public sealed class RetailAssetCatalog : IRetailAssetCatalog
+public sealed class RetailAssetCatalog : IRetailAssetCatalog, IRetailEmbeddedEffectCatalog, IRetailRpackResourceCatalog
 {
     private readonly IReadOnlyDictionary<string, IRetailAssetProvider> _providers;
     private readonly IReadOnlyDictionary<RetailAssetLogicalId, RetailAssetRecord[]> _candidates;
@@ -27,6 +27,25 @@ public sealed class RetailAssetCatalog : IRetailAssetCatalog
                 conflict.Id.StableKey,
                 StringComparer.Ordinal)
             .ToArray();
+    }
+
+    public ValueTask<RetailEmbeddedEffectCustody> ReadEmbeddedCustodyAsync(RetailAssetRecord asset,
+        CancellationToken cancellationToken=default)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        if(!_providers.TryGetValue(asset.Source.ProviderId,out var provider) || provider is not IRetailEmbeddedEffectProvider embedded)
+            throw new InvalidDataException("The catalog has no effect provenance provider for this asset.");
+        return embedded.ReadEmbeddedCustodyAsync(asset,cancellationToken);
+    }
+    public ValueTask<RetailRpackResourceCustody> ReadRpackResourceCustodyAsync(
+        RetailAssetRecord asset,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        if (!_providers.TryGetValue(asset.Source.ProviderId, out IRetailAssetProvider? provider) ||
+            provider is not IRetailRpackResourceProvider custodyProvider)
+            throw new InvalidDataException("The catalog has no RPACK custody provider for this asset.");
+        return custodyProvider.ReadRpackResourceCustodyAsync(asset, cancellationToken);
     }
 
     public IReadOnlyList<RetailAssetRecord> Assets { get; }
@@ -63,6 +82,7 @@ public sealed class RetailAssetCatalog : IRetailAssetCatalog
                     providerArray,
                     cancellationToken).ConfigureAwait(false);
         if (persistentIndex is not null &&
+            CanPersistCatalog(providerArray) &&
             initialCapture.Status == ProviderSnapshotCaptureStatus.Captured)
         {
             IReadOnlyList<RetailAssetRecord>? restored =
@@ -118,6 +138,7 @@ public sealed class RetailAssetCatalog : IRetailAssetCatalog
         }
 
         if (persistentIndex is not null &&
+            CanPersistCatalog(providerArray) &&
             initialCapture.Status ==
             ProviderSnapshotCaptureStatus.Unsupported)
         {
@@ -126,7 +147,7 @@ public sealed class RetailAssetCatalog : IRetailAssetCatalog
                 allAssets,
                 cancellationToken).ConfigureAwait(false);
         }
-        else if (persistentIndex is not null)
+        else if (persistentIndex is not null && CanPersistCatalog(providerArray))
         {
             ProviderSnapshotCapture finalCapture =
                 await TryCaptureProviderSnapshotsAsync(
@@ -152,6 +173,10 @@ public sealed class RetailAssetCatalog : IRetailAssetCatalog
             allAssets,
             wasRestoredFromPersistentIndex: false);
     }
+
+    private static bool CanPersistCatalog(IEnumerable<IRetailAssetProvider> providers) =>
+        providers.All(static provider =>
+            provider is not IRetailAssetCatalogCachePolicy policy || policy.CanPersistCatalog);
 
     private static RetailAssetCatalog CreateCatalog(
         IReadOnlyDictionary<string, IRetailAssetProvider> providerLookup,

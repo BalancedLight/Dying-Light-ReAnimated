@@ -117,6 +117,7 @@ public static class CliApplication
             "inspect-fbx",
             "inspect-rpack",
             "inspect-fed",
+            "inspect-source-msh",
             "new-project",
             "validate-project",
             "discover-dl1",
@@ -127,6 +128,10 @@ public static class CliApplication
             "conform-model",
             "deploy-model",
             "batch-models",
+            "bind-player-appearance",
+            "character",
+            "material-graph",
+            "app",
         ]);
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -172,6 +177,7 @@ public static class CliApplication
                     args[1..],
                     cancellationToken).ConfigureAwait(false),
                 "inspect-fed" => InspectFed(args[1..]),
+                "inspect-source-msh" => await SourceModelInspectionCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
                 "new-project" => NewProject(args[1..]),
                 "validate-project" => ValidateProject(args[1..]),
                 "discover-dl1" => DiscoverDl1(args[1..]),
@@ -193,6 +199,10 @@ public static class CliApplication
                     JsonOptions,
                     cancellationToken).ConfigureAwait(false),
                 "batch-models" => await ModelBatchCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
+                "bind-player-appearance" => await PlayerAppearanceCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
+                "character" => await CharacterCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
+                "material-graph" => await MaterialGraphCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
+                "app" => await AppControlCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
                 "deploy-model" => await ModelDeploymentCommand.RunAsync(args[1..], JsonOptions, cancellationToken).ConfigureAwait(false),
                 _ => UnknownCommand(args[0]),
             };
@@ -733,6 +743,7 @@ public static class CliApplication
               DLReAnimated inspect-fbx <path>
               DLReAnimated inspect-rpack <path>
               DLReAnimated inspect-fed <path>
+              DLReAnimated inspect-source-msh <source.msh>
               DLReAnimated new-project <output.dlraproj> [name]
               DLReAnimated validate-project <path>
               DLReAnimated discover-dl1 [explicit-install ...]
@@ -741,6 +752,26 @@ public static class CliApplication
               DLReAnimated build-animation-rpack <manifest.json> <output.rpack>
               DLReAnimated export-project <project.dlraproj> <dl1-install> <output-directory> [animation-id-or-name] [body|mimic|both]
               DLReAnimated batch-models <manifest.json> <output-parent> [--inspect]
+              DLReAnimated bind-player-appearance <source.scr> <new-output.scr> <character-id> <appearance-id> <fpp.msh> <tpp.msh> <skin>
+              DLReAnimated character inspect <model.dlrmodel>
+              DLReAnimated character body-hide <model.dlrmodel> --resource <body-id> --region <exact-token> --entity <exact-name> --reviewed --output <new-model.dlrmodel>
+              DLReAnimated character assign-material <model.dlrmodel> --target-material <appended-guid> --use-material <retained-guid> --reviewed --output <new-model.dlrmodel>
+              DLReAnimated character add-attachment <model.dlrmodel> --attachment <part.fbx> [--bone <exact-name>] --reviewed --output <new-model.dlrmodel>
+              DLReAnimated character shape-inputs <sphere|capsule|box> --spans <x,y,z> [--scale <factor>]
+              DLReAnimated character fit-bounds <model.dlrmodel> --bone <exact-name>
+              DLReAnimated character set-bounds <model.dlrmodel> --bone <exact-name> --center <x,y,z> --size <x,y,z> --reviewed --output <new-model.dlrmodel>
+              DLReAnimated character bounds-controls <model.dlrmodel> --bone <exact-name> --scale <factor> --output-dir <new-folder>
+              DLReAnimated character export-effects <model.dlrmodel> --output <new.rpack> [--compression none|zlib]
+              DLReAnimated character attach-source <model.dlrmodel> --archive <sources.zip> --member <exact-member> --virtual-name <resource-path> --subsystem <name> --expected-sha256 <hash> [--archive-sha256 <hash>] --reviewed --output <new-model.dlrmodel>
+              DLReAnimated character export-neutral <model.dlrmodel> --surface <id> --output <face.obj>
+              DLReAnimated character import-sculpt <target.dlrmodel> --reference <reference.dlrmodel> --target-surface <id> --reference-surface <id> --expression <name> --sculpt <face.obj|face.fbx> [--conflict reject|keep|replace] --reviewed --output <new-model.dlrmodel>
+              DLReAnimated material-graph inspect --destination <materials.mp> --source <additions.mp>
+              DLReAnimated material-graph merge --destination <materials.mp> --source <additions.mp> --output <new.mp> --reviewed
+              DLReAnimated app list
+              DLReAnimated app status (--pid <pid> | --instance <id>)
+              DLReAnimated app open (--pid <pid> | --instance <id>) --project <project.dlraproj>
+              DLReAnimated app save (--pid <pid> | --instance <id>) --output <new-project.dlraproj>
+              DLReAnimated app close (--pid <pid> | --instance <id>) [--output <new-project.dlraproj>]
               DLReAnimated deploy-model <model.dlrmodel> <project-root> <compiler.exe> <retail-Data0.pak> <character-id> <resource-name> <animation-bank> [--stock-bank] [--preflight] [--mount-editor-animation-pack]
 
             The C# project format is DL1-only. Legacy Python projects are never

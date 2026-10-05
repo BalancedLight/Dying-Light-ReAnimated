@@ -491,8 +491,7 @@ public static class Rp6lCompilerObjectNormalizer
         int totalItems = checked(units.Sum(static unit => unit.Items.Length));
         int totalNames = checked(units.Sum(static unit => unit.NameOffsets.Length));
         int totalNameBytes = checked(units.Sum(static unit => unit.NameBlob.Length));
-        if (totalChunks > byte.MaxValue + 1 ||
-            totalChunks > limits.MaximumTableCount ||
+        if (totalChunks > limits.MaximumTableCount ||
             totalItems > limits.MaximumTableCount ||
             totalNames > limits.MaximumTableCount ||
             totalNameBytes > limits.MaximumNameBlobBytes)
@@ -547,6 +546,37 @@ public static class Rp6lCompilerObjectNormalizer
             hasCompilerAddressing |= unit.HasCompilerAddressing;
         }
 
+        if (chunks.Count > byte.MaxValue + 1)
+        {
+            var grouped = new List<CompilerChunk>();
+            var routes = new (int Chunk, long Bias)[chunks.Count];
+            for (int index = 0; index < chunks.Count; index++)
+            {
+                CompilerChunk chunk = chunks[index];
+                int match = chunk.PackedSize == 0 ? grouped.FindIndex(candidate => candidate.PackedSize == 0 &&
+                    candidate.Flags == chunk.Flags && candidate.Category == chunk.Category && candidate.Unknown0 == chunk.Unknown0 &&
+                    candidate.Unknown1 == chunk.Unknown1 && candidate.LogicalSize <= Math.Min(uint.MaxValue, limits.MaximumLogicalChunkBytes) - chunk.LogicalSize) : -1;
+                if (match < 0)
+                {
+                    routes[index] = (grouped.Count, 0); grouped.Add(chunk);
+                }
+                else
+                {
+                    CompilerChunk prior = grouped[match]; routes[index] = (match, prior.LogicalSize);
+                    var segments = prior.Segments ?? [new(prior.SourcePath, prior.SourceOffset, prior.StoredSize)];
+                    var additions = chunk.Segments ?? [new(chunk.SourcePath, chunk.SourceOffset, chunk.StoredSize)];
+                    grouped[match] = prior with { LogicalSize = checked(prior.LogicalSize + chunk.LogicalSize), Segments = [.. segments, .. additions] };
+                }
+            }
+            for (int index = 0; index < items.Count; index++)
+            {
+                var route = routes[items[index].ChunkIndex];
+                items[index] = items[index] with { ChunkIndex = route.Chunk, Offset = checked(items[index].Offset + route.Bias) };
+            }
+            chunks = grouped;
+            if (chunks.Count > byte.MaxValue + 1)
+                throw new InvalidDataException("The linked RP6L still exceeds its 256 chunk routing limit after compatible chunk grouping.");
+        }
         if (resources.Count > limits.MaximumTableCount)
         {
             throw new InvalidDataException("The linked RP6L resource table exceeds the configured limit.");
@@ -667,19 +697,12 @@ public static class Rp6lCompilerObjectNormalizer
         await tables.CopyToAsync(output, 1024 * 1024, cancellationToken).ConfigureAwait(false);
         foreach (CompilerChunk chunk in parsed.Chunks)
         {
-            await using FileStream input = new(
-                chunk.SourcePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                1024 * 1024,
-                FileOptions.Asynchronous | FileOptions.RandomAccess);
-            await CopyRangeAsync(
-                input,
-                output,
-                chunk.SourceOffset,
-                chunk.StoredSize,
-                cancellationToken).ConfigureAwait(false);
+            foreach (var segment in chunk.Segments ?? [new(chunk.SourcePath, chunk.SourceOffset, chunk.StoredSize)])
+            {
+                await using FileStream input = new(segment.Path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    1024 * 1024, FileOptions.Asynchronous | FileOptions.RandomAccess);
+                await CopyRangeAsync(input, output, segment.Offset, segment.Length, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         await output.FlushAsync(cancellationToken).ConfigureAwait(false);
@@ -799,7 +822,10 @@ public static class Rp6lCompilerObjectNormalizer
         long SourceOffset)
     {
         public long StoredSize => PackedSize > 0 ? PackedSize : LogicalSize;
+        public SourceSegment[]? Segments { get; init; }
     }
+
+    private sealed record SourceSegment(string Path, long Offset, long Length);
 
     private sealed record CompilerItem(
         int ChunkIndex,
@@ -830,3 +856,5 @@ public static class Rp6lCompilerObjectNormalizer
         long TableEnd,
         long OutputLength);
 }
+
+

@@ -1,4 +1,4 @@
-<UserControl x:Class="ReAnimated.App.Views.ModelsWorkspaceView"
+﻿<UserControl x:Class="ReAnimated.App.Views.ModelsWorkspaceView"
              x:Name="WorkspaceRoot"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -24,6 +24,17 @@
                             HorizontalAlignment="Left"
                             Command="{Binding ReturnToProjectModelsCommand}"
                             Content="Back to project models" />
+                    <WrapPanel Margin="0,0,0,8">
+                        <Button Content="Undo edit"
+                                Command="{Binding UndoHelperEditCommand}"
+                                ToolTip="Undo the last model authoring edit (Ctrl+Z)"
+                                AutomationProperties.Name="Undo model authoring edit" />
+                        <Button Content="Redo edit"
+                                Margin="6,0,0,0"
+                                Command="{Binding RedoHelperEditCommand}"
+                                ToolTip="Redo the model authoring edit (Ctrl+Y)"
+                                AutomationProperties.Name="Redo model authoring edit" />
+                    </WrapPanel>
                     <Button x:Name="ImportFbxButton"
                             Margin="0,4,0,4"
                             MinHeight="34"
@@ -159,7 +170,7 @@
                                       Content="Use reviewed bone channels in preview"
                                       IsChecked="{Binding UseReviewedPolicyPreview}"
                                       IsEnabled="{Binding CanUseReviewedPolicyPreview}"
-                                      ToolTip="Use saved position, rotation, and scale choices in the DL1 output preview. Game behavior may differ." />
+                                      ToolTip="Use saved position, rotation and scale in the preview." />
                             <WrapPanel Margin="0,5,0,4">
                                 <Button Command="{Binding FrameModelCommand}" Content="Frame model" />
                                 <Button Command="{Binding ResetCameraCommand}" Content="Reset camera" />
@@ -237,6 +248,217 @@
                                               DataContext="{Binding Conformance}" />
                 </TabItem>
 
+                <TabItem Header="Character" IsSelected="{Binding IsCharacterTabSelected, Mode=TwoWay}">
+                    <ScrollViewer x:Name="CharacterSystemsScroll" VerticalScrollBarVisibility="Auto"><StackPanel Margin="8">
+                        <Button Content="Face expressions" Click="OnOpenFaceExpressions" Margin="0,0,0,8" />
+                        <Button Content="Physics and gore" Click="OnOpenCharacterCompanions" Margin="0,0,0,8" />
+                        <TextBlock FontWeight="SemiBold" Text="Character status" />
+                        <TextBlock Margin="0,5,0,8" Text="{Binding CharacterCompleteness}" TextWrapping="Wrap" />
+                        <ItemsControl ItemsSource="{Binding CharacterSubsystems}"><ItemsControl.ItemTemplate><DataTemplate>
+                            <StackPanel Margin="0,4"><TextBlock FontWeight="SemiBold"><Run Text="{Binding Subsystem}"/><Run Text=" / "/><Run Text="{Binding Status}"/></TextBlock>
+                            <Expander Header="Details"><TextBlock Text="{Binding Detail}" TextWrapping="Wrap"/></Expander></StackPanel>
+                        </DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                        <Expander Header="Unused systems" Margin="0,8"><StackPanel>
+                            <TextBlock Text="Review the source before marking a system as unused." TextWrapping="Wrap"/>
+                            <ComboBox ItemsSource="{Binding CharacterSubsystemChoices}" SelectedItem="{Binding SelectedOptionalSubsystem}"/>
+                            <CheckBox Content="Reviewed: system is unused" IsChecked="{Binding SubsystemAbsenceReviewed}"/>
+                            <Button Content="Mark as unused" Command="{Binding MarkSubsystemNotApplicableCommand}"/>
+                        </StackPanel></Expander>
+                        <Expander Header="Actor source" Margin="0,8"><StackPanel>
+                            <TextBlock Text="Select the actor, model declaration and scope to review." TextWrapping="Wrap" />
+                            <TextBlock Margin="0,6,0,2" Text="Actor source" />
+                            <ComboBox ItemsSource="{Binding ActorSourceChoices}" SelectedItem="{Binding SelectedActorSource}" DisplayMemberPath="LogicalName" />
+                            <TextBlock Margin="0,6,0,2" Text="Model declaration" />
+                            <ComboBox ItemsSource="{Binding ActorDeclarationChoices}" SelectedItem="{Binding SelectedActorDeclaration}" DisplayMemberPath="Label" />
+                            <TextBlock Margin="0,6,0,2" Text="Scope" />
+                            <ComboBox ItemsSource="{Binding ActorScopeChoices}" SelectedItem="{Binding SelectedActorScope}" DisplayMemberPath="Label" />
+                            <TextBlock Text="{Binding ActorSourceReviewDetail}" TextWrapping="Wrap" Margin="0,6" />
+                            <DataGrid ItemsSource="{Binding ActorSourceReferences}" AutoGenerateColumns="False" CanUserAddRows="False" MaxHeight="180">
+                                <DataGrid.Columns>
+                                    <DataGridCheckBoxColumn Header="Reviewed" Binding="{Binding IsReviewed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                        <DataGridCheckBoxColumn.ElementStyle><Style TargetType="CheckBox"><Setter Property="IsEnabled" Value="{Binding CanReview}" /></Style></DataGridCheckBoxColumn.ElementStyle>
+                                        <DataGridCheckBoxColumn.EditingElementStyle><Style TargetType="CheckBox"><Setter Property="IsEnabled" Value="{Binding CanReview}" /></Style></DataGridCheckBoxColumn.EditingElementStyle>
+                                    </DataGridCheckBoxColumn>
+                                    <DataGridTextColumn Header="Setting" Binding="{Binding Setting}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Resource" Binding="{Binding Resource}" IsReadOnly="True" />
+                                    <DataGridTextColumn Header="Scope" Binding="{Binding Scope}" IsReadOnly="True" />
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <CheckBox Content="Reviewed: actor and model match" IsChecked="{Binding ActorSourceReviewed}" Margin="0,6" />
+                            <Button Content="Save review" Command="{Binding RecordActorSourceReviewCommand}" />
+                            <TextBlock Text="Saved reviews" FontWeight="SemiBold" Margin="0,8,0,2" />
+                            <TextBlock Text="Saved reviews are checked against the source when opened." TextWrapping="Wrap" />
+                            <ItemsControl ItemsSource="{Binding ActorSourceReceipts}"><ItemsControl.ItemTemplate><DataTemplate><StackPanel Margin="0,5">
+                                <TextBlock Text="{Binding ExactModelName, StringFormat='Model: {0}'}" FontWeight="SemiBold" />
+                                <Expander Header="Details"><StackPanel><TextBlock Text="{Binding ActorResourceId, StringFormat='Source: {0}'}" TextWrapping="Wrap" />
+                                <TextBlock Text="{Binding ReviewedReferences.Length, StringFormat='References: {0}'}" />
+                                <TextBlock Text="{Binding ContentSha256, StringFormat='SHA-256: {0}'}" TextWrapping="Wrap" FontSize="10" /></StackPanel></Expander>
+                            </StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                        </StackPanel></Expander>
+                        <Expander Header="Dependencies" Margin="0,8"><StackPanel>
+                            <TextBlock Text="Enter one catalog name or resource ID per line." TextWrapping="Wrap" />
+                            <TextBox Text="{Binding CharacterCompanionRoots, UpdateSourceTrigger=PropertyChanged}" AcceptsReturn="True" MinHeight="70"/>
+                            <Button Content="Resolve dependencies" Command="{Binding ResolveCharacterDependenciesCommand}"/>
+                        </StackPanel></Expander>
+                        <Expander Header="Resources"><DataGrid ItemsSource="{Binding CharacterResources}" IsReadOnly="True" AutoGenerateColumns="False" MaxHeight="220">
+                            <DataGrid.Columns><DataGridTextColumn Header="Resource" Binding="{Binding LogicalName}"/><DataGridTextColumn Header="Status" Binding="{Binding Status}"/><DataGridTextColumn Header="Detail" Binding="{Binding Detail}"/></DataGrid.Columns>
+                        </DataGrid></Expander>
+                        <Expander Header="Morph channels and LODs" Margin="0,8"><DataGrid ItemsSource="{Binding CharacterMorphBindings}" IsReadOnly="True" AutoGenerateColumns="False" MaxHeight="250">
+                            <DataGrid.Columns><DataGridTextColumn Header="Source" Binding="{Binding SourceChannelIndex}"/><DataGridTextColumn Header="Target" Binding="{Binding TargetChannelSlot}"/><DataGridTextColumn Header="Name" Binding="{Binding Name}"/><DataGridTextColumn Header="Descriptor" Binding="{Binding DescriptorHash}"/><DataGridTextColumn Header="LOD" Binding="{Binding LodIndex}"/><DataGridTextColumn Header="Payload" Binding="{Binding PayloadStatus}"/></DataGrid.Columns>
+                        </DataGrid></Expander>
+                        <Expander x:Name="CharacterCompanionAuthoringPanel" Header="Physics and gore" Margin="0,8"><StackPanel>
+                            <TextBlock Text="Choose a system and source to edit." TextWrapping="Wrap"/>
+                            <WrapPanel Margin="0,4">
+                                <Button Content="Body regions" Command="{Binding ShowBodyElementsCommand}"/>
+                                <Button Content="Ragdoll" Command="{Binding ShowRagdollCommand}"/>
+                                <Button Content="Damage patches" Command="{Binding ShowDamagePatchesCommand}"/>
+                            </WrapPanel>
+                            <ComboBox ItemsSource="{Binding CompanionFamilies}" SelectedItem="{Binding CompanionFamily}"/>
+                            <ComboBox ItemsSource="{Binding CompanionCandidates}" SelectedItem="{Binding SelectedCompanion}" DisplayMemberPath="LogicalName"/>
+                            <TextBlock Text="{Binding CompanionDetails}" TextWrapping="Wrap" Margin="0,5"/>
+                            <ComboBox ItemsSource="{Binding CompanionGroups}" SelectedItem="{Binding SelectedCompanionGroup}" DisplayMemberPath="Name"/>
+                            <Expander Header="Details" Margin="0,6"><TextBlock Text="{Binding CompanionGroupDetail}" TextWrapping="Wrap"/></Expander>
+                            <StackPanel Visibility="{Binding IsRagdollCompanionSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                            <TextBlock Text="Bone and bounds" FontWeight="SemiBold"/>
+                            <TextBlock Text="{Binding SelectedBone.Name}"/>
+                            <TextBlock Text="{Binding BoneBoundsText}" TextWrapping="Wrap"/>
+                            <CheckBox Content="Show bounds and axes" IsChecked="{Binding ShowCharacterBounds}"/>
+                            <TextBlock Text="Shape" FontWeight="SemiBold" Margin="0,4"/>
+                            <ComboBox ItemsSource="{Binding RagdollSourceShapeTokens}" SelectedItem="{Binding RagdollProposedShape}"/>
+                            <TextBlock Text="Choose a shape from this ragdoll source." TextWrapping="Wrap"/>
+                            </StackPanel>
+                            <TextBlock Text="Select a relationship to inspect or update." TextWrapping="Wrap"/>
+                            <DataGrid ItemsSource="{Binding CompanionRelationships}" SelectedItem="{Binding SelectedCompanionRelationship}" IsReadOnly="True" AutoGenerateColumns="False" MaxHeight="220">
+                                <DataGrid.Columns>
+                                    <DataGridTextColumn Header="Role" Binding="{Binding Role}"/>
+                                    <DataGridTextColumn Header="Exact name" Binding="{Binding Name}"/>
+                                    <DataGridTextColumn Header="Resolution" Binding="{Binding Resolution}"/>
+                                </DataGrid.Columns>
+                            </DataGrid>
+                            <Button Content="Add cap or detached mesh..." Command="{Binding AddCharacterAttachmentCommand}"/>
+                            <Expander Header="Body-region assembly" Margin="0,6" Visibility="{Binding IsBodyElementsCompanionSelected, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
+                                <TextBlock Text="Select a region, then add its cap, detached mesh, physics and effects." TextWrapping="Wrap"/>
+                                <TextBlock Text="Cap surface"/><ComboBox ItemsSource="{Binding BodyCapSurfaceChoices}" SelectedItem="{Binding SelectedBodyCapSurface}"/><Button Content="Add cap" Command="{Binding AddBodyCapCommand}"/><ItemsControl ItemsSource="{Binding SelectedBodyCapSurfaceIds}"/>
+                                <TextBlock Text="Detached model"/><ComboBox ItemsSource="{Binding BodyDetachedAssets}" SelectedItem="{Binding SelectedDetachedAsset}" DisplayMemberPath="LogicalName"/><Button Content="Add model" Command="{Binding AddBodyDetachedCommand}"/><ItemsControl ItemsSource="{Binding SelectedBodyDetachedAssets}" DisplayMemberPath="LogicalName"/>
+                                <TextBlock Text="Detached physics"/><ComboBox ItemsSource="{Binding BodyPhysicsAssets}" SelectedItem="{Binding SelectedBodyPhysicsAsset}" DisplayMemberPath="LogicalName"/><Button Content="Add physics" Command="{Binding AddBodyPhysicsCommand}"/><ItemsControl ItemsSource="{Binding SelectedBodyPhysicsAssets}" DisplayMemberPath="LogicalName"/>
+                                <TextBlock Text="Effect"/><ComboBox ItemsSource="{Binding BodyEffectAssets}" SelectedItem="{Binding SelectedBodyEffectAsset}" DisplayMemberPath="LogicalName"/><Button Content="Add effect" Command="{Binding AddBodyEffectCommand}"/><ItemsControl ItemsSource="{Binding SelectedBodyEffectAssets}" DisplayMemberPath="LogicalName"/><Button Content="Clear selections" Command="{Binding ClearBodySelectionsCommand}"/>
+                                <Button Content="Preview visibility" Command="{Binding PreviewBodyRegionCommand}"/>
+                                <Button Content="Restore preview" Command="{Binding RestoreBodyPreviewCommand}"/>
+                                <CheckBox Content="Reviewed: cap and detached geometry" IsChecked="{Binding BodyArtistGeometryReviewed}"/>
+                                <CheckBox Content="Reviewed: helper, visibility, physics and effects" IsChecked="{Binding BodyRelationshipsReviewed}"/>
+                                <Button Content="Save assembly" Command="{Binding RecordBodyAssemblyCommand}"/>
+                                <ItemsControl ItemsSource="{Binding BodyAssemblyReviews}"><ItemsControl.ItemTemplate><DataTemplate><StackPanel Margin="0,4">
+                                    <TextBlock FontWeight="SemiBold" Text="{Binding ElementToken}"/>
+                                    <TextBlock><Run Text="Review current: "/><Run Text="{Binding Accepted}"/></TextBlock>
+                                    <TextBlock Text="{Binding HelperName}"/>
+                                    <Expander Header="Details" Margin="0,4"><StackPanel>
+                                        <TextBlock Text="Cut/cap surfaces" FontWeight="SemiBold"/>
+                                        <ItemsControl ItemsSource="{Binding CutCapSurfaceIds}"/>
+                                        <TextBlock Text="Detached models" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <ItemsControl ItemsSource="{Binding DetachedAssets}" DisplayMemberPath="LogicalName"/>
+                                        <TextBlock Text="Physics" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <ItemsControl ItemsSource="{Binding PhysicsAssets}" DisplayMemberPath="LogicalName"/>
+                                        <TextBlock Text="Effects" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <ItemsControl ItemsSource="{Binding EffectAssets}" DisplayMemberPath="LogicalName"/>
+                                        <TextBlock Text="Hide on original body" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <ItemsControl ItemsSource="{Binding BodyHideEntityNames}"/>
+                                        <TextBlock Text="Hide on detached part" FontWeight="SemiBold" Margin="0,4,0,0"/>
+                                        <ItemsControl ItemsSource="{Binding RelicHideEntityNames}"/>
+                                    </StackPanel></Expander>
+
+                                </StackPanel></DataTemplate></ItemsControl.ItemTemplate></ItemsControl>
+                            </StackPanel></Expander>
+                            <DataGrid ItemsSource="{Binding CompanionCalls}" SelectedItem="{Binding SelectedCompanionCall}" IsReadOnly="True" AutoGenerateColumns="False" MaxHeight="240"><DataGrid.Columns>
+                                <DataGridTextColumn Header="Setting" Binding="{Binding Name}"/><DataGridTextColumn Header="Original values" Binding="{Binding Arguments}"/>
+                            </DataGrid.Columns></DataGrid>
+                            <TextBlock Text="Choose a setting and enter its value." TextWrapping="Wrap"/>
+                            <ComboBox ItemsSource="{Binding CompanionArguments}" SelectedItem="{Binding SelectedCompanionArgument}" DisplayMemberPath="Label"/>
+                            <TextBox Text="{Binding CompanionNumericValue, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Choose a reference type and replacement name." TextWrapping="Wrap"/>
+                            <ComboBox ItemsSource="{Binding CompanionNameKinds}" SelectedItem="{Binding CompanionNameKind}"/>
+                            <TextBlock Text="Current name"/><TextBox Text="{Binding CompanionOldName, UpdateSourceTrigger=PropertyChanged}"/>
+                            <TextBlock Text="Replacement"/><ComboBox IsEditable="True" ItemsSource="{Binding CompanionReplacementNames}" Text="{Binding CompanionNewName, UpdateSourceTrigger=PropertyChanged}"/>
+                            <CheckBox Content="Reviewed: geometry and change" IsChecked="{Binding CompanionEditReviewed}"/>
+                            <Button Content="Apply shape" Command="{Binding ApplyRagdollShapeCommand}" Visibility="{Binding IsRagdollCompanionSelected, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                            <Button Content="Apply value" Command="{Binding ApplyCompanionNumericCommand}"/>
+                            <Button Content="Update relationship" Command="{Binding ApplySelectedCompanionReferenceCommand}"/>
+                            <StackPanel Visibility="{Binding IsBodyElementsCompanionSelected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <TextBlock Text="Hide with region"/>
+                                <ComboBox ItemsSource="{Binding BodyHideEntityChoices}" SelectedItem="{Binding SelectedBodyHideEntity}"/>
+                                <Button Content="Add hide relationship" Command="{Binding AddBodyHideEntityCommand}"/>
+                            </StackPanel>
+                            <Button Content="Rename matching references" Command="{Binding ApplyCompanionNameCommand}"/>
+                            <Button Content="Rename resource" Command="{Binding RenameCompanionResourceCommand}"/>
+
+                        </StackPanel></Expander>
+                        <Expander x:Name="CharacterFaceExpressions" Header="Face expressions" Margin="0,8"><StackPanel>
+                            <Button Content="Load reference..." Command="{Binding LoadMorphReferenceCommand}"/>
+                            <Expander Header="Saved reviews" Margin="0,4">
+                                <ItemsControl ItemsSource="{Binding CharacterExpressionReviews}">
+                                    <ItemsControl.ItemTemplate><DataTemplate><StackPanel Margin="0,4">
+                                        <TextBlock FontWeight="SemiBold" Text="{Binding Name}"/>
+                                        <TextBlock><Run Text="Reviewed: "/><Run Text="{Binding Accepted}"/></TextBlock>
+                                        <Expander Header="Details"><StackPanel><TextBlock><Run Text="Method: "/><Run Text="{Binding Method}"/></TextBlock><TextBlock Text="{Binding TargetSurfaceId}" TextWrapping="Wrap"/>
+                                        <TextBlock><Run Text="Original channel: "/><Run Text="{Binding OriginalSourceChannelIndex}"/><Run Text=" | Target slot: "/><Run Text="{Binding TargetChannelSlot}"/></TextBlock></StackPanel></Expander>
+                                    </StackPanel></DataTemplate></ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Expander>
+                            <Button Content="Attach reference systems" Command="{Binding AdoptCharacterReferenceCommand}"/>
+                            <TextBlock Text="Expression"/><ComboBox ItemsSource="{Binding MorphReferenceNames}" SelectedItem="{Binding ExpressionName}"/>
+                            <TextBlock Text="Reference surface"/><ComboBox ItemsSource="{Binding MorphReferenceSurfaceIds}" SelectedItem="{Binding SelectedReferenceSurface}"/>
+                            <TextBlock Text="Target surface"/><ComboBox ItemsSource="{Binding CharacterSurfaceIds}" SelectedItem="{Binding SelectedCharacterSurface}"/>
+                            <Slider Minimum="0" Maximum="1" Value="{Binding ExpressionPreviewWeight}"/>
+                            <Button Content="Preview reference" Command="{Binding PreviewReferenceExpressionCommand}"/>
+                            <Button Content="Preview expression" Command="{Binding PreviewExpressionCommand}"/>
+                            <Button Content="Preview neutral" Command="{Binding PreviewTargetNeutralCommand}"/>
+                            <TextBlock Text="{Binding ExpressionPreviewSubject}" FontWeight="SemiBold" Margin="0,4"/>
+                            <TextBlock Text="Pick matching points on the neutral faces." TextWrapping="Wrap" Margin="0,8,0,4"/>
+                            <Button Content="Pick reference point" Command="{Binding PickReferenceFaceCommand}"/>
+                            <Button Content="Pick target point" Command="{Binding PickTargetFaceCommand}"/>
+                            <TextBlock Text="{Binding FacePickStatus}" TextWrapping="Wrap" Margin="0,4"/>
+                            <WrapPanel>
+                                <Button Content="Add landmark pair" Command="{Binding AddPickedLandmarkCommand}"/>
+                                <Button Content="Add triangle pair" Command="{Binding AddPickedTriangleCommand}"/>
+                                <Button Content="Add target to region" Command="{Binding AddPickedRegionCommand}"/>
+                                <Button Content="Lock target point" Command="{Binding AddPickedLockCommand}"/>
+                                <Button Content="Finish picking" Command="{Binding StopFacePickingCommand}"/>
+                            </WrapPanel>
+                            <TextBlock Text="Face region" TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding ExpressionRegionName, UpdateSourceTrigger=PropertyChanged}" ToolTip="Reviewed face region"/>
+                            <TextBox Text="{Binding ExpressionTargetRegion, UpdateSourceTrigger=PropertyChanged}" ToolTip="Target vertex indices; leave empty for the full face"/>
+                            <TextBlock Text="Landmarks: source vertex, target vertex, optional weight" TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding ExpressionLandmarks, UpdateSourceTrigger=PropertyChanged}" ToolTip="One source and target vertex pair per line; optional weight last" AcceptsReturn="True" MinHeight="55"/>
+                            <TextBlock Text="Triangle pairs: source index, target index" TextWrapping="Wrap"/>
+                            <TextBox Text="{Binding ExpressionCorrespondences, UpdateSourceTrigger=PropertyChanged}" ToolTip="One source and target triangle pair per line" AcceptsReturn="True" MinHeight="70"/>
+                            <TextBox Text="{Binding ExpressionLockedVertices, UpdateSourceTrigger=PropertyChanged}" ToolTip="Target vertex indexes to retain at neutral positions"/>
+                            <CheckBox Content="Reviewed: region and correspondence" IsChecked="{Binding ExpressionCorrespondenceReviewed}"/>
+                            <Button Content="Propose expression" Command="{Binding ProposeExpressionCommand}"/>
+                            <ComboBox ItemsSource="{Binding ExpressionConflictChoices}" SelectedItem="{Binding ExpressionConflict}"/>
+                            <CheckBox Content="Reviewed: expression and seams" IsChecked="{Binding ExpressionReviewed}"/>
+                            <Button Content="Accept expression" Command="{Binding AcceptExpressionCommand}"/>
+                            <TextBlock Text="Sculpt in meters. Keep the vertex order and triangles when importing OBJ or binary FBX." TextWrapping="Wrap"/>
+                            <Button Content="Export neutral face..." Command="{Binding ExportManualNeutralCommand}"/>
+                            <Button Content="Import sculpt..." Command="{Binding ImportManualShapeCommand}"/>
+                            <TextBlock Text="Select a parent bone before importing an attachment." TextWrapping="Wrap"/>
+                            <Button Content="Add attachment mesh..." Command="{Binding AddCharacterAttachmentCommand}"/>
+                            <Expander Header="Attachment material" Margin="0,6"><StackPanel>
+                                <TextBlock Text="Attachment"/>
+                                <ComboBox ItemsSource="{Binding AccessoryCharacterMaterialChoices}" SelectedItem="{Binding SelectedAccessoryCharacterMaterial}" DisplayMemberPath="Label"/>
+                                <TextBlock Text="Original material" Margin="0,4,0,0"/>
+                                <ComboBox ItemsSource="{Binding RetainedCharacterMaterialChoices}" SelectedItem="{Binding SelectedRetainedCharacterMaterial}" DisplayMemberPath="Label"/>
+                                <CheckBox Content="Reviewed" IsChecked="{Binding CharacterMaterialReviewed}" Margin="0,4"/>
+                                <Button Content="Assign material" Command="{Binding ApplyCharacterMaterialCommand}"/>
+                            </StackPanel></Expander>
+                        </StackPanel></Expander>
+                        <Expander Header="Bone bounds" Margin="0,8"><StackPanel>
+                            <TextBlock Text="Select a bone. Enter center X Y Z, then size X Y Z in model units." TextWrapping="Wrap"/>
+                            <CheckBox Content="Show bounds and axes" IsChecked="{Binding ShowCharacterBounds}"/>
+                            <TextBox Text="{Binding BoneBoundsText, UpdateSourceTrigger=PropertyChanged}"/>
+                            <Button Content="Fit bounds" Command="{Binding FitBoneBoundsCommand}"/>
+                            <Button Content="Apply bounds" Command="{Binding ApplyBoneBoundsCommand}"/>
+                        </StackPanel></Expander>
+                    </StackPanel></ScrollViewer>
+                </TabItem>
                 <TabItem x:Name="AuthoringRigTab" Header="Bones">
                     <views:RigHierarchyEditorView xmlns:views="clr-namespace:ReAnimated.App.Views" />
                 </TabItem>

@@ -1,4 +1,4 @@
-using ReAnimated.App.Infrastructure;
+﻿using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.DL1.Assets.Catalog;
@@ -153,11 +153,11 @@ public sealed class RetailAnimationBrowserTests : IDisposable
         Assert.Same(animation, viewModel.AnimationBrowser.SelectedAsset);
         Assert.Equal("sprint", viewModel.AnimationBrowser.SearchText);
         Assert.Contains(
-            "Select a base-game model to bind it and play",
+            "Choose the source model for 'prime_4leg_sprint'",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
         Assert.Contains(
-            "Use project model",
+            "compatible rigged project model",
             viewModel.ExplorerSourceModelPickerPrompt,
             StringComparison.OrdinalIgnoreCase);
     }

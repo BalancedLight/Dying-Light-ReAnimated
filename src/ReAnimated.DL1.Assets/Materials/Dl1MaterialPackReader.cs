@@ -48,7 +48,7 @@ public sealed record Dl1MaterialPackMaterialRecord(
 /// Bounded reader for the retail ABDM material container. Only the requested
 /// material payload is read; the multi-megabyte pack body is never buffered.
 /// </summary>
-public sealed class Dl1MaterialPackReader : IAsyncDisposable
+public sealed partial class Dl1MaterialPackReader : IAsyncDisposable
 {
     private const uint Magic = 0x4D444241;
     private const int HeaderSize = 16;
@@ -56,7 +56,10 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
     private const int MaterialEntryRowSize = 16;
     private const int TextureRowSize = 12;
 
-    private readonly FileStream _stream;
+    private readonly FileStream? _stream;
+    private readonly Func<Memory<byte>, long, CancellationToken, ValueTask> _readAt;
+    private readonly long _providerLength;
+    private string? _providerSha256;
     private readonly Dl1MaterialPackLimits _limits;
     private readonly MaterialEntry[] _materials;
     private readonly SemaphoreSlim _readGate = new(1, 1);
@@ -64,14 +67,20 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
 
     private Dl1MaterialPackReader(
         string path,
-        FileStream stream,
+        FileStream? stream,
         Dl1MaterialPackLimits limits,
-        MaterialEntry[] materials)
+        MaterialEntry[] materials,
+        long providerLength,
+        Func<Memory<byte>, long, CancellationToken, ValueTask> readAt,
+        string? providerSha256 = null)
     {
         Path = path;
         _stream = stream;
         _limits = limits;
         _materials = materials;
+        _providerLength = providerLength;
+        _readAt = readAt;
+        _providerSha256 = providerSha256;
     }
 
     public string Path { get; }
@@ -96,179 +105,185 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
             FileOptions.Asynchronous | FileOptions.RandomAccess);
         try
         {
-            if (stream.Length < HeaderSize)
-            {
-                throw new InvalidDataException(
-                    "The DL1 material pack is shorter than its header.");
-            }
-
-            byte[] header = GC.AllocateUninitializedArray<byte>(HeaderSize);
-            await ReadExactlyAtAsync(
-                stream.SafeFileHandle,
-                header,
-                0,
-                cancellationToken).ConfigureAwait(false);
-            ReadOnlySpan<byte> headerData = header;
-            if (BinaryPrimitives.ReadUInt32LittleEndian(headerData) != Magic)
-            {
-                throw new InvalidDataException(
-                    $"'{fullPath}' is not an ABDM DL1 material pack.");
-            }
-
-            int containerCount = ReadBoundedCount(
-                headerData[4..],
-                limits.MaximumContainerCount,
-                "container");
-            long containerOffset =
-                BinaryPrimitives.ReadUInt32LittleEndian(headerData[8..]);
-            uint headerFlags =
-                BinaryPrimitives.ReadUInt32LittleEndian(headerData[12..]);
-            if (headerFlags != 0)
-            {
-                throw new InvalidDataException(
-                    $"ABDM header flags 0x{headerFlags:X8} are not supported.");
-            }
-
-            int containerBytes = checked(
-                containerCount * ContainerRowSize);
-            if (containerBytes > limits.MaximumTableBytes)
-            {
-                throw new InvalidDataException(
-                    "The ABDM container table exceeds the configured bound.");
-            }
-
-            ValidateRange(
-                containerOffset,
-                containerBytes,
-                stream.Length,
-                "ABDM container table");
-            byte[] table =
-                GC.AllocateUninitializedArray<byte>(containerBytes);
-            await ReadExactlyAtAsync(
-                stream.SafeFileHandle,
-                table,
-                containerOffset,
-                cancellationToken).ConfigureAwait(false);
-
-            ContainerRow? materialContainer = null;
-            for (int index = 0; index < containerCount; index++)
-            {
-                ReadOnlySpan<byte> row =
-                    table.AsSpan(index * ContainerRowSize, ContainerRowSize);
-                string name = DecodeContainerName(row[..32], index);
-                int count = ReadBoundedCount(
-                    row[32..],
-                    limits.MaximumMaterialCount,
-                    $"'{name}' entry");
-                int declaredCount = ReadBoundedCount(
-                    row[36..],
-                    limits.MaximumMaterialCount,
-                    $"'{name}' declared entry");
-                if (count != declaredCount)
-                {
-                    throw new InvalidDataException(
-                        $"ABDM container '{name}' has inconsistent entry counts.");
-                }
-
-                uint reserved =
-                    BinaryPrimitives.ReadUInt32LittleEndian(row[44..]);
-                if (reserved != 0)
-                {
-                    throw new InvalidDataException(
-                        $"ABDM container '{name}' uses an unsupported row layout.");
-                }
-
-                if (name.Equals(
-                        "materials",
-                        StringComparison.OrdinalIgnoreCase))
-                {
-                    if (materialContainer is not null)
-                    {
-                        throw new InvalidDataException(
-                            "The ABDM pack contains more than one materials container.");
-                    }
-
-                    materialContainer = new ContainerRow(
-                        count,
-                        BinaryPrimitives.ReadUInt32LittleEndian(row[40..]));
-                }
-            }
-
-            ContainerRow selected = materialContainer
-                ?? throw new InvalidDataException(
-                    "The ABDM pack has no materials container.");
-            int materialTableBytes = checked(
-                selected.Count * MaterialEntryRowSize);
-            if (materialTableBytes > limits.MaximumTableBytes)
-            {
-                throw new InvalidDataException(
-                    "The ABDM material table exceeds the configured bound.");
-            }
-
-            ValidateRange(
-                selected.TableOffset,
-                materialTableBytes,
-                stream.Length,
-                "ABDM material table");
-            byte[] materialTable =
-                GC.AllocateUninitializedArray<byte>(materialTableBytes);
-            await ReadExactlyAtAsync(
-                stream.SafeFileHandle,
-                materialTable,
-                selected.TableOffset,
-                cancellationToken).ConfigureAwait(false);
-            MaterialEntry[] materials =
-                new MaterialEntry[selected.Count];
-            uint priorHash = 0;
-            for (int index = 0; index < materials.Length; index++)
-            {
-                ReadOnlySpan<byte> row = materialTable.AsSpan(
-                    index * MaterialEntryRowSize,
-                    MaterialEntryRowSize);
-                uint hash = BinaryPrimitives.ReadUInt32LittleEndian(row);
-                long dataOffset =
-                    BinaryPrimitives.ReadUInt32LittleEndian(row[4..]);
-                int logicalSize = ReadBoundedCount(
-                    row[8..],
-                    limits.MaximumMaterialBytes,
-                    "material byte");
-                int storedSize = ReadBoundedCount(
-                    row[12..],
-                    limits.MaximumMaterialBytes,
-                    "stored material byte");
-                if (logicalSize > storedSize)
-                {
-                    throw new InvalidDataException(
-                        $"ABDM material 0x{hash:X8} is larger than its stored extent.");
-                }
-
-                ValidateRange(
-                    dataOffset,
-                    storedSize,
-                    stream.Length,
-                    $"ABDM material 0x{hash:X8}");
-                if (index > 0 && hash <= priorHash)
-                {
-                    throw new InvalidDataException(
-                        "The ABDM material hash inventory is not strictly ordered.");
-                }
-
-                priorHash = hash;
-                materials[index] =
-                    new MaterialEntry(hash, dataOffset, logicalSize);
-            }
-
-            return new Dl1MaterialPackReader(
-                fullPath,
-                stream,
-                limits,
-                materials);
+            ValueTask ReadAt(Memory<byte> buffer, long offset, CancellationToken token) =>
+                ReadExactlyAtAsync(stream.SafeFileHandle, buffer, offset, token);
+            MaterialEntry[] materials = await ReadInventoryAsync(stream.Length, ReadAt,
+                limits, cancellationToken).ConfigureAwait(false);
+            return new Dl1MaterialPackReader(fullPath, stream, limits, materials,
+                stream.Length, ReadAt);
         }
         catch
         {
             await stream.DisposeAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    private static async Task<MaterialEntry[]> ReadInventoryAsync(long providerLength,
+        Func<Memory<byte>, long, CancellationToken, ValueTask> readAt,
+        Dl1MaterialPackLimits limits, CancellationToken cancellationToken)
+    {
+        if (providerLength < HeaderSize)
+        {
+            throw new InvalidDataException(
+                "The DL1 material pack is shorter than its header.");
+        }
+
+        byte[] header = GC.AllocateUninitializedArray<byte>(HeaderSize);
+        await readAt(
+            header,
+            0,
+            cancellationToken).ConfigureAwait(false);
+        ReadOnlySpan<byte> headerData = header;
+        if (BinaryPrimitives.ReadUInt32LittleEndian(headerData) != Magic)
+        {
+            throw new InvalidDataException(
+                "The selected provider is not an ABDM DL1 material pack.");
+        }
+
+        int containerCount = ReadBoundedCount(
+            headerData[4..],
+            limits.MaximumContainerCount,
+            "container");
+        long containerOffset =
+            BinaryPrimitives.ReadUInt32LittleEndian(headerData[8..]);
+        uint headerFlags =
+            BinaryPrimitives.ReadUInt32LittleEndian(headerData[12..]);
+        if (headerFlags != 0)
+        {
+            throw new InvalidDataException(
+                $"ABDM header flags 0x{headerFlags:X8} are not supported.");
+        }
+
+        int containerBytes = checked(
+            containerCount * ContainerRowSize);
+        if (containerBytes > limits.MaximumTableBytes)
+        {
+            throw new InvalidDataException(
+                "The ABDM container table exceeds the configured bound.");
+        }
+
+        ValidateRange(
+            containerOffset,
+            containerBytes,
+            providerLength,
+            "ABDM container table");
+        byte[] table =
+            GC.AllocateUninitializedArray<byte>(containerBytes);
+        await readAt(
+            table,
+            containerOffset,
+            cancellationToken).ConfigureAwait(false);
+
+        ContainerRow? materialContainer = null;
+        for (int index = 0; index < containerCount; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReadOnlySpan<byte> row =
+                table.AsSpan(index * ContainerRowSize, ContainerRowSize);
+            string name = DecodeContainerName(row[..32], index);
+            int count = ReadBoundedCount(
+                row[32..],
+                limits.MaximumMaterialCount,
+                $"'{name}' entry");
+            int declaredCount = ReadBoundedCount(
+                row[36..],
+                limits.MaximumMaterialCount,
+                $"'{name}' declared entry");
+            if (count != declaredCount)
+            {
+                throw new InvalidDataException(
+                    $"ABDM container '{name}' has inconsistent entry counts.");
+            }
+
+            uint reserved =
+                BinaryPrimitives.ReadUInt32LittleEndian(row[44..]);
+            if (reserved != 0)
+            {
+                throw new InvalidDataException(
+                    $"ABDM container '{name}' uses an unsupported row layout.");
+            }
+
+            if (name.Equals(
+                    "materials",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (materialContainer is not null)
+                {
+                    throw new InvalidDataException(
+                        "The ABDM pack contains more than one materials container.");
+                }
+
+                materialContainer = new ContainerRow(
+                    count,
+                    BinaryPrimitives.ReadUInt32LittleEndian(row[40..]));
+            }
+        }
+
+        ContainerRow selected = materialContainer
+            ?? throw new InvalidDataException(
+                "The ABDM pack has no materials container.");
+        int materialTableBytes = checked(
+            selected.Count * MaterialEntryRowSize);
+        if (materialTableBytes > limits.MaximumTableBytes)
+        {
+            throw new InvalidDataException(
+                "The ABDM material table exceeds the configured bound.");
+        }
+
+        ValidateRange(
+            selected.TableOffset,
+            materialTableBytes,
+            providerLength,
+            "ABDM material table");
+        byte[] materialTable =
+            GC.AllocateUninitializedArray<byte>(materialTableBytes);
+        await readAt(
+            materialTable,
+            selected.TableOffset,
+            cancellationToken).ConfigureAwait(false);
+        MaterialEntry[] materials =
+            new MaterialEntry[selected.Count];
+        uint priorHash = 0;
+        for (int index = 0; index < materials.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ReadOnlySpan<byte> row = materialTable.AsSpan(
+                index * MaterialEntryRowSize,
+                MaterialEntryRowSize);
+            uint hash = BinaryPrimitives.ReadUInt32LittleEndian(row);
+            long dataOffset =
+                BinaryPrimitives.ReadUInt32LittleEndian(row[4..]);
+            int logicalSize = ReadBoundedCount(
+                row[8..],
+                limits.MaximumMaterialBytes,
+                "material byte");
+            int storedSize = ReadBoundedCount(
+                row[12..],
+                limits.MaximumMaterialBytes,
+                "stored material byte");
+            if (logicalSize > storedSize)
+            {
+                throw new InvalidDataException(
+                    $"ABDM material 0x{hash:X8} is larger than its stored extent.");
+            }
+
+            ValidateRange(
+                dataOffset,
+                storedSize,
+                providerLength,
+                $"ABDM material 0x{hash:X8}");
+            if (index > 0 && hash <= priorHash)
+            {
+                throw new InvalidDataException(
+                    "The ABDM material hash inventory is not strictly ordered.");
+            }
+
+            priorHash = hash;
+            materials[index] =
+                new MaterialEntry(hash, dataOffset, logicalSize, storedSize);
+        }
+        return materials;
     }
 
     public async Task<Dl1MaterialPackMaterialRecord?> ReadMaterialAsync(
@@ -279,9 +294,17 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
         string normalized =
             Dl1ResourceNameHash.NormalizeFileName(resourceName);
         uint hash = Dl1ResourceNameHash.Compute(normalized);
+        PayloadRead? read = await ReadPayloadAsync(hash, cancellationToken).ConfigureAwait(false);
+        return read is null ? null : ParseMaterial(normalized, hash, read.Bytes);
+    }
+
+    private async Task<PayloadRead?> ReadPayloadAsync(uint hash, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         int index = Array.BinarySearch(
             _materials,
-            new MaterialEntry(hash, 0, 0),
+            new MaterialEntry(hash, 0, 0, 0),
             MaterialEntryHashComparer.Instance);
         if (index < 0)
         {
@@ -295,8 +318,7 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            await ReadExactlyAtAsync(
-                _stream.SafeFileHandle,
+            await _readAt(
                 payload,
                 entry.Offset,
                 cancellationToken).ConfigureAwait(false);
@@ -306,7 +328,7 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
             _readGate.Release();
         }
 
-        return ParseMaterial(normalized, hash, payload);
+        return new PayloadRead(index, entry, payload);
     }
 
     public async ValueTask DisposeAsync()
@@ -320,7 +342,7 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
         await _readGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await _stream.DisposeAsync().ConfigureAwait(false);
+            if (_stream is not null) await _stream.DisposeAsync().ConfigureAwait(false);
         }
         finally
         {
@@ -486,7 +508,10 @@ public sealed class Dl1MaterialPackReader : IAsyncDisposable
     private readonly record struct MaterialEntry(
         uint Hash,
         long Offset,
-        int LogicalSize);
+        int LogicalSize,
+        int StoredSize);
+
+    private sealed record PayloadRead(int Index, MaterialEntry Entry, byte[] Bytes);
 
     private sealed class MaterialEntryHashComparer :
         IComparer<MaterialEntry>

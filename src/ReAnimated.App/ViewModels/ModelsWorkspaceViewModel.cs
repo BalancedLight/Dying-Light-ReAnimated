@@ -110,7 +110,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     private static readonly IReadOnlyList<CustomModelPreviewModeChoice> PreviewModeChoicesValue =
     [
         new(CustomModelPreviewMode.Dl1Output, "DL1 output"),
-        new(CustomModelPreviewMode.SourceFbx, "Source FBX"),
+        new(CustomModelPreviewMode.SourceFbx, "Original source"),
     ];
 
     private readonly IProjectFileDialogService _fileDialogs;
@@ -413,7 +413,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
     public IReadOnlyList<CustomModelRigModeChoice> RigModeChoices { get; } =
     [
         new(CustomModelRigMode.Auto, "Use FBX rig if present"),
-        new(CustomModelRigMode.ExactFbxRig, "Keep FBX rig"),
+        new(CustomModelRigMode.ExactFbxRig, "Keep original rig"),
         new(CustomModelRigMode.Dl1HumanoidFit, "Prepare DL1 fit"),
         new(CustomModelRigMode.StaticProp, "Static prop"),
     ];
@@ -975,6 +975,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             if (SetProperty(ref _selectedBone, value))
             {
                 LoadSelectedHelperTransform();
+                LoadBoneBounds();
                 OnPropertyChanged(nameof(CanEditSelectedHelper));
                 DuplicateSelectedAsHelperCommand.NotifyCanExecuteChanged();
                 SelectPreviewCameraCommand.NotifyCanExecuteChanged();
@@ -2657,6 +2658,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             OnPropertyChanged(nameof(PreviewCameraStatus));
 
             PopulateHierarchyRows();
+            InvalidateFaceSelections();
+            ExpressionPreviewSubject = "Neutral";
+            RefreshCharacterInventory();
 
             PopulateMaterials();
             foreach (CustomModelAnimationClipItemViewModel animation in Animations)
@@ -2902,6 +2906,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
     private void RefreshPreview()
     {
+        if (PreserveFacePickingPreview()) return;
         if (_suppressPreviewRefresh)
         {
             return;
@@ -3061,7 +3066,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             $"{previewLabel} preview - {ModelName}",
             clip is null
                 ? session.EffectiveMode == CustomModelPreviewMode.Dl1Output
-                    ? "Emitted Chrome hierarchy, +X authored bone frames, and DL1 texture semantics"
+                    ? "Model preview"
                     : session.IsSourceFallback
                         ? "DL1 preparation failed; showing the unmodified source FBX hierarchy and texture coordinates"
                         : "Unmodified FBX bind hierarchy, skin palettes, and source textures"
@@ -3090,6 +3095,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         if (!structuralReview) PublishStructuralOverlay(null, active: false);
         PublishCameraCalibrationOverlay();
         PublishContactOverlay();
+        PublishCharacterBounds();
         PublishHandOverlay();
         PublishBodyDetectionOverlay();
         if (eyeReview) PublishEyeOverlay();
@@ -3102,14 +3108,14 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             Viewport.SetPresentation($"Structural helper review - {Conformance.StructuralNode?.Name}",
                 Conformance.StructuralPreviewEnabled ? "Prepared candidate; changes have not been applied." : "Saved model with the same prepared output mode.");
         }
-        if (paintingWeights) Viewport.SetPresentation("Weight painting — source rest view", "Each stroke applies once on release. Escape cancels. Blue 0 · yellow 0.5 · red 1.");
-        if (stressReview) Viewport.SetPresentation($"Stress review — {previewLabel}", "Transient local rotations and morph weights. Saved rig and clips are unchanged; native behavior remains unverified.");
-        if (eyeReview) Viewport.SetPresentation("Eye setup — source bind", "Orange globe outline; RGB axes; blue gaze direction. Source identity and native behavior require review.");
-        if (contactReview && !eyeReview) Viewport.SetPresentation("Contact review — source bind", "Cyan footprint · orange bounds · green bottom plane. Review placement before applying.");
+        if (paintingWeights) Viewport.SetPresentation("Weight painting â€” source rest view", "Each stroke applies once on release. Escape cancels. Blue 0 Â· yellow 0.5 Â· red 1.");
+        if (stressReview) Viewport.SetPresentation($"Stress review â€” {previewLabel}", "Transient local rotations and morph weights. Saved rig and clips are unchanged; native behavior remains unverified.");
+        if (eyeReview) Viewport.SetPresentation("Eye setup â€” source bind", "Orange globe outline; RGB axes; blue gaze direction. Source identity and native behavior require review.");
+        if (contactReview && !eyeReview) Viewport.SetPresentation("Contact review â€” source bind", "Cyan footprint Â· orange bounds Â· green bottom plane. Review placement before applying.");
         if (eyeMotion) Viewport.SetPresentation("Eye motion review", "Transient local gaze with existing facial values. Saved rest frames and animation clips are unchanged.");
         if (hierarchyReview) Viewport.SetPresentation("Hierarchy draft", "Rest placement is retained. Grey: previous parent link. Cyan: proposed parent link. Apply explicitly after review.");
         if (restReview) Viewport.SetPresentation("Rest-pose draft", "Grey axes: previous frame. RGB axes: proposed frame. Apply explicitly after reviewing surface and helper behavior.");
-        if (handReview && !eyeMotion) Viewport.SetPresentation("Hand review — source bind", "Purple sampling box · colored branch proposals · yellow saved finger guides. Geometry requires review.");
+        if (handReview && !eyeMotion) Viewport.SetPresentation("Hand review â€” source bind", "Purple sampling box Â· colored branch proposals Â· yellow saved finger guides. Geometry requires review.");
         if (derivedReview) Viewport.SetPresentation("Derived motion preview", $"{clip!.Name} | frame {frame:N0} | Recorded motion. Original source retained; native behavior unverified.");
         PublishDoctorOverlay();
     }
@@ -3693,6 +3699,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
+        StopFacePicking();
         _disposed = true;
         ModelBatch.PropertyChanged -= OnModelBatchPropertyChanged;
         ModelBatch.Dispose();
@@ -3750,7 +3757,7 @@ public sealed class CustomModelAnimationClipItemViewModel : ObservableObject
     public string OriginLabel => Contract.DerivedMotion is null ? "FBX source" : "Derived";
 
     public string DecodeStatus => DecodedClip is null
-        ? Contract.DerivedMotion is null ? "Metadata only — blocked from export" : "Historical derived clip — source or rig changed; derive again before export"
+        ? Contract.DerivedMotion is null ? "Metadata only â€” blocked from export" : "Historical derived clip â€” source or rig changed; derive again before export"
         : "Decoded";
 
     public string DisplayName { get => _displayName; set => SetProperty(ref _displayName, value ?? string.Empty); }

@@ -1,4 +1,4 @@
-﻿<UserControl x:Class="ReAnimated.App.Views.GuidedModelSetupView"
+<UserControl x:Class="ReAnimated.App.Views.GuidedModelSetupView"
  xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
  xmlns:views="clr-namespace:ReAnimated.App.Views">
  <Grid Margin="18">
@@ -170,6 +170,18 @@
       </StackPanel>
      </Expander>
      <Button Content="Build both model packages…" Command="{Binding BuildFppTppPackagesCommand}" Margin="0,0,0,12" />
+     <Expander Header="Assign the pair to a Player appearance" IsExpanded="False" Margin="0,0,0,12">
+      <StackPanel>
+       <TextBlock Text="{Binding PlayerAppearanceBindingSummary}" TextWrapping="Wrap" Margin="0,6,0,8" />
+       <Button Content="Open Player appearance script…" Command="{Binding OpenPlayerAppearanceCommand}" />
+       <TextBlock Text="{Binding PlayerAppearanceSourceStatus}" TextWrapping="Wrap" Margin="0,4,0,0"
+        Foreground="{StaticResource MutedTextBrush}" />
+       <ComboBox ItemsSource="{Binding PlayerAppearanceChoices}" SelectedItem="{Binding SelectedPlayerAppearance}" Margin="0,8,0,8">
+        <ComboBox.ItemTemplate><DataTemplate><TextBlock><Run Text="{Binding CharacterId}"/><Run Text=" / "/><Run Text="{Binding AppearanceId}"/></TextBlock></DataTemplate></ComboBox.ItemTemplate>
+       </ComboBox>
+       <Button Content="Save assigned appearance script…" Command="{Binding ExportPlayerAppearanceCommand}" />
+      </StackPanel>
+     </Expander>
      <TextBlock Text="Animation takes" FontWeight="SemiBold" />
      <TextBlock Text="These checkboxes choose source takes for a local animation library. Unchecking a take does not remove it from the original FBX. The stock-motion Preview step uses a retail clip and does not add that clip to this package."
                 TextWrapping="Wrap" Margin="0,4,0,8" Foreground="{StaticResource MutedTextBrush}" />
@@ -203,6 +215,7 @@
   </ScrollViewer>
   <StackPanel Grid.Row="2">
    <ProgressBar Height="5" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding IsGuidedBusy, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+   <Button Content="Character systems: face, bounds and gore" Command="{Binding OpenCharacterSystemsCommand}" Margin="0,0,0,8"/>
    <Button Content="{Binding GuidedPrimaryLabel}" Command="{Binding GuidedPrimaryCommand}" MinHeight="42" FontSize="15"/>
    <DockPanel Margin="0,12,0,0">
     <Button Content="Back" Command="{Binding GuidedBackCommand}" DockPanel.Dock="Left"/>

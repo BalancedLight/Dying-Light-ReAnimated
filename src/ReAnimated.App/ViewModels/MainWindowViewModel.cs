@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
@@ -876,6 +876,7 @@ public sealed partial class MainWindowViewModel :
             pickStockPolicySource: DecodeConformanceStockPolicySourceAsync,
             getRetentionRemovalBlockers: GetRetentionRemovalBlockers,
             confirmPackageIdentityReplacement: ConfirmPackageIdentityReplacement);
+        Models.SetCharacterDependencyResolver(ResolveCharacterCompanionsAsync);
         Models.Conformance.SetRetailReferencePicker(PickConformanceRetailReferenceAsync);
         Models.SetGuidedPreviewHandler(PreviewDefaultDl1AnimationForModelAsync);
         Models.PersistenceStateChanged += OnModelsPersistenceStateChanged;
@@ -1108,11 +1109,13 @@ public sealed partial class MainWindowViewModel :
         ResetAttachmentOffsetCommand = new RelayCommand(
             AttachmentEditor.ResetOffset);
         UndoCommand = new RelayCommand(Undo, CanUndoCurrentContext);
-        RedoCommand = new RelayCommand(
-            Redo,
-            () => !IsJointPlacementUndoContext && _redoProjects.Count > 0);
+        RedoCommand = new RelayCommand(Redo, CanRedoCurrentContext);
         Models.Conformance.UndoLastJointPlacementCommand.CanExecuteChanged +=
             (_, _) => UndoCommand.NotifyCanExecuteChanged();
+        Models.UndoHelperEditCommand.CanExecuteChanged +=
+            (_, _) => UndoCommand.NotifyCanExecuteChanged();
+        Models.RedoHelperEditCommand.CanExecuteChanged +=
+            (_, _) => RedoCommand.NotifyCanExecuteChanged();
         Models.Conformance.PropertyChanged += (_, args) =>
         {
             if (args.PropertyName is nameof(RigConformanceWizardViewModel.Stage) or
@@ -1124,7 +1127,8 @@ public sealed partial class MainWindowViewModel :
         };
         Models.PropertyChanged += (_, args) =>
         {
-            if (args.PropertyName == nameof(ModelsWorkspaceViewModel.IsConformTabSelected))
+            if (args.PropertyName is nameof(ModelsWorkspaceViewModel.IsConformTabSelected) or
+                nameof(ModelsWorkspaceViewModel.IsBusy))
             {
                 UndoCommand.NotifyCanExecuteChanged();
                 RedoCommand.NotifyCanExecuteChanged();
@@ -1996,6 +2000,9 @@ public sealed partial class MainWindowViewModel :
                     .NotifyCanExecuteChanged();
                 ExportSelectedBrowserMeshToFbxCommand
                     .NotifyCanExecuteChanged();
+                ImportCompleteCharacterCommand.NotifyCanExecuteChanged();
+                EditSelectedProjectModelCommand.NotifyCanExecuteChanged();
+                RemoveSelectedProjectModelCommand.NotifyCanExecuteChanged();
                 PlaySelectedExplorerAnimationCommand
                     .NotifyCanExecuteChanged();
                 AddSelectedRetailAnimationCommand
@@ -2976,6 +2983,8 @@ public sealed partial class MainWindowViewModel :
                 true,
                 nameof(IsCustomModelAuthoringSurfaceVisible)))
         {
+            UndoCommand.NotifyCanExecuteChanged();
+            RedoCommand.NotifyCanExecuteChanged();
             OnPropertyChanged(nameof(IsRetailModelBrowserSurfaceVisible));
             OnPropertyChanged(nameof(IsAnimationWorkspaceSurfaceVisible));
             OnPropertyChanged(nameof(IsAnimationDiagnosticsDrawerVisible));
@@ -3053,6 +3062,8 @@ public sealed partial class MainWindowViewModel :
                 false,
                 nameof(IsCustomModelAuthoringSurfaceVisible)))
         {
+            UndoCommand.NotifyCanExecuteChanged();
+            RedoCommand.NotifyCanExecuteChanged();
             OnPropertyChanged(nameof(IsRetailModelBrowserSurfaceVisible));
             OnPropertyChanged(nameof(IsAnimationWorkspaceSurfaceVisible));
             OnPropertyChanged(nameof(IsAnimationDiagnosticsDrawerVisible));
@@ -3535,6 +3546,8 @@ public sealed partial class MainWindowViewModel :
             ShowMeshes,
             ShowSkeletonOverlay,
             _pendingProjectAssets.Values
+                .Where(receipt => _project.Assets.Any(asset =>
+                    asset.Id == receipt.AssetId))
                 .OrderBy(static receipt => receipt.RelativePath,
                     StringComparer.OrdinalIgnoreCase)
                 .ToImmutableArray(),
@@ -3606,22 +3619,25 @@ public sealed partial class MainWindowViewModel :
         }
     }
 
+    private bool _autosaveFailurePending;
     public void NotifyAutosave(AutosaveCompletedEventArgs args)
     {
         ArgumentNullException.ThrowIfNull(args);
         if (args.Succeeded)
         {
+            _autosaveFailurePending = false;
             StatusText = IsDirty
                 ? $"Recovery autosaved {args.Timestamp.LocalDateTime:T}; project still has unsaved edits"
                 : $"Recovery autosaved {args.Timestamp.LocalDateTime:T}";
         }
         else
         {
-            AddDiagnostic(
-                "Error",
-                "Autosave",
-                "Workspace autosave failed",
-                args.Error);
+            StatusText = "Recovery autosave failed; unsaved edits remain in memory. " + args.Error;
+            if (!_autosaveFailurePending)
+            {
+                _autosaveFailurePending = true;
+                AddDiagnostic("Error", "Autosave", "Workspace autosave failed", args.Error, showErrorPopup: false);
+            }
         }
     }
 
@@ -4481,10 +4497,13 @@ public sealed partial class MainWindowViewModel :
     /// failure reporting as the Open command, without displaying a file picker.
     /// Call on the UI thread after any current workspace operation completes.
     /// </summary>
-    public async Task OpenWorkspaceAsync(string path)
+    public Task OpenWorkspaceAsync(string path) => OpenWorkspaceCoreAsync(path, CancellationToken.None);
+
+    private async Task<bool> OpenWorkspaceCoreAsync(string path, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
         if (IsBusy)
         {
             throw new InvalidOperationException(
@@ -4513,7 +4532,8 @@ public sealed partial class MainWindowViewModel :
             _pendingProjectAssets.Clear();
             SweepStaleProjectTemporaryFiles(path);
             DlraProject loaded = await Task.Run(
-                () => ProjectSerializer.Load(path));
+                () => ProjectSerializer.Load(path), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             openJob.Progress = 25.0;
             openJob.Stage = "Restore models";
             openJob.State = "Preparing the project's models";
@@ -4521,7 +4541,8 @@ public sealed partial class MainWindowViewModel :
                 await PrepareModelsWorkspaceRestoreAsync(
                     loaded,
                     path,
-                    CancellationToken.None);
+                    cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             openJob.Progress = 55.0;
             SetProject(
                 loaded,
@@ -4548,7 +4569,7 @@ public sealed partial class MainWindowViewModel :
 
                 // SetProject has already restored the workspace saved with the
                 // project; activating the stored animation must not override it.
-                await RestoreSavedAnimationAsync(activeAnimation.Id);
+                await RestoreSavedAnimationAsync(activeAnimation.Id, cancellationToken);
                 if (_sourceAnimation is null)
                 {
                     throw new InvalidOperationException(
@@ -4567,12 +4588,14 @@ public sealed partial class MainWindowViewModel :
                 await LoadActiveSourceAsync(path);
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             openJob.Progress = 100.0;
             openJob.Complete("Opened");
             if (activeAnimation is null || _sourceAnimation is not null)
             {
                 StatusText = $"Opened DL1 project {loaded.Name}";
             }
+            return true;
         }
         catch (LegacyProjectFormatException exception)
         {
@@ -4590,6 +4613,7 @@ public sealed partial class MainWindowViewModel :
                 "Legacy Python project was not opened",
                 exception.Message);
             StatusText = "Project open failed";
+            return false;
         }
         catch (Exception exception) when (
             exception is ProjectFormatException
@@ -4597,7 +4621,8 @@ public sealed partial class MainWindowViewModel :
             or InvalidDataException
             or InvalidOperationException
             or IOException
-            or UnauthorizedAccessException)
+            or UnauthorizedAccessException
+            or OperationCanceledException)
         {
             RestorePendingProjectAssets(previousPendingAssets);
             ProjectPath = previousProjectPath;
@@ -4612,7 +4637,8 @@ public sealed partial class MainWindowViewModel :
                 "Project",
                 "Project could not be opened",
                 exception.Message);
-            StatusText = "Project open failed";
+            StatusText = exception is OperationCanceledException ? "Project open cancelled" : "Project open failed";
+            return false;
         }
         finally
         {
@@ -5596,16 +5622,44 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        await SaveWorkspaceToPathCoreAsync(path, overwrite: true, CancellationToken.None);
+    }
+
+    public Task SaveWorkspaceToNewPathAsync(string path, CancellationToken cancellationToken)
+    {
+        if (IsBusy || Models.IsBusy)
+            throw new InvalidOperationException("The app is busy.");
+        string outputPath = ReAnimated.Core.Automation.AppControlHandler.ValidateNewOutputPath(path);
+        return SaveWorkspaceToPathCoreAsync(outputPath, overwrite: false, cancellationToken);
+    }
+
+    private async Task SaveWorkspaceToPathCoreAsync(string path,
+        bool overwrite, CancellationToken cancellationToken)
+    {
+        bool modelsGateAcquired = false;
+        ProjectAssetSaveTransaction? assetTransaction = null;
+        Dictionary<Guid, PendingProjectAssetReceipt>? previousPendingAssets = null;
+        bool projectPublished = false;
         IsBusy = true;
         StatusText = $"Saving {Path.GetFileName(path)}…";
         try
         {
+            // A debounced model integration can also refresh project rows.
+            // Finish it before Save captures a coherent project/model pair,
+            // then serialize persistence and publication with that same gate.
+            _modelsIntegrationSource?.Cancel();
+            await _modelsTargetRefreshTask.WaitAsync(cancellationToken);
+            await _modelsIntegrationGate.WaitAsync(cancellationToken);
+            modelsGateAcquired = true;
+            if (!overwrite) previousPendingAssets = new Dictionary<Guid, PendingProjectAssetReceipt>(_pendingProjectAssets);
+            long modelRevisionAtSave = Models.PersistenceRevision;
             DlraProject projectToSave =
                 CreateProjectWithCurrentPreviewConfiguration();
             projectToSave = await PersistModelsWorkspaceAsync(
                 projectToSave,
                 path,
-                CancellationToken.None);
+                materializeAssets: overwrite,
+                cancellationToken);
             if (_activeAnimationId is { } activeId &&
                 _sourceAnimation is { } source &&
                 _targetRig is { } target)
@@ -5622,12 +5676,23 @@ public sealed partial class MainWindowViewModel :
             projectToSave = ProjectAnimationOutputNormalizer.Normalize(
                 projectToSave);
             projectToSave.Validate();
-            await MaterializePendingProjectAssetsAsync(
-                projectToSave,
-                path,
-                CancellationToken.None);
+            if (overwrite)
+            {
+                await MaterializePendingProjectAssetsAsync(projectToSave, path, cancellationToken);
+            }
+            else
+            {
+                assetTransaction = await ProjectAssetSaveTransaction.PrepareAsync(projectToSave,
+                    ProjectPath, path, _pendingProjectAssetStore, _pendingProjectAssets, cancellationToken);
+                projectToSave = assetTransaction.Project;
+                projectToSave.Validate();
+                await assetTransaction.MaterializeAsync(cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
             string savedPath = await Task.Run(
-                () => ProjectSerializer.SaveAtomic(projectToSave, path));
+                () => ProjectSerializer.SaveAtomic(projectToSave, path, overwrite));
+            projectPublished = true;
+            assetTransaction?.Commit();
             ProjectPath = savedPath;
             _project = projectToSave;
             _savedProject = projectToSave;
@@ -5641,8 +5706,8 @@ public sealed partial class MainWindowViewModel :
                 _targetProjectAsset = savedTargetAsset;
                 RefreshGuidedPreviewDraftIdentity(savedAnimation, savedTargetAsset);
             }
-            _savedModelsRevision = Models.PersistenceRevision;
-            _integratedModelsRevision = Models.PersistenceRevision;
+            _savedModelsRevision = modelRevisionAtSave;
+            _integratedModelsRevision = modelRevisionAtSave;
             ClearMaterializedPendingProjectAssets(projectToSave);
             // Saving can replace pending target metadata and rebase reviewed mappings.
             // Refresh the library and export rows from the final persisted project.
@@ -5650,6 +5715,11 @@ public sealed partial class MainWindowViewModel :
             UpdateDirtyState();
             AddRecentProjectPath(savedPath);
             StatusText = $"Saved {Path.GetFileName(savedPath)}";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Save cancelled.";
+            throw;
         }
         catch (Exception exception) when (
             exception is ProjectFormatException
@@ -5674,9 +5744,17 @@ public sealed partial class MainWindowViewModel :
                 },
                 exception);
             StatusText = $"Project save failed: {exception.Message}";
+            if (!overwrite) throw;
         }
         finally
         {
+            if (assetTransaction is not null) await assetTransaction.DisposeAsync();
+            if (!projectPublished && previousPendingAssets is not null)
+            {
+                _pendingProjectAssets.Clear();
+                foreach (var pair in previousPendingAssets) _pendingProjectAssets.Add(pair.Key, pair.Value);
+            }
+            if (modelsGateAcquired) _modelsIntegrationGate.Release();
             IsBusy = false;
         }
     }
@@ -5915,6 +5993,7 @@ public sealed partial class MainWindowViewModel :
                 _project,
                 payload,
                 ProjectPath,
+                materializeAssets: true,
                 cancellationToken);
             if (!updated.Equals(_project))
             {
@@ -5932,6 +6011,7 @@ public sealed partial class MainWindowViewModel :
     private async Task<DlraProject> PersistModelsWorkspaceAsync(
         DlraProject project,
         string projectPath,
+        bool materializeAssets,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -5940,6 +6020,7 @@ public sealed partial class MainWindowViewModel :
             project,
             Models.CreatePersistencePayload(),
             projectPath,
+            materializeAssets,
             cancellationToken);
     }
 
@@ -5947,6 +6028,7 @@ public sealed partial class MainWindowViewModel :
         DlraProject project,
         ModelsWorkspacePersistencePayload? payload,
         string? materializeProjectPath,
+        bool materializeAssets,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(project);
@@ -6007,7 +6089,7 @@ public sealed partial class MainWindowViewModel :
                 payload.PackageBytes.ToArray(),
                 cancellationToken);
         _pendingProjectAssets[packageAssetId] = staged;
-        if (!string.IsNullOrWhiteSpace(materializeProjectPath))
+        if (materializeAssets && !string.IsNullOrWhiteSpace(materializeProjectPath))
         {
             // Never replaceExisting here: the path was only reused when the
             // destination is absent or already holds these exact bytes.
@@ -16685,7 +16767,15 @@ public sealed partial class MainWindowViewModel :
     private bool CanUndoCurrentContext() =>
         IsJointPlacementUndoContext
             ? Models.Conformance.UndoLastJointPlacementCommand.CanExecute(null)
-            : _undoProjects.Count > 0;
+            : IsCustomModelAuthoringSurfaceVisible
+                ? Models.UndoHelperEditCommand.CanExecute(null)
+                : _undoProjects.Count > 0;
+
+    private bool CanRedoCurrentContext() =>
+        !IsJointPlacementUndoContext &&
+        (IsCustomModelAuthoringSurfaceVisible
+            ? Models.RedoHelperEditCommand.CanExecute(null)
+            : _redoProjects.Count > 0);
 
     private void Undo()
     {
@@ -16696,6 +16786,13 @@ public sealed partial class MainWindowViewModel :
                 Models.Conformance.UndoLastJointPlacementCommand.Execute(null);
                 StatusText = "Undid the last joint move";
             }
+            return;
+        }
+
+        if (IsCustomModelAuthoringSurfaceVisible)
+        {
+            if (Models.UndoHelperEditCommand.CanExecute(null))
+                Models.UndoHelperEditCommand.Execute(null);
             return;
         }
 
@@ -16713,6 +16810,13 @@ public sealed partial class MainWindowViewModel :
     {
         if (IsJointPlacementUndoContext)
         {
+            return;
+        }
+
+        if (IsCustomModelAuthoringSurfaceVisible)
+        {
+            if (Models.RedoHelperEditCommand.CanExecute(null))
+                Models.RedoHelperEditCommand.Execute(null);
             return;
         }
 
@@ -17892,6 +17996,8 @@ public sealed partial class MainWindowViewModel :
 
         SelectedProjectModel = ProjectModelLibrary.FirstOrDefault(model =>
             model.ModelId == selectedModelId);
+        EditSelectedProjectModelCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectModelCommand.NotifyCanExecuteChanged();
     }
 
     private void RefreshExportWorkflow()
@@ -23294,6 +23400,8 @@ public sealed partial class MainWindowViewModel :
         UndoCommand.NotifyCanExecuteChanged();
         RedoCommand.NotifyCanExecuteChanged();
         NotifyMappingCommands();
+        EditSelectedProjectModelCommand.NotifyCanExecuteChanged();
+        RemoveSelectedProjectModelCommand.NotifyCanExecuteChanged();
         ApplyFedExpressionCommand.NotifyCanExecuteChanged();
         KeyMorphPoseCommand.NotifyCanExecuteChanged();
         KeyIkConstraintCommand.NotifyCanExecuteChanged();
@@ -24595,15 +24703,19 @@ public sealed partial class MainWindowViewModel :
         await PreviewAssetAsync(selected, requireCurrentSelection: false);
     }
 
+    private bool OwnsProjectModelBrowsePreview() =>
+        !_disposed && IsRetailModelBrowserSurfaceVisible &&
+        !HasGuidedPreviewReviewDraft && !IsBusy;
+
     private void ScheduleProjectModelPreview(
         ProjectModelItemViewModel selected)
     {
-        if (!IsModelsWorkspace || _disposed)
+        CancelAutomaticAssetPreview();
+        if (!OwnsProjectModelBrowsePreview())
         {
             return;
         }
 
-        CancelAutomaticAssetPreview();
         CancellationTokenSource source =
             CancellationTokenSource.CreateLinkedTokenSource(
                 _lifetimeSource.Token);
@@ -24620,8 +24732,8 @@ public sealed partial class MainWindowViewModel :
         {
             await Task.Delay(200, source.Token);
             source.Token.ThrowIfCancellationRequested();
-            if (_disposed ||
-                !IsModelsWorkspace ||
+            if (!OwnsProjectModelBrowsePreview() ||
+                !ReferenceEquals(_automaticAssetPreviewSource, source) ||
                 SelectedProjectModel?.ModelId != selected.ModelId)
             {
                 return;

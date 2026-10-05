@@ -998,6 +998,7 @@ public sealed class CustomModelAuthoringTests
                     RetailData0PakPath = data0Pak,
                     OutputRpackPath = rpackPath,
                     ResourceName = "external_model_control_player",
+                    WorkingDirectoryRoot = Environment.GetEnvironmentVariable("DLR_MODEL_COMPILER_WORK_ROOT"),
                 });
             Assert.Equal(CustomModelBuildState.CompilerValidated, result.BuildReceipt.State);
             Assert.True(File.Exists(result.OutputRpackPath));

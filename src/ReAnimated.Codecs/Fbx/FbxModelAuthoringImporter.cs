@@ -95,7 +95,11 @@ public sealed record FbxModelAuthoringImportResult(
 {
     /// <summary>Explicit ordered source LOD associations, retained for all-level authoring/export.</summary>
     public ImmutableArray<FbxLodGroupEvidence> SourceLodGroups { get; init; } = [];
+    public ImmutableArray<CharacterLodNode> SourceCharacterLods { get; init; } = [];
 }
+
+public sealed record CharacterLodLevel(int LodIndex, ImmutableArray<string> SurfaceIds);
+public sealed record CharacterLodNode(string Name, int SourceEntityIndex, ImmutableArray<CharacterLodLevel> Levels);
 
 [Flags]
 public enum CustomModelReimportContractChange
@@ -425,13 +429,15 @@ public static class FbxModelAuthoringImporter
         ArgumentNullException.ThrowIfNull(package);
         package.Document.Validate();
         CustomModelPackageSerializer.ValidateAuthoredLayer(package);
+        CharacterActorSourceAuthoring.RevalidateAll(package);
         bool ignoreMorphChannels = package.Document.IgnoreMorphChannels ||
             package.Document.Diagnostics.Any(static diagnostic =>
                 string.Equals(
                     diagnostic.Code,
                     "model_morph_channels_skipped",
                     StringComparison.Ordinal));
-        FbxModelAuthoringImportResult decoded = Import(
+        FbxModelAuthoringImportResult decoded = package.Document.Source.Kind == CustomModelSourceKind.StockCharacter
+            ? DecodedCharacterSnapshotCodec.DecodeSource(package, cancellationToken) : Import(
             package.SourceFbx.AsSpan(),
             package.Document.Source.OriginalFileName,
             new FbxModelAuthoringImportOptions
@@ -442,6 +448,9 @@ public static class FbxModelAuthoringImporter
                 ModelIdentityOverride = package.Document.ModelId,
             },
             cancellationToken);
+
+        if (package.Document.GeometryRevision is not null)
+            return FbxDerivedMotionAuthoring.RestoreAvailability(ModelGeometryRevisionCodec.Replay(decoded, package));
 
         Dictionary<string, CustomModelAnimationClip> savedAnimations = package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is null)
             .ToDictionary(static clip => clip.SourceFingerprint, StringComparer.Ordinal);
@@ -490,10 +499,12 @@ public static class FbxModelAuthoringImporter
             BuildSettings = package.Document.BuildSettings,
             SecondaryMotion = package.Document.SecondaryMotion,
             FacialPresets = package.Document.FacialPresets,
+            MorphAuthoringRecords=package.Document.MorphAuthoringRecords,
             RigConformance = package.Document.RigConformance,
             RiggingSession = package.Document.RiggingSession is { } studio
                 ? RiggingSessions.ReconcileSource(studio, decoded.Package.Document.Source.ContentSha256) : null,
             LastBuildReceipt = null,
+            CharacterResources = package.Document.CharacterResources,
         };
         if (package.Document.AuthoredLayer is not null)
         {
@@ -531,11 +542,11 @@ public static class FbxModelAuthoringImporter
             ? null
             : document.CreateRigDefinition();
         document.Validate();
-        return FbxDerivedMotionAuthoring.RestoreAvailability(decoded with
+        return FbxDerivedMotionAuthoring.RestoreAvailability(CharacterBodyRegionAuthoring.Reconcile(MorphAuthoringEvidence.ReconcileTarget(decoded with
         {
             Package = package with { Document = document },
             Rig = reopenedRig,
-        });
+        })));
     }
 
     public static CustomModelReimportPreview PreviewReimport(
@@ -3150,7 +3161,7 @@ public static class FbxModelAuthoringImporter
         return new Guid(bytes);
     }
 
-    internal static string ComputeMorphSignature(
+    public static string ComputeMorphSignature(
         ImmutableArray<CustomModelMorphChannel> channels,
         ImmutableArray<FbxModelSurface> surfaces)
     {

@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.IO;
 using System.Security.Cryptography;
@@ -85,6 +85,7 @@ public sealed record Dl1RetailAnimationPayload(
 
 public sealed class Dl1AssetWorkspace : IAsyncDisposable
 {
+    private static readonly string[] CharacterSourceExtensions=[".pre",".bel",".scr",".def",".phx",".mpcloth",".chr",".fx",".bscr",".ascr",".msh",".skn",".msh_obj"];
     private const int MaximumAnimationScriptSectionBytes = 64 * 1024 * 1024;
     private readonly string _databasePath;
     private readonly string _cacheDirectory;
@@ -121,6 +122,37 @@ public sealed class Dl1AssetWorkspace : IAsyncDisposable
         RetailAssetId assetId,
         out Dl1RetailMeshProfile? profile) =>
         _meshProfiles.TryGetValue(assetId.StableKey, out profile);
+
+    public async Task<Dl1CharacterImportOptions> CreateCharacterImportOptionsAsync(Dl1MeshData mesh,
+        ImmutableArray<RetailAssetLogicalId> companionRoots=default,CancellationToken cancellationToken=default)
+    {
+        var install=Install??throw new InvalidOperationException("Load the installed character catalog first.");
+        string path=Path.Combine(install.DataPath,"optimized_dx11.mp");
+        var before=new FileInfo(path);
+        if(!before.Exists || before.Length>256L*1024*1024) throw new InvalidDataException("Original material database is missing or exceeds the custody bound.");
+        long length=before.Length;DateTime stamp=before.LastWriteTimeUtc;
+        var payload=ImmutableArray.Create(await File.ReadAllBytesAsync(path,cancellationToken).ConfigureAwait(false));
+        var names=ImmutableArray.CreateBuilder<string>();
+        await using(var reader=await Dl1MaterialPackReader.OpenAsync(path,cancellationToken:cancellationToken).ConfigureAwait(false))
+        {
+            foreach(var materialName in mesh.OriginalMaterialDatabase.Entries.Select(m=>m.DatabaseName).Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                var material=await reader.ReadMaterialAsync(materialName,cancellationToken).ConfigureAwait(false);
+                if(material is not null) names.Add(materialName);
+            }
+            foreach(var slot in mesh.MaterialSlots.Where(s=>s.ResolvedMaterial is not null))
+            {
+                var original=await reader.ReadMaterialAsync(slot.ResolvedMaterial!.ResourceName,cancellationToken).ConfigureAwait(false);
+                if(original is null || original.NameHash!=slot.ResolvedMaterial.NameHash || original.TechniqueCount!=slot.ResolvedMaterial.TechniqueCount)
+                    throw new InvalidDataException("A resolved material no longer matches its original shared database.");
+                names.Add(original.ResourceName);
+            }
+        }
+        var after=new FileInfo(path);
+        if(after.Length!=length || after.LastWriteTimeUtc!=stamp) throw new IOException("Original material database changed during import.");
+        return new() {CompanionRoots=companionRoots.IsDefault?[]:companionRoots,VerifiedMaterialNames=names.ToImmutable(),MaterialProviderResourceId="external:abdm",
+            ExternalResources=[new("external:abdm",Path.GetFileName(path),"dl1-material-database",payload,ReAnimated.Core.ModelAuthoring.CharacterSubsystem.Materials)]};
+    }
 
     public Task<Dl1AssetIndexResult> IndexSteamInstallAsync(
         IProgress<Dl1AssetIndexProgress>? progress,
@@ -176,7 +208,8 @@ public sealed class Dl1AssetWorkspace : IAsyncDisposable
                         install.InstallPath,
                         pendingCache,
                         additionalRpackRoots:
-                            additionalRpackRoots),
+                            additionalRpackRoots,
+                        additionalSourceExtensions:CharacterSourceExtensions),
                     token).ConfigureAwait(false);
                 pendingIndex = new RetailAssetSqliteIndex(
                     _databasePath);

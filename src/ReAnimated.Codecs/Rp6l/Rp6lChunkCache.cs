@@ -77,10 +77,29 @@ public sealed class Rp6lChunkCache : IDisposable, IAsyncDisposable
         }
     }
 
-    public async ValueTask<Stream> OpenChunkAsync(
+    public ValueTask<Stream> OpenChunkAsync(
         Rp6lArchive archive,
         Rp6lChunkDescriptor chunk,
+        CancellationToken cancellationToken = default) =>
+        OpenChunkCoreAsync(archive, chunk, null, cancellationToken);
+
+    public ValueTask<Stream> OpenChunkAsync(
+        Rp6lArchive archive,
+        Rp6lChunkDescriptor chunk,
+        string storedContentSha256,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(storedContentSha256);
+        if (storedContentSha256.Length != 64 || !storedContentSha256.All(char.IsAsciiHexDigit))
+            throw new ArgumentException("A packed chunk SHA-256 is required.", nameof(storedContentSha256));
+        return OpenChunkCoreAsync(archive, chunk, storedContentSha256.ToLowerInvariant(), cancellationToken);
+    }
+
+    private async ValueTask<Stream> OpenChunkCoreAsync(
+        Rp6lArchive archive,
+        Rp6lChunkDescriptor chunk,
+        string? storedContentSha256,
+        CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         ArgumentNullException.ThrowIfNull(archive);
@@ -99,7 +118,7 @@ public sealed class Rp6lChunkCache : IDisposable, IAsyncDisposable
                 nameof(chunk));
         }
 
-        string key = CreateChunkKey(archive, chunk);
+        string key = CreateChunkKey(archive, chunk, storedContentSha256);
         Stream? cached = await TryOpenCachedAsync(
             key,
             chunk.LogicalSize,
@@ -382,11 +401,14 @@ public sealed class Rp6lChunkCache : IDisposable, IAsyncDisposable
 
     private static string CreateChunkKey(
         Rp6lArchive archive,
-        Rp6lChunkDescriptor chunk)
+        Rp6lChunkDescriptor chunk,
+        string? storedContentSha256)
     {
         string value = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
             $"{archive.CacheIdentity}|{chunk.Index}|{chunk.Offset}|{chunk.PackedSize}|{chunk.LogicalSize}|{(int)chunk.Compression}");
+        if (storedContentSha256 is not null)
+            value += "|content:" + storedContentSha256;
         return Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     }

@@ -24,6 +24,20 @@ public static class FbxModelLodLayout
             .Where(row => row.surface.SourceGeometry is not null)
             .GroupBy(row => row.surface.SourceGeometry!.Id, StringComparer.Ordinal)
             .ToDictionary(group => group.Key, group => group.Select(row => row.index).ToImmutableArray(), StringComparer.Ordinal);
+        foreach (var native in model.SourceCharacterLods)
+        {
+            var levels = ImmutableArray.CreateBuilder<FbxModelLodLevelLayout>();
+            foreach (var level in native.Levels)
+            {
+                if (level.LodIndex != levels.Count || level.SurfaceIds.IsDefaultOrEmpty)
+                    throw new InvalidDataException("Native LOD indices must be complete and contiguous.");
+                var indexes = level.SurfaceIds.Select(id => Array.FindIndex(model.Surfaces.ToArray(), s => s.Id == id)).ToImmutableArray();
+                if (indexes.Any(i => i < 0 || !claimed.Add(i))) throw new InvalidDataException("Native LOD references a missing or multiply owned surface.");
+                levels.Add(new(level.LodIndex, indexes));
+            }
+            if (levels.Count == 0) throw new InvalidDataException("Native LOD group is empty.");
+            nodes.Add(new(native.Name, levels.ToImmutable()));
+        }
         foreach (FbxLodGroupEvidence group in model.SourceLodGroups)
         {
             if (group.Levels.IsDefaultOrEmpty)

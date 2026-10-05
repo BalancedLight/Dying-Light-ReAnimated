@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 
 namespace ReAnimated.Codecs.CompactMesh;
 
@@ -223,6 +223,8 @@ public sealed record CompiledMeshSkinEntityOverride(
 /// are not interpreted yet, but their bounded counts are retained so consumers
 /// do not mistake the decoded subset for complete runtime skin emulation.
 /// </summary>
+public sealed record CompiledMeshSkinSurfaceOverride(byte OriginalSurfaceId,byte ReplacementSurfaceId,ushort Flags);
+
 public sealed record CompiledMeshSkinDefinition(
     int Index,
     string Name,
@@ -230,7 +232,15 @@ public sealed record CompiledMeshSkinDefinition(
     IReadOnlyList<CompiledMeshSkinMaterialOverride> MaterialOverrides,
     IReadOnlyList<CompiledMeshSkinEntityOverride> EntityOverrides,
     int SurfaceOverrideCount,
-    int RandomizedChildCount);
+    int RandomizedChildCount)
+{
+    public IReadOnlyList<byte> TagBytes {get;init;}=[];
+    public IReadOnlyList<byte> ColorBytes {get;init;}=[];
+    public string? MorphsPreset {get;init;}
+    public string? Character0 {get;init;}
+    public string? Character1 {get;init;}
+    public IReadOnlyList<CompiledMeshSkinSurfaceOverride> SurfaceOverrides {get;init;}=[];
+}
 
 public sealed record CompiledMeshGeometryDocument(
     IReadOnlyList<CompiledVertexLayout> VertexLayouts,

@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Codecs.Rp6l;
@@ -278,6 +278,35 @@ public sealed class AssetCompactMeshTests
         Assert.Equal((ushort)0xC001, entity.RawValue);
         Assert.True(entity.IsHidden);
         Assert.True(entity.HasRuntimeFlag4000);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    public void SkinMetadataRetainsColorsTagsStringsAndOpaqueSurfaceFlags()
+    {
+        var fixture=RpackTestData.BuildCompiledMeshFixture();
+        byte[] payload=RpackTestData.BuildCompiledMeshSkinPayload("generic_skin",[],[],1);
+        int row=BinaryPrimitives.ReadInt32LittleEndian(payload.AsSpan(4));
+        void Append(int field,byte[] value)
+        {
+            int start=payload.Length;Array.Resize(ref payload,start+value.Length);value.CopyTo(payload,start);
+            BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(row+field),start-row);
+        }
+        byte[] tags=[1,2,3,4,5,6,7,8];byte[] colors=[12,34,56,78,90,91,92,93];
+        Append(4,tags);Append(12,colors);
+        Append(8,System.Text.Encoding.UTF8.GetBytes("generic_preset"+'\0'));
+        Append(16,System.Text.Encoding.UTF8.GetBytes("generic_family"+'\0'));
+        Append(20,System.Text.Encoding.UTF8.GetBytes("generic_state"+'\0'));
+        Append(40,[5,9,0x34,0x12]);payload[row+28]=1;
+        var result=CompiledMeshGeometryDecoder.Decode(fixture.Metadata,payload,fixture.Vertices,fixture.Indices);
+        var skin=Assert.Single(result.SkinDefinitions);
+        Assert.Equal(tags,skin.TagBytes);Assert.Equal(colors,skin.ColorBytes);
+        Assert.Equal("generic_preset",skin.MorphsPreset);Assert.Equal("generic_family",skin.Character0);Assert.Equal("generic_state",skin.Character1);
+        Assert.Equal(new CompiledMeshSkinSurfaceOverride(5,9,0x1234),Assert.Single(skin.SurfaceOverrides));
+        BinaryPrimitives.WriteInt32LittleEndian(payload.AsSpan(row+12),payload.Length-row-4);
+        var malformed=CompiledMeshGeometryDecoder.Decode(fixture.Metadata,payload,fixture.Vertices,fixture.Indices);
+        Assert.Empty(malformed.SkinDefinitions);
+        Assert.Contains(malformed.Diagnostics,d=>d.Code=="CMESHG015" && d.Severity==CompactMeshDiagnosticSeverity.Error);
     }
 
     [Fact]

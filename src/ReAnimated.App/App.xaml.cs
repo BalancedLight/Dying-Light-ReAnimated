@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using System.Reflection;
@@ -16,6 +17,8 @@ public partial class App : Application, IDisposable
     private StructuredFileLogger? _logger;
     private WorkspaceAutosaveService? _autosave;
     private MainWindowViewModel? _viewModel;
+    private AppControlServer? _appControl;
+    private bool _appControlReady;
     private int _reportingCrash;
     private bool _disposed;
 
@@ -65,11 +68,24 @@ public partial class App : Application, IDisposable
         MainWindow = window;
         _startupSmoke?.Attach(this, window, viewModel);
         window.Show();
+        Task workspaceInitialization = _startupSmoke is null
+            ? InitializeWorkspaceAsync(viewModel) : Task.CompletedTask;
+        Task installedBuildInitialization = InitializeInstalledBuildStatusAsync(viewModel);
         if (_startupSmoke is null)
         {
-            _ = InitializeWorkspaceAsync(viewModel);
+            try { _appControl = new AppControlServer(window, viewModel, () => _appControlReady); }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                _logger.Write(AppLogLevel.Warning, "app_control_unavailable", "App control unavailable.");
+            }
         }
-        _ = InitializeInstalledBuildStatusAsync(viewModel);
+        _ = CompleteAppControlStartupAsync(workspaceInitialization, installedBuildInitialization);
+    }
+
+    private async Task CompleteAppControlStartupAsync(Task workspace, Task installedBuild)
+    {
+        await Task.WhenAll(workspace, installedBuild);
+        _appControlReady = true;
     }
 
     protected override void OnExit(ExitEventArgs e)
@@ -89,6 +105,8 @@ public partial class App : Application, IDisposable
         }
 
         _disposed = true;
+        _appControl?.Dispose();
+        _appControl = null;
         _logger?.Write(
             AppLogLevel.Information,
             "application_stop",

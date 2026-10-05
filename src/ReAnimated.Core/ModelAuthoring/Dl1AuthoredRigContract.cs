@@ -67,6 +67,9 @@ public sealed record Dl1AuthoredRigNode
 
     public required Dl1AuthoredBoneBounds Bounds { get; init; }
 
+    /// <summary>Explicit source/editor bounds, including valid zero bounds on original pivots.</summary>
+    public bool BoundsWereExplicitlyRetained { get; init; }
+
     public required uint DescriptorHash { get; init; }
 }
 
@@ -420,7 +423,7 @@ public sealed class Dl1AuthoredRigContract
             if (!node.LocalBindMatrix.IsFinite ||
                 !node.GlobalBindMatrix.IsFinite ||
                 !node.InverseGlobalReferenceMatrix.IsFinite ||
-                !(node.BoundsPolicy is RigBoundsPolicy.PreserveSource or RigBoundsPolicy.Solved
+                !(node.BoundsWereExplicitlyRetained || node.BoundsPolicy is RigBoundsPolicy.PreserveSource or RigBoundsPolicy.Solved
                     ? node.Bounds.IsFiniteAndNonNegative : node.Bounds.IsFiniteAndNonZero))
             {
                 throw new ArgumentException($"Authored-rig entity '{node.Name}' contains an invalid matrix or bound.", nameof(nodes));

@@ -67,6 +67,8 @@ public sealed record Dl1OfficialModelCompilerRequest
 
     /// <summary>Verify unchanged current materials for a geometry-only update without running the material compiler or publishing shared databases.</summary>
     public bool ReuseVerifiedExistingMaterials { get; init; }
+    /// <summary>Offline diagnostic control only; incomplete dependencies remain blocked for deployment.</summary>
+    public bool AllowIncompleteCharacterDiagnostics { get; init; }
     /// <summary>Current ordinary mesh whose material layout, skin and morph features must be preserved.</summary>
     public string? ExistingCompiledMeshObjectPath { get; init; }
 
@@ -90,6 +92,7 @@ public sealed record Dl1OfficialModelCompilerResult(
     public ImmutableArray<string> Warnings { get; init; } = [];
 
     public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
+    public ImmutableDictionary<string,string> DetachedMeshObjectPaths {get;init;}=ImmutableDictionary<string,string>.Empty;
 
     /// <summary>Native reference/debug database companions required for subsequent SDK updates.</summary>
     public ImmutableArray<string> MaterialDatabaseCompanionPaths { get; init; } = [];
@@ -142,6 +145,7 @@ public sealed record Dl1OfficialModelCompilerEvidence
     public int VerifiedSkinningInfluenceCount { get; init; }
 
     public ImmutableArray<Dl1CompiledSkinSubsetMaterialReadBack> SkinningMaterialReadBack { get; init; } = [];
+    public Dl1CompiledSkinValidationEvidence? SkinDefinitionReadBack { get; init; }
 
     public Dl1CompiledChrIdentityReadBackEvidence? ChrIdentityReadBack { get; init; }
 
@@ -151,6 +155,8 @@ public sealed record Dl1OfficialModelCompilerEvidence
     public ImmutableArray<Dl1BoneScriptReadBack> BoneScriptReadBack { get; init; } = [];
     public ImmutableArray<Dl1CompiledRigNodeReadBack> RigReadBack { get; init; } = [];
     public int ShadingVerticesVerified { get; init; }
+    public CharacterCompiledResourceReadback? CharacterResourceReadback { get; init; }
+    public CharacterMaterialPublicationReadback? CharacterMaterialReadback { get; init; }
 }
 
 public sealed record Dl1OfficialAnimationCompilerRequest
@@ -188,7 +194,7 @@ public static class Dl1OfficialModelCompiler
     public const string MaterialExportWarning =
         "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-chr-skin-material-serialization-physical-node-all-lod-readback-prepared-surface-identity-material-byte-residual-attributed-triangles-sdk-material-graph-padding-v35";
+        "dl-reanimated-csharp-model-compiler-chr-skin-material-serialization-physical-node-all-lod-readback-prepared-surface-identity-material-byte-residual-attributed-triangles-sdk-material-graph-padding-character-full-native-effects-textures-material-publication-opaque-union-runtime-companions-detached-mesh-material-instances-preset-source-native-loader-reviews-chunk-grouping-v44";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -378,6 +384,7 @@ public static class Dl1OfficialModelCompiler
                     ResourceName = resourceName,
                     SurfaceName = request.SurfaceName,
                     AnimationScriptAlias = request.AnimationScriptAlias,
+                    AllowIncompleteCharacterDiagnostics=request.AllowIncompleteCharacterDiagnostics,
                 },
                 cancellationToken).ConfigureAwait(false);
 
@@ -393,13 +400,24 @@ public static class Dl1OfficialModelCompiler
                 Path.Combine(unit.OutputDirectory, unit.ExpectedObjectFileName + "_dep"),
             }).Append(rulesPath).Append(rsrcPath));
 
+            if(sourceBuild.SkinDefinitionSourcePath is { } skinSourcePath)
+            {
+                string destination=Path.Combine(projectDirectory,virtualDirectory.Replace('/',Path.DirectorySeparatorChar),resourceName+".skn");
+                Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                if(!Path.GetFullPath(skinSourcePath).Equals(Path.GetFullPath(destination),StringComparison.OrdinalIgnoreCase)) File.Copy(skinSourcePath,destination);
+            }
             warnings.AddRange(sourceBuild.NativeCompanionNotes);
             warnings.AddRange(sourceBuild.CapabilityDiagnostics.Select(d => "Capability profile: " + d.Message + " " + d.CorrectiveOperation));
-            foreach (string name in sourceBuild.NativeCompanionFiles.Where(name => name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
+            foreach (string name in sourceBuild.NativeCompanionFiles)
             {
-                string destination = Path.Combine(projectDirectory, "data", "odephysics", "meshpartcloth", name);
+                string relative=name.StartsWith("character-resources/",StringComparison.Ordinal)?Dl1NativeCompanionWriter.PreservedVirtualPath(name):
+                    name.EndsWith(".phx",StringComparison.OrdinalIgnoreCase)?$"data/odephysics/meshpartcloth/{name}":$"{virtualDirectory}/{name}";
+                if(!relative.StartsWith("data/",StringComparison.Ordinal) || relative.Split('/').Any(p=>p is "." or "..") || relative.Contains(':'))
+                    throw new InvalidDataException("Native companion virtual path is not portable.");
+                string destination=Path.Combine(projectDirectory,relative.Replace('/',Path.DirectorySeparatorChar));
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-                File.Copy(Path.Combine(stagedSourceDirectory, name), destination);
+                string originalPath=Path.Combine(stagedSourceDirectory,name);
+                if(!Path.GetFullPath(originalPath).Equals(Path.GetFullPath(destination),StringComparison.OrdinalIgnoreCase)) File.Copy(originalPath,destination);
             }
 
             if (request.AnimationLibrary is not null)
@@ -501,7 +519,7 @@ public static class Dl1OfficialModelCompiler
                     "local_dx11.mp");
                 Directory.CreateDirectory(Path.GetDirectoryName(compiledMaterialDatabase)!);
                 File.Copy(existingMaterialDatabasePath, compiledMaterialDatabase, overwrite: true);
-                if (!request.ReuseVerifiedExistingMaterials)
+                if (!request.ReuseVerifiedExistingMaterials && locallyAuthoredMaterialReferences.Length>0)
                 {
                 // The SDK update initializer routes its database to the tool installation's
                 // game folder even when source -gamedir is isolated. Own a fresh output folder,
@@ -621,6 +639,51 @@ public static class Dl1OfficialModelCompiler
                 }
             }
 
+            string? compiledMaterialCompanionDirectory=compiledMaterialDatabase is null?null:Path.GetDirectoryName(compiledMaterialDatabase);
+            CharacterMaterialPublicationReadback? characterMaterialReadback=null;
+            bool hasCharacterMaterials=request.Model.Package.Document.CharacterResources?.Resources.Any(resource=>
+                resource.Required && !resource.IsOriginalArchive && resource.Material is not null)==true;
+            if(hasCharacterMaterials)
+            {
+                if (compiledMaterialDatabase is null && existingMaterialDatabasePath is null && locallyAuthoredMaterialReferences.Length == 0)
+                {
+                    var inventory = request.Model.Package.Document.CharacterResources!;
+                    string providerId = inventory.Resources.Where(resource => resource.Required && !resource.IsOriginalArchive && resource.Material is not null)
+                        .Select(resource => resource.Material!.ProviderResourceId).Order(StringComparer.Ordinal).First();
+                    var provider = inventory.Resources.Single(resource => resource.Id == providerId);
+                    if (provider.EntryPath is null || !request.Model.Package.CompanionPayloads.TryGetValue(provider.EntryPath, out var providerBytes))
+                        throw new InvalidDataException("The original character material provider payload is missing.");
+                    _ = CustomModelPackageSerializer.Serialize(request.Model.Package);
+                    compiledMaterialDatabase = Path.Combine(jobDirectory, "CharacterMaterialBase", "local_dx11.mp");
+                    Directory.CreateDirectory(Path.GetDirectoryName(compiledMaterialDatabase)!);
+                    await File.WriteAllBytesAsync(compiledMaterialDatabase, providerBytes.ToArray(), cancellationToken).ConfigureAwait(false);
+                    compiledMaterialCompanionDirectory = Path.GetDirectoryName(compiledMaterialDatabase);
+                    AppendBounded(compilerLog, "Original character material provider staged.\r\n");
+                }
+                if(compiledMaterialDatabase is null)
+                    throw new InvalidDataException("The character requires a published material database containing its retained materials.");
+                var selectedMaterialGraph=ImmutableArray.Create(await File.ReadAllBytesAsync(compiledMaterialDatabase,cancellationToken).ConfigureAwait(false));
+                var mergedCharacterMaterials=CharacterMaterialPublication.Merge(request.Model.Package,selectedMaterialGraph,cancellationToken);
+                if(!mergedCharacterMaterials.Database.AsSpan().SequenceEqual(selectedMaterialGraph.AsSpan()))
+                {
+                    if(request.ReuseVerifiedExistingMaterials)
+                        throw new InvalidDataException("Verified material reuse cannot add character material graph records.");
+                    string mergedPath=Path.Combine(jobDirectory,"CharacterMaterials","local_dx11.mp");
+                    Directory.CreateDirectory(Path.GetDirectoryName(mergedPath)!);
+                    string temporaryMaterialPath=mergedPath+$".{Guid.NewGuid():N}.tmp";
+                    try
+                    {
+                        await using(var materialOutput=new FileStream(temporaryMaterialPath,FileMode.CreateNew,FileAccess.Write,FileShare.None,128*1024,FileOptions.Asynchronous|FileOptions.WriteThrough))
+                        {await materialOutput.WriteAsync(mergedCharacterMaterials.Database.AsMemory(),cancellationToken).ConfigureAwait(false);await materialOutput.FlushAsync(cancellationToken).ConfigureAwait(false);}
+                        CharacterMaterialPublication.Verify(request.Model.Package,ImmutableArray.Create(await File.ReadAllBytesAsync(temporaryMaterialPath,cancellationToken).ConfigureAwait(false)),cancellationToken);
+                        cancellationToken.ThrowIfCancellationRequested();File.Move(temporaryMaterialPath,mergedPath,overwrite:false);
+                    }
+                    finally{if(File.Exists(temporaryMaterialPath))File.Delete(temporaryMaterialPath);}
+                    ValidateCompiledMaterialDatabasePreserves(compiledMaterialDatabase,mergedPath);
+                    compiledMaterialDatabase=mergedPath;
+                }
+                characterMaterialReadback=mergedCharacterMaterials.Readback;
+            }
             var compiledObjects = ImmutableArray.CreateBuilder<string>(units.Length);
             for (int stage = 0; stage < units.Length; stage++)
             {
@@ -678,6 +741,10 @@ public static class Dl1OfficialModelCompiler
             }
 
             string compiledMeshObject = compiledObjects[0];
+            await using var characterResourceCache=new Rp6lChunkCache(new(){CacheDirectory=Path.Combine(jobDirectory,"CharacterResourceCache"),MaximumDiskBytes=256L*1024*1024});
+            var characterResources=await CharacterCompiledResourceAuthoring.WriteObjectsAsync(request.Model.Package,
+                Path.Combine(jobDirectory,"CharacterResources"),characterResourceCache,cancellationToken).ConfigureAwait(false);
+            compiledObjects.AddRange(characterResources.ObjectPaths);
             string compiledRpack = Path.Combine(jobDirectory, outputName);
             Rp6lCompilerObjectNormalizationResult normalization =
                 await Rp6lCompilerObjectNormalizer.LinkAtomicAsync(
@@ -690,6 +757,8 @@ public static class Dl1OfficialModelCompiler
             Rp6lArchive archive = await Rp6lArchive.OpenAsync(
                 compiledRpack,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
+            var characterResourceReadback=await CharacterCompiledResourceAuthoring.VerifyLinkedAsync(request.Model.Package,archive,
+                characterResourceCache,cancellationToken).ConfigureAwait(false);
             ValidateCompiledTextureDependencies(
                 archive.Resources,
                 sourceBuild.TextureSourceFiles);
@@ -724,6 +793,7 @@ public static class Dl1OfficialModelCompiler
             int verifiedMorphBindingCount;
             Dl1CompiledSkinningReadBackEvidence? skinningReadBack = null;
             Dl1CompiledChrIdentityReadBackEvidence? chrIdentityReadBack = null;
+            Dl1CompiledSkinValidationEvidence? skinDefinitionReadBack = null;
             Dl1PreparedPhysicalNodeReadBackEvidence? preparedPhysicalNodeReadBack = null;
             ImmutableArray<Dl1BoneScriptReadBack> boneScriptReadBack = [];
             ImmutableArray<Dl1CompiledRigNodeReadBack> rigReadBack = [];
@@ -819,11 +889,14 @@ public static class Dl1OfficialModelCompiler
                 chrIdentityReadBack = Dl1CompiledChrIdentityValidator.Validate(
                     sourceChr,
                     hierarchy,
-                    geometry);
+                    geometry,
+                    sourceBuild.PreparedSkinDefinitions.IsEmpty?null:sourceBuild.PreparedSkinDefinitions.Select(s=>s.Name));
+                if(!sourceBuild.PreparedSkinDefinitions.IsEmpty)
+                    skinDefinitionReadBack = Dl1CompiledSkinDefinitionValidator.Validate(sourceBuild.PreparedSkinDefinitions,hierarchy,geometry);
 
                 var clothReadBackInputs = new List<(string ResourceName, NativePhxDocument Document)>();
                 foreach (string name in sourceBuild.NativeCompanionFiles.Where(name =>
-                             name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
+                             !name.StartsWith("character-resources/",StringComparison.Ordinal) && name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)))
                 {
                     string source = await File.ReadAllTextAsync(Path.Combine(stagedSourceDirectory, name), cancellationToken)
                         .ConfigureAwait(false);
@@ -863,7 +936,12 @@ public static class Dl1OfficialModelCompiler
             // Player consumes standalone resource tables, just like objects rebuilt by Editor.
             string runtimeObjectPath = Path.Combine(Path.GetDirectoryName(compiledMeshObject)!, $"{resourceName}.runtime.msh_obj");
             await Rp6lCompilerObjectNormalizer.LinkAtomicAsync(
-                [compiledMeshObject], runtimeObjectPath, cancellationToken: cancellationToken).ConfigureAwait(false);
+                new[]{compiledMeshObject}.Concat(characterResources.ObjectPaths), runtimeObjectPath, cancellationToken: cancellationToken).ConfigureAwait(false);
+            var runtimeCompanionArchive=await Rp6lArchive.OpenAsync(runtimeObjectPath,cancellationToken:cancellationToken).ConfigureAwait(false);
+            var runtimeCompanionReadback=await CharacterCompiledResourceAuthoring.VerifyLinkedAsync(request.Model.Package,runtimeCompanionArchive,
+                characterResourceCache,cancellationToken).ConfigureAwait(false);
+            if(runtimeCompanionReadback!=characterResourceReadback)
+                throw new InvalidDataException("The deployed mesh object omitted retained character resources.");
             var runtimeObject = await Dl1RuntimeMeshObjectValidator.ValidateAsync(
                 runtimeObjectPath, resourceName,
                 request.Model.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary ? request.AnimationScriptAlias : null,
@@ -873,7 +951,7 @@ public static class Dl1OfficialModelCompiler
             await PublishFileAtomicallyAsync(runtimeObjectPath, outputObjectPath, cancellationToken).ConfigureAwait(false);
             await PublishFileAtomicallyAsync(compiledMeshObject, rawObjectPath, cancellationToken).ConfigureAwait(false);
             var outputTextureObjectPaths = ImmutableArray.CreateBuilder<string>(Math.Max(0, compiledObjects.Count - 1));
-            foreach (string compiledTextureObject in compiledObjects.Skip(1))
+            foreach (string compiledTextureObject in compiledObjects.Skip(1).Take(units.Length-1))
             {
                 string outputTextureObjectPath = Path.Combine(
                     outputDirectory,
@@ -883,6 +961,20 @@ public static class Dl1OfficialModelCompiler
                     outputTextureObjectPath,
                     cancellationToken).ConfigureAwait(false);
                 outputTextureObjectPaths.Add(outputTextureObjectPath);
+            }
+            var outputDetachedObjects=ImmutableDictionary.CreateBuilder<string,string>(StringComparer.OrdinalIgnoreCase);
+            foreach(var (detachedName,detachedPath) in characterResources.DetachedObjectPaths)
+            {
+                string normalizedName=detachedName.Replace('\\','/');
+                if(normalizedName.StartsWith('/') || normalizedName.Contains(':') || normalizedName.Split('/').Any(part=>part is "" or "." or ".."))
+                    throw new InvalidDataException("Detached mesh output names must remain relative.");
+                string output=Path.Combine(outputDirectory,"detached-objects",normalizedName.Replace('/',Path.DirectorySeparatorChar)+".msh_obj");
+                Directory.CreateDirectory(Path.GetDirectoryName(output)!);
+                await PublishFileAtomicallyAsync(detachedPath,output,cancellationToken).ConfigureAwait(false);
+                var reopened=await Rp6lResourceEnvelopeWriter.ReadBackAsync(output,characterResourceCache,cancellationToken).ConfigureAwait(false);
+                if(reopened.Resource.ResourceType!=Rp6lResourceTypes.Mesh || reopened.Resource.Name!=detachedName)
+                    throw new InvalidDataException("The detached mesh object identity changed during publication.");
+                outputDetachedObjects.Add(detachedName,output);
             }
             if (compiledMaterialDatabase is not null && outputMaterialDatabasePath is not null)
             {
@@ -896,7 +988,7 @@ public static class Dl1OfficialModelCompiler
             if (!request.ReuseVerifiedExistingMaterials && compiledMaterialDatabase is not null)
                 foreach (string name in MaterialDatabaseFileNames.Skip(1))
                 {
-                    string emitted = Path.Combine(Path.GetDirectoryName(compiledMaterialDatabase)!, name);
+                    string emitted = Path.Combine(compiledMaterialCompanionDirectory!, name);
                     if (!File.Exists(emitted)) continue;
                     string output = Path.Combine(outputDirectory, name);
                     await PublishFileAtomicallyAsync(emitted, output, cancellationToken).ConfigureAwait(false);
@@ -909,15 +1001,18 @@ public static class Dl1OfficialModelCompiler
                     outputDirectory,
                     cancellationToken).ConfigureAwait(false);
             var nativeCompanionPaths = ImmutableArray.CreateBuilder<string>();
+            var nativeCompanionHashes = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (string name in sourceBuild.NativeCompanionFiles)
             {
                 string destination = Path.Combine(outputDirectory, "native-companions",
+                    name.StartsWith("character-resources/",StringComparison.Ordinal)?Dl1NativeCompanionWriter.PreservedVirtualPath(name):
                     name.EndsWith(".phx", StringComparison.OrdinalIgnoreCase)
                         ? Path.Combine("data", "odephysics", "meshpartcloth", name)
                         : Path.Combine("data", "characters", characterId, name));
                 Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
                 await PublishFileAtomicallyAsync(Path.Combine(stagedSourceDirectory, name), destination, cancellationToken).ConfigureAwait(false);
                 nativeCompanionPaths.Add(destination);
+                nativeCompanionHashes.Add(destination, sourceBuild.OutputSha256[name]);
             }
             string outputRpackSha256 = await Sha256FileAsync(outputRpackPath, cancellationToken).ConfigureAwait(false);
             string outputObjectSha256 = await Sha256FileAsync(outputObjectPath, cancellationToken).ConfigureAwait(false);
@@ -927,6 +1022,14 @@ public static class Dl1OfficialModelCompiler
                 : await Sha256FileAsync(
                     outputMaterialDatabasePath,
                     cancellationToken).ConfigureAwait(false);
+            if(characterMaterialReadback is not null)
+            {
+                string actualMaterialPath=outputMaterialDatabasePath ?? compiledMaterialDatabase!;
+                var actualMaterialReadback=CharacterMaterialPublication.Verify(request.Model.Package,
+                    ImmutableArray.Create(await File.ReadAllBytesAsync(actualMaterialPath,cancellationToken).ConfigureAwait(false)),cancellationToken);
+                if(actualMaterialReadback!=characterMaterialReadback)
+                    throw new InvalidDataException("The published character material graph changed after verification.");
+            }
             string outputManifestFingerprint = Sha256(
                 Encoding.UTF8.GetBytes(
                     $"rpack={outputRpackSha256}\nmsh_obj={outputObjectSha256}\nlocal_dx11.mp={outputMaterialDatabaseSha256 ?? "none"}\n" +
@@ -988,6 +1091,7 @@ public static class Dl1OfficialModelCompiler
                                 sha256 = outputMaterialDatabaseSha256!,
                             },
                     }.Where(static output => output is not null),
+                    detachedMeshObjects=outputDetachedObjects.Select(pair=>new{name=pair.Key,path="detached-objects/"+pair.Key+".msh_obj",sha256=Sha256(File.ReadAllBytes(pair.Value))}),
                     materialReuse = new { request.ReuseVerifiedExistingMaterials, verifiedExistingMaterialFileHashes = reusedMaterialFiles, materialFeaturesVerified = previousMaterialGeometry is not null },
                     materialDatabaseCompanions = outputMaterialCompanions.Select(path => new { path = Path.GetFileName(path), sha256 = Sha256(File.ReadAllBytes(path)) }),
                     resources = archive.Resources.Select(static resource => new
@@ -999,6 +1103,8 @@ public static class Dl1OfficialModelCompiler
                     verification = new
                     {
                         boneScriptReadBack,
+                        characterResourceReadback,
+                        characterMaterialReadback,
                         rigReadBack,
                         entities = verifiedEntityCount,
                         surfaces = verifiedSurfaceCount,
@@ -1017,6 +1123,7 @@ public static class Dl1OfficialModelCompiler
                         skinningInfluences = skinningEvidence.VerifiedInfluenceCount,
                         skinningMaterials = skinningEvidence.MaterialSlots,
                         chrIdentityReadBack = chrIdentityEvidence,
+                        skinDefinitionReadBack,
                         preparedPhysicalNodeReadBack = preparedPhysicalNodeReadBackEvidence,
                         preparedPhysicalNodeCount = preparedPhysicalNodeReadBackEvidence.VerifiedNodeCount,
                         customMaterials = sourceBuild.CustomMaterialReferences.Length,
@@ -1029,7 +1136,7 @@ public static class Dl1OfficialModelCompiler
                     nativeCompanions = nativeCompanionPaths.Select(path => new
                     {
                         path = Path.GetRelativePath(outputDirectory, path).Replace('\\', '/'),
-                        sha256 = sourceBuild.OutputSha256[Path.GetFileName(path)],
+                        sha256 = nativeCompanionHashes[path],
                     }),
                     nativeCompanionNotes = sourceBuild.NativeCompanionNotes,
                     unsupported = UnsupportedCompiledOutputs,
@@ -1052,6 +1159,7 @@ public static class Dl1OfficialModelCompiler
             {
                 Warnings = warnings.ToImmutable(),
                 CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
+                DetachedMeshObjectPaths = outputDetachedObjects.ToImmutable(),
                 MaterialDatabaseCompanionPaths = outputMaterialCompanions.ToImmutable(),
                 VerifiedExistingMaterialFileHashes = reusedMaterialFiles,
                 NativeCompanionPaths = nativeCompanionPaths.ToImmutable(),
@@ -1077,6 +1185,7 @@ public static class Dl1OfficialModelCompiler
                     VerifiedSkinningVertexCount = skinningEvidence.VerifiedVertexCount,
                     VerifiedSkinningInfluenceCount = skinningEvidence.VerifiedInfluenceCount,
                     SkinningMaterialReadBack = skinningEvidence.MaterialSlots,
+                    SkinDefinitionReadBack=skinDefinitionReadBack,
                     ChrIdentityReadBack = chrIdentityEvidence,
                     PreparedPhysicalNodeReadBack = preparedPhysicalNodeReadBackEvidence,
                     MorphDeltaFormat = verifiedMorphBindingCount == 0
@@ -1085,6 +1194,8 @@ public static class Dl1OfficialModelCompiler
                     BoneScriptReadBack = boneScriptReadBack,
                     RigReadBack = rigReadBack,
                     ShadingVerticesVerified = verifiedShadingVertexCount,
+                    CharacterResourceReadback = characterResourceReadback,
+                    CharacterMaterialReadback = characterMaterialReadback,
                 },
             };
         }
@@ -3253,3 +3364,7 @@ public static class Dl1OfficialModelCompiler
         string ExpectedObjectFileName,
         string OutputDirectory);
 }
+
+
+
+

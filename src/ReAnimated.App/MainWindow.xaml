@@ -169,7 +169,7 @@
             <Separator />
             <StatusBarItem HorizontalAlignment="Right">
                 <TextBlock Foreground="{StaticResource WarningBrush}"
-                           Text="DL1 only · live D3D11 authoring preview" />
+                           Text="Dying Light 1" />
             </StatusBarItem>
         </StatusBar>
 
@@ -507,6 +507,8 @@
                                                 Content="Use selected as source"
                                                 Visibility="{Binding IsExplorerSourceModelPickerActive, Converter={StaticResource BooleanToVisibilityConverter}}" />
                                         <Button Command="{Binding AddSelectedModelToProjectCommand}" Content="Add to project" />
+                                        <ComboBox Width="155" ItemsSource="{Binding CharacterImportHostContexts}" SelectedValue="{Binding CharacterImportHostContext}" SelectedValuePath="Context" DisplayMemberPath="Label" ToolTip="Choose Standard human NPC only when that actor type is known. Other contexts keep uncertain dependencies for review."/>
+                                        <Button Command="{Binding ImportCompleteCharacterCommand}" Content="Import complete DL1 character..." />
                                         <Button Command="{Binding ExportSelectedBrowserMeshToFbxCommand}" Content="Export mesh FBX..." />
                                         <TextBlock Margin="8,5,0,0" Foreground="{StaticResource MutedTextBrush}" Text="{Binding AssetBrowser.ModelResultSummary}" />
                                     </WrapPanel>

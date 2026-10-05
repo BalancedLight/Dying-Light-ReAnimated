@@ -1,4 +1,4 @@
-using ReAnimated.Codecs.CompactMesh;
+﻿using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Core.Domain;
 using ReAnimated.DL1.Assets.Materials;
 
@@ -248,6 +248,12 @@ public sealed record Dl1MeshData(
     /// Metadata-only containers intentionally leave this null.
     /// </summary>
     public Dl1MeshGeometryProvenance? GeometryProvenance { get; init; }
+
+    public IReadOnlyList<CompiledMeshSkinDefinition> SkinDefinitions { get; init; } = [];
+
+    public CompiledMaterialDatabase OriginalMaterialDatabase { get; init; } = CompiledMaterialDatabase.Empty;
+    /// <summary>Portable archive/header/item/chunk metadata, including opaque hash and unknown fields; never local paths.</summary>
+    public string? OriginalResourceMetadataJson {get;init;}
 
     /// <summary>
     /// The exact retail skin selected during decode. DL1 falls back to

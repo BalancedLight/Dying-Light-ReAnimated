@@ -17,6 +17,40 @@ public sealed record Dl1NativeCompanionBuild(
 /// </summary>
 public static class Dl1NativeCompanionWriter
 {
+    public static string PreservedVirtualPath(string sourceBuildName)
+    {
+        const string prefix="character-resources/";
+        if(!sourceBuildName.StartsWith(prefix,StringComparison.Ordinal))
+            throw new InvalidDataException("A retained companion source name is required.");
+        string name=sourceBuildName[prefix.Length..];
+        if(string.IsNullOrWhiteSpace(name) || name.Any(char.IsControl) || name.StartsWith('/') || name.Contains(':') ||
+            name.Contains('\\') || name.Split('/').Any(part=>part is "" or "." or ".."))
+            throw new InvalidDataException("A retained companion path is unsafe.");
+        if(name.StartsWith("data/",StringComparison.Ordinal))return name;
+        if(Path.GetExtension(name).Equals(".fx",StringComparison.OrdinalIgnoreCase))
+            return "data/characters/_retained_fx_sources/"+name;
+        throw new InvalidDataException("A retained native companion must identify its virtual data path.");
+    }
+
+    public static Dl1NativeCompanionBuild BuildPreservedPackage(CustomModelPackage package, string resourceName, IEnumerable<string> emittedBoneNames)
+    {
+        var authored = Build(package.Document,resourceName,emittedBoneNames);
+        if (package.Document.CharacterResources is not { } inventory) return authored;
+        var files = authored.Files.ToBuilder();
+        foreach (var record in inventory.Resources.Where(r=>!r.IsOriginalArchive && r.EntryPath is not null && r.Id!=inventory.RootResourceId))
+        {
+            string extension = Path.GetExtension(record.LogicalName).ToLowerInvariant();
+            if (extension is not (".pre" or ".scr" or ".phx" or ".bel" or ".def" or ".mpcloth" or ".fed" or ".ascr" or ".bscr" or ".fx")) continue;
+            string path = "character-resources/" + record.LogicalName.Replace('\\','/');
+            if (path.Contains(':') || path.Split('/').Any(segment=>segment is "." or "..")) throw new InvalidDataException("Companion output paths must remain relative and portable.");
+            if (!package.CompanionPayloads.TryGetValue(record.EntryPath!,out var payload) || payload.Length!=record.ByteLength ||
+                !Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(payload.AsSpan())).Equals(record.ContentSha256,StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException("Companion source fingerprint changed before export.");
+            if (!files.TryAdd(path,payload.ToArray())) throw new InvalidDataException("Companion output paths conflict.");
+        }
+        return new(files.ToImmutable(),authored.Notes.Add("Original companion source hierarchy retained under character-resources. Native deployment must preserve these virtual paths; compilation alone does not validate runtime resolution."));
+    }
+
     public static Dl1NativeCompanionBuild Build(CustomModelDocument model, string resourceName,
         IEnumerable<string> emittedBoneNames)
     {

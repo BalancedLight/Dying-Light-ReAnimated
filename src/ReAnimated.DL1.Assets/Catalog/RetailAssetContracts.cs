@@ -16,6 +16,7 @@ public enum RetailAssetSourceKind
     ZipPak = 1,
     LooseFile = 2,
     GeneratedOverride = 3,
+    RpackEmbeddedEffect = 4,
 }
 
 /// <summary>

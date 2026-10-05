@@ -35,6 +35,101 @@ public sealed class EditorDockLayoutTests
     }
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void PlaybackToModelsDockTransitionRunsAheadOfContinuousRenderWork()
+    {
+        RunOnStaThread(() =>
+        {
+            Dispatcher dispatcher = Dispatcher.CurrentDispatcher;
+            string root = CreateTemporaryDirectory();
+            bool renderPumpRunning = true;
+            int renderCallbacks = 0;
+            try
+            {
+                var manager = new DockingManager();
+                var controller = new WorkflowDockController(
+                    manager,
+                    new EditorDockLayoutSettingsStore(root),
+                    [
+                        .. CreatePlaybackPanes(
+                            new System.Windows.Controls.Button
+                            {
+                                Content = "Choose animation",
+                                Height = 32,
+                            }),
+                        .. CreateModelPanes(),
+                    ]);
+                controller.SwitchWorkflow(EditorDockWorkflow.Playback);
+
+                Action? renderPump = null;
+                renderPump = () =>
+                {
+                    renderCallbacks++;
+                    if (renderPumpRunning)
+                    {
+                        _ = dispatcher.BeginInvoke(
+                            DispatcherPriority.Render,
+                            renderPump);
+                    }
+                };
+                _ = dispatcher.BeginInvoke(
+                    DispatcherPriority.Render,
+                    renderPump);
+
+                int applied = 0;
+                var scheduler = new DockLayoutUpdateScheduler(
+                    dispatcher,
+                    () =>
+                    {
+                        applied++;
+                        controller.SwitchWorkflow(EditorDockWorkflow.Models);
+                        controller.SetPaneVisible(
+                            "models.authoring.workspace",
+                            visible: false);
+                    });
+                scheduler.Request();
+
+                var frame = new DispatcherFrame();
+                _ = dispatcher.BeginInvoke(
+                    DispatcherPriority.Normal,
+                    new Action(() => frame.Continue = false));
+                Dispatcher.PushFrame(frame);
+
+                Assert.Equal(1, applied);
+                Assert.Equal(EditorDockWorkflow.Models, controller.ActiveWorkflow);
+                Assert.Equal(
+                    [
+                        "models.authoring.workspace",
+                        "models.browser",
+                        "models.preview",
+                        "models.project",
+                    ],
+                    controller.CurrentPaneStates
+                        .Select(static pane => pane.Id)
+                        .OrderBy(static id => id, StringComparer.Ordinal)
+                        .ToArray());
+                Assert.DoesNotContain(
+                    controller.CurrentPaneStates,
+                    static pane => pane.Id.StartsWith(
+                        "playback.",
+                        StringComparison.Ordinal));
+                Assert.True(controller.IsPaneVisible("models.project"));
+                Assert.True(controller.IsPaneVisible("models.browser"));
+                Assert.True(controller.IsPaneVisible("models.preview"));
+                Assert.Equal(0, renderCallbacks);
+
+                scheduler.Stop();
+            }
+            finally
+            {
+                renderPumpRunning = false;
+                Directory.Delete(root, recursive: true);
+            }
+        });
+    }
+
+    [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "ViewModelWpf")]
     public void LayoutStoreKeepsEachWorkflowMachineLocalAndVersioned()

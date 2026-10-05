@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using System.IO;
@@ -22,6 +22,8 @@ public sealed partial class ModelsWorkspaceViewModel
                 RefreshPerspectiveRows();
                 OnPropertyChanged(nameof(FppTppSummary));
             }
+            if (args.PropertyName is nameof(IsBusy) or nameof(HasModel) or nameof(ResourceName) or nameof(SurfaceName))
+                RefreshPlayerAppearanceAvailability();
             if (args.PropertyName is nameof(IsBusy) or nameof(HasModel))
             {
                 _prepareFppTppCommand?.NotifyCanExecuteChanged();

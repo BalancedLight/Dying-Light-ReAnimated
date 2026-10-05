@@ -1,6 +1,8 @@
 using System.Collections.Immutable;
+using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -100,6 +102,9 @@ public static class CustomModelPackageSerializer
                 texturePayloads.Add(entryPath, payload);
             }
 
+            ImmutableArray<byte> revisionPayload = [];
+            if (document.GeometryRevision is { } revision)
+                revisionPayload = ReadBoundedEntry(GetRequiredEntry(entries, ModelGeometryRevisionReference.PayloadEntryPath), MaximumSourceFbxBytes);
             ImmutableArray<byte> authoredPayload = [];
             if (document.AuthoredLayer is { } authored)
             {
@@ -131,13 +136,24 @@ public static class CustomModelPackageSerializer
                     !Guid.TryParseExact(fileName[..^5], "N", out Guid clipId) || !derivedClipIds.Contains(clipId))
                     throw new CustomModelFormatException($"The package contains an orphan or malformed derived animation entry '{entryPath}'.");
             }
+            var companionPayloads = ImmutableDictionary.CreateBuilder<string, ImmutableArray<byte>>(StringComparer.Ordinal);
+            ImmutableArray<byte> decodedCharacter = [];
+            if (document.CharacterResources is { } character)
+            {
+                decodedCharacter = ReadBoundedEntry(GetRequiredEntry(entries, CharacterResourceInventory.DecodedEntryPath), MaximumSourceFbxBytes);
+                VerifySha256(decodedCharacter.AsSpan(), character.DecodedSha256, CharacterResourceInventory.DecodedEntryPath);
+                foreach (var resource in character.Resources.Where(r => r.EntryPath is not null))
+                    companionPayloads.Add(resource.EntryPath!, ReadBoundedEntry(GetRequiredEntry(entries, resource.EntryPath!), MaximumSourceFbxBytes));
+            }
             var package = new CustomModelPackage(document, sourceFbx, texturePayloads.ToImmutable())
             {
                 AuthoredLayerPayload = authoredPayload,
+                DecodedCharacterPayload = decodedCharacter,
+                GeometryRevisionPayload = revisionPayload,
+                CompanionPayloads = companionPayloads.ToImmutable(),
                 DerivedAnimationPayloads = derivedPayloads.ToImmutable(),
             };
-            ValidateAuthoredLayer(package);
-            ValidateDerivedAnimationPayloads(package);
+            ValidatePayloads(package);
             return package;
         }
         catch (CustomModelFormatException)
@@ -214,16 +230,46 @@ public static class CustomModelPackageSerializer
         ArgumentNullException.ThrowIfNull(package);
         package.Document.Validate();
         ValidatePayloads(package);
+        byte[] manifestBytes=JsonSerializer.SerializeToUtf8Bytes(package.Document,SerializerOptions);
+        if(manifestBytes.Length>8L*1024*1024) throw new CustomModelFormatException("The custom-model manifest is unreasonably large.");
+        var paths=new HashSet<string>(StringComparer.Ordinal);
+        long expandedBytes=0;
+        void Reserve(string path,long length)
+        {
+            CustomModelSourceIdentity.ValidatePackageEntryPath(path,nameof(package));
+            if(!paths.Add(path) || paths.Count>65536) throw new CustomModelFormatException("Package payload identities overlap or exceed the entry bound.");
+            if(length<0 || length>MaximumPackageBytes-expandedBytes) throw new CustomModelFormatException("The expanded package exceeds its bounded payload limit.");
+            expandedBytes+=length;
+        }
+        Reserve(CustomModelPackage.ManifestEntryPath,manifestBytes.Length);
+        Reserve(package.Document.Source.EmbeddedEntryPath,package.SourceFbx.Length);
+        if(package.Document.GeometryRevision is not null)Reserve(ModelGeometryRevisionReference.PayloadEntryPath,package.GeometryRevisionPayload.Length);
+        if(package.Document.CharacterResources is not null)
+        {
+            Reserve(CharacterResourceInventory.DecodedEntryPath,package.DecodedCharacterPayload.Length);
+            foreach(var (path,payload) in package.CompanionPayloads)Reserve(path,payload.Length);
+        }
+        if(package.Document.AuthoredLayer is { } authoredLayer)Reserve(authoredLayer.EntryPath,package.AuthoredLayerPayload.Length);
+        foreach(var (id,payload) in package.DerivedAnimationPayloads)Reserve(DerivedAnimationDataCodec.EntryPath(id),payload.Length);
+        foreach(var (path,payload) in package.TexturePayloads)Reserve(path,payload.Length);
 
         using var stream = new MemoryStream();
         using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
         {
-            WriteManifest(archive, package.Document);
+            WriteEntry(archive, CustomModelPackage.ManifestEntryPath, manifestBytes, CompressionLevel.Optimal);
+            if (package.Document.GeometryRevision is not null)
+                WriteEntry(archive, ModelGeometryRevisionReference.PayloadEntryPath, package.GeometryRevisionPayload.AsSpan(), CompressionLevel.Optimal);
             WriteEntry(
                 archive,
                 package.Document.Source.EmbeddedEntryPath,
                 package.SourceFbx.AsSpan(),
                 CompressionLevel.Optimal);
+            if (package.Document.CharacterResources is not null)
+            {
+                WriteEntry(archive, CharacterResourceInventory.DecodedEntryPath, package.DecodedCharacterPayload.AsSpan(), CompressionLevel.Optimal);
+                foreach (var (path, bytes) in package.CompanionPayloads.OrderBy(p => p.Key, StringComparer.Ordinal))
+                    WriteEntry(archive, path, bytes.AsSpan(), CompressionLevel.Optimal);
+            }
             if (package.Document.AuthoredLayer is { } authored)
                 WriteEntry(archive, authored.EntryPath, package.AuthoredLayerPayload.AsSpan(), CompressionLevel.Optimal);
             foreach ((Guid clipId, ImmutableArray<byte> payload) in package.DerivedAnimationPayloads.OrderBy(static item => item.Key))
@@ -261,7 +307,7 @@ public static class CustomModelPackageSerializer
                 $"Unsupported custom-model format '{document.Format}'.");
         }
 
-        if (document.SchemaVersion < CustomModelDocument.CurrentSchemaVersion)
+        if (document.SchemaVersion < 7)
             document = document with { AuthoredLayer = null };
 
         return document.SchemaVersion switch
@@ -313,6 +359,7 @@ public static class CustomModelPackageSerializer
                 RiggingSession = null,
             },
             6 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion, AuthoredLayer = null },
+            7 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
             _ => throw new CustomModelFormatException(
                 $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 through {CustomModelDocument.CurrentSchemaVersion}."),
         };
@@ -321,8 +368,13 @@ public static class CustomModelPackageSerializer
     private static Dictionary<string, ZipArchiveEntry> BuildEntryMap(ZipArchive archive)
     {
         var entries = new Dictionary<string, ZipArchiveEntry>(StringComparer.Ordinal);
+        long expandedBytes = 0;
+        if (archive.Entries.Count > 65536) throw new CustomModelFormatException("The package contains too many entries.");
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
+            if (entry.Length < 0 || entry.Length > MaximumPackageBytes - expandedBytes)
+                throw new CustomModelFormatException("The expanded package exceeds its bounded payload limit.");
+            expandedBytes += entry.Length;
             string path = entry.FullName.Replace('\\', '/');
             CustomModelSourceIdentity.ValidatePackageEntryPath(path, nameof(archive));
             if (!entries.TryAdd(path, entry))
@@ -383,11 +435,86 @@ public static class CustomModelPackageSerializer
 
     private static void ValidatePayloads(CustomModelPackage package)
     {
+        if (package.Document.GeometryRevision is { } revision)
+        {
+            revision.Validate();
+            if (revision.SourceSha256 != package.Document.Source.ContentSha256 || package.GeometryRevisionPayload.Length != revision.PayloadLength)
+                throw new CustomModelFormatException("Geometry revision source or payload length differs from its reference.");
+            VerifySha256(package.GeometryRevisionPayload.AsSpan(), revision.ContentSha256, ModelGeometryRevisionReference.PayloadEntryPath);
+        }
+        else if (!package.GeometryRevisionPayload.IsEmpty) throw new CustomModelFormatException("Geometry revision bytes have no reference.");
+        if (package.Document.CharacterResources is { } character)
+        {
+            if (package.DecodedCharacterPayload.Length != character.DecodedByteLength) throw new CustomModelFormatException("Decoded character payload length differs from the inventory.");
+            VerifySha256(package.DecodedCharacterPayload.AsSpan(), character.DecodedSha256, CharacterResourceInventory.DecodedEntryPath);
+            var declared = character.Resources.Where(r => r.EntryPath is not null).ToDictionary(r => r.EntryPath!, StringComparer.Ordinal);
+            if (package.CompanionPayloads.Count != declared.Count) throw new CustomModelFormatException("Companion payloads differ from the inventory.");
+            foreach (var (path, bytes) in package.CompanionPayloads)
+            {
+                if (!declared.TryGetValue(path, out var record) || bytes.Length != record.ByteLength || bytes.Length > MaximumSourceFbxBytes)
+                    throw new CustomModelFormatException($"Companion payload '{path}' has no matching bounded inventory record.");
+                VerifySha256(bytes.AsSpan(), record.ContentSha256!, path);
+            }
+            foreach(var record in character.Resources.Where(resource=>resource.NativeResource is not null))
+            {
+                var bytes=package.CompanionPayloads[record.EntryPath!].AsSpan();
+                foreach(var item in record.NativeResource!.Items)
+                    VerifySha256(bytes.Slice(checked((int)item.PayloadOffset),item.ByteLength),item.ContentSha256,record.EntryPath!);
+            }
+            foreach(var record in character.Resources.Where(resource=>resource.Material is not null))
+            {
+                var receipt=record.Material!;
+                var providerRecord=character.Resources.Single(resource=>resource.Id==receipt.ProviderResourceId);
+                var provider=package.CompanionPayloads[providerRecord.EntryPath!].AsSpan();
+                var material=package.CompanionPayloads[record.EntryPath!].AsSpan();
+                if(receipt.PayloadOffset>provider.Length-material.Length ||
+                    !provider.Slice(checked((int)receipt.PayloadOffset),material.Length).SequenceEqual(material) ||
+                    BinaryPrimitives.ReadUInt32LittleEndian(material)!=receipt.NameHash ||
+                    BinaryPrimitives.ReadUInt16LittleEndian(material[16..])!=receipt.TechniqueCount ||
+                    BinaryPrimitives.ReadUInt16LittleEndian(material[18..])!=receipt.Textures.Length)
+                    throw new CustomModelFormatException("Material payload differs from its original provider.");
+                int textureOffset=checked(22+BinaryPrimitives.ReadUInt16LittleEndian(material[22..]));
+                if(receipt.Textures.Length>0 && (textureOffset<24 || textureOffset>material.Length-receipt.Textures.Length*12))
+                    throw new CustomModelFormatException("Material texture extent is invalid.");
+                foreach(var texture in receipt.Textures)
+                {
+                    var row=material.Slice(textureOffset+texture.Index*12,12);
+                    if(BinaryPrimitives.ReadUInt32LittleEndian(row)!=texture.SamplerState ||
+                        BinaryPrimitives.ReadUInt32LittleEndian(row[4..])!=texture.TextureNameHash ||
+                        BinaryPrimitives.ReadUInt32LittleEndian(row[8..])!=texture.LoadFlags)
+                        throw new CustomModelFormatException("Material texture rows differ from their original provider.");
+                    if (texture.NameSource is { } name)
+                    {
+                        var original = provider.Slice(checked((int)name.PayloadOffset), name.ByteLength);
+                        byte[] expected = new byte[name.ByteLength];
+                        Encoding.ASCII.GetBytes(name.Name).CopyTo(expected, 0);
+                        if (!original.SequenceEqual(expected))
+                            throw new CustomModelFormatException("The texture name differs from its original provider.");
+                        VerifySha256(original, name.PayloadSha256, providerRecord.EntryPath!);
+                    }
+                }
+            }
+            foreach(var record in character.Resources.Where(resource=>resource.PackedEffect is not null))
+            {
+                var receipt=record.PackedEffect!;
+                var bundleRecord=character.Resources.Single(resource=>resource.Id==receipt.BundleResourceId);
+                var bundle=package.CompanionPayloads[bundleRecord.EntryPath!].AsSpan();
+                var name=Encoding.UTF8.GetBytes(receipt.StoredName);
+                int kindOffset=checked(receipt.EntryOffset+name.Length+1);
+                if(receipt.EntryOffset>bundle.Length-name.Length || kindOffset>=bundle.Length || receipt.TextOffset!=kindOffset+1 ||
+                    !bundle.Slice(receipt.EntryOffset,name.Length).SequenceEqual(name) || bundle[kindOffset-1]!=0 ||
+                    unchecked((sbyte)bundle[kindOffset])!=receipt.Kind || bundle[receipt.TextOffset+receipt.TextByteLength]!=0 ||
+                    !bundle.Slice(receipt.TextOffset,receipt.TextByteLength).SequenceEqual(package.CompanionPayloads[record.EntryPath!].AsSpan()))
+                    throw new CustomModelFormatException("Packed effect bytes differ from their original bundle.");
+            }
+        }
+        else if (!package.DecodedCharacterPayload.IsEmpty || package.CompanionPayloads.Count != 0)
+            throw new CustomModelFormatException("Character payloads require an inventory.");
         ValidateAuthoredLayer(package);
         ValidateDerivedAnimationPayloads(package);
         if (package.SourceFbx.IsDefaultOrEmpty || package.SourceFbx.Length > MaximumSourceFbxBytes)
         {
-            throw new ArgumentException("A model package must contain a bounded source FBX snapshot.", nameof(package));
+            throw new ArgumentException("A model package must contain a bounded immutable source snapshot.", nameof(package));
         }
 
         VerifySha256(package.SourceFbx.AsSpan(), package.Document.Source.ContentSha256, "source FBX");
@@ -519,17 +646,9 @@ public static class CustomModelPackageSerializer
         catch (CustomModelFormatException exception)
         {
             throw new CustomModelFormatException(
-                "Refusing to overwrite an existing .dlrmodel that is not a valid DL ReAnimated C# schema-1/2 model package.",
+                "Refusing to overwrite an existing .dlrmodel that is not a supported DL ReAnimated model package.",
                 exception);
         }
-    }
-
-    private static void WriteManifest(ZipArchive archive, CustomModelDocument document)
-    {
-        ZipArchiveEntry entry = archive.CreateEntry(CustomModelPackage.ManifestEntryPath, CompressionLevel.Optimal);
-        entry.LastWriteTime = DeterministicTimestamp;
-        using Stream output = entry.Open();
-        JsonSerializer.Serialize(output, document, SerializerOptions);
     }
 
     private static void WriteEntry(
@@ -544,7 +663,7 @@ public static class CustomModelPackageSerializer
         output.Write(payload);
     }
 
-    internal static JsonSerializerOptions CreateSerializerOptions()
+    public static JsonSerializerOptions CreateSerializerOptions()
     {
         var options = new JsonSerializerOptions
         {
@@ -658,3 +777,5 @@ public static class CustomModelPackageSerializer
         }
     }
 }
+
+

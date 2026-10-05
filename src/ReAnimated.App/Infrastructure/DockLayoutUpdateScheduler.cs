@@ -24,7 +24,11 @@ public sealed class DockLayoutUpdateScheduler
         _dispatcher.VerifyAccess();
         if (_stopped || _queued) return;
         _queued = true;
-        _ = _dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+        // ContextIdle can be starved indefinitely by a continuously rendering
+        // HwndHost/D3D viewport. Dock transitions must still be deferred until
+        // the current AvalonDock callback returns, but they must run ahead of
+        // Render work so the shell cannot remain on the previous workflow.
+        _ = _dispatcher.BeginInvoke(DispatcherPriority.Normal, new Action(() =>
         {
             _queued = false;
             if (!_stopped) _apply();

@@ -1,4 +1,4 @@
-# Character Rig Studio implementation status
+﻿# Character Rig Studio implementation status
 
 The full studio is under development in the existing C# model authoring and
 Conform workspace. The current implementation provides persistence, profile
@@ -8,6 +8,10 @@ source-linked persistence of authored rig/skin/rest/morph edits.
 The seven-stage navigation now routes these tools inside Conform. A complete
 geometry-driven body/hand/eye workflow, full helper calibration and native
 acceptance of generated rigs remain unfinished.
+
+## Complete character extraction
+
+The catalog now imports original DL1 characters directly into a schema-8 editable package with hashed source custody, morph vocabulary/deltas, bounds, LODs and companion inventories. The Character panel provides manual/assisted expressions, custom-character system references, bounds fitting and source-preserving physical/damage controls. See [Complete character custody and authoring](DL1_COMPLETE_CHARACTER.md) for supported workflows and explicit native acceptance limits. Skin records without verified source translation remain export-blocking; supported colors and surface rows require exact compiler readback.
 
 ## Seven-stage workspace routing
 

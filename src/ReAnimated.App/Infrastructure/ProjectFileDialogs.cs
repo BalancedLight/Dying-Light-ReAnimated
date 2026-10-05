@@ -139,6 +139,9 @@ public interface IProjectFileDialogService
 
     string? ShowOpenAnimationDialog(string? initialPath) => null;
 
+    string? ShowOpenPlayerAppearanceScriptDialog(string? initialPath) => null;
+    string? ShowSavePlayerAppearanceScriptDialog(string suggestedName, string? initialPath) => null;
+
     AssetItemViewModel? SelectRetailAnimation(
         RetailAnimationBrowserViewModel browser) => browser.SelectedAsset;
 
@@ -254,6 +257,8 @@ public interface IProjectFileDialogService
     string? ShowSelectAdditionalRpackRootDialog(string? initialPath) => null;
 
     string? ShowOpenCustomModelFbxDialog(string? initialPath) => null;
+    string? ShowOpenManualMorphSculptDialog(string? initialPath) => ShowOpenCustomModelFbxDialog(initialPath);
+    string? ShowSaveManualMorphNeutralDialog(string suggestedName, string? initialPath) => null;
     string? ShowOpenScaleStudySourceDialog() => null;
     string? ShowOpenRigDoctorRulesDialog() => null;
     string? ShowOpenCapabilityProfileDialog() => null;

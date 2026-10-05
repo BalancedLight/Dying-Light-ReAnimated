@@ -337,6 +337,7 @@ public sealed partial class ModelsWorkspaceViewModel
     /// </summary>
     private void UpdateConformanceViewportBinding()
     {
+        if (PreserveFacePickingPreview()) return;
         if (HandReviewActive)
         {
             Viewport.SceneSource.SetBrushTarget(null);

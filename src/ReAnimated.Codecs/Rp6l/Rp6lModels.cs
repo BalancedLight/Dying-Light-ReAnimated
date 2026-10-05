@@ -110,5 +110,6 @@ public static class Rp6lResourceTypes
     public const short Skin = 274;
     public const short Animation = 320;
     public const short AnimationScript = 322;
+    public const short Effect = 336;
     public const short Texture = 8480;
 }

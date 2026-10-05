@@ -1,4 +1,4 @@
-using ReAnimated.Codecs.CompactMesh;
+﻿using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Codecs.Rp6l;
 
 namespace ReAnimated.DL1.Assets.Meshes;
@@ -329,6 +329,9 @@ public static class Dl1MeshResourceDecoder
             diagnostics)
         {
             GeometryProvenance = geometryProvenance,
+            SkinDefinitions=geometry?.SkinDefinitions??[],
+            OriginalMaterialDatabase=geometry?.MaterialDatabase??CompiledMaterialDatabase.Empty,
+            OriginalResourceMetadataJson=System.Text.Json.JsonSerializer.Serialize(new {Format="dl1-original-resource-metadata-v1",SourceFingerprint=archive.CacheIdentity,archive.Header,Resource=resource,Chunks=archive.Chunks.Where(c=>resource.Items.Any(i=>i.ChunkIndex==c.Index)).ToArray()}),
             AppliedSkinName = appliedSkin?.Name,
             SkinHiddenEntityIndexes = skinHiddenEntityIndexes,
         };

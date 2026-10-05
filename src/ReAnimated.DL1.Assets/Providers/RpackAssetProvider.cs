@@ -17,7 +17,8 @@ public sealed record RpackProviderError(
 public sealed class RpackAssetProvider :
     IRetailAssetProvider,
     IRetailAssetSnapshotProvider,
-    IAsyncDisposable
+    IAsyncDisposable,
+    IRetailRpackResourceProvider
 {
     private readonly RpackSource[] _sources;
     private readonly Rp6lChunkCache _chunkCache;
@@ -258,6 +259,23 @@ public sealed class RpackAssetProvider :
             resource,
             _chunkCache,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public async ValueTask<RetailRpackResourceCustody> ReadRpackResourceCustodyAsync(
+        RetailAssetRecord asset,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(asset);
+        ValidateOwnership(asset);
+        RetailAssetRecordValidator.Validate(ProviderId, asset);
+        RpackSource source = _sources.FirstOrDefault(source =>
+            source.Path.Equals(asset.Source.ContainerPath, StringComparison.OrdinalIgnoreCase) &&
+            source.Priority == asset.Source.Priority)
+            ?? throw new ArgumentException("The resource container is not a configured source.", nameof(asset));
+        Rp6lArchive cached = await GetArchiveAsync(source.Path, cancellationToken).ConfigureAwait(false);
+        return await RpackResourceCustodyReader.ReadAsync(
+            asset, ProviderId, _installId, source, cached, _limits, _chunkCache, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()

@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Numerics;
 using System.Text;
 
@@ -1272,7 +1272,15 @@ public static class CompiledMeshGeometryDecoder
                     materialOverrides,
                     entityOverrides,
                     surfaceOverrideCount,
-                    randomizedChildCount));
+                    randomizedChildCount)
+                {
+                    TagBytes=ReadOptionalSkinBlob(data,rowOffset,4,8),
+                    ColorBytes=ReadOptionalSkinBlob(data,rowOffset,12,8),
+                    MorphsPreset=ReadOptionalSkinString(data,rowOffset,8),
+                    Character0=ReadOptionalSkinString(data,rowOffset,16),
+                    Character1=ReadOptionalSkinString(data,rowOffset,20),
+                    SurfaceOverrides=ReadSkinSurfaceOverrides(data,rowOffset,surfaceOverrideCount),
+                });
             }
 
             return result;
@@ -1405,6 +1413,25 @@ public static class CompiledMeshGeometryDecoder
             pointerOffset,
             label);
         EnsureRange(data.Length, arrayOffset, 1, label);
+    }
+
+    private static byte[] ReadOptionalSkinBlob(ReadOnlySpan<byte> data,int row,int field,int length)
+    {
+        if(ReadInt32(data,row+field)==0)return [];
+        int pointer=ReadRelativeInt32Pointer(data,row,row+field,"skin metadata");
+        EnsureRange(data.Length,pointer,length,"skin metadata");
+        return data.Slice(pointer,length).ToArray();
+    }
+    private static string? ReadOptionalSkinString(ReadOnlySpan<byte> data,int row,int field)=>ReadInt32(data,row+field)==0?null:
+        ReadStringAtRelativeInt32Pointer(data,row,row+field,"skin optional string");
+    private static CompiledMeshSkinSurfaceOverride[] ReadSkinSurfaceOverrides(ReadOnlySpan<byte> data,int row,int count)
+    {
+        if(count==0)return [];
+        int pointer=ReadRelativeInt32Pointer(data,row,row+40,"skin surface records");
+        EnsureRange(data.Length,pointer,checked(count*4),"skin surface records");
+        var records=new CompiledMeshSkinSurfaceOverride[count];
+        for(int i=0;i<count;i++)records[i]=new(data[pointer+i*4],data[pointer+i*4+1],ReadUInt16(data,pointer+i*4+2));
+        return records;
     }
 
     private static string ReadStringAtRelativeInt32Pointer(
