@@ -528,7 +528,8 @@ public sealed class Dl1CharacterImportTests
         }
         else
         {
-            var retained=Assert.Single(inventory.Resources,row=>row.NativeResource is not null);
+            var retained=Assert.Single(inventory.Resources,row=>row.Id == texture.Id.LogicalId.StableKey);
+            Assert.NotNull(retained.NativeResource);
             Assert.Equal(2,retained.NativeResource!.Items.Length);
             Assert.Equal(textureBytes,imported.Package.CompanionPayloads[retained.EntryPath!].ToArray());
             Assert.Equal(retained.Id,Assert.Single(material.Material!.Textures).ResourceId);
@@ -552,7 +553,8 @@ public sealed class Dl1CharacterImportTests
             items.Select((item,index)=>new RetailRpackItemCustody(item,ImmutableArray.Create(payloads[index]),Hash(payloads[index]))).ToImmutableArray(),
             [new(new(0,16,514,0,length,0,1,2,Rp6lCompression.None),new string('a',64))],Hash(payloads.SelectMany(bytes=>bytes).ToArray())));
         var imported=await Dl1CharacterImporter.ImportAsync(mesh,root,catalog,new(){CompanionRoots=[asset.Id.LogicalId]});
-        var part=Assert.Single(imported.Package.Document.CharacterResources!.Resources,row=>row.NativeResource is {ResourceType:272});
+        var part=Assert.Single(imported.Package.Document.CharacterResources!.Resources,row=>row.Id == asset.Id.LogicalId.StableKey);
+        Assert.Equal(Rp6lResourceTypes.Mesh, part.NativeResource!.ResourceType);
         Assert.Equal(CharacterSubsystem.DetachedParts,part.Subsystem);Assert.Equal(5,part.NativeResource!.Items.Length);
         Assert.Equal(payloads.SelectMany(bytes=>bytes).ToArray(),imported.Package.CompanionPayloads[part.EntryPath!].ToArray());
         Assert.Contains(imported.Package.Document.CharacterResources.Resources,row=>row.Subsystem==CharacterSubsystem.Materials && row.ReferencedBy.Contains(part.Id));
@@ -643,7 +645,11 @@ public sealed class Dl1CharacterImportTests
     private static (RetailAssetRecord Root, Dl1MeshData Mesh) Fixture()
     {
         RetailAssetLogicalId logical = RetailAssetLogicalId.Rpack(272, "synthetic_character");
-        RetailAssetRecord root = new(RetailAssetId.Create(logical, "synthetic", "synthetic", 1, 1, "snapshot", new string('d', 64)), "synthetic_character", new("synthetic", RetailAssetSourceKind.Rpack, 1, "synthetic.rpack", "synthetic_character", 1, 3, 3, DateTime.UnixEpoch));
+        byte[] rootBytes = RootResourceItems().SelectMany(static item => item).ToArray();
+        RetailAssetRecord root = new(RetailAssetId.Create(logical, "synthetic", "synthetic", 1, 1,
+            Sha("synthetic-root-archive"), Hash(rootBytes)), "synthetic_character",
+            new("synthetic", RetailAssetSourceKind.Rpack, 1, "synthetic.rpack", "synthetic_character",
+                1, rootBytes.Length, rootBytes.Length, DateTime.UnixEpoch));
         CompactMeshEntity[] entities = [
             new(0, "root", 0, new CompactBounds(0,0,0,1,1,1), -1, CompactMeshEntityType.Bone, 0, 1, CompactMatrix3x4.Identity, CompactMatrix3x4.Identity, 0, 0),
             new(1, "face", 0, new CompactBounds(0,0,0,1,1,1), 0, CompactMeshEntityType.Bone | CompactMeshEntityType.SkinnedMesh, 0, 2, CompactMatrix3x4.Identity, CompactMatrix3x4.Identity, 0, 0)];
@@ -657,11 +663,38 @@ public sealed class Dl1CharacterImportTests
         return (root, mesh);
     }
 
+    private static byte[][] RootResourceItems()
+    {
+        CompiledMeshTestFixture fixture = RpackTestData.BuildCompiledMeshFixture();
+        return [fixture.Metadata, fixture.Variants, [1, 2, 3], fixture.Vertices, fixture.Indices];
+    }
+
+    private static RetailRpackResourceCustody RootCustody(RetailAssetRecord root)
+    {
+        byte[][] payloads = RootResourceItems();
+        int offset = 0;
+        ImmutableArray<Rp6lItemDescriptor> items = payloads.Select((bytes, index) =>
+        {
+            var item = new Rp6lItemDescriptor(index, 0, 0, 2, offset, bytes.Length, 0);
+            offset += bytes.Length;
+            return item;
+        }).ToImmutableArray();
+        string contentHash = Hash(payloads.SelectMany(static bytes => bytes).ToArray());
+        return new(root, new(1, 0, items.Length, 1, 1, 13, 1, 1),
+            new(1, root.Id.Name, Rp6lResourceTypes.Mesh, 0, 0, items.Length, items),
+            items.Select((item, index) => new RetailRpackItemCustody(item,
+                ImmutableArray.Create(payloads[index]), Hash(payloads[index]))).ToImmutableArray(),
+            [new(new(0, 16, 514, 0, offset, 0, 1, 2, Rp6lCompression.None), contentHash)], contentHash);
+    }
+
     private sealed class FakeCatalog(RetailAssetRecord root, params RetailAssetRecord[] companions) : IRetailAssetCatalog, IRetailEmbeddedEffectCatalog, IRetailRpackResourceCatalog
     {
         public Dictionary<string, byte[]> Payloads { get; } = new(StringComparer.Ordinal);
         public Dictionary<string, RetailEmbeddedEffectCustody> Effects { get; } = new(StringComparer.Ordinal);
-        public Dictionary<string,RetailRpackResourceCustody> Native {get;}=new(StringComparer.Ordinal);
+        public Dictionary<string,RetailRpackResourceCustody> Native {get;} = new(StringComparer.Ordinal)
+        {
+            [root.Id.StableKey] = RootCustody(root),
+        };
         public ValueTask<RetailRpackResourceCustody> ReadRpackResourceCustodyAsync(RetailAssetRecord asset,CancellationToken cancellationToken=default)
         {cancellationToken.ThrowIfCancellationRequested();return new(Native[asset.Id.StableKey]);}
         public int CustodyReads { get; private set; }

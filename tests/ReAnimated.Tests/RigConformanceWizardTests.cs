@@ -42,7 +42,7 @@ public sealed class RigConformanceWizardTests
     public void WizardWithoutATemplateCannotAdvanceAndReportsWhy()
     {
         var statuses = new List<string>();
-        var wizard = new RigConformanceWizardViewModel(
+        var wizard = CreateWizard(
             (_, _) => Task.FromResult(
                 Dl1RigTemplateResolution.Failed(
                     "player",
@@ -358,7 +358,7 @@ public sealed class RigConformanceWizardTests
             },
         };
 
-        var restored = new RigConformanceWizardViewModel(
+        var restored = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)),
             static _ => { });
         restored.SetModel(model);
@@ -388,7 +388,7 @@ public sealed class RigConformanceWizardTests
             },
         };
 
-        var restored = new RigConformanceWizardViewModel(
+        var restored = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)),
             static _ => { });
         restored.SetModel(model);
@@ -415,7 +415,7 @@ public sealed class RigConformanceWizardTests
                 Document = model.Package.Document with { RigConformance = saved },
             },
         };
-        var restored = new RigConformanceWizardViewModel(
+        var restored = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)), static _ => { });
         restored.SetModel(model);
         restored.ResolveTemplateCommand.Execute(null);
@@ -451,7 +451,7 @@ public sealed class RigConformanceWizardTests
     public void ChangedSourceWithUnsavedFitChoicesAlsoRequiresRematching()
     {
         FbxModelAuthoringImportResult original = CreateModel();
-        var wizard = new RigConformanceWizardViewModel(
+        var wizard = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)), static _ => { });
         wizard.SetModel(original);
         wizard.ResolveTemplateCommand.Execute(null);
@@ -506,7 +506,7 @@ public sealed class RigConformanceWizardTests
                 Document = model.Package.Document with { RigConformance = saved },
             },
         };
-        var restored = new RigConformanceWizardViewModel(
+        var restored = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)), static _ => { });
         restored.SetModel(model);
         restored.ResolveTemplateCommand.Execute(null);
@@ -586,7 +586,7 @@ public sealed class RigConformanceWizardTests
     [Fact]
     public void NewAdaptSessionAutoClassifiesUnambiguousBodyAndAccessoryComponents()
     {
-        var wizard = new RigConformanceWizardViewModel(
+        var wizard = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)),
             static _ => { });
         FbxModelAuthoringImportResult model = CreateModel();
@@ -701,6 +701,7 @@ public sealed class RigConformanceWizardTests
         RigConformanceWizardViewModel wizard = new(
             (profile, _) => Task.FromResult(CreateResolution(profile)),
             static _ => { });
+        RigConformanceTestSchedulers.UseImmediate(wizard);
         wizard.SetModel(model);
         wizard.ResolveTemplateCommand.Execute(null);
         RigConformanceLandmarkViewModel finger = Assert.Single(wizard.FittedFingerJoints);
@@ -940,13 +941,18 @@ public sealed class RigConformanceWizardTests
 
     private static RigConformanceWizardViewModel CreateResolvedWizard()
     {
-        var wizard = new RigConformanceWizardViewModel(
+        var wizard = CreateWizard(
             (profile, _) => Task.FromResult(CreateResolution(profile)),
             static _ => { });
         wizard.SetModel(CreateModel());
         wizard.ResolveTemplateCommand.Execute(null);
         return wizard;
     }
+
+    private static RigConformanceWizardViewModel CreateWizard(
+        Func<string, CancellationToken, Task<Dl1RigTemplateResolution>> resolveTemplate,
+        Action<string> setStatus) =>
+        new(resolveTemplate, setStatus, new ImmediateRigConformanceSolveScheduler());
 
     internal static Dl1RigTemplateResolution CreateResolution(string profile) =>
         new(CreateTemplate(), profile, "player_1_tpp", new string('b', 64), "ok");

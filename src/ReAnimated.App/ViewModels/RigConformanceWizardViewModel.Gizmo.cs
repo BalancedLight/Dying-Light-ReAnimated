@@ -151,12 +151,12 @@ public sealed partial class RigConformanceWizardViewModel
         if (commit)
         {
             _previousPositionOverrides = drag.OriginalOverrides;
-            Solve();
+            QueueSolve();
             return;
         }
 
         _positionOverrides = drag.OriginalOverrides;
-        Solve();
+        QueueSolve();
     }
 
     private bool IsLandmarkBone(string boneName)
@@ -192,7 +192,7 @@ public sealed partial class RigConformanceWizardViewModel
                 new Vector3D(-position.X, position.Y, position.Z));
         }
 
-        Solve();
+        QueueSolve();
     }
 
     private sealed record ActiveDrag(

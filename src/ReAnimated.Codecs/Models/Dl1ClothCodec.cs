@@ -335,6 +335,54 @@ public static class Dl1ClothCodec
         return new(text, calls.ToImmutable());
     }
 
+    public static string ReplaceCollisionRadius(string text, int commandIndex, double radius)
+    {
+        NativeClothSyntax syntax = Parse(text);
+        if ((uint)commandIndex >= (uint)syntax.Commands.Length)
+            throw new ArgumentOutOfRangeException(nameof(commandIndex));
+        NativeClothCommand command = syntax.Commands[commandIndex];
+        int count = command.Name switch
+        {
+            "CollisionSphere" => 2,
+            "CollisionSphereShift" => 3,
+            "CollisionCapsuleBetween" => 5,
+            _ => throw new InvalidOperationException("This collision declaration cannot be edited."),
+        };
+        if (!double.IsFinite(radius) || radius == 0 || command.Name == "CollisionCapsuleBetween" && radius < 0)
+            throw new ArgumentOutOfRangeException(nameof(radius));
+        if (command.Arguments.Length != count || !double.TryParse(command.Arguments[^1],
+                NumberStyles.Float, CultureInfo.InvariantCulture, out _))
+            throw new InvalidOperationException("Choose a collision with an explicit numeric radius.");
+        int i = command.Start + command.Name.Length;
+        while (SkipTrivia(text, ref i)) { }
+        int argumentStart = ++i, depth = 0;
+        while (i < command.Start + command.Length - 1)
+        {
+            if (SkipComment(text, ref i)) continue;
+            char c = text[i];
+            if (c == '"') { SkipString(text, ref i); continue; }
+            if (c is '(' or '[') depth++;
+            if (c is ')' or ']') depth--;
+            if (c == ',' && depth == 0) argumentStart = i + 1;
+            i++;
+        }
+        int argumentEnd = i;
+        i = argumentStart;
+        while (SkipTrivia(text, ref i)) { }
+        int numberStart = i;
+        while (i < argumentEnd && (char.IsAsciiDigit(text[i]) || text[i] is '+' or '-' or '.' or 'e' or 'E')) i++;
+        int numberEnd = i;
+        while (i < argumentEnd && SkipTrivia(text, ref i)) { }
+        if (i != argumentEnd || numberEnd == numberStart)
+            throw new InvalidOperationException("The collision radius is an expression. Edit its native source instead.");
+        string updated = text[..numberStart] + radius.ToString("R", CultureInfo.InvariantCulture) + text[numberEnd..];
+        NativePhxDocument check = ReadPhx(updated);
+        if (!check.IsValid)
+            throw new InvalidDataException(string.Join(" ", check.Diagnostics.Where(static diagnostic => diagnostic.IsError)
+                .Select(static diagnostic => diagnostic.Message)));
+        return updated;
+    }
+
     private static ImmutableArray<NativeClothQuotedArgument> ReadQuotedArguments(string text, int start, int end)
     {
         var result = ImmutableArray.CreateBuilder<NativeClothQuotedArgument>();

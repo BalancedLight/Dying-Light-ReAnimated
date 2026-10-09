@@ -3,6 +3,7 @@ using System.Collections.ObjectModel;
 using System.IO;
 using CommunityToolkit.Mvvm.ComponentModel;
 using ReAnimated.App.Infrastructure;
+using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
 using ReAnimated.Retargeting.Conformance;
 
@@ -114,26 +115,21 @@ public sealed partial class RigConformanceWizardViewModel
             ConformanceStrength = preserveSourceProportions ? 0.0 : 1.0;
         }
 
-        bool solved = false;
         if (_sourceConformanceReviewRequired)
         {
-            RerunAutomaticMatching();
-            solved = true;
+            _roleOverrides = ImmutableDictionary<string, string>.Empty;
+            _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
+            _previousPositionOverrides = null;
+            _sourceConformanceReviewRequired = false;
+            _geometryEvidence = null;
+            _geometryEvidenceCaptured = false;
         }
 
         // GeneratedBodyRig validates stable typed role assignments against its
         // own hierarchy. Use only roles present in the selected target, and fill
         // only absent overrides so prior author choices remain authoritative.
-        if (SeedGeneratedBodyRoleOverrides())
-        {
-            Solve();
-            solved = true;
-        }
-
-        if (!solved)
-        {
-            Solve();
-        }
+        SeedGeneratedBodyRoleOverrides();
+        await StartSolveAsync(debounce: false, cancellationToken).ConfigureAwait(true);
 
         // Automatic geometry matches are the normal path. Keep their proposed
         // selections as the default mapping so ambiguity review does not turn
@@ -142,6 +138,7 @@ public sealed partial class RigConformanceWizardViewModel
         if (HasPendingMappingReview)
         {
             AcceptMappingProposals();
+            await StartSolveAsync(debounce: false, cancellationToken).ConfigureAwait(true);
         }
 
         if (Fit is null)
@@ -165,13 +162,13 @@ public sealed partial class RigConformanceWizardViewModel
 
     /// <summary>Whether the primary guided flow can place joints on a solved rig.</summary>
     public bool CanPlaceGuidedBodyJoints =>
-        !IsBusy && Fit is not null && _model?.Rig is not null && !RequiresSourceRematch;
+        !IsBusy && IsFitCurrent && _model?.Rig is not null && !RequiresSourceRematch;
 
     /// <summary>Whether an existing hand setup is ready for the optional hand review.</summary>
     public bool CanReviewGuidedHands => !IsBusy && HasHandSetup && CanReviewHandSetup;
 
     /// <summary>Whether a conformed skeleton can be shown in the fit viewport.</summary>
-    public bool CanPreviewGuidedFit => Fit is not null && _template is not null && !IsBusy;
+    public bool CanPreviewGuidedFit => IsFitCurrent && _template is not null && !IsBusy;
 
     /// <summary>Apply gate exposed to the simplified guided screen.</summary>
     public bool CanApplyGuidedFit => CanApply && MissingCoreRoles.IsEmpty && !IsBusy;
@@ -215,6 +212,8 @@ public sealed partial class RigConformanceWizardViewModel
     /// <summary>Human-readable blocker for the primary guided fit step.</summary>
     public string GuidedFitBlockReason => Fit is null
         ? SolveStatus
+        : !IsFitCurrent
+            ? "The fit is updating. Wait for the current result before applying."
         : !MissingCoreRoles.IsEmpty
             ? $"Choose source joints for these targets: {string.Join(", ", MissingCoreRoles)}."
             : !CanApplyGuidedFit

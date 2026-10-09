@@ -135,6 +135,7 @@ public sealed class ModelsWorkspaceConformanceViewportTests
             resolveRigTemplate: (profile, _) =>
                 Task.FromResult(CreateTemplateResolutionWithMatchingHead(profile)),
             captureAuthoredLayer: static (model, _) => model);
+        RigConformanceTestSchedulers.UseImmediate(workspace);
         workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
             source,
             "synthetic-camera-preview.dlrmodel",

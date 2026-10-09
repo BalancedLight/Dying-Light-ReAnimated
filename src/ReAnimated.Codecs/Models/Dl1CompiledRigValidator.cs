@@ -15,6 +15,12 @@ public static class Dl1CompiledRigValidator
     private const double FloatTolerance = 1e-5;
 
     public static ImmutableArray<Dl1CompiledRigNodeReadBack> Validate(Dl1AuthoredRigContract expected, CompactMeshDocument compiled)
+        => Validate(expected, compiled, []);
+
+    public static ImmutableArray<Dl1CompiledRigNodeReadBack> Validate(
+        Dl1AuthoredRigContract expected,
+        CompactMeshDocument compiled,
+        ImmutableArray<int> authoredRigToPhysicalNodeIndices)
     {
         ArgumentNullException.ThrowIfNull(expected);
         ArgumentNullException.ThrowIfNull(compiled);
@@ -22,12 +28,28 @@ public static class Dl1CompiledRigValidator
         for (int index = 0; index < compiled.Entities.Count; index++)
             if (compiled.Entities[index].Index != index || compiled.Entities[index].ParentIndex < -1 || compiled.Entities[index].ParentIndex >= index)
                 throw new InvalidDataException("The compiled hierarchy is not a contiguous parent-before-child table.");
+
+        bool hasExplicitPhysicalMap = !authoredRigToPhysicalNodeIndices.IsDefaultOrEmpty;
+        ImmutableArray<int> physicalMap = !hasExplicitPhysicalMap
+            ? Enumerable.Range(0, expected.Nodes.Length).ToImmutableArray()
+            : authoredRigToPhysicalNodeIndices;
+        if (physicalMap.Length != expected.Nodes.Length ||
+            physicalMap.Any(index => (uint)index >= (uint)compiled.Entities.Count) ||
+            physicalMap.Distinct().Count() != physicalMap.Length)
+        {
+            throw new InvalidDataException(
+                "The authored-rig to source-MSH physical-node map must uniquely cover every rig node.");
+        }
+
         var byName = compiled.Entities.ToLookup(static n => n.Name, StringComparer.OrdinalIgnoreCase);
         var matched = new CompactMeshEntity[expected.Nodes.Length];
         foreach (Dl1AuthoredRigNode node in expected.Nodes)
         {
             CompactMeshEntity[] candidates = byName[node.Name].ToArray();
             if (candidates.Length != 1) throw new InvalidDataException($"Prepared node '{node.Name}' has {candidates.Length} compiled matches.");
+            int expectedPhysicalIndex = physicalMap[node.PhysicalIndex];
+            if (hasExplicitPhysicalMap && candidates[0].Index != expectedPhysicalIndex)
+                throw new InvalidDataException($"Prepared node '{node.Name}' moved to compiled entity {candidates[0].Index}; the source-MSH physical map expects {expectedPhysicalIndex}.");
             matched[node.PhysicalIndex] = candidates[0];
         }
         var result = ImmutableArray.CreateBuilder<Dl1CompiledRigNodeReadBack>(expected.Nodes.Length);
@@ -37,7 +59,11 @@ public static class Dl1CompiledRigValidator
             if (!actual.LocalMatrix.IsFinite || !actual.ReferenceMatrix.IsFinite || !actual.Bounds.IsFinite ||
                 actual.Bounds.HalfX < 0 || actual.Bounds.HalfY < 0 || actual.Bounds.HalfZ < 0)
                 throw new InvalidDataException($"Compiled node '{actual.Name}' has non-finite matrices or invalid bounds.");
-            int parent = node.ParentPhysicalIndex < 0 ? -1 : matched[node.ParentPhysicalIndex].Index;
+            int parent = node.ParentPhysicalIndex < 0
+                ? -1
+                : hasExplicitPhysicalMap
+                    ? physicalMap[node.ParentPhysicalIndex]
+                    : matched[node.ParentPhysicalIndex].Index;
             if (actual.ParentIndex != parent) throw new InvalidDataException($"Compiled node '{actual.Name}' changed its prepared parent.");
             CompactMeshEntityType type = node.IsDeform ? CompactMeshEntityType.Bone : CompactMeshEntityType.Helper;
             if (actual.EntityType != type) throw new InvalidDataException($"Compiled node '{actual.Name}' changed its prepared representation from {type} to {actual.EntityType}.");

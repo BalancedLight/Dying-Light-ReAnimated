@@ -542,6 +542,13 @@ $focusedGates = @(
 
 $hermeticGates = @(
     (New-Gate `
+        -Name "hermetic-release-quality" `
+        -Category "model and recovery workflows" `
+        -Action "test" `
+        -Filter "FullyQualifiedName~AnimationRigBindingTests|FullyQualifiedName~AuthoredAnimationTests|FullyQualifiedName~ModelsWorkspaceAuthoredAnimationTests|FullyQualifiedName~ModelAnimationCaptureTests|FullyQualifiedName~RecoveryCloseTests|FullyQualifiedName~RecoveryModelSynchronizationTests|FullyQualifiedName~SecondaryMotionRecoveryTests|FullyQualifiedName~ProjectSaveModelSynchronizationTests|FullyQualifiedName~TransactionalPlaybackTests|FullyQualifiedName~RigConformanceAsyncSolveTests|FullyQualifiedName~RigidPropWorkflowTests|FullyQualifiedName~SecondaryColliderAuthoringTests" `
+        -InputRoots @($codecRoots + $viewModelRoots) `
+        -InputFiles @($testProjectInputs + @(Select-TestInputFiles "^(AnimationRigBinding|AuthoredAnimation|ModelsWorkspaceAuthoredAnimation|ModelAnimationCapture|RecoveryClose|RecoveryModelSynchronization|SecondaryMotionRecovery|ProjectSaveModelSynchronization|TransactionalPlayback|RigConformanceAsyncSolve|RigidPropWorkflow|SecondaryColliderAuthoring)Tests$"))),
+    (New-Gate `
         -Name "hermetic-codec-evaluation" `
         -Category "codec/evaluation" `
         -Action "test" `

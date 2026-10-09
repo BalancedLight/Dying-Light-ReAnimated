@@ -11,6 +11,85 @@ namespace ReAnimated.Tests;
 
 public sealed class GuidedModelSetupTests
 {
+    [Theory]
+    [InlineData(CustomModelWorkflowMode.Character, true)]
+    [InlineData(CustomModelWorkflowMode.OriginalRig, false)]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void SerializedWorkflowModeSurvivesPackageImportAndSelectsGuidedMode(
+        CustomModelWorkflowMode workflowMode,
+        bool usesDl1Rig)
+    {
+        FbxModelAuthoringImportResult source = FbxModelAuthoringImporter.Import(
+            RigidPropWorkflowTests.CreateDoorFixture(), "workflow-model.fbx");
+        source = source with
+        {
+            Package = source.Package with
+            {
+                Document = source.Package.Document with { WorkflowMode = workflowMode },
+            },
+        };
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string path = Path.Combine(directory, "workflow-model.dlrmodel");
+            CustomModelPackageSerializer.SaveAtomic(source.Package, path);
+
+            CustomModelPackage loaded = CustomModelPackageSerializer.Load(path);
+            FbxModelAuthoringImportResult reopened = FbxModelAuthoringImporter.ImportPackage(loaded);
+            using ModelsWorkspaceViewModel workspace = CreateWorkspace(model: reopened);
+
+            Assert.Equal(workflowMode, reopened.Package.Document.WorkflowMode);
+            Assert.Equal(usesDl1Rig, workspace.GuidedUsesDl1Rig);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task KeepOriginalDoesNotRelabelAnAppliedFit()
+    {
+        using var workspace = CreateWorkspace(withModel: true);
+        await workspace.BeginGuidedSetupAsync(CustomModelSkeletonChoice.MapToDl1);
+        await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
+        var fitted = workspace.CaptureProjectSession().Model!;
+        long revision = workspace.PersistenceRevision;
+        await workspace.BeginGuidedSetupAsync(CustomModelSkeletonChoice.KeepOriginal);
+        Assert.Same(fitted, workspace.CaptureProjectSession().Model);
+        Assert.Equal(revision, workspace.PersistenceRevision);
+        Assert.True(workspace.GuidedUsesDl1Rig);
+        Assert.Equal(CustomModelWorkflowMode.Character, fitted.Package.Document.WorkflowMode);
+        Assert.Contains("Undo the fit", workspace.GuidedStatus);
+
+        var legacy = fitted with { Package = fitted.Package with { Document = fitted.Package.Document with
+        { WorkflowMode = CustomModelWorkflowMode.OriginalRig } } };
+        using var reopened = CreateWorkspace(model: legacy);
+        Assert.True(reopened.GuidedUsesDl1Rig);
+        Assert.True(reopened.IsGuidedPreview);
+    }
+
+    [Fact]
+    public async Task OriginalPropStartsWithItsIncludedAuthoredClipAndSkipsCharacterFitAdvice()
+    {
+        var source = FbxModelAuthoringImporter.Import(RigidPropWorkflowTests.CreateDoorFixture(), "generic-door.fbx");
+        source = source with { Package = source.Package with { Document = source.Package.Document with
+        { AnimationClips = source.Package.Document.AnimationClips.Select(static clip => clip with { Included = false }).ToImmutableArray() } } };
+        source = FbxAuthoredAnimationAuthoring.Create(source, "open", 1, new FrameRate(30, 1));
+        using var workspace = CreateWorkspace(model: source);
+        Assert.Equal("open", workspace.SelectedAnimation!.DisplayName);
+        await workspace.BeginGuidedSetupAsync(CustomModelSkeletonChoice.KeepOriginal);
+        Assert.False(workspace.ShowGuidedFitReview);
+        Assert.Equal("Original rig", workspace.GuidedRigSummary);
+        Assert.True(workspace.GuidedPrimaryCommand.CanExecute(null));
+        await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
+        Assert.True(workspace.IsGuidedPreview);
+        Assert.DoesNotContain("stock", workspace.GuidedStatus, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Preview animation", workspace.GuidedPrimaryLabel);
+    }
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
@@ -63,7 +142,42 @@ public sealed class GuidedModelSetupTests
         Assert.False(workspace.GuidedUsesDl1Rig);
         await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
         Assert.True(workspace.IsGuidedPreview);
-        Assert.Equal(revision, workspace.PersistenceRevision);
+        Assert.True(workspace.PersistenceRevision > revision);
+        Assert.Equal(CustomModelWorkflowMode.OriginalRig,
+            workspace.CaptureProjectSession().Model!.Package.Document.WorkflowMode);
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task OriginalRigChoicePersistsAndPreviewsItsOwnClipAfterRestore()
+    {
+        FbxModelAuthoringImportResult source = WithoutDerivedMotions(
+            CreateModelWithAnimationTakes());
+        using var first = CreateWorkspace(model: source);
+        await first.BeginGuidedSetupAsync(CustomModelSkeletonChoice.KeepOriginal);
+        FbxModelAuthoringImportResult saved = first.CaptureProjectSession().Model!;
+        Assert.Equal(CustomModelWorkflowMode.OriginalRig, saved.Package.Document.WorkflowMode);
+
+        using var restored = CreateWorkspace(model: saved);
+        int stockPreviewCalls = 0;
+        restored.SetGuidedPreviewHandler(() =>
+        {
+            stockPreviewCalls++;
+            return Task.FromResult(true);
+        });
+
+        Assert.False(restored.GuidedUsesDl1Rig);
+        await restored.GuidedPrimaryCommand.ExecuteAsync(null);
+        Assert.True(restored.IsGuidedPreview);
+        Assert.Equal("Preview animation", restored.GuidedPrimaryLabel);
+
+        await restored.GuidedPrimaryCommand.ExecuteAsync(null);
+
+        Assert.True(restored.IsGuidedExport);
+        Assert.Equal(0, stockPreviewCalls);
+        Assert.NotNull(restored.SelectedAnimation?.DecodedClip);
+        Assert.NotNull(restored.Viewport.SceneSource.CaptureFrame().Skeleton);
     }
 
     [Fact]
@@ -317,7 +431,7 @@ public sealed class GuidedModelSetupTests
         using var workspace = CreateWorkspace(model: generated);
         workspace.SetGuidedPreviewHandler(static () => Task.FromResult(true));
 
-        await workspace.BeginGuidedSetupAsync(CustomModelSkeletonChoice.KeepOriginal);
+        await workspace.BeginGuidedSetupAsync(CustomModelSkeletonChoice.MapToDl1);
         await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
         await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
 
@@ -362,6 +476,7 @@ public sealed class GuidedModelSetupTests
             static _ => Task.CompletedTask, static () => null,
             resolveRigTemplate: (profile, _) => Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)),
             captureAuthoredLayer: static (model, _) => model);
+        RigConformanceTestSchedulers.UseImmediate(workspace);
         if (withModel || model is not null) workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
             model ?? RigConformanceWizardTests.CreateModel(), "generic-model.dlrmodel",
             new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
@@ -419,6 +534,26 @@ public sealed class GuidedModelSetupTests
             AnimationClips = ImmutableDictionary<Guid, AnimationClip>.Empty
                 .Add(poseId, pose)
                 .Add(movingId, moving),
+        };
+    }
+
+    private static FbxModelAuthoringImportResult WithoutDerivedMotions(
+        FbxModelAuthoringImportResult model)
+    {
+        ImmutableArray<CustomModelAnimationClip> sources = model.Package.Document.AnimationClips
+            .Where(static clip => clip.DerivedMotion is null)
+            .ToImmutableArray();
+        HashSet<Guid> sourceIds = sources.Select(static clip => clip.Id).ToHashSet();
+        return model with
+        {
+            Package = model.Package with
+            {
+                Document = model.Package.Document with { AnimationClips = sources },
+                DerivedAnimationPayloads = ImmutableDictionary<Guid, ImmutableArray<byte>>.Empty,
+            },
+            AnimationClips = model.AnimationClips
+                .Where(pair => sourceIds.Contains(pair.Key))
+                .ToImmutableDictionary(),
         };
     }
 

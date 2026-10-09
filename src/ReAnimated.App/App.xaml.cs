@@ -133,7 +133,7 @@ public partial class App : Application, IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private void OnDispatcherUnhandledException(
+    private async void OnDispatcherUnhandledException(
         object sender,
         DispatcherUnhandledExceptionEventArgs args)
     {
@@ -155,7 +155,7 @@ public partial class App : Application, IDisposable
             return;
         }
 
-        TryEmergencySave();
+        await TryEmergencySaveAsync();
         string? reportPath = TryWriteCrashReport(
             args.Exception,
             "DispatcherUnhandledException");
@@ -226,11 +226,15 @@ public partial class App : Application, IDisposable
         }
     }
 
-    private void TryEmergencySave()
+    internal async Task TryEmergencySaveAsync()
     {
         try
         {
-            _ = _autosave?.SaveNow("dispatcher-crash");
+            if (_autosave is { } autosave)
+            {
+                autosave.Stop();
+                _ = await autosave.SaveNowAsync("dispatcher-crash");
+            }
         }
         catch
         {

@@ -268,7 +268,10 @@ public static class Dl1OfficialModelCompiler
         ArgumentNullException.ThrowIfNull(sourceBuild);
         ArgumentNullException.ThrowIfNull(hierarchy);
         if (sourceBuild.AuthoredRigContract is { } contract)
-            return Dl1CompiledRigValidator.Validate(contract, hierarchy);
+            return Dl1CompiledRigValidator.Validate(
+                contract,
+                hierarchy,
+                sourceBuild.AuthoredRigToPhysicalNodeIndices);
         if (!sourceBuild.BoneScriptPolicies.IsDefault)
             throw new InvalidDataException("Studio compilation requires the source writer's prepared contract.");
         return [];

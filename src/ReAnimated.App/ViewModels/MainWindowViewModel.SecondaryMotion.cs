@@ -6,6 +6,7 @@ using System.Text.Json;
 using CommunityToolkit.Mvvm.Input;
 using Microsoft.Win32;
 using ReAnimated.App.Infrastructure;
+using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
@@ -26,6 +27,10 @@ public sealed partial class MainWindowViewModel
     private readonly Dictionary<string, TransformMatrix> _secondaryLocalDeltas = new(StringComparer.Ordinal);
     private GizmoRenderData[] _secondaryGizmos = [];
     private GizmoRenderData[] _secondaryExternalGizmos = [];
+    private FbxModelAuthoringImportResult? _secondaryFitModel;
+    private CustomModelPackage? _secondaryFitPackage;
+    private CustomModelDocument? _nativeCollisionDocument;
+    private ImmutableArray<NativeClothSource> _nativeCollisionSources = [];
     public SecondaryMotionViewModel SecondaryMotion { get; } = new();
 
     private void InitializeSecondaryMotionFeature()
@@ -37,15 +42,27 @@ public sealed partial class MainWindowViewModel
         SecondaryMotion.ImportNativeCommand = new RelayCommand(ImportNativeCloth);
         SecondaryMotion.ExportNativeCommand = new RelayCommand(ExportNativeCloth);
         SecondaryMotion.SaveModelCopyCommand = new RelayCommand(SaveSecondaryModelCopy);
+        SecondaryMotion.FitCollisionSphereCommand = new RelayCommand(FitSecondarySphereCollision);
+        SecondaryMotion.FitCollisionCapsuleCommand = new RelayCommand(FitSecondaryCapsuleCollision);
+        SecondaryMotion.ApplyCollisionProposalCommand = new RelayCommand(ApplySecondaryCollisionProposal);
+        SecondaryMotion.CollisionPreviewChanged += OnSecondaryCollisionPreviewChanged;
     }
 
-    private void DisposeSecondaryMotionFeature() => SecondaryMotion.Changed -= OnSecondaryMotionChanged;
+    private void DisposeSecondaryMotionFeature()
+    {
+        SecondaryMotion.Changed -= OnSecondaryMotionChanged;
+        SecondaryMotion.CollisionPreviewChanged -= OnSecondaryCollisionPreviewChanged;
+    }
 
     private void OnSecondaryMotionChanged(object? sender, EventArgs args)
     {
+        NotifySecondaryMotionPendingStateChanged();
+        RefreshNativeCollisionOverlays();
         ResetSecondaryMotionPreview();
         RefreshEditableSkeletonPreview();
     }
+
+    private void OnSecondaryCollisionPreviewChanged(object? sender, EventArgs args) => RefreshEditableSkeletonPreview();
 
     private void ResetSecondaryMotionPreview()
     {
@@ -60,12 +77,18 @@ public sealed partial class MainWindowViewModel
     private void SynchronizeSecondaryMotionModel()
     {
         CustomModelDocument? document = _customTargetPreviewSession?.Document;
+        SecondaryMotion.SetCollisionBoneNames(document?.CreateEffectiveBones().Select(bone => bone.Name) ?? []);
         if (ReferenceEquals(document, _secondaryDocument)) return;
         _secondaryDocument = document;
+        _secondaryFitModel = null;
+        _secondaryFitPackage = null;
+        _nativeCollisionDocument = null;
+        _nativeCollisionSources = [];
         ResetSecondaryMotionPreview();
         SecondaryMotionModelKey? key = document is null ? null : new(_project.ProjectId, document.ModelId,
             document.Source.ContentSha256, _targetProjectAsset?.ContentSha256 ?? Convert.ToHexStringLower(
-                SHA256.HashData(CustomModelPackageSerializer.Serialize(_customTargetPreviewSession!.Package).AsSpan())));
+                SHA256.HashData(CustomModelPackageSerializer.Serialize(_customTargetPreviewSession!.Package).AsSpan())),
+            CustomModelContractSignatures.ComputeRig(document.CreateEffectiveBones()));
         SecondaryMotionModelSelection selection = _secondaryModelStates.Select(key, document?.SecondaryMotion ?? new(), SecondaryMotion.Definition);
         if (!selection.IdentityChanged) return;
         SecondaryMotion.Changed -= OnSecondaryMotionChanged;
@@ -74,6 +97,109 @@ public sealed partial class MainWindowViewModel
             ? "Restored unsaved settings for this model. Save a model copy to keep them."
             : "Model settings loaded. To keep changes, save a model copy, open it in Models, then save the project.";
         SecondaryMotion.Changed += OnSecondaryMotionChanged;
+        RefreshNativeCollisionOverlays(force: true);
+    }
+
+    private FbxModelAuthoringImportResult GetSecondaryFitModel()
+    {
+        CustomModelPreviewSession preview = _customTargetPreviewSession ??
+            throw new InvalidOperationException("Select a custom model target before fitting a collision.");
+        if (_secondaryFitModel is null || !ReferenceEquals(_secondaryFitPackage, preview.Package))
+        {
+            _secondaryFitModel = FbxModelAuthoringImporter.ImportPackage(preview.Package);
+            _secondaryFitPackage = preview.Package;
+        }
+        return _secondaryFitModel;
+    }
+
+    private void FitSecondarySphereCollision()
+    {
+        try
+        {
+            if (SecondaryMotion.StartBoneName is not { } boneName)
+                throw new InvalidOperationException("Choose a bone before fitting a sphere.");
+            SecondaryMotion.SetCollisionProposal(SecondaryColliderAuthoring.FitSphere(GetSecondaryFitModel(), boneName));
+            SecondaryMotion.Status = "Sphere fitted. Resize or move it, then apply.";
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or InvalidDataException or IOException)
+        {
+            SecondaryMotion.Status = "Sphere fit failed: " + error.Message;
+        }
+    }
+
+    private void FitSecondaryCapsuleCollision()
+    {
+        try
+        {
+            if (SecondaryMotion.StartBoneName is not { } start || SecondaryMotion.EndBoneName is not { } end)
+                throw new InvalidOperationException("Choose both bones before fitting a capsule.");
+            SecondaryMotion.SetCollisionProposal(SecondaryColliderAuthoring.FitCapsule(GetSecondaryFitModel(), start, end));
+            SecondaryMotion.Status = "Capsule fitted. Resize or move it, then apply.";
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or InvalidDataException or IOException)
+        {
+            SecondaryMotion.Status = "Capsule fit failed: " + error.Message;
+        }
+    }
+
+    private void ApplySecondaryCollisionProposal()
+    {
+        try
+        {
+            if (SecondaryMotion.CurrentColliderProposal is not { } proposal)
+                throw new InvalidOperationException("Enter finite offsets and a positive radius before applying.");
+            SecondaryMotion.ApplyCollisionProposal(proposal);
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+        {
+            SecondaryMotion.Status = "Collision edit rejected: " + error.Message;
+        }
+    }
+
+    private void RefreshNativeCollisionOverlays(bool force = false)
+    {
+        CustomModelDocument? document = _customTargetPreviewSession?.Document;
+        ImmutableArray<NativeClothSource> sources = SecondaryMotion.Definition.NativeSources;
+        if (!force && ReferenceEquals(document, _nativeCollisionDocument) &&
+            _nativeCollisionSources.SequenceEqual(sources)) return;
+        _nativeCollisionDocument = document;
+        _nativeCollisionSources = sources;
+        if (document is null || sources.IsEmpty)
+        {
+            ImmutableArray<string> details = document is null && !sources.IsEmpty
+                ? DescribeNativeSourcesWithoutModel(sources)
+                : [];
+            SecondaryMotion.SetNativeCollisionOverlays(new([], details));
+            return;
+        }
+
+        try
+        {
+            FbxModelAuthoringImportResult model = GetSecondaryFitModel();
+            Dl1AuthoredRigContract prepared = Dl1CustomModelRigPreparer.Prepare(model).Contract;
+            var bounds = prepared.Nodes.ToDictionary(node => node.Name, node => node.Bounds, StringComparer.Ordinal);
+            Dl1NativeClothCollisionOverlayResolution resolution = Dl1NativeClothCollisionOverlayResolver.Resolve(
+                SecondaryMotion.Definition, document.CreateEffectiveBones(), bounds);
+            SecondaryMotion.SetNativeCollisionOverlays(resolution);
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidDataException or InvalidOperationException or IOException)
+        {
+            SecondaryMotion.SetNativeCollisionOverlays(new([], ["Native collision overlays unavailable: " + error.Message]));
+        }
+    }
+
+    private static ImmutableArray<string> DescribeNativeSourcesWithoutModel(ImmutableArray<NativeClothSource> sources)
+    {
+        var details = ImmutableArray.CreateBuilder<string>();
+        foreach (NativeClothSource source in sources)
+        {
+            ImmutableArray<NativeClothDiagnostic> diagnostics = source.Kind == NativeClothSourceKind.Phx
+                ? Dl1ClothCodec.ReadPhx(source.Text).Diagnostics
+                : Dl1ClothCodec.ReadMpCloth(source.Text).Diagnostics;
+            details.AddRange(diagnostics.Select(diagnostic => $"{source.ResourceName}: {diagnostic.Message}"));
+        }
+        details.Add("Select a model to resolve native collision positions from its retained element bounds.");
+        return details.Distinct(StringComparer.Ordinal).ToImmutableArray();
     }
 
     /// <summary>Call after the final display skeleton has been rebased for the custom-model presentation.</summary>
@@ -81,8 +207,48 @@ public sealed partial class MainWindowViewModel
         SkeletonRenderData display)
     {
         SynchronizeSecondaryMotionModel();
+        display = ApplySecondaryActorScale(display);
         if (!SecondaryMotion.Enabled || SecondaryMotion.Definition.Groups.IsEmpty)
-        { _secondaryLocalDeltas.Clear(); _secondaryGizmos = []; _secondaryExternalGizmos = []; return display; }
+        {
+            _secondarySession = null;
+            _secondaryRequest = null;
+            _secondaryLocalDeltas.Clear();
+            bool showCollisionOverlay = SecondaryMotion.ShowCollisions &&
+                (SecondaryMotion.NativeCollisionOverlays.Length > 0 || SecondaryMotion.CurrentColliderProposal is not null ||
+                 SecondaryMotion.Definition.Groups.Any(group => !group.Colliders.IsEmpty));
+            if (!showCollisionOverlay)
+            { _secondaryGizmos = []; _secondaryExternalGizmos = []; return display; }
+            try
+            {
+                bool fpp = request.PreviewProfile.Context == Dl1PreviewContext.Dl1Fpp;
+                EvaluationFrame sampled = new AnimationEvaluator().Evaluate(request);
+                SkeletonPose physicalPose = SecondaryMotionDomain.SelectPhysicsPose(sampled);
+                SkeletonPose bind = request.TargetRig.CreateBindPose();
+                SkeletonRenderData physicalSkeleton = CorePreviewAdapter.ToRenderSkeleton(
+                    bind, actorWorldTransform: ScaleSecondaryActorTransform(sampled.ActorWorldTransform));
+                physicalSkeleton = physicalSkeleton with { Bones = physicalSkeleton.Bones.Select((bone, index) => bone with
+                    { WorldTransform = CorePreviewAdapter.ToSystemMatrix(physicalPose.GlobalMatrices[index]) }).ToArray() };
+                if (fpp)
+                {
+                    _secondaryExternalGizmos = BuildSecondaryGizmos(physicalSkeleton, null);
+                    _secondaryGizmos = [];
+                }
+                else
+                {
+                    _secondaryGizmos = BuildSecondaryGizmos(physicalSkeleton, null);
+                    _secondaryExternalGizmos = [];
+                }
+                SecondaryMotion.Status = "Collision shapes previewed.";
+                return display;
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+                _secondaryGizmos = [];
+                _secondaryExternalGizmos = [];
+                SecondaryMotion.Status = "Collision preview unavailable: " + exception.Message;
+                return display;
+            }
+        }
         try
         {
             bool fpp = request.PreviewProfile.Context == Dl1PreviewContext.Dl1Fpp;
@@ -109,7 +275,8 @@ public sealed partial class MainWindowViewModel
                 // Model-owned offsets are expressed in the imported/source bone axes. Chrome
                 // presentation rebases those axes to +X; feeding its matrices to these offsets
                 // would relocate virtual tips and colliders before the solver even starts.
-                return new(physicalPose.GlobalMatrices, sampled.ActorWorldTransform);
+                TransformMatrix actorWorld = ScaleSecondaryActorTransform(sampled.ActorWorldTransform);
+                return new(physicalPose.GlobalMatrices, actorWorld);
             }
             SkeletonPose bind = request.TargetRig.CreateBindPose();
             SkeletonPose presentationBind = _customTargetPreviewSession?.CreatePresentationPose(bind) ?? bind;
@@ -156,6 +323,16 @@ public sealed partial class MainWindowViewModel
     private SkeletonRenderData ApplySecondaryMotionToExternalSkeleton(SkeletonRenderData skeleton)
         => SecondaryMotionRenderAdapter.ApplyBoneLocalDeltas(skeleton, _secondaryLocalDeltas);
 
+    private SkeletonRenderData ApplySecondaryActorScale(SkeletonRenderData skeleton)
+    {
+        if (SecondaryMotion.PreviewActorScale == 1) return skeleton;
+        TransformMatrix root = ScaleSecondaryActorTransform(CorePreviewAdapter.ToCoreMatrix(skeleton.RootTransform));
+        return skeleton with { RootTransform = CorePreviewAdapter.ToSystemMatrix(root) };
+    }
+
+    private TransformMatrix ScaleSecondaryActorTransform(TransformMatrix actorWorld) => actorWorld *
+        TransformMatrix.CreateScale(new(SecondaryMotion.PreviewActorScale, SecondaryMotion.PreviewActorScale, SecondaryMotion.PreviewActorScale));
+
     // Runtime variants and FPP profiles are recreated during ordinary playback. Storage/reference
     // identity would restart the entire bind preroll on every frame even when their values agree.
     internal static bool SecondaryPreviewProfilesEquivalent(PreviewProfile first, PreviewProfile second) =>
@@ -170,12 +347,12 @@ public sealed partial class MainWindowViewModel
         first.MaximumActiveMorphTargets == second.MaximumActiveMorphTargets &&
         first.ClampMorphWeightsToRigBounds == second.ClampMorphWeightsToRigBounds;
 
-    private GizmoRenderData[] BuildSecondaryGizmos(SkeletonRenderData skeleton, SecondaryMotionResult result)
+    private GizmoRenderData[] BuildSecondaryGizmos(SkeletonRenderData skeleton, SecondaryMotionResult? result)
     {
         List<GizmoRenderData> lines = [];
         var world = skeleton.Bones.ToDictionary(b => b.Name,
             b => CorePreviewAdapter.ToCoreMatrix(b.WorldTransform * skeleton.RootTransform), StringComparer.Ordinal);
-        if (SecondaryMotion.ShowAnchors)
+        if (SecondaryMotion.ShowAnchors && result is not null)
         {
             foreach (SecondaryMotionGroup group in SecondaryMotion.Definition.Groups.Where(g => g.Enabled))
             {
@@ -187,20 +364,33 @@ public sealed partial class MainWindowViewModel
             }
         }
         if (SecondaryMotion.ShowCollisions)
-            foreach (SecondaryCollider c in SecondaryMotion.Definition.Groups.Where(g => g.Enabled).SelectMany(g => g.Colliders))
+        {
+            foreach (SecondaryMotionGroup group in SecondaryMotion.Definition.Groups.Where(g => g.Enabled))
             {
-                Vector3D a = world[c.BoneName].TransformPoint(c.LocalPosition);
-                Vector3D b = c.EndBoneName is { } end ? world[end].TransformPoint(c.EndLocalPosition) : a;
-                double radius = c.Radius * world[c.BoneName].TransformDirection(Vector3D.UnitX).Length;
-                foreach (Vector3D p in new[] { a, b })
+                for (int index = 0; index < group.Colliders.Length; index++)
                 {
-                    Circle(p, radius, Vector3D.UnitX, Vector3D.UnitY, new(1, 0.35f, 0.2f, 0.8f));
-                    Circle(p, radius, Vector3D.UnitX, Vector3D.UnitZ, new(1, 0.35f, 0.2f, 0.8f));
-                    Circle(p, radius, Vector3D.UnitY, Vector3D.UnitZ, new(1, 0.35f, 0.2f, 0.8f));
+                    SecondaryCollider collider = group.Colliders[index];
+                    if (group.Name == SecondaryMotion.SelectedGroup && SecondaryMotion.SelectedColliderIndex == index &&
+                        SecondaryMotion.CurrentColliderProposal is { } draft)
+                        collider = draft;
+                    DrawBoneCollider(collider, new(1, 0.35f, 0.2f, 0.8f));
                 }
-                if (a != b) foreach (Vector3D offset in new[] { Vector3D.UnitX * radius, -Vector3D.UnitX * radius, Vector3D.UnitZ * radius, -Vector3D.UnitZ * radius })
-                    Line(a + offset, b + offset, new(1, 0.35f, 0.2f, 0.8f));
             }
+            if (SecondaryMotion.CurrentColliderProposal is { } proposal && SecondaryMotion.SelectedColliderIndex is null)
+                DrawBoneCollider(proposal, new(1, 0.8f, 0.1f, 1));
+
+            TransformMatrix root = CorePreviewAdapter.ToCoreMatrix(skeleton.RootTransform);
+            double nativeRootScale = (root.TransformDirection(Vector3D.UnitX).Length +
+                root.TransformDirection(Vector3D.UnitY).Length + root.TransformDirection(Vector3D.UnitZ).Length) / 3;
+            foreach (Dl1NativeClothCollisionOverlay native in SecondaryMotion.NativeCollisionOverlays)
+            {
+                if (!world.TryGetValue(native.BoneName, out TransformMatrix start)) continue;
+                Vector3D a = start.TransformPoint(native.LocalPosition);
+                Vector3D b = native.EndBoneName is { } endName && world.TryGetValue(endName, out TransformMatrix end)
+                    ? end.TransformPoint(native.EndLocalPosition) : a;
+                DrawCapsule(a, b, native.Radius * nativeRootScale, new(0.5f, 0.75f, 1, 0.85f));
+            }
+        }
         return lines.ToArray();
         void Line(Vector3D a, Vector3D b, Vector4 color) => lines.Add(new(GizmoKind.Line,
             new((float)a.X, (float)a.Y, (float)a.Z), new((float)b.X, (float)b.Y, (float)b.Z), color, 1.2f));
@@ -212,6 +402,36 @@ public sealed partial class MainWindowViewModel
                 Line(center + radius * (x * Math.Cos(a) + y * Math.Sin(a)), center + radius * (x * Math.Cos(b) + y * Math.Sin(b)), color);
             }
         }
+        void DrawBoneCollider(SecondaryCollider collider, Vector4 color)
+        {
+            if (!world.TryGetValue(collider.BoneName, out TransformMatrix start)) return;
+            TransformMatrix end = collider.EndBoneName is { } endName && world.TryGetValue(endName, out TransformMatrix endBone)
+                ? endBone : start;
+            Vector3D a = start.TransformPoint(collider.LocalPosition);
+            Vector3D b = collider.EndBoneName is null ? a : end.TransformPoint(collider.EndLocalPosition);
+            double scaleA = MaxBasisScale(start);
+            double scaleB = collider.EndBoneName is null ? scaleA : MaxBasisScale(end);
+            DrawCapsule(a, b, collider.Radius * Math.Max(scaleA, scaleB), color);
+        }
+        void DrawCapsule(Vector3D a, Vector3D b, double radius, Vector4 color)
+        {
+            Vector3D axis = b - a;
+            Vector3D direction = axis.TryNormalize(out Vector3D normalized) ? normalized : Vector3D.UnitY;
+            Vector3D reference = Math.Abs(direction.X) < 0.8 ? Vector3D.UnitX : Vector3D.UnitY;
+            Vector3D first = Vector3D.Cross(direction, reference).Normalized();
+            Vector3D second = Vector3D.Cross(direction, first).Normalized();
+            foreach (Vector3D point in new[] { a, b })
+            {
+                Circle(point, radius, first, second, color);
+                Circle(point, radius, direction, first, color);
+                Circle(point, radius, direction, second, color);
+            }
+            foreach (Vector3D offset in new[] { first * radius, -first * radius, second * radius, -second * radius })
+                Line(a + offset, b + offset, color);
+        }
+        static double MaxBasisScale(TransformMatrix matrix) => Math.Max(
+            matrix.TransformDirection(Vector3D.UnitX).Length,
+            Math.Max(matrix.TransformDirection(Vector3D.UnitY).Length, matrix.TransformDirection(Vector3D.UnitZ).Length));
     }
 
     private void LoadSecondarySetup()
@@ -252,7 +472,11 @@ public sealed partial class MainWindowViewModel
                 else sources.Add(source);
             }
             SecondaryMotion.Load(SecondaryMotion.Definition with { NativeSources = sources.ToImmutable() });
-            SecondaryMotion.Status = "Cloth files imported. Set up the preview manually. " + string.Join(" ", diagnostics.Distinct());
+            SecondaryMotion.Status = "Cloth files imported.";
+            if (dialog.FileNames.Length > 0 && diagnostics.Count > 0)
+                SecondaryMotion.CollisionDetails = string.Join(Environment.NewLine,
+                    SecondaryMotion.CollisionDetails.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries)
+                        .Concat(diagnostics).Distinct(StringComparer.Ordinal));
             SecondaryMotion.PersistenceStatus = "Save a model copy to keep the imported cloth files.";
         });
     }

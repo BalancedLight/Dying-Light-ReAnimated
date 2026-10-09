@@ -3,6 +3,7 @@ using System.Reflection;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
@@ -69,6 +70,217 @@ public sealed class ModelsWorkspacePersistenceTests
         {
             RpackTestData.DeleteTemporaryDirectory(directory);
         }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task SecondaryMotionSurvivesASecondSaveAfterModelsNameEdit()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string projectPath = Path.Combine(directory, "secondary-roundtrip.dlraproj");
+            await using var assets = new Dl1AssetWorkspace(
+                Path.Combine(directory, "assets.sqlite3"),
+                Path.Combine(directory, "cache"));
+            await using var viewModel = new MainWindowViewModel(
+                new JsonWorkspaceStateStore(Path.Combine(directory, "recovery.json")),
+                new ProjectPathDialogs(projectPath),
+                assets);
+            FbxModelAuthoringImportResult authored = FbxModelAuthoringImporter.Import(
+                BlenderFbxStrictValidationTests.CreateValidModelFixture(), "generated-human.fbx");
+            SetModelsWorkspaceModel(viewModel, authored);
+
+            await viewModel.SaveWorkspaceToNewPathAsync(projectPath, CancellationToken.None);
+            DlraProject firstSave = ProjectSerializer.Load(projectPath);
+            ProjectModelEntry modelEntry = Assert.Single(firstSave.Models);
+            ProjectAssetReference targetAsset = firstSave.Assets.Single(asset => asset.Id == modelEntry.AssetId);
+            CustomModelPackage package = LoadProjectCustomModel(projectPath, targetAsset);
+            FbxModelAuthoringImportResult imported = FbxModelAuthoringImporter.ImportPackage(package);
+            CustomModelPreviewSession targetPreview = CustomModelPreviewAdapter.CreateSession(
+                imported, CustomModelPreviewMode.Dl1Output);
+            SetPrivateField(viewModel, "_customTargetPreviewSession", targetPreview);
+            SetPrivateField(viewModel, "_targetProjectAsset", targetAsset);
+            InvokePrivate(viewModel, "SynchronizeSecondaryMotionModel");
+
+            string root = imported.Package.Document.CreateEffectiveBones()[0].Name;
+            string nativePhx = Dl1ClothCodec.WritePhx(
+                1, 1, [new(0, 0, root, 1, 0, 0)], [$"CollisionSphere(\"{root}\", 0.2)"]);
+            var edited = viewModel.SecondaryMotion.Definition with
+            {
+                PreviewActorScale = 1.5,
+                NativeSources = [new NativeClothSource
+                {
+                    Kind = NativeClothSourceKind.Phx,
+                    ResourceName = "generated.phx",
+                    Text = nativePhx,
+                }],
+            };
+            viewModel.SecondaryMotion.Load(edited);
+
+            await viewModel.SaveWorkspaceCommand.ExecuteAsync(null);
+            DlraProject secondarySave = ProjectSerializer.Load(projectPath);
+            CustomModelPackage firstEditedPackage = LoadProjectCustomModel(
+                projectPath, secondarySave.Assets.Single(asset => asset.Id ==
+                    secondarySave.Models.Single().AssetId));
+            Assert.Equal(1.5, firstEditedPackage.Document.SecondaryMotion.PreviewActorScale);
+            Assert.Equal(nativePhx, Assert.Single(firstEditedPackage.Document.SecondaryMotion.NativeSources).Text);
+
+            viewModel.Models.ModelName += " revised";
+            await viewModel.SaveWorkspaceCommand.ExecuteAsync(null);
+
+            DlraProject finalProject = ProjectSerializer.Load(projectPath);
+            ProjectModelEntry finalModel = Assert.Single(finalProject.Models);
+            CustomModelPackage finalPackage = LoadProjectCustomModel(
+                projectPath, finalProject.Assets.Single(asset => asset.Id == finalModel.AssetId));
+            Assert.EndsWith("revised", finalModel.Name, StringComparison.Ordinal);
+            Assert.Equal(1.5, finalPackage.Document.SecondaryMotion.PreviewActorScale);
+            Assert.Equal(nativePhx, Assert.Single(finalPackage.Document.SecondaryMotion.NativeSources).Text);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public async Task SecondaryMotionForNonCurrentModelSurvivesAnotherModelsSave()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            string projectPath = Path.Combine(directory, "secondary-noncurrent.dlraproj");
+            await using var assets = new Dl1AssetWorkspace(
+                Path.Combine(directory, "assets.sqlite3"),
+                Path.Combine(directory, "cache"));
+            await using var viewModel = new MainWindowViewModel(
+                new JsonWorkspaceStateStore(Path.Combine(directory, "recovery.json")),
+                new ProjectPathDialogs(projectPath),
+                assets);
+            FbxModelAuthoringImportResult first = FbxModelAuthoringImporter.Import(
+                BlenderFbxStrictValidationTests.CreateValidModelFixture(), "generated-first.fbx");
+            FbxModelAuthoringImportResult second = WithModelIdentity(
+                first, Guid.NewGuid(), "Second generated model");
+            SetModelsWorkspaceModel(viewModel, first);
+            await viewModel.SaveWorkspaceToNewPathAsync(projectPath, CancellationToken.None);
+            viewModel.Models.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+                second,
+                "second-generated.dlrmodel",
+                new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+            await viewModel.SaveWorkspaceCommand.ExecuteAsync(null);
+
+            DlraProject project = ProjectSerializer.Load(projectPath);
+            ProjectModelEntry firstEntry = FindCustomModelEntry(project, first.Package.Document.ModelId);
+            ProjectAssetReference firstAsset = project.Assets.Single(asset => asset.Id == firstEntry.AssetId);
+            CustomModelPackage firstPackage = LoadProjectCustomModel(projectPath, firstAsset);
+            FbxModelAuthoringImportResult importedFirst = FbxModelAuthoringImporter.ImportPackage(firstPackage);
+            AttachSecondaryTarget(viewModel, importedFirst, firstAsset);
+            SecondaryMotionDefinition edited = CreateSecondaryMotionEdit(viewModel, importedFirst);
+            viewModel.SecondaryMotion.Load(edited);
+
+            await viewModel.SaveWorkspaceCommand.ExecuteAsync(null);
+            viewModel.Models.ModelName += " revised";
+            await viewModel.SaveWorkspaceCommand.ExecuteAsync(null);
+
+            DlraProject finalProject = ProjectSerializer.Load(projectPath);
+            ProjectModelEntry finalFirst = FindCustomModelEntry(finalProject, first.Package.Document.ModelId);
+            CustomModelPackage savedFirst = LoadProjectCustomModel(
+                projectPath, finalProject.Assets.Single(asset => asset.Id == finalFirst.AssetId));
+            ProjectModelEntry finalSecond = FindCustomModelEntry(finalProject, second.Package.Document.ModelId);
+            Assert.EndsWith("revised", finalSecond.Name, StringComparison.Ordinal);
+            Assert.Equal(1.5, savedFirst.Document.SecondaryMotion.PreviewActorScale);
+            Assert.Equal(edited.NativeSources[0].Text, Assert.Single(savedFirst.Document.SecondaryMotion.NativeSources).Text);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public void PersistedSecondaryMotionMergesIntoNewerMetadataWithoutClearingItsRevision()
+    {
+        string directory = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            using var workspace = new ModelsWorkspaceViewModel(
+                new NullProjectFileDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
+            FbxModelAuthoringImportResult model = FbxModelAuthoringImporter.Import(
+                BlenderFbxStrictValidationTests.CreateValidModelFixture(), "generated-race-model.fbx");
+            workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+                model,
+                "generated-race-model.dlrmodel",
+                new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+            SecondaryMotionDefinition baseline = model.Package.Document.SecondaryMotion;
+            SecondaryMotionDefinition persisted = baseline with { PreviewActorScale = 1.5 };
+            var identity = new SecondaryMotionModelKey(
+                Guid.NewGuid(),
+                model.Package.Document.ModelId,
+                model.Package.Document.Source.ContentSha256,
+                Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+                    CustomModelPackageSerializer.Serialize(model.Package).AsSpan())),
+                CustomModelContractSignatures.ComputeRig(model.Package.Document.CreateEffectiveBones()));
+            PendingSecondaryMotionEdit edit = PendingSecondaryMotionEdit.Create(identity, persisted, baseline);
+            long saveRevision = workspace.PersistenceRevision;
+
+            workspace.ModelName = "Renamed during save";
+            long concurrentRevision = workspace.PersistenceRevision;
+            PersistedSecondaryMotionAdoption adoption = workspace.AdoptPersistedSecondaryMotion(edit, saveRevision);
+
+            Assert.Equal(PersistedSecondaryMotionAdoption.Adopted, adoption);
+            Assert.Equal(concurrentRevision, workspace.PersistenceRevision);
+            Assert.Equal("Renamed during save", workspace.ModelName);
+            Assert.Equal(1.5, workspace.CaptureProjectSession().Model!.Package.Document.SecondaryMotion.PreviewActorScale);
+            ModelsWorkspacePersistencePayload payload = workspace.CreatePersistencePayload()!;
+            string packagePath = Path.Combine(directory, "merged.dlrmodel");
+            File.WriteAllBytes(packagePath, payload.PackageBytes.ToArray());
+            CustomModelPackage saved = CustomModelPackageSerializer.Load(packagePath);
+            Assert.Equal(1.5, saved.Document.SecondaryMotion.PreviewActorScale);
+        }
+        finally
+        {
+            RpackTestData.DeleteTemporaryDirectory(directory);
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ProjectPersistence")]
+    public void PersistedSecondaryMotionRefusesAnIndependentSecondaryEdit()
+    {
+        using var workspace = new ModelsWorkspaceViewModel(
+            new NullProjectFileDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
+        FbxModelAuthoringImportResult original = FbxModelAuthoringImporter.Import(
+            BlenderFbxStrictValidationTests.CreateValidModelFixture(), "generated-conflict-model.fbx");
+        workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+            original, "generated-conflict-model.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        SecondaryMotionDefinition baseline = original.Package.Document.SecondaryMotion;
+        SecondaryMotionDefinition persisted = baseline with { PreviewActorScale = 1.5 };
+        var identity = new SecondaryMotionModelKey(
+            Guid.NewGuid(), original.Package.Document.ModelId, original.Package.Document.Source.ContentSha256,
+            new string('a', 64), CustomModelContractSignatures.ComputeRig(original.Package.Document.CreateEffectiveBones()));
+        PendingSecondaryMotionEdit edit = PendingSecondaryMotionEdit.Create(identity, persisted, baseline);
+
+        CustomModelDocument conflictDocument = original.Package.Document with
+        {
+            SecondaryMotion = baseline with { PreviewActorScale = 1.25 },
+        };
+        var conflictModel = original with
+        {
+            Package = original.Package with { Document = conflictDocument },
+        };
+        workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+            conflictModel, "generated-conflict-model.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+
+        PersistedSecondaryMotionAdoption adoption = workspace.AdoptPersistedSecondaryMotion(edit, workspace.PersistenceRevision);
+
+        Assert.Equal(PersistedSecondaryMotionAdoption.Conflict, adoption);
+        Assert.Equal(1.25, workspace.CaptureProjectSession().Model!.Package.Document.SecondaryMotion.PreviewActorScale);
     }
 
     [Fact]
@@ -640,6 +852,7 @@ public sealed class ModelsWorkspacePersistenceTests
             resolveRigTemplate: (profile, _) =>
                 Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)),
             captureAuthoredLayer: static (model, _) => model);
+        RigConformanceTestSchedulers.UseImmediate(viewModel);
         FbxModelAuthoringImportResult sourceModel =
             RigConformanceWizardTests.CreateModel();
         FbxModelSurface originalSurface = sourceModel.Surfaces[0];
@@ -1049,6 +1262,62 @@ public sealed class ModelsWorkspacePersistenceTests
                 : document.CreateRigDefinition(),
         };
     }
+
+    private static ProjectModelEntry FindCustomModelEntry(DlraProject project, Guid modelId)
+    {
+        string prefix = $"custom-model:{modelId:N}:";
+        return Assert.Single(project.Models.Where(model =>
+            project.Assets.Single(asset => asset.Id == model.AssetId).ResourceId?.StartsWith(
+                prefix, StringComparison.Ordinal) == true));
+    }
+
+    private static CustomModelPackage LoadProjectCustomModel(
+        string projectPath,
+        ProjectAssetReference asset)
+    {
+        string path = Path.Combine(Path.GetDirectoryName(projectPath)!,
+            asset.RelativePath.Replace('/', Path.DirectorySeparatorChar));
+        return CustomModelPackageSerializer.Load(path);
+    }
+
+    private static void AttachSecondaryTarget(
+        MainWindowViewModel viewModel,
+        FbxModelAuthoringImportResult imported,
+        ProjectAssetReference asset)
+    {
+        CustomModelPreviewSession targetPreview = CustomModelPreviewAdapter.CreateSession(
+            imported, CustomModelPreviewMode.Dl1Output);
+        SetPrivateField(viewModel, "_customTargetPreviewSession", targetPreview);
+        SetPrivateField(viewModel, "_targetProjectAsset", asset);
+        InvokePrivate(viewModel, "SynchronizeSecondaryMotionModel");
+    }
+
+    private static SecondaryMotionDefinition CreateSecondaryMotionEdit(
+        MainWindowViewModel viewModel,
+        FbxModelAuthoringImportResult imported)
+    {
+        string root = imported.Package.Document.CreateEffectiveBones()[0].Name;
+        string nativePhx = Dl1ClothCodec.WritePhx(
+            1, 1, [new(0, 0, root, 1, 0, 0)], [$"CollisionSphere(\"{root}\", 0.2)"]);
+        return viewModel.SecondaryMotion.Definition with
+        {
+            PreviewActorScale = 1.5,
+            NativeSources = [new NativeClothSource
+            {
+                Kind = NativeClothSourceKind.Phx,
+                ResourceName = "generated.phx",
+                Text = nativePhx,
+            }],
+        };
+    }
+
+    private static void SetPrivateField(object target, string name, object? value) =>
+        target.GetType().GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(target, value);
+
+    private static void InvokePrivate(object target, string name) =>
+        target.GetType().GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(target, null);
 
     private static ProjectAnimationSourceBinding CreateFbxBinding(
         Guid assetId,

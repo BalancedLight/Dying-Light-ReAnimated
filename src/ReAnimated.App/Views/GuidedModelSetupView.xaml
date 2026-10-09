@@ -21,7 +21,7 @@
     <Button Content="Change skeleton…" Command="{Binding GuidedChooseSkeletonCommand}" HorizontalAlignment="Left" Margin="0,12,0,0"
      Visibility="{Binding IsGuidedAdjust, Converter={StaticResource BooleanToVisibilityConverter}}"/>
     <CheckBox Content="Adjust joints" Margin="0,16,0,8" IsChecked="{Binding GuidedShowJoints}"
-     Visibility="{Binding IsGuidedAdjust, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+     Visibility="{Binding ShowGuidedFitReview, Converter={StaticResource BooleanToVisibilityConverter}}"/>
     <StackPanel Margin="0,12,0,0" Visibility="{Binding IsGuidedUnriggedPreparation, Converter={StaticResource BooleanToVisibilityConverter}}">
      <TextBlock Text="Review body joints" FontWeight="SemiBold" />
      <TextBlock Text="Choose a marker, then drag its colored handle. Build the rig when the markers match your model." TextWrapping="Wrap" Margin="0,6,0,8" />
@@ -60,7 +60,7 @@
      </StackPanel></DataTemplate></ItemsControl.ItemTemplate>
     </ItemsControl>
     <Expander Header="Review assigned bone matches" Margin="0,10,0,0"
-     Visibility="{Binding IsGuidedAdjust, Converter={StaticResource BooleanToVisibilityConverter}}">
+     Visibility="{Binding ShowGuidedFitReview, Converter={StaticResource BooleanToVisibilityConverter}}">
      <StackPanel Margin="0,6,0,0">
       <TextBlock Text="Change an existing match here to free a source bone for a missing target. Each choice is checked before it is kept."
        TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,6" />
@@ -77,7 +77,7 @@
     </Expander>
          <TextBlock Text="Next: apply the reviewed fit, then preview movement. Animation-channel and LOD choices are checked before building in Export."
       TextWrapping="Wrap" Margin="0,10,0,0" Foreground="{StaticResource MutedTextBrush}"
-      Visibility="{Binding IsGuidedAdjust, Converter={StaticResource BooleanToVisibilityConverter}}" />
+      Visibility="{Binding ShowGuidedFitReview, Converter={StaticResource BooleanToVisibilityConverter}}" />
 <TextBlock Text="{Binding GuidedFeaturesSummary}" Margin="0,16,0,0" TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}"/>
     <StackPanel Margin="0,12,0,0"
      Visibility="{Binding IsGuidedPreview, Converter={StaticResource BooleanToVisibilityConverter}}">
@@ -140,6 +140,9 @@
        Command="{Binding OpenGuidedSecondaryMotionSetupCommand}"
        Margin="0,8,0,0" MinHeight="30"/>
      </StackPanel>
+      <Expander Header="Animations" Margin="0,8,0,0">
+       <views:ModelAnimationStacksView xmlns:views="clr-namespace:ReAnimated.App.Views" MinHeight="240"/>
+      </Expander>
     </StackPanel>
     <Expander Header="Preview morphs" Margin="0,12,0,0" Visibility="{Binding HasGuidedMorphs, Converter={StaticResource BooleanToVisibilityConverter}}">
      <StackPanel Margin="0,8,0,0">
@@ -215,7 +218,7 @@
   </ScrollViewer>
   <StackPanel Grid.Row="2">
    <ProgressBar Height="5" IsIndeterminate="True" Margin="0,0,0,10" Visibility="{Binding IsGuidedBusy, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-   <Button Content="Character systems: face, bounds and gore" Command="{Binding OpenCharacterSystemsCommand}" Margin="0,0,0,8"/>
+   <Button Content="Model systems" Command="{Binding OpenCharacterSystemsCommand}" Margin="0,0,0,8"/>
    <Button Content="{Binding GuidedPrimaryLabel}" Command="{Binding GuidedPrimaryCommand}" MinHeight="42" FontSize="15"/>
    <DockPanel Margin="0,12,0,0">
     <Button Content="Back" Command="{Binding GuidedBackCommand}" DockPanel.Dock="Left"/>

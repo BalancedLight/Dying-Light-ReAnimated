@@ -87,7 +87,8 @@ public sealed class RigGeometryCorrespondenceWizardTests
             Enumerable.Range(0, rig.BoneCount).ToImmutableArray(), geometry.GlobalBindMatrices.Select(static m => m.InvertedAffine()).ToImmutableArray(), true);
         var model = original with { Package = original.Package with { Document = document }, Rig = rig, Surfaces = [surface] };
         var wizard = new RigConformanceWizardViewModel((profile, _) => Task.FromResult(new Dl1RigTemplateResolution(
-            template, profile, "synthetic", new string('b', 64), "synthetic geometry control")), static _ => { });
+            template, profile, "synthetic", new string('b', 64), "synthetic geometry control")), static _ => { },
+            new ImmediateRigConformanceSolveScheduler());
         wizard.SetModel(model);
         wizard.ResolveTemplateCommand.Execute(null);
         return (wizard, model, template, surface);

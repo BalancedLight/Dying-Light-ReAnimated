@@ -114,6 +114,24 @@ public sealed record AnimationTargetSelection(
     }
 }
 
+public sealed record AuthoredAnimationDialogResult(
+    string Name,
+    double DurationSeconds,
+    ReAnimated.Core.Domain.FrameRate FrameRate)
+{
+    public AuthoredAnimationDialogResult Validate()
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(Name);
+        if (!double.IsFinite(DurationSeconds) || DurationSeconds <= 0 ||
+            FrameRate.Numerator <= 0 || FrameRate.Denominator <= 0)
+        {
+            throw new ArgumentException("Animation timing must be positive and finite.");
+        }
+
+        return this with { Name = Name.Trim() };
+    }
+}
+
 public interface IProjectFileDialogService
 {
     string? ShowOpenProjectDialog(string? initialPath);
@@ -138,6 +156,8 @@ public interface IProjectFileDialogService
     }
 
     string? ShowOpenAnimationDialog(string? initialPath) => null;
+
+    AuthoredAnimationDialogResult? ShowNewAnimationDialog(string suggestedName) => null;
 
     string? ShowOpenPlayerAppearanceScriptDialog(string? initialPath) => null;
     string? ShowSavePlayerAppearanceScriptDialog(string suggestedName, string? initialPath) => null;

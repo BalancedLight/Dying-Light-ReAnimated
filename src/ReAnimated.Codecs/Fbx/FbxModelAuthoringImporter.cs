@@ -74,6 +74,12 @@ public sealed record FbxModelSurface(
     public GeometrySourceComponent? SourceGeometry { get; init; }
     public ImmutableArray<GeometrySourceCorner> SourceCorners { get; init; } = [];
     public ImmutableArray<GeometrySourceTriangle> SourceTriangles { get; init; } = [];
+
+    /// <summary>
+    /// Original FBX rig node whose rigid transform owns this unskinned mesh.
+    /// Null leaves it static; weighted meshes continue to use their skin palette.
+    /// </summary>
+    public long? RigidGeometryOwnerFbxObjectId { get; init; }
 }
 
 public sealed record FbxModelMorphTarget(
@@ -404,6 +410,7 @@ public static class FbxModelAuthoringImporter
                     55),
             },
         };
+        document = FbxAnimationRigBinding.Capture(document, clips);
         document.Validate();
         var package = new CustomModelPackage(
             document,
@@ -450,9 +457,10 @@ public static class FbxModelAuthoringImporter
             cancellationToken);
 
         if (package.Document.GeometryRevision is not null)
-            return FbxDerivedMotionAuthoring.RestoreAvailability(ModelGeometryRevisionCodec.Replay(decoded, package));
+            return FbxDerivedMotionAuthoring.RestoreAvailability(FbxAnimationRigBinding.RestoreSourceBindings(
+                ModelGeometryRevisionCodec.Replay(decoded, package), decoded));
 
-        Dictionary<string, CustomModelAnimationClip> savedAnimations = package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is null)
+        Dictionary<string, CustomModelAnimationClip> savedAnimations = package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is null && clip.AuthoredAnimation is null)
             .ToDictionary(static clip => clip.SourceFingerprint, StringComparer.Ordinal);
         ImmutableArray<CustomModelAnimationClip> animations = decoded.Package.Document.AnimationClips
             .Select(clip => savedAnimations.TryGetValue(clip.SourceFingerprint, out CustomModelAnimationClip? saved)
@@ -466,7 +474,7 @@ public static class FbxModelAuthoringImporter
                 }
                 : clip)
             .ToImmutableArray();
-        animations = animations.AddRange(package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is not null));
+        animations = animations.AddRange(package.Document.AnimationClips.Where(static clip => clip.DerivedMotion is not null || clip.AuthoredAnimation is not null));
         var savedMaterials = package.Document.Materials.ToBuilder();
         var normalizedDiagnostics = decoded.Package.Document.Diagnostics
             .Where(static diagnostic =>
@@ -495,6 +503,7 @@ public static class FbxModelAuthoringImporter
             Name = package.Document.Name,
             Materials = savedMaterials.ToImmutable(),
             AnimationClips = animations,
+            WorkflowMode = package.Document.WorkflowMode,
             Diagnostics = normalizedDiagnostics.ToImmutable(),
             BuildSettings = package.Document.BuildSettings,
             SecondaryMotion = package.Document.SecondaryMotion,
@@ -542,11 +551,11 @@ public static class FbxModelAuthoringImporter
             ? null
             : document.CreateRigDefinition();
         document.Validate();
-        return FbxDerivedMotionAuthoring.RestoreAvailability(CharacterBodyRegionAuthoring.Reconcile(MorphAuthoringEvidence.ReconcileTarget(decoded with
+        return FbxDerivedMotionAuthoring.RestoreAvailability(FbxAnimationRigBinding.RestoreSourceBindings(CharacterBodyRegionAuthoring.Reconcile(MorphAuthoringEvidence.ReconcileTarget(decoded with
         {
             Package = package with { Document = document },
             Rig = reopenedRig,
-        })));
+        })), decoded));
     }
 
     public static CustomModelReimportPreview PreviewReimport(
@@ -637,10 +646,11 @@ public static class FbxModelAuthoringImporter
                 ModelId = existing.Document.ModelId,
                 Name = existing.Document.Name,
                 BuildSettings = existing.Document.BuildSettings,
+                WorkflowMode = existing.Document.WorkflowMode,
                 SecondaryMotion = existing.Document.SecondaryMotion,
                 FacialPresets = existing.Document.FacialPresets,
                 AnimationClips = replacement.Package.Document.AnimationClips.AddRange(
-                    existing.Document.AnimationClips.Where(static clip => clip.DerivedMotion is not null)),
+                    existing.Document.AnimationClips.Where(static clip => clip.DerivedMotion is not null || clip.AuthoredAnimation is not null)),
                 RiggingSession = existing.Document.RiggingSession is { } studio
                     ? RiggingSessions.ReconcileSource(studio, replacement.Package.Document.Source.ContentSha256) : null,
                 LastBuildReceipt = null,
@@ -651,7 +661,10 @@ public static class FbxModelAuthoringImporter
                 replacementDocument,
                 replacement.Package.SourceFbx,
                 replacement.Package.TexturePayloads)
-                { DerivedAnimationPayloads = existing.DerivedAnimationPayloads },
+                {
+                    DerivedAnimationPayloads = existing.DerivedAnimationPayloads,
+                    AuthoredAnimationPayloads = existing.AuthoredAnimationPayloads,
+                },
             Rig = replacementDocument.Bones.IsEmpty
                 ? null
                 : replacementDocument.CreateRigDefinition(),
@@ -1640,6 +1653,12 @@ public static class FbxModelAuthoringImporter
                 out GeometrySourceSkinning sourceSkinning,
                 diagnostics,
                 cancellationToken);
+            long? rigidGeometryOwnerObjectId = ResolveRigidGeometryOwnerObjectId(
+                scene,
+                modelObjectId,
+                rig,
+                boneIndexByModel,
+                maximumRetainedInfluences);
 
             TransformMatrix rawMeshGlobal = modelObjectId.HasValue
                 ? rawBindPose.GetValueOrDefault(
@@ -1813,7 +1832,10 @@ public static class FbxModelAuthoringImporter
                             pending,
                             palette,
                             rigInverseBindGlobals,
-                            geometryMorphs));
+                            geometryMorphs) with
+                        {
+                            RigidGeometryOwnerFbxObjectId = rigidGeometryOwnerObjectId,
+                        });
                         pending.Clear();
                         palette.Clear();
                     }
@@ -1839,7 +1861,10 @@ public static class FbxModelAuthoringImporter
                         pending,
                         palette,
                         rigInverseBindGlobals,
-                        geometryMorphs));
+                        geometryMorphs) with
+                    {
+                        RigidGeometryOwnerFbxObjectId = rigidGeometryOwnerObjectId,
+                    });
                 }
             }
 
@@ -1863,6 +1888,7 @@ public static class FbxModelAuthoringImporter
                 Name = meshName,
                 GeometryObjectId = geometryObjectId,
                 ModelObjectId = modelObjectId ?? 0,
+                RigidGeometryOwnerFbxObjectId = rigidGeometryOwnerObjectId,
                 ControlPointCount = controlPoints.Count,
                 PolygonCount = polygons.Length,
                 TriangleCount = triangles.Count,
@@ -1877,6 +1903,34 @@ public static class FbxModelAuthoringImporter
         }
 
         return (meshParts.ToImmutable(), surfaces.ToImmutable(), morphChannels.ToImmutable());
+    }
+
+    private static long? ResolveRigidGeometryOwnerObjectId(
+        FbxSemanticScene scene,
+        long? modelObjectId,
+        RigDefinition? rig,
+        ImmutableDictionary<long, int> boneIndexByModel,
+        int maximumRetainedInfluences)
+    {
+        if (rig is null || maximumRetainedInfluences > 0 ||
+            modelObjectId is not { } meshModelId)
+        {
+            return null;
+        }
+
+        // Preserve a Mesh/Limb transform that directly owns its geometry.
+        if (boneIndexByModel.ContainsKey(meshModelId))
+        {
+            return meshModelId;
+        }
+
+        // A renderable Mesh Model can sit below one or more non-rendering
+        // pivots. Bind it to the nearest retained transform without adding
+        // artificial skin weights to its vertices.
+        return FbxCoreAnimationAdapter.GetNearestImportedParentId(
+            scene,
+            meshModelId,
+            boneIndexByModel.Keys.ToHashSet());
     }
 
     private static ImmutableArray<TransformMatrix> ComputeExactBindGlobals(

@@ -6,6 +6,9 @@
             <TextBlock Text="Secondary motion" FontWeight="SemiBold" FontSize="16"/>
             <TextBlock Text="Preview simulation · 120 Hz · 8 iterations" ToolTip="The preview approximates MPC behavior; it does not reproduce native results." Margin="0,6,0,12" TextWrapping="Wrap"/>
             <CheckBox Content="Enable preview simulation" IsChecked="{Binding Enabled}"/>
+            <TextBlock Text="Actor scale" Margin="0,8,0,0"/>
+            <Slider Minimum="0.1" Maximum="4" TickFrequency="0.05" Value="{Binding PreviewActorScale}"/>
+            <TextBlock Text="{Binding PreviewActorScale, StringFormat={}{0:0.00}}" HorizontalAlignment="Right"/>
             <TextBlock Text="Motion group" Margin="0,10,0,0"/>
             <ComboBox ItemsSource="{Binding GroupNames}" SelectedItem="{Binding SelectedGroup}" Margin="0,3,0,6"/>
             <CheckBox Content="Enable selected group" IsChecked="{Binding GroupEnabled}"/>
@@ -21,7 +24,43 @@
             <Slider Minimum="0" Maximum="1000" Value="{Binding RestShapeStiffness}"/>
             <CheckBox Content="Show anchors and constraint links" IsChecked="{Binding ShowAnchors}" Margin="0,12,0,4"/>
             <CheckBox Content="Show collision shapes" IsChecked="{Binding ShowCollisions}"/>
+            <Expander Header="Collision" Margin="0,8">
+                <StackPanel>
+                    <TextBlock Text="Existing"/>
+                    <ComboBox ItemsSource="{Binding ColliderNames}" SelectedIndex="{Binding SelectedColliderIndex}" Margin="0,2,0,6"/>
+                    <Button Content="New collider" Command="{Binding NewCollisionProposalCommand}" HorizontalAlignment="Left" Margin="0,0,0,6"/>
+                    <TextBlock Text="Shape"/>
+                    <ComboBox ItemsSource="{Binding CollisionShapeOptions}" SelectedItem="{Binding CollisionShape}" Margin="0,2,0,6"/>
+                    <TextBlock Text="Start bone"/>
+                    <ComboBox ItemsSource="{Binding BoneNames}" SelectedItem="{Binding StartBoneName}" Margin="0,2,0,6"/>
+                    <TextBlock Text="End bone"/>
+                    <ComboBox ItemsSource="{Binding BoneNames}" SelectedItem="{Binding EndBoneName}" Margin="0,2,0,6"/>
+                    <TextBlock Text="Start offset (X Y Z)"/>
+                    <TextBox Text="{Binding StartOffsetText, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6"/>
+                    <TextBlock Text="End offset (X Y Z)"/>
+                    <TextBox Text="{Binding EndOffsetText, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6"/>
+                    <TextBlock Text="Radius"/>
+                    <TextBox Text="{Binding CollisionRadiusText, UpdateSourceTrigger=PropertyChanged}" Margin="0,2,0,6"/>
+                    <WrapPanel Margin="0,4,0,0">
+                        <Button Content="Fit sphere" Command="{Binding FitCollisionSphereCommand}" Margin="0,0,6,6"/>
+                        <Button Content="Fit capsule" Command="{Binding FitCollisionCapsuleCommand}" Margin="0,0,6,6"/>
+                        <Button Content="Apply" Command="{Binding ApplyCollisionProposalCommand}" Margin="0,0,6,6"/>
+                        <Button Content="Undo" Command="{Binding UndoCollisionEditCommand}" Margin="0,0,6,6"/>
+                    </WrapPanel>
+                </StackPanel>
+            </Expander>
             <WrapPanel Margin="0,12,0,0">
+                <Expander Header="Native collision" Width="260" Margin="0,0,0,8">
+                    <StackPanel>
+                        <ComboBox ItemsSource="{Binding NativeCollisionChoices}" SelectedItem="{Binding SelectedNativeCollision}" DisplayMemberPath="Label"/>
+                        <TextBlock Text="Radius" Margin="0,6,0,2"/>
+                        <TextBox Text="{Binding NativeCollisionRadiusText, UpdateSourceTrigger=PropertyChanged}"/>
+                        <WrapPanel Margin="0,6,0,0">
+                            <Button Content="Apply" Command="{Binding ApplyNativeCollisionCommand}" Margin="0,0,6,0"/>
+                            <Button Content="Undo" Command="{Binding UndoNativeCollisionCommand}"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </Expander>
                 <Button Content="Reset" Command="{Binding ResetCommand}" Margin="0,0,6,6"/>
                 <Button Content="Load setup" Command="{Binding LoadSetupCommand}" Margin="0,0,6,6"/>
                 <Button Content="Save setup" Command="{Binding SaveSetupCommand}" Margin="0,0,6,6"/>
@@ -31,6 +70,9 @@
             </WrapPanel>
             <TextBlock Text="{Binding Status}" TextWrapping="Wrap" Margin="0,10,0,0"/>
             <TextBlock Text="{Binding PersistenceStatus}" TextWrapping="Wrap" Margin="0,10,0,0"/>
+            <Expander Header="Details" Margin="0,8,0,0">
+                <TextBlock Text="{Binding CollisionDetails}" TextWrapping="Wrap" Margin="0,4,0,0"/>
+            </Expander>
         </StackPanel>
     </ScrollViewer>
 </UserControl>

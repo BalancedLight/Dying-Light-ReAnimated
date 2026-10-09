@@ -234,7 +234,8 @@ public sealed partial class MainWindowViewModel :
         CustomModelAnimationClip Selection,
         AnimationClip Clip,
         CustomModelPreviewPayload Preview,
-        string PackagePath);
+        string PackagePath,
+        CustomModelPreviewSession PreviewSession);
 
     private sealed record LoadedProjectCustomModel(
         FbxModelAuthoringImportResult Imported,
@@ -880,6 +881,7 @@ public sealed partial class MainWindowViewModel :
         Models.Conformance.SetRetailReferencePicker(PickConformanceRetailReferenceAsync);
         Models.SetGuidedPreviewHandler(PreviewDefaultDl1AnimationForModelAsync);
         Models.PersistenceStateChanged += OnModelsPersistenceStateChanged;
+        InitializeModelAnimationCapture();
         _savedModelsRevision = Models.PersistenceRevision;
         _integratedModelsRevision = Models.PersistenceRevision;
         if (Directory.Exists(Models.DeveloperToolsProjectRoot))
@@ -3529,6 +3531,8 @@ public sealed partial class MainWindowViewModel :
 
     public WorkspaceSnapshot CreateSnapshot()
     {
+        if (Models.PersistenceRevision != _integratedModelsRevision || !_modelsTargetRefreshTask.IsCompleted)
+            throw new InvalidOperationException("Wait for model edits to finish before creating a recovery snapshot.");
         return new WorkspaceSnapshot(
             WorkspaceSnapshot.CurrentSchemaVersion,
             DateTimeOffset.UtcNow,
@@ -3551,18 +3555,23 @@ public sealed partial class MainWindowViewModel :
                 .OrderBy(static receipt => receipt.RelativePath,
                     StringComparer.OrdinalIgnoreCase)
                 .ToImmutableArray(),
-            KeepFramed);
+            KeepFramed,
+            CaptureSecondaryMotionRecoveryEdits());
     }
 
     public void RestoreSnapshot(WorkspaceSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        ImmutableArray<PendingSecondaryMotionEdit> previousSecondaryEdits = CaptureSecondaryMotionRecoveryEdits();
+        ImmutableArray<PendingSecondaryMotionEdit> recoveredSecondaryEdits = PendingSecondaryMotionEdit.ValidateSnapshotEdits(
+            snapshot.PendingSecondaryMotionEdits.IsDefault ? [] : snapshot.PendingSecondaryMotionEdits);
         AdoptPendingProjectAssetReceipts(snapshot.PendingAssets);
         if (snapshot.Project is not null)
         {
             try
             {
                 snapshot.Project.Validate();
+                RestoreSecondaryMotionRecoveryEdits(recoveredSecondaryEdits);
                 SetProject(
                     snapshot.Project,
                     markSaved: !snapshot.IsProjectDirty,
@@ -3574,6 +3583,7 @@ public sealed partial class MainWindowViewModel :
                 or ArgumentException
                 or InvalidOperationException)
             {
+                RestoreSecondaryMotionRecoveryEdits(previousSecondaryEdits);
                 AddDiagnostic(
                     "Error",
                     "Recovery",
@@ -3582,6 +3592,7 @@ public sealed partial class MainWindowViewModel :
             }
         }
 
+        if (snapshot.Project is null) RestoreSecondaryMotionRecoveryEdits(recoveredSecondaryEdits);
         ProjectPath = snapshot.ProjectPath;
         AssetBrowser.SearchText = snapshot.AssetSearch;
         Timeline.CurrentFrame = snapshot.CurrentFrame;
@@ -4215,6 +4226,7 @@ public sealed partial class MainWindowViewModel :
             Models.CaptureProjectSession();
         Dictionary<Guid, PendingProjectAssetReceipt> previousPendingAssets =
             new(_pendingProjectAssets);
+        ImmutableArray<PendingSecondaryMotionEdit> previousSecondaryEdits = CaptureSecondaryMotionRecoveryEdits();
         long previousSavedModelsRevision = _savedModelsRevision;
         long previousIntegratedModelsRevision = _integratedModelsRevision;
         string? previousProjectPath = ProjectPath;
@@ -4312,6 +4324,7 @@ public sealed partial class MainWindowViewModel :
             UnauthorizedAccessException)
         {
             RestorePendingProjectAssets(previousPendingAssets);
+            RestoreSecondaryMotionRecoveryEdits(previousSecondaryEdits);
             ProjectPath = previousProjectPath;
             RestoreAnimationRuntimeSnapshot(previous);
             Models.RestoreProjectSession(previousModels);
@@ -4517,6 +4530,7 @@ public sealed partial class MainWindowViewModel :
             Models.CaptureProjectSession();
         Dictionary<Guid, PendingProjectAssetReceipt> previousPendingAssets =
             new(_pendingProjectAssets);
+        ImmutableArray<PendingSecondaryMotionEdit> previousSecondaryEdits = CaptureSecondaryMotionRecoveryEdits();
         long previousSavedModelsRevision = _savedModelsRevision;
         long previousIntegratedModelsRevision = _integratedModelsRevision;
         string? previousProjectPath = ProjectPath;
@@ -4600,6 +4614,7 @@ public sealed partial class MainWindowViewModel :
         catch (LegacyProjectFormatException exception)
         {
             RestorePendingProjectAssets(previousPendingAssets);
+            RestoreSecondaryMotionRecoveryEdits(previousSecondaryEdits);
             ProjectPath = previousProjectPath;
             RestoreAnimationRuntimeSnapshot(previous);
             Models.RestoreProjectSession(previousModels);
@@ -4625,6 +4640,7 @@ public sealed partial class MainWindowViewModel :
             or OperationCanceledException)
         {
             RestorePendingProjectAssets(previousPendingAssets);
+            RestoreSecondaryMotionRecoveryEdits(previousSecondaryEdits);
             ProjectPath = previousProjectPath;
             RestoreAnimationRuntimeSnapshot(previous);
             Models.RestoreProjectSession(previousModels);
@@ -5191,10 +5207,9 @@ public sealed partial class MainWindowViewModel :
                 "The custom-model animation frame count differs from the saved project document.");
         }
 
-        CustomModelPreviewPayload preview = CustomModelPreviewAdapter.Create(
-            imported,
-            clip,
-            frame: 0);
+        CustomModelPreviewSession previewSession = CustomModelPreviewAdapter.CreateSession(
+            imported, CustomModelPreviewMode.SourceFbx);
+        CustomModelPreviewPayload preview = previewSession.CreatePayload(clip, frame: 0);
         if (preview.Skeleton is null)
         {
             throw new InvalidDataException(
@@ -5206,7 +5221,8 @@ public sealed partial class MainWindowViewModel :
             selection,
             clip,
             preview,
-            packagePath);
+            packagePath,
+            previewSession);
     }
 
     private async Task<(ProjectAnimationSource Source,
@@ -5660,6 +5676,9 @@ public sealed partial class MainWindowViewModel :
                 path,
                 materializeAssets: overwrite,
                 cancellationToken);
+            SecondaryMotionSaveFlushResult secondaryFlush = await PrepareSecondaryMotionProjectSaveAsync(
+                projectToSave, ProjectPath, path, overwrite, cancellationToken);
+            projectToSave = secondaryFlush.Project;
             if (_activeAnimationId is { } activeId &&
                 _sourceAnimation is { } source &&
                 _targetRig is { } target)
@@ -5696,6 +5715,11 @@ public sealed partial class MainWindowViewModel :
             ProjectPath = savedPath;
             _project = projectToSave;
             _savedProject = projectToSave;
+            var acceptedSecondaryEdits = ImmutableArray.CreateBuilder<PendingSecondaryMotionEdit>();
+            foreach (PendingSecondaryMotionEdit edit in secondaryFlush.PersistedEdits)
+                if (Models.AdoptPersistedSecondaryMotion(edit, modelRevisionAtSave) != PersistedSecondaryMotionAdoption.Conflict)
+                    acceptedSecondaryEdits.Add(edit);
+            CommitSecondaryMotionProjectSave(acceptedSecondaryEdits.ToImmutable());
             if (_activeAnimationId is { } savedActiveId &&
                 projectToSave.Animations.FirstOrDefault(animation =>
                     animation.Id == savedActiveId) is { } savedAnimation &&
@@ -6346,7 +6370,9 @@ public sealed partial class MainWindowViewModel :
                 .OrderByDescending(candidate =>
                     candidate.SourceAssetId == packageAsset.Id)
                 .FirstOrDefault();
-            if (source is null && selection.Included && stack.IsDecoded && stack.HasTemporalMovement)
+            bool canSeedStaticAuthoredClip = selection.AuthoredAnimation is not null;
+            if (source is null && selection.Included && stack.IsDecoded &&
+                (stack.HasTemporalMovement || canSeedStaticAuthoredClip))
             {
                 source = new ProjectAnimationSource
                 {
@@ -6385,7 +6411,8 @@ public sealed partial class MainWindowViewModel :
                 sources.Add(source);
             }
 
-            if (source is null || modelEntry.IsStatic || !stack.HasTemporalMovement)
+            if (source is null || modelEntry.IsStatic ||
+                (!stack.HasTemporalMovement && !canSeedStaticAuthoredClip))
             {
                 continue;
             }
@@ -10934,6 +10961,10 @@ public sealed partial class MainWindowViewModel :
                         DeclaredRoles = binding.Roles,
                     };
                     sourceMeshes = customModelSource.Preview.Meshes.ToArray();
+                    sourceModel = new DecodedProjectModelSession(
+                        customModelSource.Imported.Rig!, sourceAsset, sourceMeshes,
+                        customModelSource.Preview.Skeleton!,
+                        CustomPreviewSession: customModelSource.PreviewSession);
                 }
                 else
                 {
@@ -11132,6 +11163,7 @@ public sealed partial class MainWindowViewModel :
                 if (targetAsset.Kind == ProjectAssetKind.CustomModelSource)
                 {
                     if (sourceModel is not null &&
+                        sourceModel.CustomPreviewSession?.RequestedMode == CustomModelPreviewMode.Dl1Output &&
                         ProjectModelAssetsMatch(
                             sourceModel.ProjectAsset,
                             targetAsset))
@@ -28551,7 +28583,7 @@ public sealed partial class MainWindowViewModel :
         return source.Clip.SamplePose(
             source.Rig,
             seconds,
-            Timeline.IsLooping
+            Timeline.IsLooping && Timeline.IsPlaying
                 ? PlaybackMode.Loop
                 : PlaybackMode.Clamp);
     }
@@ -28669,7 +28701,7 @@ public sealed partial class MainWindowViewModel :
                 projectAnimation,
                 seconds,
                 ResolvePreviewProfile(),
-                Timeline.IsLooping
+                Timeline.IsLooping && Timeline.IsPlaying
                     ? PlaybackMode.Loop
                     : PlaybackMode.Clamp,
                 EvaluationPurpose.Preview);
@@ -28959,7 +28991,9 @@ public sealed partial class MainWindowViewModel :
                     checked((float)pair.Value)))
                 .ToArray();
         SetSourcePreviewScene(
-            _sourceBaseMeshes,
+            _sourceModelContext?.CustomPreviewSession is { HasRigidGeometry: true } customSource
+                ? customSource.CreateMeshes(frame.RawSourcePose, _sourceBaseMeshes).ToArray()
+                : _sourceBaseMeshes,
             CreateSourcePresentationSkeleton(frame.RawSourcePose),
             morphWeights: rawMorphs,
             generation: generation);
@@ -29143,16 +29177,31 @@ public sealed partial class MainWindowViewModel :
         return true;
     }
 
+    private MeshRenderData[] CreateActorPreviewMeshes(
+        SkeletonPose pose,
+        TransformMatrix actorWorld,
+        bool reviewedPolicy = false)
+    {
+        IReadOnlyList<MeshRenderData> meshes = _customTargetPreviewSession is { HasRigidGeometry: true } customTarget
+            ? customTarget.CreateMeshes(pose, _targetBaseMeshes, reviewedPolicy)
+            : _targetBaseMeshes;
+        Matrix4x4 placement = CorePreviewAdapter.ToSystemMatrix(actorWorld);
+        return meshes.Select(mesh => mesh.IsSkinned
+            ? mesh
+            : mesh with { LocalToWorld = mesh.LocalToWorld * placement }).ToArray();
+    }
+
     private MeshRenderData[] PublishEvaluatedAttachments(
         ProjectAnimation animation,
         EvaluationFrame frame)
     {
+        TransformMatrix actorWorld = ScaleSecondaryActorTransform(frame.ActorWorldTransform);
         AttachmentSceneComposition scene =
             AttachmentSceneComposer.Compose(
-                _targetBaseMeshes,
+                CreateActorPreviewMeshes(frame.DisplayPose, actorWorld, _reviewedBscrTargetPreviewApplied),
                 frame.DisplayAttachments,
                 _attachmentRenderAssets,
-                frame.ActorWorldTransform);
+                actorWorld);
         PublishAttachmentGripStatus(frame,scene);
         Guid? selectedBindingId =
             AttachmentEditor.SelectedAttachment?.Id;
@@ -30373,13 +30422,15 @@ public sealed partial class MainWindowViewModel :
                     frame.AuthoredPose,
                     SelectedTargetBoneIndex,
                     frame.ActorWorldTransform);
+        skeleton = ApplySecondaryActorScale(skeleton);
         skeleton = ApplySecondaryMotionToExternalSkeleton(skeleton);
+        TransformMatrix actorWorld = ScaleSecondaryActorTransform(frame.ActorWorldTransform);
         AttachmentSceneComposition scene =
             AttachmentSceneComposer.Compose(
-                _targetBaseMeshes,
+                CreateActorPreviewMeshes(frame.AuthoredPose, actorWorld),
                 frame.AuthoredAttachments,
                 _attachmentRenderAssets,
-                frame.ActorWorldTransform);
+                actorWorld);
         Guid? selectedBindingId =
             AttachmentEditor.SelectedAttachment?.Id;
         MeshRenderData[] meshes = scene.Meshes

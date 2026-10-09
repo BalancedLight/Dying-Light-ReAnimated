@@ -951,6 +951,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 RefreshTimeline();
                 RefreshPreview();
                 OpenSelectedAnimationInAnimateCommand.NotifyCanExecuteChanged();
+                _prepareSelectedAnimationCommand?.NotifyCanExecuteChanged();
             }
         }
     }
@@ -1170,6 +1171,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 path,
                 packagePath: null,
                 markAuthoringChanged: false);
+            await Conformance.SetModelAsync(imported, token);
             await SynchronizeImportedModelAsync(previous, token);
             _setStatus(isReimport
                 ? $"Reimported custom model {Path.GetFileName(path)} after validation"
@@ -1341,6 +1343,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 sourcePath: null,
                 packagePath: path,
                 markAuthoringChanged: false);
+            await Conformance.SetModelAsync(decoded, token);
             await SynchronizeImportedModelAsync(previous, token);
             _setStatus($"Opened custom model package {Path.GetFileName(path)}");
         }
@@ -2578,6 +2581,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         try
         {
             CommitModel(model, sourcePath, packagePath, markAuthoringChanged: false);
+            Conformance.SetModelQueued(_model);
             SelectedAnimation = selectedAnimationClipId is { } selectedId
                 ? Animations.FirstOrDefault(animation => animation.Id == selectedId)
                 : SelectedAnimation;
@@ -2633,7 +2637,6 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             // from; keeping it across a load pairs the new model's meshes with
             // the old model's skeleton.
             InvalidateConformancePreview();
-            Conformance.SetModel(imported);
             _sourcePath = sourcePath;
             _packagePath = packagePath;
             ModelName = imported.Package.Document.Name;
@@ -2653,6 +2656,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             OnPropertyChanged(nameof(AnimationScriptAliasSummary));
             _flipTextureCoordinateV = imported.Package.Document.BuildSettings.FlipTextureCoordinateV;
             OnPropertyChanged(nameof(FlipTextureCoordinateV));
+            Conformance.SetModelQueued(imported);
             OnPropertyChanged(nameof(CanUseReviewedPolicyPreview));
             BuildStatus = buildStatus;
             OnPropertyChanged(nameof(PreviewCameraStatus));
@@ -2724,7 +2728,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             SelectedAnimation = imported.Package.Document.RigConformance?.AppliedOutputRigSignature is not null
                 ? Animations.FirstOrDefault(static clip =>
                     clip.DecodedClip is not null && clip.Contract.DerivedMotion is not null)
-                : Animations.FirstOrDefault(static clip => clip.DecodedClip is not null);
+                : Animations.FirstOrDefault(static clip => clip.Included && clip.DecodedClip is not null)
+                    ?? Animations.FirstOrDefault(static clip => clip.DecodedClip is not null);
             Summary =
                 $"{imported.Package.Document.Meshes.Length:N0} mesh part(s) | {imported.Surfaces.Length:N0} draw surface(s) | " +
                 $"{imported.Package.Document.CreateEffectiveBones().Length:N0} rig/helper node(s) | {Animations.Count:N0} animation stack(s) | " +
@@ -2896,10 +2901,16 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         document.Validate();
         AuthoringSnapshot? before = recordsEdit ? CaptureAuthoringSnapshot() : null;
         var previous = _model;
-        _model = _model with
+        FbxModelAuthoringImportResult timed = FbxAnimationTimingAuthoring.ApplySelections(_model, selections);
+        _model = timed with
         {
-            Package = _model.Package with { Document = document },
+            Package = timed.Package with
+            {
+                Document = document with { AnimationClips = timed.Package.Document.AnimationClips },
+            },
         };
+        foreach (CustomModelAnimationClipItemViewModel item in Animations)
+            item.UpdateContract(_model.Package.Document.AnimationClips.Single(clip => clip.Id == item.Id));
         Conformance.RefreshMetadataSnapshot(previous, _model);
         if (before is not null) RecordAuthoringUndo(before);
     }
@@ -3015,19 +3026,25 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         {
             skeleton = session.CreateSkeleton(clip, frame, selectedPreviewBone);
         }
+        IReadOnlyList<MeshRenderData> posedRigidMeshes =
+            session.CreateMeshes(clip, frame, reviewedPolicyApplied);
         ImmutableArray<MorphWeight> stressMorphs = SampleAnimationMorphs(displayModel, clip, frame);
         if (stressReview && Conformance.TryGetStressPreview(out var stressPose, out stressMorphs))
+        {
             skeleton = session.CreateSkeleton(stressPose!, Conformance.SelectedStressJoint?.Index);
+            posedRigidMeshes = session.CreateMeshes(stressPose!);
+        }
         if (eyeMotion && Conformance.TryGetEyeMotion(out var eyePose))
         {
             skeleton = session.CreateSkeleton(eyePose!, null);
+            posedRigidMeshes = session.CreateMeshes(eyePose!);
             stressMorphs = Conformance.StressMorphOffsets.Select(m => new MorphWeight(m.Name, (float)m.Weight)).ToImmutableArray();
         }
         if (replacePreparedScene)
         {
             IReadOnlyList<MeshRenderData> previewMeshes = Conformance.WeightHeatmapBoneIndex is { } weightBone && IsConformTabSelected && !structuralReview && !doctorReview && !derivedReview && !contactReview && !restReview && !hierarchyReview
                 ? SkinWeightHeatmapBuilder.Build(displayModel, session.Meshes, weightBone, stressReview ? null : Conformance.WeightPreview)
-                : session.Meshes;
+                : posedRigidMeshes;
             if (handReview && Conformance.HandBindingHeatmapBoneIndex is { } handBone)
                 previewMeshes = SkinWeightHeatmapBuilder.Build(displayModel, session.Meshes, handBone, Conformance.HandBindingWeightPreview);
             if (eyeReview && Conformance.EyeBindingHeatmapBoneIndex is { } eyeBone)
@@ -3044,6 +3061,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         }
         else
         {
+            if (session.HasRigidGeometry && !paintingWeights)
+                Viewport.SceneSource.SetMeshes(posedRigidMeshes);
             Viewport.SceneSource.SetSkeleton(skeleton);
         }
         Viewport.SceneSource.SetMorphWeights(stressMorphs);
@@ -3447,7 +3466,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         _model = candidate;
         _previewSession = null;
         InvalidateConformancePreview();
-        Conformance.SetModel(_model);
+        Conformance.SetModelQueued(_model);
         PopulateHierarchyRows(selectedName);
         OnPropertyChanged(nameof(PreviewCameraStatus));
         NotifyCommands();
@@ -3491,6 +3510,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
     private void OnAnimationItemPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
     {
+        if (args.PropertyName is not (nameof(CustomModelAnimationClipItemViewModel.DisplayName) or
+            nameof(CustomModelAnimationClipItemViewModel.Included) or nameof(CustomModelAnimationClipItemViewModel.FrameRateNumerator) or
+            nameof(CustomModelAnimationClipItemViewModel.FrameRateDenominator) or nameof(CustomModelAnimationClipItemViewModel.RootMotionMode) or
+            nameof(CustomModelAnimationClipItemViewModel.RootBoneName))) return;
+        if (sender is CustomModelAnimationClipItemViewModel { HasInvalidFrameRate: true } &&
+            args.PropertyName is nameof(CustomModelAnimationClipItemViewModel.FrameRateNumerator) or
+                nameof(CustomModelAnimationClipItemViewModel.FrameRateDenominator)) return;
         MarkAuthoringChanged();
         NotifyGuidedExportState();
         ExportAnimationRpackCommand.NotifyCanExecuteChanged();
@@ -3499,6 +3525,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             nameof(CustomModelAnimationClipItemViewModel.FrameRateDenominator))
         {
             SelectedAnimation?.ApplyTimelineCadence(Timeline);
+            RefreshTimeline();
+            RefreshPreview();
         }
     }
 
@@ -3606,6 +3634,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         SelectDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
         BuildModelRpackCommand.NotifyCanExecuteChanged();
         ExportAnimationRpackCommand.NotifyCanExecuteChanged();
+        CreateAuthoredAnimationCommand.NotifyCanExecuteChanged();
+        _prepareSelectedAnimationCommand?.NotifyCanExecuteChanged();
         OpenSelectedAnimationInAnimateCommand.NotifyCanExecuteChanged();
         OpenDeveloperToolsProjectCommand.NotifyCanExecuteChanged();
         OpenDeployedAnimationScriptCommand.NotifyCanExecuteChanged();
@@ -3701,6 +3731,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
         StopFacePicking();
         _disposed = true;
+        InvalidateConformancePreview();
+        Conformance.CancelPendingSolve();
         ModelBatch.PropertyChanged -= OnModelBatchPropertyChanged;
         ModelBatch.Dispose();
         NativeScaleStudy.Dispose();
@@ -3731,11 +3763,15 @@ public sealed class CustomModelAnimationClipItemViewModel : ObservableObject
     private int _frameRateDenominator;
     private Dl1RootMotionMode _rootMotionMode;
     private string? _rootBoneName;
+    private readonly AnimationClip? _decodedClip;
+    private AnimationClip? _effectiveClip;
+    private string? _frameRateError;
+    internal bool HasInvalidFrameRate => _frameRateError is not null;
 
     public CustomModelAnimationClipItemViewModel(CustomModelAnimationClip contract, AnimationClip? decodedClip)
     {
         Contract = contract;
-        DecodedClip = decodedClip;
+        _decodedClip = decodedClip;
         _displayName = contract.DisplayName;
         _included = contract.Included;
         _frameRateNumerator = contract.FrameRate.Numerator;
@@ -3744,29 +3780,64 @@ public sealed class CustomModelAnimationClipItemViewModel : ObservableObject
         _rootBoneName = contract.RootBoneName;
     }
 
-    public CustomModelAnimationClip Contract { get; }
+    public CustomModelAnimationClip Contract { get; private set; }
 
-    public AnimationClip? DecodedClip { get; }
+    public AnimationClip? DecodedClip
+    {
+        get
+        {
+            if (_decodedClip is null) return null;
+            var rate = new FrameRate(FrameRateNumerator, FrameRateDenominator);
+            if (_effectiveClip?.FrameRate != rate)
+                _effectiveClip = FbxAnimationTimingAuthoring.WithFrameRate(_decodedClip, rate);
+            return _effectiveClip;
+        }
+    }
+
+    internal void UpdateContract(CustomModelAnimationClip contract) => Contract = contract;
 
     public Guid Id => Contract.Id;
 
     public string SourceName => Contract.SourceName;
 
-    public long FrameCount => Contract.FrameCount;
+    public long FrameCount => DecodedClip?.FrameCount ?? Contract.FrameCount;
 
-    public string OriginLabel => Contract.DerivedMotion is null ? "FBX source" : "Derived";
+    public string OriginLabel => Contract.AuthoredAnimation is not null ? "Authored"
+        : Contract.DerivedMotion is not null ? "Derived" : "FBX source";
 
-    public string DecodeStatus => DecodedClip is null
+    public string DecodeStatus => _frameRateError ?? (DecodedClip is null
         ? Contract.DerivedMotion is null ? "Metadata only â€” blocked from export" : "Historical derived clip â€” source or rig changed; derive again before export"
-        : "Decoded";
+        : "Decoded");
 
     public string DisplayName { get => _displayName; set => SetProperty(ref _displayName, value ?? string.Empty); }
 
     public bool Included { get => _included; set => SetProperty(ref _included, value); }
 
-    public int FrameRateNumerator { get => _frameRateNumerator; set => SetProperty(ref _frameRateNumerator, Math.Max(1, value)); }
+    public int FrameRateNumerator { get => _frameRateNumerator; set => SetFrameRate(value, numerator: true); }
 
-    public int FrameRateDenominator { get => _frameRateDenominator; set => SetProperty(ref _frameRateDenominator, Math.Max(1, value)); }
+    public int FrameRateDenominator { get => _frameRateDenominator; set => SetFrameRate(value, numerator: false); }
+
+    private void SetFrameRate(int value, bool numerator)
+    {
+        value = Math.Max(1, value);
+        string property = numerator ? nameof(FrameRateNumerator) : nameof(FrameRateDenominator);
+        try
+        {
+            var rate = new FrameRate(numerator ? value : _frameRateNumerator, numerator ? _frameRateDenominator : value);
+            AnimationClip? candidate = _decodedClip is null ? null : FbxAnimationTimingAuthoring.WithFrameRate(_decodedClip, rate);
+            _frameRateError = null;
+            _effectiveClip = candidate;
+            OnPropertyChanged(nameof(DecodeStatus));
+            if (numerator) SetProperty(ref _frameRateNumerator, value, property);
+            else SetProperty(ref _frameRateDenominator, value, property);
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or OverflowException)
+        {
+            _frameRateError = "Frame rate unchanged: " + error.Message;
+            OnPropertyChanged(nameof(DecodeStatus));
+            OnPropertyChanged(property);
+        }
+    }
 
     public Dl1RootMotionMode RootMotionMode { get => _rootMotionMode; set => SetProperty(ref _rootMotionMode, value); }
 

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -29,6 +30,9 @@ public partial class MainWindow : Window
     private readonly DockLayoutUpdateScheduler _dockLayoutScheduler;
     private bool _isLoaded;
     private bool _isClosing;
+    private bool _closeApproved;
+    private bool _closeInProgress;
+    private string? _lastAutosaveError;
     private bool _pendingWorkspaceSurfaceLayout;
     private bool _pendingViewportLayout;
     private bool _pendingDockLayout;
@@ -97,15 +101,92 @@ public partial class MainWindow : Window
         CompositionTarget.Rendering += OnCompositionRendering;
     }
 
-    private void OnWindowClosing(
+    private async void OnWindowClosing(
         object? sender,
         CancelEventArgs args)
     {
-        _isClosing = true;
-        _dockLayoutScheduler.Stop();
-        _dockController.SaveCurrentLayout();
+        if (_closeApproved)
+        {
+            _isClosing = true;
+            _dockLayoutScheduler.Stop();
+            _dockController.SaveCurrentLayout();
+            _autosave.Stop();
+            return;
+        }
+        args.Cancel = true;
+        if (_closeInProgress) return;
+        if (_viewModel.IsBusy || _viewModel.Models.IsBusy)
+        {
+            _viewModel.StatusText = "Wait for the current task to finish before closing.";
+            return;
+        }
+        _closeInProgress = true;
+        bool previouslyEnabled = IsEnabled;
+        IsEnabled = false;
+        _viewModel.Timeline.IsPlaying = false;
+        _viewModel.Models.Timeline.IsPlaying = false;
         _autosave.Stop();
-        _ = _autosave.SaveNow("window-closing");
+        bool close = false;
+        try
+        {
+            close = await RecoveryCloseCoordinator.TryCloseAsync(
+                () => _viewModel.CanSaveWorkspaceSnapshot
+                    ? _autosave.SaveNowAsync("window-closing")
+                    : Task.FromResult(!_viewModel.HasAppControlUnsavedChanges),
+                () =>
+                {
+                    var dialog = new RecoverySaveFailureDialog(_lastAutosaveError ??
+                        "Review the existing recovery or save the current project elsewhere.") { Owner = this };
+                    _ = dialog.ShowDialog();
+                    return dialog.Decision;
+                },
+                SaveProjectElsewhereForCloseAsync);
+        }
+        catch (Exception error)
+        {
+            _viewModel.NotifyAutosave(new AutosaveCompletedEventArgs(false, "window-closing",
+                DateTimeOffset.UtcNow, error.Message));
+        }
+        finally
+        {
+            _closeInProgress = false;
+            if (!close)
+            {
+                IsEnabled = previouslyEnabled;
+                _autosave.Start();
+            }
+        }
+        if (close)
+        {
+            _closeApproved = true;
+            _ = Dispatcher.BeginInvoke(new Action(Close));
+        }
+    }
+
+    private async Task<bool> SaveProjectElsewhereForCloseAsync()
+    {
+        var picker = new Microsoft.Win32.SaveFileDialog
+        {
+            Title = "Save project",
+            Filter = "ReAnimated project (*.dlraproj)|*.dlraproj",
+            DefaultExt = ".dlraproj",
+            AddExtension = true,
+            OverwritePrompt = false,
+            FileName = Path.GetFileNameWithoutExtension(_viewModel.ProjectPath) ?? "project",
+        };
+        if (picker.ShowDialog(this) != true) return false;
+        try
+        {
+            await _viewModel.SaveWorkspaceToNewPathAsync(picker.FileName, CancellationToken.None);
+            return !_viewModel.HasAppControlUnsavedChanges && File.Exists(picker.FileName) &&
+                string.Equals(Path.GetFullPath(_viewModel.ProjectPath!), Path.GetFullPath(picker.FileName),
+                    StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception error)
+        {
+            _lastAutosaveError = error.Message;
+            return false;
+        }
     }
 
     private void OnWindowClosed(
@@ -617,6 +698,7 @@ public partial class MainWindow : Window
         object? sender,
         AutosaveCompletedEventArgs args)
     {
+        _lastAutosaveError = args.Error;
         _viewModel.NotifyAutosave(args);
     }
 

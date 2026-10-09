@@ -15,6 +15,33 @@ public sealed class Dl1AuthoredRigContractTests
     private static readonly int[] DepthFirstSourceOrder = [0, 1, 3, 2];
 
     [Fact]
+    public void GeneratedSegmentProxyBoundsDoNotCapWideDeformBones()
+    {
+        FbxModelAuthoringImportResult source = FbxModelAuthoringImporter.ImportPackage(
+            CharacterBodyRegionAuthoringTests.CreateGenericBodyRegionPackage());
+        CustomModelDocument document = source.Package.Document with
+        {
+            Bones = source.Package.Document.Bones.Select(bone => bone with { LocalBounds = null }).ToImmutableArray(),
+            RiggingSession = null,
+        };
+        FbxModelSurface[] surfaces = source.Surfaces.Select(surface => surface with
+        {
+            Vertices = surface.Vertices.Select(vertex => vertex with { Position = vertex.Position * 20 }).ToImmutableArray(),
+        }).ToArray();
+        FbxModelAuthoringImportResult wide = source with
+        {
+            Package = source.Package with { Document = document },
+            Rig = document.CreateRigDefinition(),
+            Surfaces = surfaces.ToImmutableArray(),
+        };
+
+        Dl1AuthoredRigContract contract = Dl1CustomModelRigPreparer.Prepare(wide).Contract;
+
+        Assert.Contains(contract.Nodes, node => node.IsDeform &&
+            (node.Bounds.HalfExtents.Y > 0.08 || node.Bounds.HalfExtents.Z > 0.08));
+    }
+
+    [Fact]
     public async Task StudioPreservesAffineSourceAndPairsSerializedLocalsReferencesAndChr()
     {
         FbxModelAuthoringImportResult original = CreateSyntheticModel();

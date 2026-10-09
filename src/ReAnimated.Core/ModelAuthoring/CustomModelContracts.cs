@@ -14,6 +14,12 @@ public enum CustomModelRigMode
     Dl1HumanoidFit,
 }
 
+public enum CustomModelWorkflowMode
+{
+    OriginalRig,
+    Character,
+}
+
 public enum CustomModelTextureSemantic
 {
     BaseColor,
@@ -359,6 +365,13 @@ public sealed record CustomModelMeshPart
 
     public long ModelObjectId { get; init; }
 
+    /// <summary>
+    /// Original FBX Model object that rigidly owns this mesh's transform.
+    /// Null means that the mesh is static or is moved through authored skin
+    /// weights. The owner remains an imported rig identity across edits.
+    /// </summary>
+    public long? RigidGeometryOwnerFbxObjectId { get; init; }
+
     public int ControlPointCount { get; init; }
 
     public int PolygonCount { get; init; }
@@ -382,6 +395,13 @@ public sealed record CustomModelMeshPart
     internal void Validate(string parameterName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(Name, parameterName);
+        if (RigidGeometryOwnerFbxObjectId == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                parameterName,
+                $"Mesh '{Name}' has an invalid zero rigid-geometry owner identity.");
+        }
+
         int[] counts =
         [
             ControlPointCount,
@@ -538,10 +558,15 @@ public sealed record CustomModelAnimationClip
 
     public bool HasSkeletalTracks { get; init; }
 
+    /// <summary>Bind frames for the original clip's tracks and their ancestors.</summary>
+    public string? SourceBindFingerprint { get; init; }
+
     public bool HasMorphTracks { get; init; }
 
     /// <summary>Optional portable derived motion metadata; the original source clip remains authoritative.</summary>
     public DerivedMotionReference? DerivedMotion { get; init; }
+
+    public AuthoredAnimationReference? AuthoredAnimation { get; init; }
 
     public string FacialSourceValueUnit { get; init; } = "percent";
 
@@ -560,7 +585,12 @@ public sealed record CustomModelAnimationClip
         }
 
         ProjectAssetReference.ValidateSha256(SourceFingerprint, parameterName);
+        if (SourceBindFingerprint is { } binding)
+            ProjectAssetReference.ValidateSha256(binding, parameterName);
         DerivedMotion?.Validate();
+        AuthoredAnimation?.Validate();
+        if (DerivedMotion is not null && AuthoredAnimation is not null)
+            throw new ArgumentException("An animation cannot have both authored and derived payload references.");
         if (FacialSourceValueUnit is not ("percent" or "normalized"))
         {
             throw new ArgumentException(
@@ -672,7 +702,7 @@ public sealed record CustomModelBuildSettings
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 8;
+    public const int CurrentSchemaVersion = 9;
 
     public const string EmptyMorphSignature =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -688,6 +718,8 @@ public sealed record CustomModelDocument
     public string Name { get; init; } = "Untitled model";
 
     public CustomModelRigMode RigMode { get; init; } = CustomModelRigMode.Auto;
+
+    public CustomModelWorkflowMode? WorkflowMode { get; init; }
 
     public CustomModelSourceIdentity Source { get; init; } = new();
 
@@ -768,6 +800,8 @@ public sealed record CustomModelDocument
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(Name);
+        if (WorkflowMode is { } workflow && !Enum.IsDefined(workflow))
+            throw new ArgumentException("The model workflow is invalid.", nameof(WorkflowMode));
         Source.Validate(nameof(Source));
         CharacterResources?.Validate();
         GeometryRevision?.Validate();
@@ -904,6 +938,13 @@ public sealed record CustomModelDocument
         foreach (CustomModelMeshPart mesh in Meshes)
         {
             mesh.Validate(nameof(Meshes));
+            if (mesh.RigidGeometryOwnerFbxObjectId is { } ownerObjectId &&
+                Bones.Count(bone => bone.FbxObjectId == ownerObjectId) != 1)
+            {
+                throw new ArgumentException(
+                    $"Mesh '{mesh.Name}' rigid owner FBX object {ownerObjectId} must identify exactly one retained imported rig node.",
+                    nameof(Meshes));
+            }
         }
 
         foreach (CustomModelMaterial material in Materials)
@@ -1074,6 +1115,8 @@ public sealed record CustomModelPackage(
     public ImmutableDictionary<string, ImmutableArray<byte>> CompanionPayloads { get; init; } = ImmutableDictionary<string, ImmutableArray<byte>>.Empty;
     public ImmutableArray<byte> AuthoredLayerPayload { get; init; } = [];
     public ImmutableDictionary<Guid, ImmutableArray<byte>> DerivedAnimationPayloads { get; init; } =
+        ImmutableDictionary<Guid, ImmutableArray<byte>>.Empty;
+    public ImmutableDictionary<Guid, ImmutableArray<byte>> AuthoredAnimationPayloads { get; init; } =
         ImmutableDictionary<Guid, ImmutableArray<byte>>.Empty;
     public const string ManifestEntryPath = "model.json";
 

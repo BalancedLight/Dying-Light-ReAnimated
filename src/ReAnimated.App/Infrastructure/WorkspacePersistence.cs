@@ -25,7 +25,8 @@ public sealed record WorkspaceSnapshot(
     bool? MeshesVisible = null,
     bool? SkeletonOverlayVisible = null,
     ImmutableArray<PendingProjectAssetReceipt> PendingAssets = default,
-    bool? KeepFramed = null)
+    bool? KeepFramed = null,
+    ImmutableArray<PendingSecondaryMotionEdit> PendingSecondaryMotionEdits = default)
 {
     public const int CurrentSchemaVersion = 3;
 
@@ -42,6 +43,12 @@ public interface IWorkspaceSnapshotProvider
     bool CanSaveWorkspaceSnapshot => true;
 
     WorkspaceSnapshot CreateSnapshot();
+
+    Task<WorkspaceSnapshot> PrepareSnapshotAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(CreateSnapshot());
+    }
 
     void RestoreSnapshot(WorkspaceSnapshot snapshot);
 }
@@ -81,6 +88,10 @@ public sealed class JsonWorkspaceStateStore
                 snapshot.PendingAssets.IsDefault
                     ? null
                     : snapshot.PendingAssets),
+            PendingSecondaryMotionEdits = PendingSecondaryMotionEdit.ValidateSnapshotEdits(
+                snapshot.PendingSecondaryMotionEdits.IsDefault
+                    ? null
+                    : snapshot.PendingSecondaryMotionEdits),
         };
         string json = JsonSerializer.Serialize(normalized, SerializerOptions);
         AtomicFileWriter.WriteAllText(FilePath, json);
@@ -116,6 +127,10 @@ public sealed class JsonWorkspaceStateStore
                 PendingAssets = snapshot.PendingAssets.IsDefault
                     ? []
                     : snapshot.PendingAssets,
+                PendingSecondaryMotionEdits = PendingSecondaryMotionEdit.ValidateSnapshotEdits(
+                    snapshot.PendingSecondaryMotionEdits.IsDefault
+                        ? null
+                        : snapshot.PendingSecondaryMotionEdits),
             },
             Convert.ToHexStringLower(SHA256.HashData(bytes)));
     }
@@ -190,6 +205,8 @@ public sealed class WorkspaceAutosaveService : IDisposable
     private readonly IWorkspaceSnapshotProvider _snapshotProvider;
     private readonly JsonWorkspaceStateStore _store;
     private readonly DispatcherTimer _timer;
+    private readonly SemaphoreSlim _saveGate = new(1, 1);
+    private readonly CancellationTokenSource _shutdown = new();
     private bool _disposed;
 
     public WorkspaceAutosaveService(
@@ -229,6 +246,7 @@ public sealed class WorkspaceAutosaveService : IDisposable
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (!_snapshotProvider.CanSaveWorkspaceSnapshot) return false;
+        if (!_saveGate.Wait(0)) return false;
         try
         {
             WorkspaceSnapshot snapshot = _snapshotProvider.CreateSnapshot();
@@ -249,6 +267,41 @@ public sealed class WorkspaceAutosaveService : IDisposable
                     exception.Message));
             return false;
         }
+        finally { _saveGate.Release(); }
+    }
+
+    public async Task<bool> SaveNowAsync(string reason, CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (!_snapshotProvider.CanSaveWorkspaceSnapshot) return false;
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
+        bool acquired = false;
+        try
+        {
+            await _saveGate.WaitAsync(linked.Token);
+            acquired = true;
+            if (!_snapshotProvider.CanSaveWorkspaceSnapshot) return false;
+            WorkspaceSnapshot snapshot = await _snapshotProvider.PrepareSnapshotAsync(linked.Token);
+            linked.Token.ThrowIfCancellationRequested();
+            if (!_snapshotProvider.CanSaveWorkspaceSnapshot) return false;
+            await Task.Run(() => _store.Save(snapshot), linked.Token);
+            AutosaveCompleted?.Invoke(this, new AutosaveCompletedEventArgs(true, reason, snapshot.SavedAt, null));
+            return true;
+        }
+        catch (OperationCanceledException) when (linked.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception exception)
+        {
+            AutosaveCompleted?.Invoke(this, new AutosaveCompletedEventArgs(false, reason,
+                DateTimeOffset.UtcNow, exception.Message));
+            return false;
+        }
+        finally
+        {
+            if (acquired) _saveGate.Release();
+        }
     }
 
     public void Dispose()
@@ -261,11 +314,20 @@ public sealed class WorkspaceAutosaveService : IDisposable
         _disposed = true;
         _timer.Stop();
         _timer.Tick -= OnAutosaveTick;
+        _shutdown.Cancel();
+        _ = DisposeSaveResourcesAsync();
     }
 
-    private void OnAutosaveTick(object? sender, EventArgs args)
+    private async Task DisposeSaveResourcesAsync()
     {
-        _ = SaveNow("interval");
+        await _saveGate.WaitAsync().ConfigureAwait(false);
+        _saveGate.Dispose();
+        _shutdown.Dispose();
+    }
+
+    private async void OnAutosaveTick(object? sender, EventArgs args)
+    {
+        if (!_disposed) _ = await SaveNowAsync("interval");
     }
 }
 

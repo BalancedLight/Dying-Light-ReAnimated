@@ -25,6 +25,7 @@ public sealed class ModelsWorkspaceConformancePreviewOwnershipTests
             static () => null,
             resolveRigTemplate: (profile, _) =>
                 Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)));
+        RigConformanceTestSchedulers.UseImmediate(workspace);
         workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
             model,
             "generic-model.dlrmodel",
@@ -84,6 +85,7 @@ public sealed class ModelsWorkspaceConformancePreviewOwnershipTests
             static () => null,
             resolveRigTemplate: (profile, _) =>
                 Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)));
+        RigConformanceTestSchedulers.UseImmediate(workspace);
         workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
             model,
             "generic-model.dlrmodel",
@@ -161,6 +163,7 @@ public sealed class ModelsWorkspaceConformancePreviewOwnershipTests
             static () => null,
             resolveRigTemplate: (profile, _) =>
                 Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)));
+        RigConformanceTestSchedulers.UseImmediate(workspace);
         workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
             source,
             "generic-source.dlrmodel",
@@ -188,6 +191,60 @@ public sealed class ModelsWorkspaceConformancePreviewOwnershipTests
         Assert.Contains("reindexed but not retargeted", workspace.Viewport.DiagnosticOverlay);
     }
 
+    [Fact]
+    public async Task LatePreparedFitPreviewCannotReplaceTheCurrentFit()
+    {
+        FbxModelAuthoringImportResult model = RigConformanceWizardTests.CreateModel();
+        var scheduler = new DeferredConformancePreviewScheduler();
+        using var workspace = new ModelsWorkspaceViewModel(
+            new NoDialogs(),
+            static _ => { },
+            static _ => Task.CompletedTask,
+            static () => null,
+            resolveRigTemplate: (profile, _) =>
+                Task.FromResult(RigConformanceWizardTests.CreateResolution(profile)));
+        workspace.ConformancePreviewPreparationScheduler = scheduler;
+        workspace.CommitProjectRestore(new PreparedModelsWorkspaceRestore(
+            model,
+            "generated-model.dlrmodel",
+            new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
+        workspace.IsConformTabSelected = true;
+        workspace.Conformance.StudioStage = RigStudioStage.Fit;
+
+        await workspace.Conformance.ResolveTemplateCommand.ExecuteAsync(null);
+        Task oldPreparation = workspace.ConformancePreviewPreparationTask;
+        Assert.Single(scheduler.Calls);
+        DeferredConformancePreviewScheduler.Call oldCall = scheduler.Calls[0];
+        RenderFrameSnapshot sourceFrame = workspace.Viewport.SceneSource.CaptureFrame();
+
+        var currentFitPublished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnFitChanged(object? sender, EventArgs args) => currentFitPublished.TrySetResult();
+        workspace.Conformance.FitChanged += OnFitChanged;
+        try
+        {
+            workspace.Conformance.ConformanceStrength = 0.75;
+            await currentFitPublished.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            workspace.Conformance.FitChanged -= OnFitChanged;
+        }
+
+        Task currentPreparation = workspace.ConformancePreviewPreparationTask;
+        Assert.Equal(2, scheduler.Calls.Count);
+        DeferredConformancePreviewScheduler.Call currentCall = scheduler.Calls[1];
+        DeferredConformancePreviewScheduler.Complete(currentCall);
+        await currentPreparation.WaitAsync(TimeSpan.FromSeconds(10));
+        RenderFrameSnapshot currentFrame = workspace.Viewport.SceneSource.CaptureFrame();
+        Assert.NotNull(currentFrame.Skeleton);
+        Assert.False(sourceFrame.Skeleton!.Bones.SequenceEqual(currentFrame.Skeleton!.Bones));
+
+        DeferredConformancePreviewScheduler.Complete(oldCall);
+        await oldPreparation.WaitAsync(TimeSpan.FromSeconds(10));
+        RenderFrameSnapshot afterLateCompletion = workspace.Viewport.SceneSource.CaptureFrame();
+        Assert.Equal(currentFrame.Skeleton.Bones, afterLateCompletion.Skeleton!.Bones);
+    }
+
     private static void AssertValidPair(RenderFrameSnapshot frame)
     {
         Assert.NotNull(frame.Skeleton);
@@ -204,5 +261,25 @@ public sealed class ModelsWorkspaceConformancePreviewOwnershipTests
     {
         public string? ShowOpenProjectDialog(string? initialPath) => null;
         public string? ShowSaveProjectDialog(string suggestedName, string? currentPath) => null;
+    }
+
+    private sealed class DeferredConformancePreviewScheduler : IConformancePreviewPreparationScheduler
+    {
+        public sealed record Call(Func<CancellationToken, PreparedConformancePreview> Prepare,
+            TaskCompletionSource<PreparedConformancePreview> Completion);
+
+        public List<Call> Calls { get; } = [];
+
+        public Task<PreparedConformancePreview> PrepareAsync(
+            Func<CancellationToken, PreparedConformancePreview> prepare,
+            CancellationToken cancellationToken)
+        {
+            var call = new Call(prepare, new TaskCompletionSource<PreparedConformancePreview>());
+            Calls.Add(call);
+            return call.Completion.Task;
+        }
+
+        public static void Complete(Call call) =>
+            call.Completion.TrySetResult(call.Prepare(CancellationToken.None));
     }
 }

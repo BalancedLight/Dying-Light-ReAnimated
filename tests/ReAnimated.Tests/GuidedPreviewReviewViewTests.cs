@@ -24,6 +24,40 @@ public sealed class GuidedPreviewReviewViewTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "EditorUsability")]
+    public async Task AnimationsRemainAvailableWithoutAStockReviewDraft()
+    {
+        MainWindowViewModel owner = await CreateOwnerAsync();
+        try
+        {
+            WpfTestDispatcher.Run(() =>
+            {
+                SetDraft(owner, hasDraft: false);
+                owner.Models.SetGuidedPreviewReviewContext(owner);
+                SetGuidedStep(owner.Models, GuidedModelSetupStep.Preview);
+                var view = new GuidedModelSetupView { DataContext = owner.Models };
+                var host = new ContentControl { Content = view };
+                UpdateLayout(host, view);
+                Assert.Equal(Visibility.Collapsed, GetReviewPanel(view).Visibility);
+                Expander animations = Assert.Single(view.GetVisualDescendants<Expander>(),
+                    candidate => Equals(candidate.Header, "Animations"));
+                for (DependencyObject? ancestor = animations; ancestor is not null;
+                    ancestor = VisualTreeHelper.GetParent(ancestor))
+                    if (ancestor is FrameworkElement element)
+                        Assert.Equal(Visibility.Visible, element.Visibility);
+                Assert.Same(owner.Models, animations.DataContext);
+                Assert.IsType<ModelAnimationStacksView>(animations.Content);
+            });
+        }
+        finally
+        {
+            await DisposeOwnerAsync(owner);
+            DeleteTemporaryDirectory();
+        }
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "EditorUsability")]
     public async Task ReviewBindingsSurviveDetachedHostAndReparenting()
     {
         MainWindowViewModel owner = await CreateOwnerAsync();

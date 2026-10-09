@@ -3,7 +3,8 @@ namespace ReAnimated.App.ViewModels;
 public sealed partial class MainWindowViewModel
 {
     public bool HasAppControlUnsavedChanges => IsDirty ||
-        Models.PersistenceRevision != _savedModelsRevision || !_modelsTargetRefreshTask.IsCompleted;
+        Models.PersistenceRevision != _savedModelsRevision || !_modelsTargetRefreshTask.IsCompleted ||
+        HasPendingSecondaryMotionEdits;
 
     public async Task OpenWorkspaceForAppControlAsync(string projectPath, CancellationToken cancellationToken)
     {

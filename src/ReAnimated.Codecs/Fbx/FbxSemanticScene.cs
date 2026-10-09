@@ -546,11 +546,12 @@ public sealed class FbxSemanticScene
     }
 
     /// <summary>
-    /// Selects the sole usable skeletal stack for normal animation import.
+    /// Selects the sole usable transform stack for normal animation import.
     /// Explicit names remain authoritative. With multiple stacks, automatic
     /// selection is permitted only when exactly one one-layer stack owns
-    /// changing limb channels, or, for a static rest pose, exactly one owns
-    /// any limb channels. Ambiguous authored takes still require review.
+    /// changing supported rig-transform channels, or, for a static rest pose,
+    /// exactly one owns any such channels. Ambiguous authored takes still
+    /// require review.
     /// </summary>
     public FbxAnimationStackInfo SelectAnimationStackForImport(
         string? name) =>
@@ -642,15 +643,17 @@ public sealed class FbxSemanticScene
                 continue;
             }
 
-            FbxAnimationCurveBinding[] limbBindings = bindings
+            FbxAnimationCurveBinding[] transformBindings = bindings
                 .Where(binding =>
                     Models.TryGetValue(
                         binding.ModelId,
                         out FbxModelObject? model) &&
-                    model.IsLimb &&
+                    (model.IsLimb ||
+                     FbxCoreAnimationAdapter.IsSupportedNonLimbModel(this, model) ||
+                     FbxCoreAnimationAdapter.IsStructuralContainerModel(this, model)) &&
                     IsEvaluatedTransformProperty(binding.PropertyName))
                 .ToArray();
-            int changing = limbBindings.Count(
+            int changing = transformBindings.Count(
                 static binding =>
                     binding.Curve.KeyValues.Length > 1 &&
                     binding.Curve.KeyValues.Max() -
@@ -660,7 +663,7 @@ public sealed class FbxSemanticScene
                     stack,
                     true,
                     string.Empty,
-                    limbBindings.Length,
+                        transformBindings.Length,
                     changing));
         }
 

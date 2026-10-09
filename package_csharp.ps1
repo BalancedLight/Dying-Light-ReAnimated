@@ -759,6 +759,7 @@ function Invoke-PackageSelfTest {
         "inspect-fbx"
         "inspect-rpack"
         "inspect-fed"
+        "inspect-source-msh"
         "new-project"
         "validate-project"
         "discover-dl1"
@@ -769,6 +770,10 @@ function Invoke-PackageSelfTest {
         "conform-model"
         "deploy-model"
         "batch-models"
+        "bind-player-appearance"
+        "character"
+        "material-graph"
+        "app"
     )
     $reportedCliCommands = @(
         $result.cliCommands |

@@ -21,11 +21,12 @@ public sealed partial class MainWindowViewModel
         if(evaluated?.GripCalibration is not { } grip || !_attachmentRenderAssets.TryGetValue(evaluated.AssetId,out var asset)||
             !AttachmentGripFrames.Matches(grip,asset,out _))return [];
         var shapes=new List<GizmoRenderData>();
-        if(evaluated.PrimaryGripWorldFrame is { } primary)Axes(frame.ActorWorldTransform*primary,.06,null);
-        if(evaluated.SecondaryPropWorldFrame is { } prop)Axes(frame.ActorWorldTransform*prop,.045,new Vector4(0,1,1,1));
-        if(evaluated.SecondaryCharacterWorldFrame is { } hand)Axes(frame.ActorWorldTransform*hand,.055,new Vector4(1,0,1,1));
+        TransformMatrix actorWorld = ScaleSecondaryActorTransform(frame.ActorWorldTransform);
+        if(evaluated.PrimaryGripWorldFrame is { } primary)Axes(actorWorld*primary,.06,null);
+        if(evaluated.SecondaryPropWorldFrame is { } prop)Axes(actorWorld*prop,.045,new Vector4(0,1,1,1));
+        if(evaluated.SecondaryCharacterWorldFrame is { } hand)Axes(actorWorld*hand,.055,new Vector4(1,0,1,1));
         if(evaluated.SecondaryPropWorldFrame is { } a&&evaluated.SecondaryCharacterWorldFrame is { } b)
-            Line(frame.ActorWorldTransform.TransformPoint(a.Translation),frame.ActorWorldTransform.TransformPoint(b.Translation),new(1,1,0,1));
+            Line(actorWorld.TransformPoint(a.Translation),actorWorld.TransformPoint(b.Translation),new(1,1,0,1));
         return shapes.ToArray();
         void Axes(TransformMatrix matrix,double length,Vector4? color)
         {

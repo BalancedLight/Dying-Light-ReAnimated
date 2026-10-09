@@ -94,6 +94,12 @@ public sealed partial class ModelsWorkspaceViewModel
     /// </summary>
     private CustomModelPreviewSession? _conformanceSession;
     private ImmutableArray<int> _conformanceFitToEffective = [];
+    private CancellationTokenSource? _conformancePreviewPreparationCancellation;
+    private long _conformancePreviewPreparationRevision;
+    private Task _conformancePreviewPreparationTask = Task.CompletedTask;
+    internal Task ConformancePreviewPreparationTask => _conformancePreviewPreparationTask;
+    internal IConformancePreviewPreparationScheduler ConformancePreviewPreparationScheduler { get; set; } =
+        new ThreadPoolConformancePreviewPreparationScheduler();
 
     /// <summary>
     /// Identifies the emitted bone table the cached session was built for.
@@ -151,7 +157,10 @@ public sealed partial class ModelsWorkspaceViewModel
     /// performance concern, not a reason to display a mismatched pair.
     /// </para>
     /// </remarks>
-    private void OnConformanceFitChanged(object? sender, EventArgs e)
+    private void OnConformanceFitChanged(object? sender, EventArgs e) =>
+        _conformancePreviewPreparationTask = PrepareConformancePreviewAsync();
+
+    private async Task PrepareConformancePreviewAsync()
     {
         if (_model is not { } model || !FitPreviewIsActive)
         {
@@ -165,72 +174,123 @@ public sealed partial class ModelsWorkspaceViewModel
             return;
         }
 
+        CancellationTokenSource? previousCancellation = _conformancePreviewPreparationCancellation;
+        previousCancellation?.Cancel();
+        long revision = Interlocked.Increment(ref _conformancePreviewPreparationRevision);
+        CancellationTokenSource? cancellation = null;
         try
         {
             string topologyKey = BuildConformanceTopologyKey(fit);
-            bool rebuilt = false;
-            if (_conformanceSession is null ||
-                !string.Equals(_conformanceTopologyKey, topologyKey, StringComparison.Ordinal))
+            if (_conformanceSession is not null &&
+                string.Equals(_conformanceTopologyKey, topologyKey, StringComparison.Ordinal))
             {
-                Dl1RigConformanceApplyResult applied = Dl1RigConformanceApplier.ApplyDetailed(
-                    model,
-                    fit,
-                    Conformance.CreateSettings());
-                _conformanceSession = CustomModelPreviewAdapter.CreateSession(
-                    applied.Model,
-                    CustomModelPreviewMode.Dl1Output);
-                _conformanceFitToEffective = applied.FitToEffective;
-                _conformanceTopologyKey = topologyKey;
-                rebuilt = true;
+                PublishConformancePreview(model, new(topologyKey, _conformanceSession,
+                    _conformanceFitToEffective, null), rebuilt: false);
+                return;
             }
 
-            CustomModelPreviewSession session = _conformanceSession;
+            cancellation = new CancellationTokenSource();
+            _conformancePreviewPreparationCancellation = cancellation;
+            CustomModelRigConformance? settings = Conformance.CreateSettings();
             int selectedFit = Conformance.SelectedBoneIndex;
-            Conformance.SetGizmoBoneIndexMap(_conformanceFitToEffective);
-            int selectedEffective =
-                (uint)selectedFit < (uint)_conformanceFitToEffective.Length
-                    ? _conformanceFitToEffective[selectedFit]
-                    : -1;
-            SkeletonRenderData? skeleton = session.CreateSkeleton(null, 0,
-                selectedEffective >= 0 ? selectedEffective : null);
-
-            if (rebuilt || !ReferenceEquals(_sceneOwnerSession, session))
-            {
-                Viewport.SceneSource.SetScene(
-                    session.Meshes,
-                    skeleton,
-                    [],
-                    generation: Interlocked.Increment(ref _previewGeneration));
-                _sceneOwnerSession = session;
-            }
-            else
-            {
-                Viewport.SceneSource.SetSkeleton(skeleton);
-            }
-
-            Viewport.SceneSource.SetGizmos(
-                Conformance.Stage == RigConformanceStage.Refine
-                    ? BuildJointPlacementGizmos(skeleton, selectedEffective)
-                    : []);
-
-            Viewport.SceneSource.SetMorphWeights(MergeGuidedMorphOverrides(model, []));
-            Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
-            ApplySkeletonVisibility();
-            Viewport.SetPresentation(
-                Conformance.IsAdvancedSetupMode ? $"Conformance preview - {ModelName}" : $"Joint preview - {ModelName}",
-                Conformance.IsAdvancedSetupMode ? Conformance.SolveStatus : "Review the joint positions and body proportions.");
-            Viewport.SetDiagnosticOverlay(null);
+            PreparedConformancePreview prepared = await ConformancePreviewPreparationScheduler.PrepareAsync(
+                token => PrepareConformancePreview(model, fit, settings, topologyKey, selectedFit, token),
+                cancellation.Token).ConfigureAwait(true);
+            if (!IsCurrentConformancePreviewPreparation(revision, model, fit, cancellation.Token)) return;
+            PublishConformancePreview(model, prepared, rebuilt: true);
         }
-        catch (Exception exception) when (
-            exception is InvalidDataException or
-            CustomModelFormatException or
-            InvalidOperationException or
-            ArgumentException)
+        catch (OperationCanceledException)
         {
-            InvalidateConformancePreview();
-            Viewport.SetDiagnosticOverlay(
-                $"The conformed model could not be previewed: {exception.Message}");
         }
+        catch (Exception exception)
+        {
+            if (IsCurrentConformancePreviewPreparation(
+                    revision, model, fit, cancellation?.Token ?? CancellationToken.None))
+                Viewport.SetDiagnosticOverlay($"The conformed model could not be previewed: {exception.Message}");
+        }
+        finally
+        {
+            if (cancellation is not null)
+            {
+                if (ReferenceEquals(_conformancePreviewPreparationCancellation, cancellation))
+                    _conformancePreviewPreparationCancellation = null;
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private static PreparedConformancePreview PrepareConformancePreview(
+        FbxModelAuthoringImportResult model,
+        RigConformanceResult fit,
+        CustomModelRigConformance? settings,
+        string topologyKey,
+        int selectedFit,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        Dl1RigConformanceApplyResult applied = Dl1RigConformanceApplier.ApplyDetailed(
+            model, fit, settings, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        CustomModelPreviewSession session = CustomModelPreviewAdapter.CreateSession(
+            applied.Model, CustomModelPreviewMode.Dl1Output);
+        cancellationToken.ThrowIfCancellationRequested();
+        int selectedEffective = (uint)selectedFit < (uint)applied.FitToEffective.Length
+            ? applied.FitToEffective[selectedFit]
+            : -1;
+        SkeletonRenderData? skeleton = session.CreateSkeleton(null, 0,
+            selectedEffective >= 0 ? selectedEffective : null);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new(topologyKey, session, applied.FitToEffective, skeleton);
+    }
+
+    private bool IsCurrentConformancePreviewPreparation(
+        long revision,
+        FbxModelAuthoringImportResult model,
+        RigConformanceResult fit,
+        CancellationToken cancellationToken) =>
+        !_disposed && !cancellationToken.IsCancellationRequested &&
+        revision == Interlocked.Read(ref _conformancePreviewPreparationRevision) &&
+        ReferenceEquals(model, _model) && ReferenceEquals(fit, Conformance.Fit) && FitPreviewIsActive;
+
+    private void PublishConformancePreview(
+        FbxModelAuthoringImportResult model,
+        PreparedConformancePreview prepared,
+        bool rebuilt)
+    {
+        CustomModelPreviewSession session = prepared.Session;
+        _conformanceSession = session;
+        _conformanceFitToEffective = prepared.FitToEffective;
+        _conformanceTopologyKey = prepared.TopologyKey;
+        int selectedFit = Conformance.SelectedBoneIndex;
+        Conformance.SetGizmoBoneIndexMap(_conformanceFitToEffective);
+        int selectedEffective = (uint)selectedFit < (uint)_conformanceFitToEffective.Length
+            ? _conformanceFitToEffective[selectedFit]
+            : -1;
+        SkeletonRenderData? skeleton = prepared.Skeleton ?? session.CreateSkeleton(null, 0,
+            selectedEffective >= 0 ? selectedEffective : null);
+
+        if (rebuilt || !ReferenceEquals(_sceneOwnerSession, session))
+        {
+            Viewport.SceneSource.SetScene(session.Meshes, skeleton, [],
+                generation: Interlocked.Increment(ref _previewGeneration));
+            _sceneOwnerSession = session;
+        }
+        else
+        {
+            Viewport.SceneSource.SetSkeleton(skeleton);
+        }
+
+        Viewport.SceneSource.SetGizmos(
+            Conformance.Stage == RigConformanceStage.Refine
+                ? BuildJointPlacementGizmos(skeleton, selectedEffective)
+                : []);
+        Viewport.SceneSource.SetMorphWeights(MergeGuidedMorphOverrides(model, []));
+        Viewport.SceneSource.SetMeshVisibility(ShowMeshes);
+        ApplySkeletonVisibility();
+        Viewport.SetPresentation(
+            Conformance.IsAdvancedSetupMode ? $"Conformance preview - {ModelName}" : $"Joint preview - {ModelName}",
+            Conformance.IsAdvancedSetupMode ? Conformance.SolveStatus : "Review the joint positions and body proportions.");
+        Viewport.SetDiagnosticOverlay(null);
     }
 
     private static IReadOnlyList<GizmoRenderData> BuildJointPlacementGizmos(
@@ -311,6 +371,10 @@ public sealed partial class ModelsWorkspaceViewModel
 
     private void InvalidateConformancePreview()
     {
+        Interlocked.Increment(ref _conformancePreviewPreparationRevision);
+        CancellationTokenSource? cancellation = _conformancePreviewPreparationCancellation;
+        _conformancePreviewPreparationCancellation = null;
+        cancellation?.Cancel();
         _conformanceSession = null;
         _conformanceFitToEffective = [];
         _conformanceTopologyKey = null;
@@ -320,7 +384,11 @@ public sealed partial class ModelsWorkspaceViewModel
 
     private void OnConformancePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(RigConformanceWizardViewModel.IsBusy)) ModelBatch?.RefreshAvailability();
+        if (e.PropertyName == nameof(RigConformanceWizardViewModel.IsBusy))
+        {
+            ModelBatch?.RefreshAvailability();
+            _prepareSelectedAnimationCommand?.NotifyCanExecuteChanged();
+        }
         if (e.PropertyName is not (nameof(RigConformanceWizardViewModel.Stage) or nameof(RigConformanceWizardViewModel.StudioStage) or
             nameof(RigConformanceWizardViewModel.SelectedLandmark)))
         {

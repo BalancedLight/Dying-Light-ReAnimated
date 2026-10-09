@@ -258,6 +258,10 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private readonly Func<string, CancellationToken, Task<Dl1RigTemplateResolution>> _resolveTemplate;
     private readonly Action<string> _setStatus;
+    private IRigConformanceSolveScheduler _solveScheduler;
+    private CancellationTokenSource? _fitSolveCancellation;
+    private long _fitInputRevision;
+    private long _publishedFitRevision = -1;
 
     private FbxModelAuthoringImportResult? _model;
     private Dl1RigTemplate? _template;
@@ -273,6 +277,15 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         ImmutableDictionary<string, string> Roles,
         ImmutableDictionary<string, Vector3D>? Positions,
         bool RequiresSourceReview);
+    private sealed record PendingRoleOverride(
+        ImmutableDictionary<string, string> RolesBefore,
+        MappingEditSnapshot? PreviousUndo,
+        int MappedBefore,
+        int CoreBefore,
+        string Role,
+        string SourceBoneName,
+        bool AllowMajorLoss);
+    private PendingRoleOverride? _pendingRoleOverride;
     private ImmutableDictionary<string, Vector3D> _positionOverrides =
         ImmutableDictionary<string, Vector3D>.Empty;
     private ImmutableDictionary<string, Vector3D>? _previousPositionOverrides;
@@ -328,9 +341,18 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public RigConformanceWizardViewModel(
         Func<string, CancellationToken, Task<Dl1RigTemplateResolution>> resolveTemplate,
         Action<string> setStatus)
+        : this(resolveTemplate, setStatus, new ThreadPoolRigConformanceSolveScheduler())
+    {
+    }
+
+    internal RigConformanceWizardViewModel(
+        Func<string, CancellationToken, Task<Dl1RigTemplateResolution>> resolveTemplate,
+        Action<string> setStatus,
+        IRigConformanceSolveScheduler solveScheduler)
     {
         _resolveTemplate = resolveTemplate ?? throw new ArgumentNullException(nameof(resolveTemplate));
         _setStatus = setStatus ?? throw new ArgumentNullException(nameof(setStatus));
+        _solveScheduler = solveScheduler ?? throw new ArgumentNullException(nameof(solveScheduler));
 
         foreach ((string bone, string label, string instruction, string? mirror) in LandmarkSequence)
         {
@@ -575,7 +597,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public string MappingReviewMessage => HasMissingAnatomicalCorrespondence ? "Some anatomical roles need a source bone. Choose them in the mapping table before applying." :
         HasPendingMappingReview ? "Review the proposed mappings, then accept them or choose different source bones." : string.Empty;
 
-    public bool CanApply => !RequiresSourceRematch && Fit is not null && !HasPendingMappingReview && !HasMissingAnatomicalCorrespondence;
+    public bool CanApply => IsFitCurrent && !IsBusy && !RequiresSourceRematch && !HasPendingMappingReview && !HasMissingAnatomicalCorrespondence;
+    private bool IsFitCurrent => Fit is not null &&
+        Interlocked.Read(ref _publishedFitRevision) == Interlocked.Read(ref _fitInputRevision);
 
     /// <summary>True when a saved output rig is being edited from its current bones.</summary>
     public bool IsEditingAppliedOutputRig => _editingAppliedOutputRig;
@@ -602,7 +626,23 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     /// artifact so a stale fit cannot outlive the model it came from.
     /// </summary>
     public void SetModel(FbxModelAuthoringImportResult? model)
+        => SetModelCore(model, solveSynchronously: true);
+
+    public async Task SetModelAsync(
+        FbxModelAuthoringImportResult? model,
+        CancellationToken cancellationToken = default)
     {
+        SetModelCore(model, solveSynchronously: false);
+        if (model is null || _template is null || model.Rig is null) return;
+        await StartSolveAsync(debounce: false, cancellationToken).ConfigureAwait(true);
+    }
+
+    private void SetModelCore(FbxModelAuthoringImportResult? model, bool solveSynchronously)
+    {
+        CancelPendingFitSolve();
+        Interlocked.Increment(ref _fitInputRevision);
+        Interlocked.Exchange(ref _publishedFitRevision, -1);
+        IsBusy = false;
         Guid? selectedGuide = model?.Package.Document.ModelId == _model?.Package.Document.ModelId ? SelectedBodyGuideId : null;
         bool mirrorGuide = selectedGuide is not null && MirrorBodyGuide;
         bool sameSourceModel = model is not null && _model?.Package.Document.ModelId == model.Package.Document.ModelId;
@@ -619,6 +659,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             _model = model;
             _previousMappingEdit = null;
             _previousPositionOverrides = null;
+            _pendingRoleOverride = null;
             _sourceConformanceReviewRequired = false;
             _editingAppliedOutputRig = false;
             MappingEditStatus = string.Empty;
@@ -669,8 +710,25 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         RestoreStudioWorkflow();
         SelectBodyGuide(selectedGuide);
         MirrorBodyGuide = mirrorGuide && CanMirrorBodyGuide;
-        Solve();
+        if (solveSynchronously) Solve();
         NotifyStateChanged();
+    }
+
+    internal FbxModelAuthoringImportResult? UpdateWorkflowMode(CustomModelWorkflowMode workflowMode)
+    {
+        if (_model is not { } model)
+            return null;
+
+        if (model.Package.Document.WorkflowMode == workflowMode)
+            return model;
+
+        CustomModelDocument document = model.Package.Document with
+        {
+            WorkflowMode = workflowMode,
+        };
+        document.Validate();
+        _model = model with { Package = model.Package with { Document = document } };
+        return _model;
     }
 
     /// <summary>
@@ -767,10 +825,12 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                     .ConfigureAwait(true);
             if (!ReferenceEquals(source, _model) || !requested.Equals(TemplateProfileName, StringComparison.Ordinal)) return;
             UseTemplateResolution(resolution);
+            if (_model?.Rig is not null && _template is not null)
+                await StartSolveAsync(debounce: false, cancellationToken).ConfigureAwait(true);
         }
         finally
         {
-            IsBusy = false;
+            IsBusy = _fitSolveCancellation is not null;
             NotifyStateChanged();
         }
     }
@@ -787,7 +847,6 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             ? $"{resolution.ResourceName}: {resolution.Status}"
             : resolution.Status;
         _setStatus(TemplateStatus);
-        Solve();
     }
 
     /// <summary>
@@ -798,6 +857,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public void Solve()
     {
         if (_settingModel) return;
+        CancelPendingFitSolve();
+        long revision = Interlocked.Increment(ref _fitInputRevision);
+        IsBusy = false;
         if (_sourceConformanceReviewRequired)
         {
             Correspondence = null;
@@ -809,36 +871,12 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             RefreshWarnings();
             RefreshMissingCoreRoles();
             SolveStatus = "The previous fit belongs to a different source model. Re-match the changed model before fitting.";
+            Interlocked.Exchange(ref _publishedFitRevision, revision);
             NotifyStateChanged();
             FitChanged?.Invoke(this, EventArgs.Empty);
             return;
         }
-        // Applied output bones have DL1 names, while the saved decisions name
-        // the original FBX bones. Preserve those decisions in the document,
-        // but start a clean current-rig solve so the output can be adjusted.
-        if (!_editingAppliedOutputRig && _model is { Rig: { } displayedRig } &&
-            _model.Package.Document.RigConformance is { } savedConformance &&
-            savedConformance.MatchesAppliedOutputRig(
-                displayedRig,
-                _model.Package.Document.Source.ContentSha256))
-        {
-            _editingAppliedOutputRig = true;
-            _roleOverrides = ImmutableDictionary<string, string>.Empty;
-            _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
-            _previousMappingEdit = null;
-            _previousPositionOverrides = null;
-            _sourceConformanceReviewRequired = false;
-            // The current output already carries the approved proportions.
-            // Preserve those segment lengths until the author explicitly
-            // chooses a different fit strength or scale policy.
-            _settingModel = true;
-            try
-            {
-                ScaleMode = CustomModelConformanceScaleMode.Automatic;
-                ConformanceStrength = 0.0;
-            }
-            finally { _settingModel = false; }
-        }
+        PrepareAppliedOutputRigForSolve();
 
         if (_template is not { } template ||
             _model?.Rig is not { } source)
@@ -846,6 +884,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             Fit = null;
             if (HasUnriggedSource && _model!.Package.Document.RigConformance is null)
                 SolveStatus = "Unrigged model loaded. Review and edit its body guides.";
+            Interlocked.Exchange(ref _publishedFitRevision, revision);
             NotifyStateChanged();
             return;
         }
@@ -915,12 +954,270 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             SolveStatus = $"The conformance could not be solved: {exception.Message}";
         }
 
+        if (!AcceptPendingRoleOverride(new(
+                Correspondence, Landmark, Fit, _geometryEvidence, _geometryEvidenceCaptured, SolveStatus)))
+            return;
+        Interlocked.Exchange(ref _publishedFitRevision, revision);
         RefreshMappings();
         RefreshLandmarks();
         RefreshWarnings();
         RefreshMissingCoreRoles();
         NotifyStateChanged();
         FitChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void QueueSolve(bool debounce = true)
+    {
+        if (_settingModel || _restoringStudio) return;
+        _ = StartSolveAsync(debounce, CancellationToken.None);
+    }
+
+    internal void SetModelQueued(FbxModelAuthoringImportResult? model)
+    {
+        SetModelCore(model, solveSynchronously: false);
+        if (model is not null && _template is not null && model.Rig is not null)
+            QueueSolve(debounce: false);
+        else
+            Solve();
+    }
+
+    private async Task StartSolveAsync(bool debounce, CancellationToken cancellationToken)
+    {
+        if (_settingModel) return;
+        PrepareAppliedOutputRigForSolve();
+        CancelPendingFitSolve();
+        long revision = Interlocked.Increment(ref _fitInputRevision);
+        var linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _fitSolveCancellation = linkedCancellation;
+        RigConformanceSolveRequest request = CaptureSolveRequest(revision);
+        IsBusy = true;
+        await RunScheduledSolveAsync(request, debounce, linkedCancellation).ConfigureAwait(true);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    private async Task RunScheduledSolveAsync(
+        RigConformanceSolveRequest request,
+        bool debounce,
+        CancellationTokenSource cancellation)
+    {
+        CancellationToken token = cancellation.Token;
+        try
+        {
+            if (debounce)
+                await _solveScheduler.DelayAsync(TimeSpan.FromMilliseconds(200), token).ConfigureAwait(true);
+            token.ThrowIfCancellationRequested();
+            RigConformanceSolveResult result = await _solveScheduler.SolveAsync(request, token).ConfigureAwait(true);
+            token.ThrowIfCancellationRequested();
+            if (!IsCurrentSolve(request, token)) return;
+            if (!AcceptPendingRoleOverride(result)) return;
+            PublishSolveResult(result, request.Revision);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            if (IsCurrentSolve(request, token)) IsBusy = false;
+        }
+        catch (Exception exception)
+        {
+            if (IsCurrentSolve(request, token))
+            {
+                PublishSolveResult(new(null, null, null, null, false,
+                    $"The conformance could not be solved: {exception.Message}"), request.Revision);
+            }
+        }
+        finally
+        {
+            if (ReferenceEquals(_fitSolveCancellation, cancellation))
+            {
+                _fitSolveCancellation = null;
+                IsBusy = false;
+            }
+            cancellation.Dispose();
+        }
+    }
+
+    private bool IsCurrentSolve(RigConformanceSolveRequest request, CancellationToken token) =>
+        !token.IsCancellationRequested &&
+        request.Revision == Interlocked.Read(ref _fitInputRevision) &&
+        ReferenceEquals(request.Model, _model);
+
+    private RigConformanceSolveRequest CaptureSolveRequest(long revision)
+    {
+        FbxModelAuthoringImportResult? model = _model;
+        Dl1RigTemplate? template = _template;
+        bool useGeometry = UseGeometryCorrespondence;
+        bool requiresSourceReview = _sourceConformanceReviewRequired;
+        bool editingAppliedOutput = _editingAppliedOutputRig;
+        bool keepExtraBones = KeepExtraBones;
+        CustomModelConformanceScaleMode scaleMode = ScaleMode;
+        double manualScale = ManualScale;
+        double conformanceStrength = ConformanceStrength;
+        ImmutableDictionary<string, string> roleOverrides = _roleOverrides;
+        ImmutableDictionary<string, Vector3D> positionOverrides = _positionOverrides;
+        RigGeometryEvidence? geometryEvidence = _geometryEvidence;
+        bool geometryEvidenceCaptured = _geometryEvidenceCaptured;
+        return new(revision, model, cancellationToken => ComputeSolveResult(
+            model, template, useGeometry, requiresSourceReview, editingAppliedOutput,
+            keepExtraBones, scaleMode, manualScale, conformanceStrength,
+            roleOverrides, positionOverrides, geometryEvidence, geometryEvidenceCaptured,
+            cancellationToken));
+    }
+
+    private static RigConformanceSolveResult ComputeSolveResult(
+        FbxModelAuthoringImportResult? model,
+        Dl1RigTemplate? template,
+        bool useGeometry,
+        bool requiresSourceReview,
+        bool editingAppliedOutput,
+        bool keepExtraBones,
+        CustomModelConformanceScaleMode scaleMode,
+        double manualScale,
+        double conformanceStrength,
+        ImmutableDictionary<string, string> roleOverrides,
+        ImmutableDictionary<string, Vector3D> positionOverrides,
+        RigGeometryEvidence? geometryEvidence,
+        bool geometryEvidenceCaptured,
+        CancellationToken cancellationToken)
+    {
+        if (requiresSourceReview)
+        {
+            return new(null, null, null, geometryEvidence, geometryEvidenceCaptured,
+                "The previous fit belongs to a different source model. Re-match the changed model before fitting.");
+        }
+        if (template is null || model?.Rig is not { } source)
+        {
+            string status = model?.Rig is null && model?.Package.Document.RigConformance is null
+                ? "Unrigged model loaded. Review and edit its body guides."
+                : "Import a model and resolve a target skeleton to begin.";
+            return new(null, null, null, geometryEvidence, geometryEvidenceCaptured, status);
+        }
+
+        try
+        {
+            if (useGeometry && !geometryEvidenceCaptured)
+            {
+                RigGeometryEvidence captured = FbxRigGeometryEvidence.Build(model, cancellationToken);
+                geometryEvidence = captured.Supports.Any(static support => support.SurfaceMass > 0)
+                    ? captured
+                    : null;
+                geometryEvidenceCaptured = true;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            RigCorrespondence correspondence = RigCorrespondenceSolver.Solve(
+                template,
+                source,
+                new RigCorrespondenceOptions
+                {
+                    DropExtraBones = !keepExtraBones,
+                    RoleOverrides = roleOverrides,
+                    GeometryEvidence = useGeometry ? geometryEvidence : null,
+                },
+                cancellationToken);
+            RigLandmarkSolution landmark = RigLandmarkSolver.Solve(
+                template,
+                source,
+                correspondence,
+                new RigLandmarkOptions
+                {
+                    ScaleOverride = scaleMode == CustomModelConformanceScaleMode.Manual ? manualScale : null,
+                    RestrictScaleToRegion = scaleMode switch
+                    {
+                        CustomModelConformanceScaleMode.Leg => RigScaleRegion.Leg,
+                        CustomModelConformanceScaleMode.Torso => RigScaleRegion.Torso,
+                        CustomModelConformanceScaleMode.Arm => RigScaleRegion.Arm,
+                        _ => null,
+                    },
+                },
+                cancellationToken);
+            RigConformanceResult fit = RigConformanceSolver.Solve(
+                template,
+                source,
+                correspondence,
+                landmark,
+                new RigConformanceOptions
+                {
+                    ConformanceStrength = conformanceStrength,
+                    PositionOverrides = positionOverrides,
+                },
+                cancellationToken);
+            string status = editingAppliedOutput
+                ? $"Reopened the applied DL rig for editing. Original source mapping decisions remain saved; the current rig is the fit source. {fit.Bones.Length} bones - {correspondence.MappedCount} mapped, {correspondence.SynthesizedCount} synthesized."
+                : string.Create(CultureInfo.CurrentCulture,
+                    $"{fit.Bones.Length} bones - {correspondence.MappedCount} mapped, {correspondence.SynthesizedCount} synthesized, {correspondence.ExtraCount} retained, {correspondence.DroppedCount} dropped. {fit.Warnings.Length} proportion warnings.");
+            if (useGeometry && geometryEvidence is null)
+                status += " No usable surface support; only name-based proposals are available.";
+            return new(correspondence, landmark, fit, geometryEvidence, geometryEvidenceCaptured, status);
+        }
+        catch (Exception exception) when (exception is InvalidDataException or InvalidOperationException or ArgumentException)
+        {
+            return new(null, null, null, geometryEvidence, geometryEvidenceCaptured,
+                $"The conformance could not be solved: {exception.Message}");
+        }
+    }
+
+    private void PublishSolveResult(RigConformanceSolveResult result, long revision)
+    {
+        _geometryEvidence = result.GeometryEvidence;
+        _geometryEvidenceCaptured = result.GeometryEvidenceCaptured;
+        Correspondence = result.Correspondence;
+        Landmark = result.Landmark;
+        Fit = result.Fit;
+        SolveStatus = result.Status;
+        Interlocked.Exchange(ref _publishedFitRevision, revision);
+        RefreshMappings();
+        RefreshLandmarks();
+        RefreshWarnings();
+        RefreshMissingCoreRoles();
+        NotifyStateChanged();
+        FitChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void CancelPendingFitSolve()
+    {
+        CancellationTokenSource? cancellation = _fitSolveCancellation;
+        _fitSolveCancellation = null;
+        cancellation?.Cancel();
+    }
+
+    internal void CancelPendingSolve()
+    {
+        Interlocked.Increment(ref _fitInputRevision);
+        CancelPendingFitSolve();
+        IsBusy = false;
+    }
+
+    internal void SetSolveScheduler(IRigConformanceSolveScheduler scheduler)
+    {
+        ArgumentNullException.ThrowIfNull(scheduler);
+        CancelPendingSolve();
+        _solveScheduler = scheduler;
+    }
+
+    private void PrepareAppliedOutputRigForSolve()
+    {
+        if (_sourceConformanceReviewRequired || _editingAppliedOutputRig ||
+            _model is not { Rig: { } displayedRig } model ||
+            model.Package.Document.RigConformance is not { } savedConformance ||
+            !savedConformance.MatchesAppliedOutputRig(
+                displayedRig,
+                model.Package.Document.Source.ContentSha256))
+            return;
+
+        _editingAppliedOutputRig = true;
+        _roleOverrides = ImmutableDictionary<string, string>.Empty;
+        _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
+        _previousMappingEdit = null;
+        _previousPositionOverrides = null;
+        _sourceConformanceReviewRequired = false;
+        _settingModel = true;
+        try
+        {
+            ScaleMode = CustomModelConformanceScaleMode.Automatic;
+            ConformanceStrength = 0.0;
+        }
+        finally
+        {
+            _settingModel = false;
+        }
     }
 
     private void RefreshMappings()
@@ -989,7 +1286,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         OnPropertyChanged(nameof(GuidedEditableMappingRows));
     }
 
-    partial void OnUseGeometryCorrespondenceChanged(bool value) => Solve();
+    partial void OnUseGeometryCorrespondenceChanged(bool value) => QueueSolve();
 
     private void AcceptMappingProposals()
     {
@@ -997,7 +1294,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         _previousMappingEdit = CaptureMappingEdit();
         foreach (var row in correspondence.Rows.Where(static r => r.Disposition == RigBoneDisposition.Mapped && r.Role is not null && r.SourceName is not null))
             _roleOverrides = _roleOverrides.SetItem(row.Role!, row.SourceName!);
-        Solve();
+        QueueSolve();
         MappingEditStatus = "Suggested matches accepted. Undo restores the previous mapping choices.";
     }
 
@@ -1020,14 +1317,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         }
         _geometryEvidence = null;
         _geometryEvidenceCaptured = false;
-        Solve();
-        MappingEditStatus = Fit is null
-            ? "Automatic matching could not finish. Check the fit status."
-            : sourceChanged
-                ? "Changed model matched. Review its bones and joint positions. Undo returns to the saved fit review."
-                : previous.IsEmpty
-                ? "Automatic matching refreshed from the current model."
-                : "Automatic matching replaced the manual bone choices. Undo restores them.";
+        QueueSolve();
+        MappingEditStatus = "Automatic matching queued.";
         UndoLastMappingChangeCommand.NotifyCanExecuteChanged();
     }
 
@@ -1046,7 +1337,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         }
         _sourceConformanceReviewRequired = previous.RequiresSourceReview;
         _previousMappingEdit = null;
-        Solve();
+        QueueSolve();
         MappingEditStatus = RequiresSourceRematch
             ? "Saved fit restored for review. Re-match before fitting the changed model."
             : "Previous bone mapping choices restored.";
@@ -1128,6 +1419,11 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private bool ApplyRoleOverride(string role, string sourceBoneName)
     {
+        if (IsBusy)
+        {
+            MappingEditStatus = "Wait for the current fit to finish before changing a bone match.";
+            return false;
+        }
         if (_sourceConformanceReviewRequired) return false;
         if (_model?.Rig is not { } sourceRig ||
             sourceRig.GetBoneIndex(sourceBoneName) < 0)
@@ -1164,52 +1460,62 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         int mappedBefore = MappedCount;
         int coreBefore = CoreRoles.Length - MissingCoreRoles.Length;
         _previousMappingEdit = CaptureMappingEdit();
+        _pendingRoleOverride = new(previous, previousUndo, mappedBefore, coreBefore,
+            role, sourceBoneName, IsAdvancedSetupMode);
         _roleOverrides = previous.SetItem(role, sourceBoneName);
-        Solve();
-        if (Fit is null || Correspondence is null)
-        {
-            _roleOverrides = previous;
-            _previousMappingEdit = previousUndo;
-            Solve();
-            MappingEditStatus = "That bone choice could not be fitted. The previous mappings were restored.";
-            return false;
-        }
+        MappingEditStatus = $"Checking the {sourceBoneName} match.";
+        QueueSolve();
+        return true;
+    }
 
-        int lostMapped = mappedBefore - MappedCount;
-        int lostCore = coreBefore - (CoreRoles.Length - MissingCoreRoles.Length);
+    private bool AcceptPendingRoleOverride(RigConformanceSolveResult result)
+    {
+        if (_pendingRoleOverride is not { } pending) return true;
+        int mappedCount = result.Correspondence?.MappedCount ?? 0;
+        var mappedCoreRoles = new HashSet<string>(StringComparer.Ordinal);
+        if (result.Correspondence is { } solvedCorrespondence)
+        {
+            foreach (RigCorrespondenceRow row in solvedCorrespondence.Rows.Where(
+                         static row => row.Disposition == RigBoneDisposition.Mapped && row.Role is not null))
+                mappedCoreRoles.Add(row.Role!);
+        }
+        int coreCount = CoreRoles.Count(mappedCoreRoles.Contains);
+        int lostMapped = pending.MappedBefore - mappedCount;
+        int lostCore = pending.CoreBefore - coreCount;
         bool majorLoss =
-            mappedBefore >= 4 && lostMapped >= Math.Max(3, mappedBefore / 2) ||
-            coreBefore >= 3 && lostCore >= Math.Max(2, coreBefore / 2);
-        if (majorLoss && !IsAdvancedSetupMode)
+            pending.MappedBefore >= 4 && lostMapped >= Math.Max(3, pending.MappedBefore / 2) ||
+            pending.CoreBefore >= 3 && lostCore >= Math.Max(2, pending.CoreBefore / 2);
+        if (result.Fit is null || result.Correspondence is null || majorLoss && !pending.AllowMajorLoss)
         {
-            _roleOverrides = previous;
-            _previousMappingEdit = previousUndo;
-            Solve();
-            MappingEditStatus =
-                $"Would unmap {lostMapped} bones ({Math.Max(0, lostCore)} core). " +
-                "Previous fit restored; Advanced can allow it.";
+            _roleOverrides = pending.RolesBefore;
+            _previousMappingEdit = pending.PreviousUndo;
+            _pendingRoleOverride = null;
+            MappingEditStatus = result.Fit is null || result.Correspondence is null
+                ? "That bone choice could not be fitted. The previous mappings were restored."
+                : $"Would unmap {lostMapped} bones ({Math.Max(0, lostCore)} core). Previous fit restored; Advanced can allow it.";
+            QueueSolve();
             return false;
         }
 
+        _pendingRoleOverride = null;
         MappingEditStatus = majorLoss
             ? $"This choice unmapped {lostMapped} bones. Undo restores the previous mapping."
             : lostMapped > 0
                 ? $"This choice changed {lostMapped} other bone mappings. Undo restores them."
-                : $"{sourceBoneName} assigned. Undo restores the previous mapping.";
+                : "Bone match applied. Undo restores the previous mapping.";
         if (_guidedMappingConflictTargetRole is { } conflictTarget &&
             _guidedMappingConflictOwnerRole is { } conflictOwner &&
             _guidedMappingConflictSourceName is { } conflictSource)
         {
-            if (string.Equals(role, conflictOwner, StringComparison.Ordinal) &&
-                !string.Equals(sourceBoneName, conflictSource, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(pending.Role, conflictOwner, StringComparison.Ordinal) &&
+                !string.Equals(pending.SourceBoneName, conflictSource, StringComparison.OrdinalIgnoreCase))
             {
-                MappingEditStatus =
-                    $"{conflictSource} is now free from {conflictOwner}. Choose it for {conflictTarget} when ready.";
+                MappingEditStatus = $"{conflictSource} is now free from {conflictOwner}. Choose it for {conflictTarget} when ready.";
                 OnPropertyChanged(nameof(GuidedMappingReviewRows));
                 OnPropertyChanged(nameof(GuidedEditableMappingRows));
             }
-            else if (string.Equals(role, conflictTarget, StringComparison.Ordinal) &&
-                     string.Equals(sourceBoneName, conflictSource, StringComparison.OrdinalIgnoreCase))
+            else if (string.Equals(pending.Role, conflictTarget, StringComparison.Ordinal) &&
+                     string.Equals(pending.SourceBoneName, conflictSource, StringComparison.OrdinalIgnoreCase))
             {
                 ClearGuidedMappingConflict();
             }
@@ -1279,14 +1585,14 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             _positionOverrides = _positionOverrides.Remove(mirror);
         }
 
-        Solve();
+        QueueSolve();
     }
 
     private void ResetAllOverrides()
     {
         _previousPositionOverrides = _positionOverrides;
         _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
-        Solve();
+        QueueSolve();
     }
 
     private void UndoLastJointPlacement()
@@ -1298,23 +1604,23 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
         _positionOverrides = previous;
         _previousPositionOverrides = null;
-        Solve();
+        QueueSolve();
     }
 
-    partial void OnKeepExtraBonesChanged(bool value) => Solve();
+    partial void OnKeepExtraBonesChanged(bool value) => QueueSolve();
 
     partial void OnScaleModeChanged(CustomModelConformanceScaleMode value)
     {
         OnPropertyChanged(nameof(SelectedScaleModeChoice));
         OnPropertyChanged(nameof(IsManualScale));
-        Solve();
+        QueueSolve();
     }
 
     partial void OnManualScaleChanged(double value)
     {
         if (ScaleMode == CustomModelConformanceScaleMode.Manual)
         {
-            Solve();
+            QueueSolve();
         }
     }
 
@@ -1322,7 +1628,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(FitMode));
         OnPropertyChanged(nameof(SelectedFitModeChoice));
-        Solve();
+        QueueSolve();
     }
 
     partial void OnStageChanged(RigConformanceStage value)

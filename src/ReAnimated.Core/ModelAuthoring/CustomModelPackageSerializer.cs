@@ -136,6 +136,25 @@ public static class CustomModelPackageSerializer
                     !Guid.TryParseExact(fileName[..^5], "N", out Guid clipId) || !derivedClipIds.Contains(clipId))
                     throw new CustomModelFormatException($"The package contains an orphan or malformed derived animation entry '{entryPath}'.");
             }
+            var authoredAnimations = ImmutableDictionary.CreateBuilder<Guid, ImmutableArray<byte>>();
+            foreach (CustomModelAnimationClip clip in document.AnimationClips.Where(static clip => clip.AuthoredAnimation is not null))
+            {
+                AuthoredAnimationReference reference = clip.AuthoredAnimation!;
+                string authoredEntryPath = AuthoredAnimationReference.EntryPath(clip.Id);
+                ZipArchiveEntry entry = GetRequiredEntry(entries, authoredEntryPath);
+                if (entry.Length != reference.PayloadLength)
+                    throw new CustomModelFormatException("An authored animation length differs from its manifest.");
+                ImmutableArray<byte> payload = ReadBoundedEntry(entry, DerivedAnimationDataCodec.MaximumPayloadBytes);
+                VerifySha256(payload.AsSpan(), reference.PayloadSha256, authoredEntryPath);
+                authoredAnimations.Add(clip.Id, payload);
+            }
+            foreach (string authoredEntryPath in entries.Keys.Where(static entryPath => entryPath.StartsWith("animation/authored/", StringComparison.Ordinal)))
+            {
+                string fileName = authoredEntryPath["animation/authored/".Length..];
+                if (!fileName.EndsWith(".json", StringComparison.Ordinal) ||
+                    !Guid.TryParseExact(fileName[..^5], "N", out Guid id) || !authoredAnimations.ContainsKey(id))
+                    throw new CustomModelFormatException("The package contains an orphan authored animation.");
+            }
             var companionPayloads = ImmutableDictionary.CreateBuilder<string, ImmutableArray<byte>>(StringComparer.Ordinal);
             ImmutableArray<byte> decodedCharacter = [];
             if (document.CharacterResources is { } character)
@@ -152,6 +171,7 @@ public static class CustomModelPackageSerializer
                 GeometryRevisionPayload = revisionPayload,
                 CompanionPayloads = companionPayloads.ToImmutable(),
                 DerivedAnimationPayloads = derivedPayloads.ToImmutable(),
+                AuthoredAnimationPayloads = authoredAnimations.ToImmutable(),
             };
             ValidatePayloads(package);
             return package;
@@ -251,6 +271,7 @@ public static class CustomModelPackageSerializer
         }
         if(package.Document.AuthoredLayer is { } authoredLayer)Reserve(authoredLayer.EntryPath,package.AuthoredLayerPayload.Length);
         foreach(var (id,payload) in package.DerivedAnimationPayloads)Reserve(DerivedAnimationDataCodec.EntryPath(id),payload.Length);
+        foreach(var (id,payload) in package.AuthoredAnimationPayloads)Reserve(AuthoredAnimationReference.EntryPath(id),payload.Length);
         foreach(var (path,payload) in package.TexturePayloads)Reserve(path,payload.Length);
 
         using var stream = new MemoryStream();
@@ -274,6 +295,8 @@ public static class CustomModelPackageSerializer
                 WriteEntry(archive, authored.EntryPath, package.AuthoredLayerPayload.AsSpan(), CompressionLevel.Optimal);
             foreach ((Guid clipId, ImmutableArray<byte> payload) in package.DerivedAnimationPayloads.OrderBy(static item => item.Key))
                 WriteEntry(archive, DerivedAnimationDataCodec.EntryPath(clipId), payload.AsSpan(), CompressionLevel.Optimal);
+            foreach ((Guid clipId, ImmutableArray<byte> payload) in package.AuthoredAnimationPayloads.OrderBy(static item => item.Key))
+                WriteEntry(archive, AuthoredAnimationReference.EntryPath(clipId), payload.AsSpan(), CompressionLevel.Optimal);
             foreach ((string entryPath, ImmutableArray<byte> payload) in package.TexturePayloads
                          .OrderBy(static item => item.Key, StringComparer.Ordinal))
             {
@@ -309,6 +332,15 @@ public static class CustomModelPackageSerializer
 
         if (document.SchemaVersion < 7)
             document = document with { AuthoredLayer = null };
+
+        if (document.SchemaVersion < 9)
+            document = document with
+            {
+                WorkflowMode = document.RigConformance?.AppliedOutputRigSignature is not null ||
+                    document.RigMode == CustomModelRigMode.Dl1HumanoidFit
+                    ? CustomModelWorkflowMode.Character
+                    : CustomModelWorkflowMode.OriginalRig,
+            };
 
         return document.SchemaVersion switch
         {
@@ -360,6 +392,7 @@ public static class CustomModelPackageSerializer
             },
             6 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion, AuthoredLayer = null },
             7 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
+            8 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
             _ => throw new CustomModelFormatException(
                 $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 through {CustomModelDocument.CurrentSchemaVersion}."),
         };
@@ -512,6 +545,7 @@ public static class CustomModelPackageSerializer
             throw new CustomModelFormatException("Character payloads require an inventory.");
         ValidateAuthoredLayer(package);
         ValidateDerivedAnimationPayloads(package);
+        ValidateAuthoredAnimationPayloads(package);
         if (package.SourceFbx.IsDefaultOrEmpty || package.SourceFbx.Length > MaximumSourceFbxBytes)
         {
             throw new ArgumentException("A model package must contain a bounded immutable source snapshot.", nameof(package));
@@ -590,6 +624,34 @@ public static class CustomModelPackageSerializer
                     throw new CustomModelFormatException($"Clip '{clip.Id}' declares derived motion without a payload.");
             }
         }
+    }
+
+    public static void ValidateAuthoredAnimationPayloads(CustomModelPackage package)
+    {
+        ArgumentNullException.ThrowIfNull(package);
+        if (package.AuthoredAnimationPayloads is null)
+            throw new CustomModelFormatException("Authored animation payloads must be initialized.");
+        Dictionary<Guid, CustomModelAnimationClip> clips = package.Document.AnimationClips
+            .Where(static clip => clip.AuthoredAnimation is not null).ToDictionary(static clip => clip.Id);
+        long total = 0;
+        foreach ((Guid id, ImmutableArray<byte> payload) in package.AuthoredAnimationPayloads)
+        {
+            if (!clips.TryGetValue(id, out CustomModelAnimationClip? clip))
+                throw new CustomModelFormatException("An authored animation payload has no manifest reference.");
+            AuthoredAnimationReference reference = clip.AuthoredAnimation!;
+            reference.Validate();
+            if (payload.IsDefaultOrEmpty || payload.Length != reference.PayloadLength)
+                throw new CustomModelFormatException("An authored animation payload is missing or has the wrong length.");
+            total = checked(total + payload.Length);
+            if (total > 512L * 1024L * 1024L)
+                throw new CustomModelFormatException("Authored animation payloads exceed the package bound.");
+            VerifySha256(payload.AsSpan(), reference.PayloadSha256, AuthoredAnimationReference.EntryPath(id));
+            DerivedAnimationData data = DerivedAnimationDataCodec.Deserialize(payload.AsSpan());
+            if (data.ClipId != id || data.FrameCount != clip.FrameCount || data.FrameRate != clip.FrameRate)
+                throw new CustomModelFormatException("Authored animation timing or identity differs from its manifest.");
+        }
+        if (clips.Keys.Any(id => !package.AuthoredAnimationPayloads.ContainsKey(id)))
+            throw new CustomModelFormatException("An authored animation has no payload.");
     }
 
     public static AuthoredModelLayer? ValidateAuthoredLayer(CustomModelPackage package)

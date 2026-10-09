@@ -41,6 +41,7 @@ public sealed class CustomModelPreviewSession
     private readonly Dl1PreparedAuthoredRig? _authoredRig;
     private readonly bool _configuredFlipTextureCoordinateV;
     private readonly SkeletonPose? _sourceBindPose;
+    private readonly ImmutableDictionary<string, RigidGeometryOwnerBinding> _rigidGeometryOwners;
     private readonly Dictionary<AnimationClip, HashSet<int>> _trackedBoneIndices = [];
     private ImmutableArray<Dl1ResolvedBoneScriptPolicy> _reviewedPolicies;
 
@@ -63,6 +64,7 @@ public sealed class CustomModelPreviewSession
         Meshes = meshes;
         Diagnostics = diagnostics;
         _sourceBindPose = model.Rig is { } rig ? RigStressPose.Evaluate(model.Package.Document, rig, [], 0) : null;
+        _rigidGeometryOwners = BuildRigidGeometryOwners(model, authoredRig);
     }
 
     public CustomModelPreviewMode RequestedMode { get; }
@@ -74,6 +76,8 @@ public sealed class CustomModelPreviewSession
     public bool AppliesTextureCoordinateVFlip { get; }
 
     public ImmutableArray<MeshRenderData> Meshes { get; }
+
+    public bool HasRigidGeometry => !_rigidGeometryOwners.IsEmpty;
 
     public ImmutableArray<string> Diagnostics { get; }
 
@@ -373,6 +377,117 @@ public sealed class CustomModelPreviewSession
     }
 
     /// <summary>
+    /// Returns the preview meshes for one evaluated clip frame. Unweighted
+    /// geometry attached to an imported pivot follows that pivot's bind-relative
+    /// transform; skin palettes remain evaluated by the renderer as before.
+    /// </summary>
+    public ImmutableArray<MeshRenderData> CreateMeshes(
+        AnimationClip? clip,
+        int frame,
+        bool reviewedPolicy = false)
+    {
+        if (_model.Rig is null || _rigidGeometryOwners.IsEmpty)
+            return Meshes;
+
+        SkeletonPose pose = CreateClipPresentationPose(clip, frame, reviewedPolicy);
+        return CreateRigidGeometryMeshes(pose);
+    }
+
+    /// <summary>Applies a supplied source pose to rigidly attached preview meshes.</summary>
+    public ImmutableArray<MeshRenderData> CreateMeshes(SkeletonPose runtimePose)
+        => CreateMeshes(runtimePose, Meshes);
+
+    public ImmutableArray<MeshRenderData> CreateMeshes(
+        SkeletonPose runtimePose,
+        IReadOnlyList<MeshRenderData> meshes,
+        bool reviewedPolicy = false,
+        TransformMatrix? actorWorldTransform = null)
+    {
+        ArgumentNullException.ThrowIfNull(runtimePose);
+        ArgumentNullException.ThrowIfNull(meshes);
+        if (_model.Rig is null || _rigidGeometryOwners.IsEmpty)
+            return meshes.ToImmutableArray();
+        SkeletonPose pose = CreatePresentationPose(runtimePose);
+        if (reviewedPolicy) pose = ApplyReviewedComponentMasks(pose);
+        return CreateRigidGeometryMeshes(pose, meshes, actorWorldTransform);
+    }
+
+    private ImmutableArray<MeshRenderData> CreateRigidGeometryMeshes(SkeletonPose pose)
+        => CreateRigidGeometryMeshes(pose, Meshes);
+
+    private ImmutableArray<MeshRenderData> CreateRigidGeometryMeshes(
+        SkeletonPose pose, IReadOnlyList<MeshRenderData> meshes,
+        TransformMatrix? actorWorldTransform = null)
+    {
+        var result = ImmutableArray.CreateBuilder<MeshRenderData>(meshes.Count);
+        foreach (MeshRenderData mesh in meshes)
+        {
+            if (!_rigidGeometryOwners.TryGetValue(mesh.Id, out RigidGeometryOwnerBinding owner))
+            {
+                result.Add(mesh);
+                continue;
+            }
+
+            if ((uint)owner.PresentationBoneIndex >= (uint)pose.GlobalMatrices.Length)
+                throw new InvalidDataException($"Rigid mesh '{mesh.Id}' has an owner outside its preview rig.");
+            TransformMatrix ownerPose = pose.GlobalMatrices[owner.PresentationBoneIndex];
+            TransformMatrix bindRelative = ownerPose * owner.BindGlobal.InvertedAffine();
+            if (actorWorldTransform is { } actorWorld) bindRelative = actorWorld * bindRelative;
+            if (!bindRelative.IsFinite)
+                throw new InvalidDataException($"Rigid mesh '{mesh.Id}' produced a non-finite owner transform.");
+            result.Add(mesh with { LocalToWorld = CorePreviewAdapter.ToSystemMatrix(bindRelative) });
+        }
+
+        return result.MoveToImmutable();
+    }
+
+    private static ImmutableDictionary<string, RigidGeometryOwnerBinding> BuildRigidGeometryOwners(
+        FbxModelAuthoringImportResult model,
+        Dl1PreparedAuthoredRig? authoredRig)
+    {
+        if (model.Rig is null)
+            return ImmutableDictionary<string, RigidGeometryOwnerBinding>.Empty;
+
+        ImmutableArray<CustomModelBone> bones = model.Package.Document.CreateEffectiveBones();
+        var sourceGlobals = ImmutableArray.CreateBuilder<TransformMatrix>(bones.Length);
+        for (int index = 0; index < bones.Length; index++)
+        {
+            CustomModelBone bone = bones[index];
+            sourceGlobals.Add(bone.ParentIndex < 0
+                ? bone.ExactLocalBindMatrix
+                : sourceGlobals[bone.ParentIndex] * bone.ExactLocalBindMatrix);
+        }
+
+        var result = ImmutableDictionary.CreateBuilder<string, RigidGeometryOwnerBinding>(StringComparer.Ordinal);
+        foreach (FbxModelSurface surface in model.Surfaces)
+        {
+            if (surface.IsSkinned || surface.RigidGeometryOwnerFbxObjectId is not { } ownerObjectId)
+                continue;
+            int[] owners = bones
+                .Where(bone => bone.FbxObjectId == ownerObjectId)
+                .Select(static bone => bone.Index)
+                .ToArray();
+            if (owners.Length != 1)
+                throw new InvalidDataException($"Rigid surface '{surface.Id}' must name exactly one retained owner bone.");
+
+            int sourceIndex = owners[0];
+            int presentationIndex = authoredRig is null
+                ? sourceIndex
+                : authoredRig.Contract.SourceToPhysicalIndices[sourceIndex];
+            TransformMatrix bindGlobal = authoredRig is null
+                ? sourceGlobals[sourceIndex]
+                : authoredRig.Contract.Nodes[presentationIndex].GlobalBindMatrix;
+            result.Add(surface.Id, new(presentationIndex, bindGlobal));
+        }
+
+        return result.ToImmutable();
+    }
+
+    private readonly record struct RigidGeometryOwnerBinding(
+        int PresentationBoneIndex,
+        TransformMatrix BindGlobal);
+
+    /// <summary>
     /// Diagnostic DL1 Output comparison using the reviewed BSCR component
     /// masks. This is an authoring approximation: native LOD selection,
     /// animation blending and engine composition are not simulated. The
@@ -484,7 +599,7 @@ public sealed class CustomModelPreviewSession
         int? selectedBoneIndex = null,
         bool reviewedPolicy = false) =>
         new(
-            Meshes,
+            CreateMeshes(clip, frame, reviewedPolicy),
             CreateSkeleton(clip, frame, selectedBoneIndex, reviewedPolicy),
             reviewedPolicy
                 ? Diagnostics.Add("Reviewed BSCR-mask preview holds omitted POS/ROT/SCL channels at bind. This is an authoring approximation; native blending, LOD and runtime binding remain unverified.")

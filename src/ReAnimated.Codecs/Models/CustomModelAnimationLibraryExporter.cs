@@ -303,11 +303,11 @@ public static class CustomModelAnimationLibraryExporter
             }
 
             AnimationClip clip = RebaseToAuthoredRig(
-                imported,
+                FbxAnimationTimingAuthoring.WithFrameRate(imported, selection.FrameRate),
                 preparedRig,
                 name,
                 outputFrameRate,
-                selection.DerivedMotion is null ? [] : request.Model.Package.Document.CreateEffectiveBones()
+                selection.DerivedMotion is null && selection.AuthoredAnimation is null ? [] : request.Model.Package.Document.CreateEffectiveBones()
                     .Select(static bone => bone.ExactLocalBindMatrix).ToImmutableArray(),
                 cancellationToken);
             AnimationRootMode rootMode = selection.RootMotionMode switch

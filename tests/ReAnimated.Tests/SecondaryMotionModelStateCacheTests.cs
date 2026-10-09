@@ -35,7 +35,6 @@ public sealed class SecondaryMotionModelStateCacheTests
     [Theory]
     [InlineData("model")]
     [InlineData("source")]
-    [InlineData("package")]
     [InlineData("project")]
     public void DifferentIdentityDoesNotReuseAnotherModelsPendingDefinition(string changedPart)
     {
@@ -48,7 +47,6 @@ public sealed class SecondaryMotionModelStateCacheTests
         {
             "model" => key with { ModelId = Guid.NewGuid() },
             "source" => key with { SourceHash = new string('c', 64) },
-            "package" => key with { PackageHash = new string('d', 64) },
             _ => key with { ProjectId = Guid.NewGuid() },
         };
         var changed = cache.Select(other, packaged, edited);
@@ -61,5 +59,5 @@ public sealed class SecondaryMotionModelStateCacheTests
         Assert.True(originalAgain.HasPendingEdits);
     }
 
-    private static SecondaryMotionModelKey Key() => new(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64), new string('b', 64));
+    private static SecondaryMotionModelKey Key() => new(Guid.NewGuid(), Guid.NewGuid(), new string('a', 64), new string('b', 64), new string('c', 64));
 }

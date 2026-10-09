@@ -73,6 +73,8 @@ public sealed record SecondaryMotionGroup
 
 public sealed record SecondaryMotionDefinition
 {
+    /// <summary>Preview-only uniform actor scale; authored geometry and native files retain model-space units.</summary>
+    public double PreviewActorScale { get; init; } = 1.0;
     public ImmutableArray<SecondaryMotionGroup> Groups { get; init; } = [];
     public ImmutableArray<NativeClothSource> NativeSources { get; init; } = [];
 
@@ -80,6 +82,8 @@ public sealed record SecondaryMotionDefinition
     {
         if (Groups.IsDefault || NativeSources.IsDefault || Groups.Length > 256 || NativeSources.Length > 512)
             throw new ArgumentException("Secondary-motion collections must be initialized and bounded.");
+        if (!double.IsFinite(PreviewActorScale) || PreviewActorScale < 0.1 || PreviewActorScale > 4)
+            throw new ArgumentException("Preview actor scale must be between 0.1 and 4.");
         HashSet<string>? names = boneNames?.ToHashSet(StringComparer.Ordinal);
         var driven = new HashSet<string>(StringComparer.Ordinal);
         var groups = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

@@ -273,6 +273,8 @@
                                       Content="Export"
                                       IsChecked="{Binding IsExportWorkspace, Mode=OneWay}" />
                         <Button Margin="8,2,4,2" Padding="10,4" Content="Change workflow" Command="{Binding ChangeStartWorkflowCommand}" />
+                        <Button Content="Save to model" Command="{Binding SaveAnimationToModelCommand}"
+                                Visibility="{Binding HasModelAnimationCapture, Converter={StaticResource BooleanToVisibilityConverter}}" />
                     </StackPanel>
                     <StackPanel Orientation="Horizontal"
                                 Margin="0,2"

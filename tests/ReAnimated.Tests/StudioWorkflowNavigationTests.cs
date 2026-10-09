@@ -251,6 +251,7 @@ public sealed class StudioWorkflowNavigationTests : IDisposable
     private static ModelsWorkspaceViewModel Workspace(FbxModelAuthoringImportResult model)
     {
         var workspace = new ModelsWorkspaceViewModel(new NoDialogs(), static _ => { }, static _ => Task.CompletedTask, static () => null);
+        RigConformanceTestSchedulers.UseImmediate(workspace);
         workspace.CommitProjectRestore(new(model, "workflow.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
         workspace.IsConformTabSelected = true;
         return workspace;

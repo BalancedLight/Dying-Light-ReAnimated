@@ -31,7 +31,7 @@ public static class FbxDerivedMotionAuthoring
         var document=model.Package.Document;document.Validate();
         var session=document.RiggingSession??throw new InvalidOperationException("Start a studio session before deriving animation.");
         var selection=document.AnimationClips.Single(c=>c.Id==sourceClipId);
-        if(selection.DerivedMotion is not null)throw new InvalidOperationException("Choose an original FBX source clip for this derivation path.");
+        if(selection.DerivedMotion is not null || selection.AuthoredAnimation is not null)throw new InvalidOperationException("Choose an imported animation to prepare.");
         if(document.AnimationClips.Any(c=>c.DisplayName.Equals(name.Trim(),StringComparison.OrdinalIgnoreCase)))
             throw new InvalidOperationException("Choose a distinct name for the derived animation.");
         var source=FbxModelAuthoringImporter.Import(model.Package.SourceFbx.AsSpan(),document.Source.OriginalFileName,new()
@@ -40,6 +40,7 @@ public static class FbxDerivedMotionAuthoring
             throw new InvalidOperationException("The selected clip no longer matches the immutable FBX source.");
         if(source.Rig is null||model.Rig is null||!source.AnimationClips.TryGetValue(sourceSelection.Id,out var clip))
             throw new InvalidOperationException("This path requires a decoded source rig and source animation clip.");
+        clip = FbxAnimationTimingAuthoring.WithFrameRate(clip, selection.FrameRate);
         var sourceBones=source.Package.Document.CreateEffectiveBones();var targetBones=document.CreateEffectiveBones();
         var sourceNames=sourceBones.ToDictionary(b=>b.Name,b=>b.Index,StringComparer.Ordinal);
         var sourceIds=sourceBones.Where(b=>b.FbxObjectId!=0).ToDictionary(b=>b.FbxObjectId,b=>b.Index);
@@ -82,6 +83,8 @@ public static class FbxDerivedMotionAuthoring
 
     public static FbxModelAuthoringImportResult RestoreAvailability(FbxModelAuthoringImportResult model)
     {
+        model = FbxAuthoredAnimationAuthoring.RestoreAvailability(model);
+        model = FbxAnimationTimingAuthoring.RestoreTiming(model);
         var document=model.Package.Document;
         if(!document.AnimationClips.Any(c=>c.DerivedMotion is not null)&&!document.Diagnostics.Any(d=>d.Code==StaleDiagnosticCode))return model;
         var clips=model.AnimationClips.ToBuilder();var stale=new List<string>();
@@ -117,23 +120,39 @@ public static class FbxDerivedMotionAuthoring
     public static void ValidateExport(FbxModelAuthoringImportResult model,CustomModelAnimationClip selection)
     {
         var authoritative=model.Package.Document.AnimationClips.SingleOrDefault(c=>c.Id==selection.Id);
-        if(authoritative?.DerivedMotion is null&&selection.DerivedMotion is null)return;
+        if (authoritative?.AuthoredAnimation is not null || selection.AuthoredAnimation is not null)
+        {
+            FbxAuthoredAnimationAuthoring.ValidateExport(model, authoritative ?? selection);
+            return;
+        }
+        if(authoritative?.DerivedMotion is null&&selection.DerivedMotion is null)
+        {
+            if (!FbxAnimationRigBinding.Matches(model, authoritative ?? selection))
+                throw new InvalidOperationException($"Prepare '{selection.DisplayName}' for this rig before export.");
+            return;
+        }
         if(authoritative?.DerivedMotion is null||!IsCurrent(model.Package.Document,authoritative))
             throw new InvalidOperationException("The derived animation belongs to a different source or target rig. Re-derive it before export.");
         var data=ReadPayload(model.Package,authoritative);
-        var document=model.Package.Document;var observed=RiggingSessions.ObserveSourceHierarchy(document);
+        ValidateComponentPolicies(model.Package.Document, data);
+    }
+
+    internal static void ValidateComponentPolicies(CustomModelDocument document, DerivedAnimationData data)
+    {
+        if (document.RiggingSession is null) return;
+        var observed=RiggingSessions.ObserveSourceHierarchy(document);
         var bones=document.CreateEffectiveBones().ToDictionary(b=>b.Name);
         var policies=document.RiggingSession!.Recipe.ComponentPolicies.ToDictionary(p=>p.EntityId);
         foreach(var track in data.TransformTracks)
         {
-            if(!bones.TryGetValue(track.BoneName,out var bone))throw new InvalidDataException($"Derived motion references missing bone '{track.BoneName}'.");
+            if(!bones.TryGetValue(track.BoneName,out var bone))throw new InvalidDataException($"Animation references missing bone '{track.BoneName}'.");
             var bind=bone.LocalBindTransform;RigAnimationComponents required=RigAnimationComponents.None;
             if(track.Keyframes.Any(k=>(k.Value.Translation-bind.Translation).Length>1e-8))required|=RigAnimationComponents.Position;
             if(track.Keyframes.Any(k=>Math.Abs(QuaternionDot(k.Value.Rotation,bind.Rotation))<1-1e-10))required|=RigAnimationComponents.Rotation;
             if(track.Keyframes.Any(k=>(k.Value.Scale-bind.Scale).Length>1e-8))required|=RigAnimationComponents.Scale;
             if(required==RigAnimationComponents.None)continue;
             if(!policies.TryGetValue(observed[bone.Index].EntityId,out var policy)||policy.EmittedMask is not { } mask||(mask&required)!=required)
-                throw new InvalidOperationException($"Derived motion on '{bone.Name}' requires explicit {required} components. Resolve its POS/ROT/SCL export policy without suppressing the animated values.");
+                throw new InvalidOperationException($"Animation on '{bone.Name}' requires {required} components. Update its export policy before export.");
         }
     }
     private static double QuaternionDot(ReAnimated.Core.Mathematics.QuaternionD a,ReAnimated.Core.Mathematics.QuaternionD b)=>a.X*b.X+a.Y*b.Y+a.Z*b.Z+a.W*b.W;

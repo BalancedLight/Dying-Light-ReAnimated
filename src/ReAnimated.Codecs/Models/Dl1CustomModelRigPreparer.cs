@@ -635,12 +635,11 @@ public static class Dl1CustomModelRigPreparer
             double defaultRadius = Math.Max(
                 MinimumHalfExtent,
                 Math.Min(0.025, Math.Max(segmentLength, 0.02) * 0.12));
-            double radiusCap = Math.Max(0.015, Math.Min(0.08, Math.Max(segmentLength, 0.02) * 0.25));
             double radiusY = pointsByBone[index].Count > 0
-                ? Math.Min(radiusCap, Math.Max(defaultRadius, PercentileAbsolute(pointsByBone[index], static value => value.Y, 0.75)))
+                ? Math.Max(defaultRadius, PercentileAbsolute(pointsByBone[index], static value => value.Y, 0.75))
                 : defaultRadius;
             double radiusZ = pointsByBone[index].Count > 0
-                ? Math.Min(radiusCap, Math.Max(defaultRadius, PercentileAbsolute(pointsByBone[index], static value => value.Z, 0.75)))
+                ? Math.Max(defaultRadius, PercentileAbsolute(pointsByBone[index], static value => value.Z, 0.75))
                 : defaultRadius;
             low = new Vector3D(low.X, -radiusY, -radiusZ);
             high = new Vector3D(high.X, radiusY, radiusZ);

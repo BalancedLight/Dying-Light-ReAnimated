@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
@@ -79,6 +80,63 @@ public sealed class Dl1CompiledRigValidatorTests
         Assert.Equal(2, rows[1].CompiledEntityIndex);
         Assert.Equal(1, rows[2].CompiledEntityIndex);
         Assert.Equal(0, rows[1].CompiledParentIndex);
+    }
+
+    [Fact]
+    public void MappedAuthoredRigIndexesReadBackAcrossInterleavedRigidGeometry()
+    {
+        var (baseContract, _) = Fixture();
+        Dl1AuthoredRigNode additional = baseContract.Nodes[1] with
+        {
+            PhysicalIndex = 2,
+            SourceBoneIndex = 2,
+            ParentPhysicalIndex = 0,
+            Name = "another_child",
+            DescriptorHash = ReAnimated.Codecs.Anm2.Dl1NameHash.Compute("another_child"),
+        };
+        Dl1AuthoredRigContract expected = new(
+            baseContract.SourceModelName,
+            baseContract.SourceFbxSha256,
+            baseContract.Nodes.Add(additional),
+            baseContract.MorphChannels);
+        CompactMeshDocument baseCompiled = Fixture().Compiled;
+        CompactMeshEntity[] entities =
+        [
+            baseCompiled.Entities[0] with { ChildCount = 3 },
+            baseCompiled.Entities[1] with { Index = 1 },
+            new CompactMeshEntity(
+                2,
+                "rigid_mesh",
+                0,
+                default,
+                0,
+                CompactMeshEntityType.Mesh,
+                0,
+                0,
+                CompactMatrix3x4.Identity,
+                CompactMatrix3x4.Identity,
+                0,
+                0),
+            baseCompiled.Entities[1] with { Index = 3, Name = "another_child" },
+        ];
+        CompactMeshDocument compiled = baseCompiled with
+        {
+            DeclaredEntityCount = entities.Length,
+            DeclaredRootCount = 1,
+            Entities = entities,
+        };
+
+        ImmutableArray<int> physicalMap = [0, 1, 3];
+        ImmutableArray<Dl1CompiledRigNodeReadBack> rows =
+            Dl1CompiledRigValidator.Validate(expected, compiled, physicalMap);
+
+        Assert.Equal(3, rows.Length);
+        Assert.Equal(3, rows[2].CompiledEntityIndex);
+        Assert.Equal(0, rows[2].CompiledParentIndex);
+        Assert.Throws<InvalidDataException>(() =>
+            Dl1CompiledRigValidator.Validate(expected, compiled, [0, 1, 2]));
+        Assert.Throws<InvalidDataException>(() =>
+            Dl1CompiledRigValidator.Validate(expected, compiled, [0, 1, 1]));
     }
 
     private static CompactMatrix3x4 Matrix(TransformMatrix m) => new((float)m.M11, (float)m.M12, (float)m.M13, (float)m.M14,

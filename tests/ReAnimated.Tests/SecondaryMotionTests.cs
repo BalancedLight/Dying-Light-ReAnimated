@@ -111,17 +111,43 @@ public sealed class SecondaryMotionTests
     }
 
     [Theory]
-    [InlineData(2, 2, 2)]
-    [InlineData(0.5, 0.5, 0.5)]
     [InlineData(1, 2, 1)]
     [InlineData(-1, 1, 1)]
-    public void ScaledActorPlacementIsRejectedInsteadOfShrinkingExplicitRestLengths(double x, double y, double z)
+    public void NonUniformOrMirroredActorPlacementIsRejected(double x, double y, double z)
     {
         var session = new SecondaryMotionSession(Definition(), BoneNames);
         var frame = Animated(0) with { ActorWorldTransform = TransformMatrix.CreateScale(new(x, y, z)) };
         ArgumentException sampled = Assert.Throws<ArgumentException>(() => session.Sample(0, _ => frame));
-        Assert.Contains("unit-scale", sampled.Message, StringComparison.Ordinal);
+        Assert.Contains("uniform", sampled.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Throws<ArgumentException>(() => new SecondaryMotionSession(Definition(), BoneNames, frame));
+    }
+
+    [Fact]
+    public void SecondaryCollisionRadiusAppliesActorAndBoneScaleOnce()
+    {
+        string[] bones = ["anchor", "free", "body"];
+        var definition = new SecondaryMotionDefinition { Groups = [new()
+        {
+            Name = "scaled",
+            Particles = [new() { ReferenceBoneName = "anchor", Fixed = true, Radius = 0 },
+                new() { ReferenceBoneName = "free", DrivenBoneName = "free", LocalPosition = Vector3D.UnitX, Radius = 0 }],
+            Constraints = [new() { First = 0, Second = 1, RestLength = 1 }],
+            Colliders = [new() { BoneName = "body", LocalPosition = Vector3D.UnitX, Radius = .2 }],
+            Preview = new() { Gravity = Vector3D.Zero, StructuralStiffness = 1, AnimationFollow = 0, Damping = 0 },
+        }] };
+        var backend = new RecordingCollisionBackend();
+        SecondaryMotionFrame frame = new([
+            TransformMatrix.Identity,
+            TransformMatrix.Identity,
+            TransformMatrix.Identity,
+        ], TransformMatrix.CreateScale(new(1.5, 1.5, 1.5)));
+        var session = new SecondaryMotionSession(definition, bones, collisionBackend: backend);
+
+        SecondaryMotionResult result = session.Sample(1.0 / SecondaryMotionSession.StepsPerSecond, _ => frame);
+
+        Assert.InRange(Vector3D.Distance(result.Particles[0].WorldPosition, result.Particles[1].WorldPosition), 1.5 - 1e-10, 1.5 + 1e-10);
+        Assert.NotEmpty(backend.ColliderRadii);
+        Assert.All(backend.ColliderRadii, radius => Assert.Equal(.3, radius, 10));
     }
 
     [Fact]
@@ -277,5 +303,22 @@ public sealed class SecondaryMotionTests
     {
         SecondaryMotionFrame pose = Animated(seconds);
         return pose with { Globals = pose.Globals.SetItem(0, TransformMatrix.CreateTranslation(new(0.2 * seconds, 0, 0))) };
+    }
+
+    private sealed class RecordingCollisionBackend : ISecondaryCollisionBackend
+    {
+        public string Identity => "Generated test backend";
+        public bool IsNative => false;
+        public long NativeContactQueryCount => 0;
+        public List<double> ColliderRadii { get; } = [];
+
+        public bool TryContact(Vector3D particleCenter, double particleRadius, Vector3D colliderStart,
+            Vector3D colliderEnd, double colliderRadius, Vector3D degenerateNormal,
+            out SecondaryCollisionContact contact)
+        {
+            ColliderRadii.Add(colliderRadius);
+            contact = default;
+            return false;
+        }
     }
 }

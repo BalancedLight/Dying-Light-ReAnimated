@@ -2,6 +2,7 @@
 using ReAnimated.Core.Domain;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Core.ModelAuthoring;
+using ReAnimated.Retargeting.Mapping;
 
 namespace ReAnimated.App.ViewModels;
 
@@ -44,6 +45,7 @@ public sealed partial class ModelsWorkspaceViewModel
     public bool GuidedPreviewAvailable => _guidedPreviewHandler is not null;
     public bool IsGuidedImport => GuidedStep == GuidedModelSetupStep.Import;
     public bool IsGuidedAdjust => GuidedStep == GuidedModelSetupStep.Adjust;
+    public bool ShowGuidedFitReview => IsGuidedAdjust && GuidedUsesDl1Rig;
     public bool IsGuidedPreview => GuidedStep == GuidedModelSetupStep.Preview;
     public bool IsGuidedExport => GuidedStep == GuidedModelSetupStep.Export;
     public bool IsGuidedBusy => _guidedWorking || IsBusy || Conformance.IsBusy;
@@ -74,6 +76,11 @@ public sealed partial class ModelsWorkspaceViewModel
     {
         get
         {
+            if (!_guidedUsesDl1Rig && HasDecodedSourceAnimation)
+                return "Preview animation";
+            if (!_guidedUsesDl1Rig && !HasHumanoidStockPreviewRig)
+                return "Preview movement";
+
             MainWindowViewModel? review = GuidedPreviewReviewContext;
             if (review?.HasGuidedPreviewReviewDraft != true)
             {
@@ -90,7 +97,7 @@ public sealed partial class ModelsWorkspaceViewModel
         ? "Body guides · Dying Light skeleton will be built"
         : GuidedUsesDl1Rig
         ? "Dying Light skeleton · original body proportions preserved"
-        : "Original skeleton · stock animations require retargeting";
+        : "Original rig";
     public string GuidedFeaturesSummary => _model is not { } model ? string.Empty
         : $"{model.Package.Document.MorphChannels.Length} morph controls detected" +
           (model.Package.Document.SecondaryMotion.NativeSources.IsEmpty
@@ -135,15 +142,32 @@ public sealed partial class ModelsWorkspaceViewModel
     public bool AdvanceGuidedPreviewAfterVerifiedPlayback()
     {
         if (GuidedStep != GuidedModelSetupStep.Preview || !HasModel)
-        {
             return false;
-        }
 
         GuidedStep = GuidedModelSetupStep.Export;
         GuidedStatus =
             "The reviewed animation is playing. Continue to Export when ready.";
         ActivateGuidedStep();
         return true;
+    }
+
+    private bool HasDecodedSourceAnimation => Animations.Any(static item =>
+        item.DecodedClip is not null);
+
+    private bool HasHumanoidStockPreviewRig
+    {
+        get
+        {
+            if (_model?.Rig is null)
+                return false;
+            var roles = _model.Package.Document.CreateEffectiveBones()
+                .Select(bone => HumanoidBoneSemanticClassifier.Classify(bone.Name)?.Role)
+                .OfType<string>()
+                .ToHashSet(StringComparer.Ordinal);
+            return roles.Contains("body.pelvis") && roles.Contains("body.head") &&
+                roles.Contains("arm.left.upper") && roles.Contains("arm.right.upper") &&
+                roles.Contains("leg.left.upper") && roles.Contains("leg.right.upper");
+        }
     }
 
     public void SetImportedAnimationWorkspaceOffer(Func<string, IEnumerable<AnimationClip>, Task<bool>> offer)
@@ -177,22 +201,38 @@ public sealed partial class ModelsWorkspaceViewModel
         if (_guidedModelId == modelId) { NotifyGuidedState(); return; }
         _guidedModelId = modelId;
         _guidedShowJoints = false;
-        _guidedUsesDl1Rig = true;
         bool hasAppliedFit = _model?.Rig is { } rig &&
             _model.Package.Document.RigConformance is { } conformance &&
             conformance.MatchesAppliedOutputRig(rig, _model.Package.Document.Source.ContentSha256);
+        _guidedUsesDl1Rig = hasAppliedFit || _model?.Package.Document.WorkflowMode switch
+        {
+            CustomModelWorkflowMode.Character => true,
+            CustomModelWorkflowMode.OriginalRig => false,
+            _ => hasAppliedFit || _model?.Package.Document.RigMode == CustomModelRigMode.Dl1HumanoidFit,
+        };
         GuidedStep = modelId is null ? GuidedModelSetupStep.Import
             : hasAppliedFit ? GuidedModelSetupStep.Preview : GuidedModelSetupStep.Adjust;
         GuidedStatus = modelId is null ? "Choose an FBX, then choose its skeleton."
             : hasAppliedFit ? "Your saved Dying Light fit is restored. Preview movement before export."
-            : "The model is loaded. Continue to prepare its Dying Light skeleton.";
+            : _guidedUsesDl1Rig
+                ? "The model is loaded. Continue to prepare its Dying Light skeleton."
+                : "The original skeleton is restored. Preview an animation before export.";
         NotifyGuidedState();
     }
 
     public async Task BeginGuidedSetupAsync(CustomModelSkeletonChoice choice)
     {
         if (!HasModel || choice == CustomModelSkeletonChoice.Cancel) return;
+        if (choice == CustomModelSkeletonChoice.KeepOriginal &&
+            _model?.Package.Document.RigConformance?.AppliedOutputRigSignature is not null)
+        {
+            GuidedStatus = "Undo the fit or reopen the source model to use its original skeleton.";
+            return;
+        }
         _guidedUsesDl1Rig = choice == CustomModelSkeletonChoice.MapToDl1;
+        PersistGuidedWorkflowMode(_guidedUsesDl1Rig
+            ? CustomModelWorkflowMode.Character
+            : CustomModelWorkflowMode.OriginalRig);
         GuidedStep = GuidedModelSetupStep.Adjust;
         IsConformTabSelected = true;
         if (_guidedUsesDl1Rig)
@@ -232,6 +272,18 @@ public sealed partial class ModelsWorkspaceViewModel
         Conformance.StudioStage = IsGuidedAdjust ? RigStudioStage.Fit
             : IsGuidedPreview ? RigStudioStage.Animate : RigStudioStage.VerifyAndExport;
         if (IsGuidedAdjust) Conformance.Stage = RigConformanceStage.Refine;
+    }
+
+    private void PersistGuidedWorkflowMode(CustomModelWorkflowMode mode)
+    {
+        if (_model is not { } current ||
+            current.Package.Document.WorkflowMode == mode)
+            return;
+
+        AuthoringSnapshot before = CaptureAuthoringSnapshot();
+        _model = Conformance.UpdateWorkflowMode(mode) ?? current;
+        RecordAuthoringUndo(before);
+        MarkAuthoringChanged();
     }
 
     private async Task ReturnToGuidedStepAsync()
@@ -276,10 +328,35 @@ public sealed partial class ModelsWorkspaceViewModel
                         { GuidedStatus = BuildStatus; break; }
                     }
                     GuidedStep = GuidedModelSetupStep.Preview;
-                    GuidedStatus = "Play a stock animation to check this model in motion.";
+                    GuidedStatus = GuidedUsesDl1Rig ? "Preview an animation to check the fit." : "Preview or create an animation.";
                     ActivateGuidedStep();
                     break;
                 case GuidedModelSetupStep.Preview:
+                    if (!GuidedUsesDl1Rig && HasDecodedSourceAnimation)
+                    {
+                        CustomModelAnimationClipItemViewModel? sourceAnimation =
+                            SelectedAnimation?.DecodedClip is not null
+                                ? SelectedAnimation
+                                : Animations.FirstOrDefault(static item => item.DecodedClip is not null);
+                        if (sourceAnimation is null)
+                        {
+                            GuidedStatus = "No animation is available. Import or create one before exporting this rig.";
+                            break;
+                        }
+
+                        SelectedAnimation = sourceAnimation;
+                        Timeline.CurrentFrame = 0;
+                        Timeline.IsPlaying = true;
+                        GuidedStep = GuidedModelSetupStep.Export;
+                        ActivateGuidedStep();
+                        GuidedStatus = $"Previewing {sourceAnimation.DisplayName}. Continue to Export when ready.";
+                        break;
+                    }
+                    if (!GuidedUsesDl1Rig && !HasHumanoidStockPreviewRig)
+                    {
+                        GuidedStatus = "No animation is available. Import or create one before exporting this rig.";
+                        break;
+                    }
                     if (_guidedPreviewHandler is null)
                     { GuidedStatus = "Animation preview is unavailable in this workspace."; break; }
                     await _synchronizeProject();
@@ -319,7 +396,7 @@ public sealed partial class ModelsWorkspaceViewModel
         foreach (string property in new[] { nameof(IsGuidedImport), nameof(IsGuidedAdjust), nameof(IsGuidedPreview),
             nameof(IsGuidedExport), nameof(IsGuidedBusy), nameof(GuidedStepTitle), nameof(GuidedPrimaryLabel),
             nameof(GuidedUsesDl1Rig), nameof(GuidedPreviewAvailable), nameof(GuidedRigSummary), nameof(GuidedFeaturesSummary),
-            nameof(GuidedShowJoints), nameof(ShowGuidedJointControls), nameof(IsGuidedUnriggedPreparation),
+            nameof(GuidedShowJoints), nameof(ShowGuidedJointControls), nameof(ShowGuidedFitReview), nameof(IsGuidedUnriggedPreparation),
             nameof(GuidedBodyDetectionStatus) }) OnPropertyChanged(property);
         _guidedPrimaryCommand?.NotifyCanExecuteChanged();
         _guidedBackCommand?.NotifyCanExecuteChanged();

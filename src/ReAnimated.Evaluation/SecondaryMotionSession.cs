@@ -194,10 +194,21 @@ public sealed class SecondaryMotionSession
     {
         const double tolerance = 1e-5;
         Vector3D x = matrix.TransformDirection(Vector3D.UnitX), y = matrix.TransformDirection(Vector3D.UnitY), z = matrix.TransformDirection(Vector3D.UnitZ);
-        if (Math.Abs(x.LengthSquared - 1) > tolerance || Math.Abs(y.LengthSquared - 1) > tolerance || Math.Abs(z.LengthSquared - 1) > tolerance ||
-            Math.Abs(Vector3D.Dot(x, y)) > tolerance || Math.Abs(Vector3D.Dot(x, z)) > tolerance || Math.Abs(Vector3D.Dot(y, z)) > tolerance ||
+        double scale = (x.Length + y.Length + z.Length) / 3;
+        double lengthTolerance = tolerance * Math.Max(1, scale);
+        double dotTolerance = tolerance * Math.Max(1, scale * scale);
+        if (!double.IsFinite(scale) || scale <= 1e-8 ||
+            Math.Abs(x.Length - scale) > lengthTolerance || Math.Abs(y.Length - scale) > lengthTolerance || Math.Abs(z.Length - scale) > lengthTolerance ||
+            Math.Abs(Vector3D.Dot(x, y)) > dotTolerance || Math.Abs(Vector3D.Dot(x, z)) > dotTolerance || Math.Abs(Vector3D.Dot(y, z)) > dotTolerance ||
             matrix.LinearDeterminant <= 0)
-            throw new ArgumentException("Secondary motion preview requires a unit-scale rigid actor transform. Use unscaled actor placement and author model geometry and physics dimensions at the intended size; scaled, sheared or mirrored actor placement is not supported.", parameterName);
+            throw new ArgumentException("Secondary motion preview requires a positive uniform-scale rigid actor transform. Nonuniform scale, shear and mirrored placement are not supported.", parameterName);
+    }
+
+    private static double UniformActorScale(TransformMatrix matrix, string parameterName)
+    {
+        ValidateActorPlacement(matrix, parameterName);
+        Vector3D x = matrix.TransformDirection(Vector3D.UnitX), y = matrix.TransformDirection(Vector3D.UnitY), z = matrix.TransformDirection(Vector3D.UnitZ);
+        return (x.Length + y.Length + z.Length) / 3;
     }
 
     private static SecondaryMotionFrame BlendFrame(SecondaryMotionFrame from, SecondaryMotionFrame to, double amount, int[]? parents)
@@ -223,10 +234,13 @@ public sealed class SecondaryMotionSession
     private GroupState CreateState(SecondaryMotionGroup group, SecondaryMotionFrame frame)
     {
         Vector3D[] targets = Targets(group, frame);
-        double[] lengths = group.Constraints.Select(c => c.RestLength ?? Vector3D.Distance(targets[c.First], targets[c.Second])).ToArray();
+        double actorScale = UniformActorScale(frame.ActorWorldTransform, nameof(frame));
+        double[] lengths = group.Constraints.Select(c => c.RestLength is double restLength
+            ? restLength * actorScale
+            : Vector3D.Distance(targets[c.First], targets[c.Second])).ToArray();
         if (lengths.Any(v => !double.IsFinite(v) || v <= 1e-9))
             throw new ArgumentException($"Secondary group '{group.Name}' has a zero-length initial constraint.");
-        return new(group, targets, new Vector3D[targets.Length], (Vector3D[])targets.Clone(), lengths);
+        return new(group, targets, new Vector3D[targets.Length], (Vector3D[])targets.Clone(), lengths, actorScale);
     }
 
     private Vector3D[] Targets(SecondaryMotionGroup group, SecondaryMotionFrame frame) => group.Particles
@@ -234,6 +248,7 @@ public sealed class SecondaryMotionSession
 
     private void Advance(GroupState[] states, SecondaryMotionFrame frame, double dt)
     {
+        double actorScale = UniformActorScale(frame.ActorWorldTransform, nameof(frame));
         foreach (GroupState s in states)
         {
             SecondaryMotionGroup group = s.Group;
@@ -278,7 +293,8 @@ public sealed class SecondaryMotionSession
                         _ => settings.BendStiffness,
                     };
                     double amount = 1 - Math.Pow(1 - stiffness, dt * StepsPerSecond / SolverIterations);
-                    Vector3D correction = delta * ((length - s.Lengths[k]) / length * amount / sum);
+                    double restLength = s.Lengths[k] * actorScale / s.InitialActorScale;
+                    Vector3D correction = delta * ((length - restLength) / length * amount / sum);
                     s.Position[c.First] += correction * firstWeight;
                     s.Position[c.Second] -= correction * secondWeight;
                 }
@@ -439,13 +455,16 @@ public sealed class SecondaryMotionSession
         matrix.TransformDirection(Vector3D.UnitX).Length,
         Math.Max(matrix.TransformDirection(Vector3D.UnitY).Length, matrix.TransformDirection(Vector3D.UnitZ).Length));
 
-    private sealed class GroupState(SecondaryMotionGroup group, Vector3D[] position, Vector3D[] velocity, Vector3D[] previousTargets, double[] lengths)
+    private sealed class GroupState(SecondaryMotionGroup group, Vector3D[] position, Vector3D[] velocity,
+        Vector3D[] previousTargets, double[] lengths, double initialActorScale)
     {
         public SecondaryMotionGroup Group { get; } = group;
         public Vector3D[] Position { get; } = position;
         public Vector3D[] Velocity { get; } = velocity;
         public Vector3D[] PreviousTargets { get; set; } = previousTargets;
         public double[] Lengths { get; } = lengths;
-        public GroupState Copy() => new(Group, (Vector3D[])Position.Clone(), (Vector3D[])Velocity.Clone(), (Vector3D[])PreviousTargets.Clone(), Lengths);
+        public double InitialActorScale { get; } = initialActorScale;
+        public GroupState Copy() => new(Group, (Vector3D[])Position.Clone(), (Vector3D[])Velocity.Clone(),
+            (Vector3D[])PreviousTargets.Clone(), Lengths, InitialActorScale);
     }
 }

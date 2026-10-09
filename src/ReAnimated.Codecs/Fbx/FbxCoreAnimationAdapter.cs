@@ -487,13 +487,35 @@ public static class FbxCoreAnimationAdapter
             return true;
         }
 
-        // Some exporters write prop holders as Mesh Models while retaining
-        // the prop role only in the authored name. Do not promote arbitrary
-        // renderable Mesh Models into the animation hierarchy.
+        // Some exporters animate the renderable Mesh Model itself, rather than
+        // using a LimbNode. Retain that transform only when it owns geometry
+        // and an authored transform curve; ordinary renderable meshes stay out
+        // of the animation hierarchy.
         return model.Subtype.Equals("Mesh", StringComparison.OrdinalIgnoreCase) &&
-            IsPropName(model.Name) &&
-            scene.GetModelParentId(model.ObjectId).HasValue;
+            ((HasModelGeometry(scene, model.ObjectId) &&
+              HasTransformAnimationBinding(scene, model.ObjectId)) ||
+             (IsPropName(model.Name) &&
+              scene.GetModelParentId(model.ObjectId).HasValue));
     }
+
+    private static bool HasModelGeometry(
+        FbxSemanticScene scene,
+        long modelId) => scene.Connections.Any(connection =>
+            string.Equals(connection.Kind, "OO", StringComparison.Ordinal) &&
+            connection.ParentId == modelId &&
+            scene.ObjectNodes.TryGetValue(connection.ChildId, out FbxNode? child) &&
+            child.Name.Equals("Geometry", StringComparison.Ordinal) &&
+            child.Properties.Length > 2 &&
+            child.Properties[2].Value is string subtype &&
+            subtype.Equals("Mesh", StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasTransformAnimationBinding(
+        FbxSemanticScene scene,
+        long modelId) => scene.Connections.Any(connection =>
+            string.Equals(connection.Kind, "OP", StringComparison.Ordinal) &&
+            connection.ParentId == modelId &&
+            connection.PropertyName is
+                "Lcl Translation" or "Lcl Rotation" or "Lcl Scaling");
 
     /// <summary>
     /// Blender and several FBX exporters emit a root Null as an armature
@@ -518,10 +540,19 @@ public static class FbxCoreAnimationAdapter
                 scene.Models.TryGetValue(connection.ChildId, out _))
             .Select(connection => scene.Models[connection.ChildId])
             .ToArray();
-        return children.Length > 0 && children.All(static child =>
+        bool recognizedContainerShape = children.Length > 0 && children.All(static child =>
             child.IsLimb ||
             child.Subtype.Equals("Mesh", StringComparison.OrdinalIgnoreCase) &&
             !IsPropName(child.Name));
+        if (!recognizedContainerShape)
+        {
+            return false;
+        }
+
+        // Keep the legacy armature-container exclusion when deform LimbNodes
+        // are present. A mesh-only root Null remains an authored pivot even
+        // before it has animation curves, so users can create its first clip.
+        return children.Any(static child => child.IsLimb);
     }
 
     internal static long? GetNearestImportedParentId(

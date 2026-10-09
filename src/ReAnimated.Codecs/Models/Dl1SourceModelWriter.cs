@@ -57,6 +57,9 @@ public sealed record Dl1SourceModelBuildResult(
     public ImmutableArray<Dl1ResolvedBoneScriptPolicy> BoneScriptPolicies { get; init; }
     [JsonIgnore]
     public Dl1AuthoredRigContract? AuthoredRigContract { get; init; }
+    /// <summary>Maps dense authored-rig indexes to emitted source-MSH physical nodes.</summary>
+    [JsonIgnore]
+    public ImmutableArray<int> AuthoredRigToPhysicalNodeIndices { get; init; } = [];
     [JsonIgnore]
     public ImmutableArray<Dl1PreparedSkinningSurfaceExpectation> PreparedSkinningExpectations { get; init; } = [];
     [JsonIgnore]
@@ -316,6 +319,7 @@ public static class Dl1SourceModelWriter
             NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
             BoneScriptPolicies = componentPolicies,
             AuthoredRigContract = prepared.RigContract,
+            AuthoredRigToPhysicalNodeIndices = prepared.AuthoredRigToPhysicalNodeIndices,
             PreparedSkinningExpectations = BuildCompiledSkinningExpectations(prepared),
             PreparedPhysicalNodeExpectations = preparedPhysicalNodeExpectations,
             PreparedMorphExpectations = prepared.GeometryNodes.SelectMany(node => node.Lods.Select((lod, index) =>
@@ -511,7 +515,7 @@ public static class Dl1SourceModelWriter
         Dl1PreparedAuthoredRig? authoredRig = sourceBones.IsEmpty
             ? null
             : Dl1CustomModelRigPreparer.Prepare(model, cancellationToken);
-        var nodes = ImmutableArray.CreateBuilder<SourceNode>();
+        var rigNodes = ImmutableArray.CreateBuilder<SourceNode>();
         var boneNames = ImmutableArray.CreateBuilder<string>();
         int helperCount = 0;
         foreach (Dl1AuthoredRigNode node in authoredRig?.Contract.Nodes ?? [])
@@ -523,7 +527,7 @@ public static class Dl1SourceModelWriter
                 helperCount++;
             }
 
-            nodes.Add(new SourceNode(
+            rigNodes.Add(new SourceNode(
                 node.Name,
                 isHelper ? NodeHelper : NodeBone,
                 node.ParentPhysicalIndex,
@@ -549,11 +553,27 @@ public static class Dl1SourceModelWriter
             cancellationToken);
 
         ImmutableArray<FbxModelLodNodeLayout> layout = FbxModelLodLayout.Create(model);
+        ImmutableArray<int?> geometryOwnerPhysicalIndices = layout
+            .Select(node => ResolveRigidGeometryOwnerPhysicalIndex(
+                model,
+                node,
+                sourceBones,
+                authoredRig))
+            .ToImmutableArray();
+        (ImmutableArray<SourceNodeEmission> emissionOrder, ImmutableArray<int> authoredRigToPhysical)
+            = BuildSourceNodeEmissionOrder(rigNodes.ToImmutable(), geometryOwnerPhysicalIndices);
         var geometryNodes = ImmutableArray.CreateBuilder<SourceNode>(layout.Length);
-        var usedNames = nodes.Select(static node => node.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var usedNames = rigNodes.Select(static node => node.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
         for (int nodeIndex = 0; nodeIndex < layout.Length; nodeIndex++)
         {
             FbxModelLodNodeLayout sourceNode = layout[nodeIndex];
+            int? ownerPhysicalIndex = geometryOwnerPhysicalIndices[nodeIndex];
+            int? ownerNativePhysicalIndex = ownerPhysicalIndex is { } ownerIndex
+                ? authoredRigToPhysical[ownerIndex]
+                : null;
+            TransformMatrix? ownerBindGlobal = ownerPhysicalIndex is { } sourceOwnerIndex
+                ? authoredRig!.Contract.Nodes[sourceOwnerIndex].GlobalBindMatrix
+                : null;
             var lods = ImmutableArray.CreateBuilder<SourceLod>(sourceNode.Levels.Length);
             foreach (FbxModelLodLevelLayout level in sourceNode.Levels)
             {
@@ -578,10 +598,18 @@ public static class Dl1SourceModelWriter
                     }
 
                     int materialIndex = materialIndexById.TryGetValue(surface.MaterialId, out int resolvedMaterial) ? resolvedMaterial : 0;
-                    ImmutableArray<int> physicalPalette = authoredRig is null
+                    ImmutableArray<int> sourcePhysicalPalette = authoredRig is null
                         ? surface.PaletteBoneIndices.IsEmpty ? [] : throw new InvalidDataException($"Surface '{surface.Id}' has a skin palette without an authored rig.")
                         : authoredRig.Surfaces[surfaceIndex].PhysicalPalette;
-                    draws.Add(BuildLod(surface, materialIndex, physicalPalette, document.BuildSettings.FlipTextureCoordinateV));
+                    ImmutableArray<int> physicalPalette = authoredRig is null
+                        ? sourcePhysicalPalette
+                        : sourcePhysicalPalette.Select(index => authoredRigToPhysical[index]).ToImmutableArray();
+                    draws.Add(BuildLod(
+                        surface,
+                        materialIndex,
+                        physicalPalette,
+                        document.BuildSettings.FlipTextureCoordinateV,
+                        ownerBindGlobal));
                 }
                 lods.Add(CombineLodDraws(draws.ToImmutable(), sourceNode.Name, level.LodIndex));
             }
@@ -593,21 +621,20 @@ public static class Dl1SourceModelWriter
                 if (!usedNames.Add(nodeName)) throw new InvalidDataException($"Original mesh entity '{nodeName}' conflicts with another output entity; rename requires a reviewed reference transaction.");
             }
             else nodeName = UniqueName(SanitizeName($"{resourceName}_{sourceNode.Name}_p{nodeIndex:00}", 63), usedNames);
+            TransformMatrix reference = ownerBindGlobal is { } ownerGlobal
+                ? ownerGlobal.InvertedAffine()
+                : TransformMatrix.Identity;
             geometryNodes.Add(new SourceNode(nodeName, skinned ? NodeSkinnedMesh : NodeMesh,
-                -1, TransformMatrix.Identity, TransformMatrix.Identity,
+                ownerNativePhysicalIndex ?? -1, TransformMatrix.Identity, reference,
                 ComputeBounds(lods.SelectMany(static lod => lod.Positions)),
-                skinned ? NodeAnimated : 0, lods.ToImmutable()));
-        }
-
-        foreach (SourceNode geometryNode in geometryNodes)
-        {
-            nodes.Add(geometryNode);
+                skinned || ownerBindGlobal is not null ? NodeAnimated : 0,
+                lods.ToImmutable()));
         }
 
         IEnumerable<Vector3D> allPositions = model.Surfaces.SelectMany(static surface => surface.Vertices)
             .Select(static vertex => vertex.Position);
         Bounds modelBounds = ComputeBounds(allPositions, minimumHalfExtent: 0.005);
-        nodes.Add(new SourceNode(
+        SourceNode boundsNode = new(
             UniqueName(SanitizeName($"{resourceName}_bounds", 63), usedNames),
             NodeMesh,
             -1,
@@ -615,7 +642,28 @@ public static class Dl1SourceModelWriter
             TransformMatrix.Identity,
             modelBounds,
             0,
-            []));
+            []);
+
+        var nodes = ImmutableArray.CreateBuilder<SourceNode>(emissionOrder.Length);
+        foreach (SourceNodeEmission emission in emissionOrder)
+        {
+            if (emission.IsRigNode)
+            {
+                SourceNode rigNode = rigNodes[emission.Index];
+                int parent = rigNode.ParentIndex < 0
+                    ? -1
+                    : authoredRigToPhysical[rigNode.ParentIndex];
+                nodes.Add(rigNode with { ParentIndex = parent });
+            }
+            else if (emission.IsGeometryNode)
+            {
+                nodes.Add(geometryNodes[emission.Index]);
+            }
+            else
+            {
+                nodes.Add(boundsNode);
+            }
+        }
 
         if (nodes.Count == 0 || nodes.Count > MaximumPhysicalNodes)
         {
@@ -624,6 +672,10 @@ public static class Dl1SourceModelWriter
 
         ImmutableArray<SourceNode> nodeArray = nodes.ToImmutable();
         ValidateDepthFirstOrder(nodeArray);
+        ImmutableArray<int> explicitRigPhysicalMap = authoredRigToPhysical.SequenceEqual(
+                Enumerable.Range(0, authoredRigToPhysical.Length))
+            ? []
+            : authoredRigToPhysical;
         return new PreparedSourceModel(
             materials.MaterialReferences,
             materials.Files,
@@ -633,15 +685,163 @@ public static class Dl1SourceModelWriter
             boneNames.ToImmutable(),
             helperCount,
             geometryNodes.ToImmutable(),
-            authoredRig?.Contract);
+            authoredRig?.Contract,
+            explicitRigPhysicalMap);
+    }
+
+    private static int? ResolveRigidGeometryOwnerPhysicalIndex(
+        FbxModelAuthoringImportResult model,
+        FbxModelLodNodeLayout layout,
+        ImmutableArray<CustomModelBone> sourceBones,
+        Dl1PreparedAuthoredRig? authoredRig)
+    {
+        int[] surfaceIndexes = layout.Levels
+            .SelectMany(static level => level.SurfaceIndexes)
+            .ToArray();
+        long?[] ownerIds = surfaceIndexes
+            .Select(index => model.Surfaces[index].RigidGeometryOwnerFbxObjectId)
+            .Distinct()
+            .ToArray();
+        if (ownerIds.Length != 1)
+        {
+            throw new InvalidDataException(
+                $"LOD node '{layout.Name}' mixes static, skinned, or differently owned rigid geometry.");
+        }
+
+        long? ownerId = ownerIds[0];
+        if (ownerId is null)
+            return null;
+        if (surfaceIndexes.Any(index => model.Surfaces[index].IsSkinned))
+        {
+            throw new InvalidDataException(
+                $"LOD node '{layout.Name}' cannot use both rigid ownership and skin weights.");
+        }
+        if (authoredRig is null)
+        {
+            throw new InvalidDataException(
+                $"LOD node '{layout.Name}' has a rigid owner but no emitted rig.");
+        }
+
+        CustomModelBone[] matches = sourceBones
+            .Where(bone => bone.FbxObjectId == ownerId.Value)
+            .ToArray();
+        if (matches.Length != 1)
+        {
+            throw new InvalidDataException(
+                $"Rigid LOD owner FBX object {ownerId.Value} must resolve to exactly one emitted rig node.");
+        }
+
+        return authoredRig.Contract.SourceToPhysicalIndices[matches[0].Index];
+    }
+
+    private static (ImmutableArray<SourceNodeEmission> Order, ImmutableArray<int> RigToPhysical)
+        BuildSourceNodeEmissionOrder(
+            ImmutableArray<SourceNode> rigNodes,
+            ImmutableArray<int?> rigidGeometryOwners)
+    {
+        if (rigidGeometryOwners.IsDefault)
+            throw new ArgumentException("Rigid-geometry owner rows must be initialized.", nameof(rigidGeometryOwners));
+        var rigChildren = Enumerable.Range(0, rigNodes.Length)
+            .Select(static _ => new List<int>())
+            .ToArray();
+        var rigRoots = new List<int>();
+        for (int index = 0; index < rigNodes.Length; index++)
+        {
+            int parent = rigNodes[index].ParentIndex;
+            if (parent < 0)
+                rigRoots.Add(index);
+            else if (parent < index)
+                rigChildren[parent].Add(index);
+            else
+                throw new InvalidDataException("Prepared rig nodes must remain in parent-before-child order.");
+        }
+
+        var geometryChildren = Enumerable.Range(0, rigNodes.Length)
+            .Select(static _ => new List<int>())
+            .ToArray();
+        var geometryRoots = new List<int>();
+        for (int geometryIndex = 0; geometryIndex < rigidGeometryOwners.Length; geometryIndex++)
+        {
+            if (rigidGeometryOwners[geometryIndex] is { } owner)
+            {
+                if ((uint)owner >= (uint)rigNodes.Length)
+                    throw new InvalidDataException("A rigid geometry owner points outside the prepared rig.");
+                geometryChildren[owner].Add(geometryIndex);
+            }
+            else
+            {
+                geometryRoots.Add(geometryIndex);
+            }
+        }
+
+        var order = ImmutableArray.CreateBuilder<SourceNodeEmission>(
+            rigNodes.Length + rigidGeometryOwners.Length + 1);
+        var rigToPhysical = new int[rigNodes.Length];
+        void VisitRig(int rigIndex)
+        {
+            rigToPhysical[rigIndex] = order.Count;
+            order.Add(new(SourceNodeEmissionKind.Rig, rigIndex));
+            foreach (int child in rigChildren[rigIndex])
+                VisitRig(child);
+            foreach (int geometry in geometryChildren[rigIndex])
+                order.Add(new(SourceNodeEmissionKind.Geometry, geometry));
+        }
+
+        foreach (int root in rigRoots)
+            VisitRig(root);
+        foreach (int geometry in geometryRoots)
+            order.Add(new(SourceNodeEmissionKind.Geometry, geometry));
+        order.Add(new(SourceNodeEmissionKind.Bounds, -1));
+        return (order.MoveToImmutable(), rigToPhysical.ToImmutableArray());
+    }
+
+    private static ImmutableArray<uint> RigidOwnerLocalIndices(
+        ImmutableArray<uint> indices,
+        TransformMatrix ownerBindGlobal)
+    {
+        if (indices.Length % 3 != 0)
+            throw new InvalidDataException("Rigid mesh index rows must contain complete triangles.");
+        if (ownerBindGlobal.LinearDeterminant >= 0)
+            return indices;
+
+        var reversed = ImmutableArray.CreateBuilder<uint>(indices.Length);
+        for (int offset = 0; offset < indices.Length; offset += 3)
+        {
+            reversed.Add(indices[offset]);
+            reversed.Add(indices[offset + 2]);
+            reversed.Add(indices[offset + 1]);
+        }
+
+        return reversed.MoveToImmutable();
+    }
+
+    private static Vector3D TransformNormalToRigidOwner(
+        TransformMatrix ownerBindGlobal,
+        Vector3D normal)
+    {
+        // Positions are transformed by ownerBindGlobal^-1, so normals enter
+        // owner-local space through the inverse-transpose dual transform.
+        Vector3D ownerNormal = new(
+            ownerBindGlobal.M11 * normal.X + ownerBindGlobal.M21 * normal.Y + ownerBindGlobal.M31 * normal.Z,
+            ownerBindGlobal.M12 * normal.X + ownerBindGlobal.M22 * normal.Y + ownerBindGlobal.M32 * normal.Z,
+            ownerBindGlobal.M13 * normal.X + ownerBindGlobal.M23 * normal.Y + ownerBindGlobal.M33 * normal.Z);
+        if (!ownerNormal.TryNormalize(out Vector3D normalized))
+            throw new InvalidDataException("Rigid mesh normals cannot be transformed into a finite owner-local frame.");
+        return normalized;
     }
 
     private static SourceLod BuildLod(
         FbxModelSurface surface,
         int materialIndex,
         ImmutableArray<int> physicalPalette,
-        bool flipTextureCoordinateV)
+        bool flipTextureCoordinateV,
+        TransformMatrix? rigidOwnerBindGlobal)
     {
+        if (surface.IsSkinned && rigidOwnerBindGlobal is not null)
+            throw new InvalidDataException($"Skinned surface '{surface.Id}' cannot also use a rigid transform owner.");
+        TransformMatrix? worldToOwner = rigidOwnerBindGlobal is { } ownerGlobal
+            ? ownerGlobal.InvertedAffine()
+            : null;
         for (int index = 0; index < surface.Vertices.Length; index++)
         {
             Vector3D normal = surface.Vertices[index].Normal;
@@ -650,15 +850,26 @@ public static class Dl1SourceModelWriter
                     $"Surface '{surface.Id}' vertex {index} has a missing or degenerate base normal. " +
                     "Review authored normal edits before native output.");
         }
-        ImmutableArray<Vector3D> positions = surface.Vertices.Select(static vertex => vertex.Position).ToImmutableArray();
-        ImmutableArray<Vector3D> normals = surface.Vertices.Select(static vertex => vertex.Normal.Normalized()).ToImmutableArray();
+        ImmutableArray<Vector3D> positions = surface.Vertices
+            .Select(vertex => worldToOwner is { } inverse
+                ? inverse.TransformPoint(vertex.Position)
+                : vertex.Position)
+            .ToImmutableArray();
+        ImmutableArray<Vector3D> normals = surface.Vertices
+            .Select(vertex => rigidOwnerBindGlobal is { } owner
+                ? TransformNormalToRigidOwner(owner, vertex.Normal)
+                : vertex.Normal.Normalized())
+            .ToImmutableArray();
         ImmutableArray<(double U, double V)> uvs = surface.Vertices
             .Select(vertex => (
                 vertex.TextureCoordinateU,
                 ConvertTextureCoordinateV(vertex.TextureCoordinateV, flipTextureCoordinateV)))
             .ToImmutableArray();
+        ImmutableArray<uint> indices = rigidOwnerBindGlobal is { } reflectedOwner
+            ? RigidOwnerLocalIndices(surface.Indices, reflectedOwner)
+            : surface.Indices;
         (ImmutableArray<Vector3D> tangents, ImmutableArray<Vector3D> bitangents) =
-            ComputeTangentBasis(positions, normals, uvs, surface.Indices);
+            ComputeTangentBasis(positions, normals, uvs, indices);
         for (int index = 0; index < normals.Length; index++)
         {
             if (!normals[index].IsFinite || normals[index].LengthSquared <= 1e-16 ||
@@ -690,8 +901,8 @@ public static class Dl1SourceModelWriter
             tangents,
             bitangents,
             uvs,
-            surface.Indices,
-            [new SourceSubset(materialIndex, 0, surface.Indices.Length, physicalPalette, 0, positions.Length)],
+            indices,
+            [new SourceSubset(materialIndex, 0, indices.Length, physicalPalette, 0, positions.Length)],
             skin,
             surface.MorphTargets.Select(target =>
             {
@@ -714,7 +925,9 @@ public static class Dl1SourceModelWriter
 
                 return new SourceMorphTarget(
                     target.Name,
-                    target.PositionDeltas);
+                    worldToOwner is { } inverse
+                        ? target.PositionDeltas.Select(inverse.TransformDirection).ToImmutableArray()
+                        : target.PositionDeltas);
             }).ToImmutableArray());
     }
 
@@ -1368,6 +1581,21 @@ public static class Dl1SourceModelWriter
         uint Flags,
         ImmutableArray<SourceLod> Lods);
 
+    private enum SourceNodeEmissionKind
+    {
+        Rig,
+        Geometry,
+        Bounds,
+    }
+
+    private readonly record struct SourceNodeEmission(
+        SourceNodeEmissionKind Kind,
+        int Index)
+    {
+        public bool IsRigNode => Kind == SourceNodeEmissionKind.Rig;
+        public bool IsGeometryNode => Kind == SourceNodeEmissionKind.Geometry;
+    }
+
     private sealed record PreparedSourceModel(
         ImmutableArray<string> MaterialNames,
         ImmutableDictionary<string, byte[]> MaterialFiles,
@@ -1377,7 +1605,8 @@ public static class Dl1SourceModelWriter
         ImmutableArray<string> BoneNames,
         int HelperCount,
         ImmutableArray<SourceNode> GeometryNodes,
-        Dl1AuthoredRigContract? RigContract);
+        Dl1AuthoredRigContract? RigContract,
+        ImmutableArray<int> AuthoredRigToPhysicalNodeIndices = default);
 }
 
 

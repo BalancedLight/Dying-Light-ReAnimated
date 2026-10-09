@@ -42,7 +42,7 @@ public sealed partial class RigConformanceWizardViewModel
         {
             DeriveMotionCommand?.Cancel();_derivedGeneration++;_derivedMotionPreview=null;DerivedPreviewEnabled=false;DerivedSources.Clear();
             if(_model is { } model)
-                foreach(var source in model.Package.Document.AnimationClips.Where(c=>c.DerivedMotion is null&&model.AnimationClips.ContainsKey(c.Id)))
+                foreach(var source in model.Package.Document.AnimationClips.Where(c=>c.DerivedMotion is null&&c.AuthoredAnimation is null&&model.AnimationClips.ContainsKey(c.Id)))
                     DerivedSources.Add(new(source.Id,source.DisplayName));
             DerivedSource=DerivedSources.FirstOrDefault(c=>c.Id==id)??DerivedSources.FirstOrDefault();
             SuggestDerivedName();
