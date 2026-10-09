@@ -590,6 +590,51 @@ function Assert-PackageExecutable {
         [System.IO.Path]::GetFullPath($Path))
 }
 
+function Assert-PackageCliDispatchContract {
+    param([Parameter(Mandatory = $true)][object]$Result)
+
+    $expectedCliCommands = @(
+        "version"
+        "inspect-anm2"
+        "inspect-fbx"
+        "inspect-rpack"
+        "inspect-fed"
+        "inspect-source-msh"
+        "new-project"
+        "validate-project"
+        "discover-dl1"
+        "fingerprint-dl1"
+        "index-dl1"
+        "build-animation-rpack"
+        "export-project"
+        "conform-model"
+        "deploy-model"
+        "batch-models"
+        "bind-player-appearance"
+        "character"
+        "material-graph"
+        "app"
+    )
+    $reportedCliCommands = @(
+        $Result.cliCommands |
+            ForEach-Object { [string]$_ })
+    $cliCommandDifference = @(
+        Compare-Object `
+            -ReferenceObject $expectedCliCommands `
+            -DifferenceObject $reportedCliCommands)
+    if ($Result.cliDispatchContract -ne
+            "dl-reanimated-cli-dispatch-v1" -or
+        $cliCommandDifference.Count -ne 0 -or
+        $reportedCliCommands.Count -ne
+            $expectedCliCommands.Count) {
+        throw (
+            "The packaged executable does not report the complete CLI dispatch contract. " +
+            "Expected: $($expectedCliCommands -join ', '). " +
+            "Reported: $($reportedCliCommands -join ', '). " +
+            "Contract: '$($Result.cliDispatchContract)'.")
+    }
+}
+
 function Invoke-PackageSelfTest {
     param(
         [Parameter(Mandatory = $true)]
@@ -753,46 +798,7 @@ function Invoke-PackageSelfTest {
             $ExpectedInformationalVersion) {
         throw "The package self-test report does not match the requested source provenance."
     }
-    $expectedCliCommands = @(
-        "version"
-        "inspect-anm2"
-        "inspect-fbx"
-        "inspect-rpack"
-        "inspect-fed"
-        "inspect-source-msh"
-        "new-project"
-        "validate-project"
-        "discover-dl1"
-        "fingerprint-dl1"
-        "index-dl1"
-        "build-animation-rpack"
-        "export-project"
-        "conform-model"
-        "deploy-model"
-        "batch-models"
-        "bind-player-appearance"
-        "character"
-        "material-graph"
-        "app"
-    )
-    $reportedCliCommands = @(
-        $result.cliCommands |
-            ForEach-Object { [string]$_ })
-    $cliCommandDifference = @(
-        Compare-Object `
-            -ReferenceObject $expectedCliCommands `
-            -DifferenceObject $reportedCliCommands)
-    if ($result.cliDispatchContract -ne
-            "dl-reanimated-cli-dispatch-v1" -or
-        $cliCommandDifference.Count -ne 0 -or
-        $reportedCliCommands.Count -ne
-            $expectedCliCommands.Count) {
-        throw (
-            "The packaged executable does not report the complete CLI dispatch contract. " +
-            "Expected: $($expectedCliCommands -join ', '). " +
-            "Reported: $($reportedCliCommands -join ', '). " +
-            "Contract: '$($result.cliDispatchContract)'.")
-    }
+    Assert-PackageCliDispatchContract -Result $result
 
     $cliStartInfo =
         New-Object System.Diagnostics.ProcessStartInfo
