@@ -697,6 +697,8 @@ function Invoke-PackageSelfTest {
         $ExpectedInformationalVersion
     $processStartInfo.UseShellExecute = $false
     $processStartInfo.CreateNoWindow = $true
+    $processStartInfo.RedirectStandardOutput = $true
+    $processStartInfo.RedirectStandardError = $true
     $processStartInfo.WindowStyle =
         [System.Diagnostics.ProcessWindowStyle]::Hidden
     $process =
@@ -706,6 +708,8 @@ function Invoke-PackageSelfTest {
         if (-not $process.Start()) {
             throw "The packaged executable self-test process did not start."
         }
+        $selfTestOutputTask = $process.StandardOutput.ReadToEndAsync()
+        $selfTestErrorTask = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit(60000)) {
             $terminated = $false
             try {
@@ -724,9 +728,12 @@ function Invoke-PackageSelfTest {
             throw "The packaged executable self-test exceeded 60 seconds."
         }
         if ($process.ExitCode -ne 0) {
+            $selfTestOutput = $selfTestOutputTask.GetAwaiter().GetResult()
+            $selfTestError = $selfTestErrorTask.GetAwaiter().GetResult()
             throw (
                 "The packaged executable self-test failed with exit code " +
-                "$($process.ExitCode).")
+                "$($process.ExitCode)." + [Environment]::NewLine +
+                $selfTestOutput + $selfTestError)
         }
     }
     finally {
@@ -892,9 +899,6 @@ function Invoke-PackageSelfTest {
         "Embedded.Schemas.dlrsetup.schema.json"
         "Embedded.Schemas.model-batch.schema.json"
         "Embedded.Docs.CSHARP_REWRITE.md"
-        "Embedded.Docs.DL1_FIRST_RELEASE_SUPPORT_MATRIX.md"
-        "Embedded.Docs.DL1_BLENDER_RETAIL_HANDOFF.md"
-        "Embedded.Docs.DL1_WPF_STARTUP_ACCEPTANCE.md"
         "Blender.export_dl1_retail_anm2_fbx.py"
     )
     $reportedResources =

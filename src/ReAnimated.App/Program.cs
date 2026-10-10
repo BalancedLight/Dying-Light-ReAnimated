@@ -45,11 +45,9 @@ internal static class Program
                     .GetResult();
                 return 0;
             }
-            catch
+            catch (Exception exception)
             {
-                // The package script treats a nonzero process exit as a
-                // failed candidate. Keep this validation path independent
-                // from normal app paths, logging, recovery, and WPF.
+                Console.Error.WriteLine(exception);
                 return 1;
             }
         }

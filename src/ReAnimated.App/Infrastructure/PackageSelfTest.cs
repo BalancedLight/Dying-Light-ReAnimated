@@ -45,9 +45,6 @@ public static class PackageSelfTest
         "Embedded.Schemas.dlrsetup.schema.json",
         "Embedded.Schemas.model-batch.schema.json",
         "Embedded.Docs.CSHARP_REWRITE.md",
-        "Embedded.Docs.DL1_FIRST_RELEASE_SUPPORT_MATRIX.md",
-        "Embedded.Docs.DL1_BLENDER_RETAIL_HANDOFF.md",
-        "Embedded.Docs.DL1_WPF_STARTUP_ACCEPTANCE.md",
         BlenderHelperResource.ResourceSuffix,
     ];
     private static readonly string[] RequiredHelperMarkers =

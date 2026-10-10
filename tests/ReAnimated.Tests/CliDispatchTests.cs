@@ -111,6 +111,20 @@ public sealed class CliDispatchTests
                 PackageSelfTest.SchemaVersion,
                 root.GetProperty("schemaVersion")
                     .GetInt32());
+            string[] requiredResources = root.GetProperty("requiredResources")
+                .EnumerateArray()
+                .Select(static resource => resource.GetString()!)
+                .ToArray();
+            string[] embeddedResources = typeof(PackageSelfTest).Assembly
+                .GetManifestResourceNames();
+            foreach (string resource in requiredResources)
+            {
+                Assert.Single(embeddedResources, name => name == resource);
+            }
+            Assert.Equal(
+                "ReAnimated.App.Embedded.Docs.CSHARP_REWRITE.md",
+                Assert.Single(requiredResources, name => name.Contains(
+                    ".Embedded.Docs.", StringComparison.Ordinal)));
             Assert.True(root.GetProperty("sqliteRoundTripVerified").GetBoolean());
             Assert.True(Version.TryParse(
                 root.GetProperty("sqliteVersion").GetString(), out _));
