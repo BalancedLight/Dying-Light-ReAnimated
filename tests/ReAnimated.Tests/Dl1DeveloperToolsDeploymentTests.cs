@@ -670,7 +670,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
                 "SeqTrack( \"idle_loop\", \"idle_loop.anm2\", 0, 2, 30, 1, 0.5 )",
                 animation.ScrSequence);
             Assert.Equal(
-                "out/ReAnimated/GenericModel/GenericLibrary_pc.rpack",
+                "out/ReAnimated/GenericModel/common_anims_sp_PC.rpack",
                 plan.PortableRpackRelativePath);
 
             Dictionary<string, Dl1DeveloperToolsDeploymentArtifact> artifacts = plan.Artifacts
@@ -713,7 +713,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
                 Dl1DeploymentArtifactRole.Shared);
             AssertArtifact(
                 artifacts,
-                "out/ReAnimated/GenericModel/GenericLibrary_pc.rpack",
+                "out/ReAnimated/GenericModel/common_anims_sp_PC.rpack",
                 Dl1DeploymentArtifactRole.PortableOnly);
             AssertArtifact(
                 artifacts,
@@ -834,7 +834,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Assert.Equal(
                 exportPortableAnimationRpack,
                 plan.Artifacts.Any(static artifact =>
-                    artifact.RelativePath == "out/ReAnimated/GenericModel/GenericLibrary_pc.rpack" &&
+                    artifact.RelativePath == "out/ReAnimated/GenericModel/common_anims_sp_PC.rpack" &&
                     artifact.Role == Dl1DeploymentArtifactRole.PortableOnly));
 
             Dl1DeveloperToolsDeploymentArtifact compiledAnimation = Assert.Single(
@@ -1322,7 +1322,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
             Assert.Contains(
                 deployed.Receipt.Artifacts,
                 static artifact =>
-                    artifact.RelativePath == "out/ReAnimated/GenericModel/GenericLibrary_pc.rpack" &&
+                    artifact.RelativePath == "out/ReAnimated/GenericModel/common_anims_sp_PC.rpack" &&
                     artifact.Role == Dl1DeploymentArtifactRole.PortableOnly &&
                     artifact.CreatedByDeployment);
             Assert.Equal(
@@ -1351,7 +1351,7 @@ public sealed class Dl1DeveloperToolsDeploymentTests
                 "assets_pc/characters/animations/idle_loop.anm2_obj"));
             Assert.False(ProjectFileExists(
                 request.ProjectRoot,
-                "out/ReAnimated/GenericModel/GenericLibrary_pc.rpack"));
+                "out/ReAnimated/GenericModel/common_anims_sp_PC.rpack"));
             Assert.False(ProjectFileExists(request.ProjectRoot, contentManifestRelative));
             Assert.False(ProjectFileExists(request.ProjectRoot, runtimePackRelative));
             Assert.False(ProjectFileExists(

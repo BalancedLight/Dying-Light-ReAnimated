@@ -174,8 +174,8 @@ public sealed class Dl1CustomModelPackageBuilderTests
             Assert.StartsWith(result.PackageDirectory, animations.OutputPath, StringComparison.OrdinalIgnoreCase);
             Assert.StartsWith(result.PackageDirectory, animations.ManifestPath, StringComparison.OrdinalIgnoreCase);
 
-            string animationRpackRelative = $"animations/{alias}_pc.rpack";
-            string animationManifestRelative = $"animations/{alias}_pc.animations.json";
+            string animationRpackRelative = "animations/common_anims_sp_PC.rpack";
+            string animationManifestRelative = "animations/common_anims_sp_PC.animations.json";
             Assert.Equal(await Sha256Async(ascr), result.OutputSha256["loose/transaction_model.ascr"]);
             Assert.Equal(
                 await Sha256Async(animations.OutputPath),

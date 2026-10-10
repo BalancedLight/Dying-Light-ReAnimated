@@ -188,7 +188,7 @@ public static class Dl1CustomModelPackageBuilder
                 CustomModelAnimationLibraryRequest animationRequest = new()
                 {
                     Model = request.Model,
-                    OutputPath = Path.Combine(animationDirectory, $"{alias}_pc.rpack"),
+                    OutputPath = Path.Combine(animationDirectory, ReAnimated.Core.Project.AnimationExportDefaults.DeveloperToolsRpackFileName),
                     Selections = selections,
                     AnimationScriptAlias = alias,
                 };

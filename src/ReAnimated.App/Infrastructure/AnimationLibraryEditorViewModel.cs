@@ -48,6 +48,7 @@ public sealed class AnimationLibraryEditRowViewModel : ObservableObject
 {
     private readonly IReadOnlyList<AnimationLibraryRetailScriptOption>
         _retailScripts;
+    private readonly ProjectAnimationLibrary _original;
     private string _resourceName;
     private string _displayName;
     private AnimationLibraryModeOption _selectedMode;
@@ -66,6 +67,7 @@ public sealed class AnimationLibraryEditRowViewModel : ObservableObject
         ArgumentNullException.ThrowIfNull(retailScripts);
         ArgumentNullException.ThrowIfNull(modeOptions);
         ArgumentNullException.ThrowIfNull(collisionOptions);
+        _original = library;
         Id = library.Id;
         _resourceName = library.ResourceName;
         _displayName = library.DisplayName;
@@ -214,7 +216,7 @@ public sealed class AnimationLibraryEditRowViewModel : ObservableObject
         }
     }
 
-    public ProjectAnimationLibrary ToProjectLibrary() => new()
+    public ProjectAnimationLibrary ToProjectLibrary() => _original with
     {
         Id = Id,
         ResourceName = ResourceName.Trim(),

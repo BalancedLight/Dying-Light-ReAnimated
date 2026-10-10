@@ -5,13 +5,13 @@ using CommunityToolkit.Mvvm.Input;
 
 namespace ReAnimated.App.ViewModels;
 
-public sealed class TimelineViewModel : ObservableObject
+public sealed partial class TimelineViewModel : ObservableObject
 {
     private const double DefaultPixelsPerFrame = 6.0;
     private const double MinimumPixelsPerFrame = 0.05;
     private const double DefaultViewportWidth = 1080.0;
     private const double DefaultViewportHeight = 180.0;
-    private const double MinimumCanvasHeight = 160.0;
+    private const double MinimumCanvasHeight = 60.0;
     private const double MaximumCanvasWidth = 250_000.0;
     private const double TimelineRightPadding = 18.0;
     private const double TrackHeaderHeight = 24.0;
@@ -20,6 +20,8 @@ public sealed class TimelineViewModel : ObservableObject
     private readonly int _startFrame;
     private readonly List<TimelineCurveTrackViewModel> _allCurves = [];
     private int _currentFrame;
+    private double _positionFrame;
+    private double _sourceFrameOffset;
     private int _endFrame;
     private double _pixelsPerFrame = DefaultPixelsPerFrame;
     private double _viewportWidth = DefaultViewportWidth;
@@ -41,6 +43,7 @@ public sealed class TimelineViewModel : ObservableObject
     {
         _startFrame = startFrame;
         _currentFrame = startFrame;
+        _positionFrame = startFrame;
         _endFrame = Math.Max(startFrame + 1, endFrame);
         TogglePlaybackCommand = new RelayCommand(
             () => IsPlaying = !IsPlaying,
@@ -50,12 +53,13 @@ public sealed class TimelineViewModel : ObservableObject
             () => CurrentFrame = Math.Max(StartFrame, CurrentFrame - 1));
         StepForwardCommand = new RelayCommand(
             () => CurrentFrame = Math.Min(EndFrame, CurrentFrame + 1));
-        AddKeyframeCommand = new RelayCommand(AddKeyframe);
+        AddKeyframeCommand = new RelayCommand(AddKeyframe, () => CanAddKey);
         FitTimelineCommand = new RelayCommand(FitTimeline);
         ZoomInCommand = new RelayCommand(
             () => ZoomTimeline(1.5));
         ZoomOutCommand = new RelayCommand(
             () => ZoomTimeline(1.0 / 1.5));
+        InitializeKeyEditing();
         FitTimeline();
     }
 
@@ -106,11 +110,14 @@ public sealed class TimelineViewModel : ObservableObject
         "Authored edits",
         "Facial",
         "IK / attachments",
+        "Events",
     ];
 
     public event EventHandler? CurrentFrameChanged;
 
     public event EventHandler? KeyframeRequested;
+
+    public event EventHandler? PlaybackStopped;
 
     public IRelayCommand TogglePlaybackCommand { get; }
 
@@ -162,11 +169,13 @@ public sealed class TimelineViewModel : ObservableObject
         get => _selectedTrack;
         set
         {
+            string? previousId = _selectedTrack?.Id;
             if (SetProperty(ref _selectedTrack, value))
             {
                 OnPropertyChanged(nameof(SelectedTrackLabel));
                 FilterCurves();
                 RebuildVisibleKeyframes();
+                OnSelectedTrackEditingChanged(previousId);
             }
         }
     }
@@ -176,30 +185,61 @@ public sealed class TimelineViewModel : ObservableObject
         : $"{SelectedTrack.Name}  |  {SelectedTrack.Channel}";
 
     public string VisibleTrackCountLabel =>
-        $"{VisibleTracks.Count:N0} of {Tracks.Count:N0} tracks";
+        $"{VisibleTracks.Count:N0} of {Tracks.Count + EventLanes.Count:N0} tracks";
 
     public string CurveStatusLabel => Curves.Count == 0
-        ? "No numeric curves are available for the selected channel."
-        : $"{Curves.Count:N0} components | shared value scale | source values are read-only";
+        ? "No curves"
+        : $"{Curves.Count:N0} components · {TrackAccessLabel}";
+
+    public double PositionFrame
+    {
+        get => _positionFrame;
+        set
+        {
+            if (!double.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+            double normalized = Math.Clamp(value, StartFrame, EndFrame);
+            bool changed = SetProperty(ref _positionFrame, normalized);
+            int whole = checked((int)Math.Floor(normalized + 1e-9));
+            if (_currentFrame != whole)
+            {
+                _currentFrame = whole;
+                OnPropertyChanged(nameof(CurrentFrame));
+            }
+            if (!_settingFrameFromPlayback) ResetPlaybackClock();
+            if (changed)
+            {
+                OnPropertyChanged(nameof(CurrentFramePixelX));
+                OnPropertyChanged(nameof(SourceFrame));
+                CurrentFrameChanged?.Invoke(this, EventArgs.Empty);
+            }
+        }
+    }
+
+    public double SourceFrameOffset
+    {
+        get => _sourceFrameOffset;
+        set
+        {
+            if (!double.IsFinite(value) || value < 0 || value > int.MaxValue) throw new ArgumentOutOfRangeException(nameof(value));
+            if (value != _sourceFrameOffset) CancelKeyDrag();
+            if (!SetProperty(ref _sourceFrameOffset, value)) return;
+            ClearKeySelection();
+            OnPropertyChanged(nameof(SourceFrame));
+            RebuildPresentationGeometry();
+        }
+    }
+    public int SourceFrame => checked((int)Math.Min(int.MaxValue, Math.Floor(SourceFrameOffset + PositionFrame + 1e-9)));
 
     public int CurrentFrame
     {
         get => _currentFrame;
-        set
-        {
-            int normalized = Math.Clamp(value, StartFrame, EndFrame);
-            bool changed = SetProperty(ref _currentFrame, normalized);
-            if (!_settingFrameFromPlayback)
-            {
-                ResetPlaybackClock();
-            }
+        set => PositionFrame = value;
+    }
 
-            if (changed)
-            {
-                OnPropertyChanged(nameof(CurrentFramePixelX));
-                CurrentFrameChanged?.Invoke(this, EventArgs.Empty);
-            }
-        }
+    public double PositionFromPixel(double pixelX)
+    {
+        if (!double.IsFinite(pixelX)) throw new ArgumentOutOfRangeException(nameof(pixelX));
+        return Math.Clamp(StartFrame + Math.Max(0, pixelX) / PixelsPerFrame, StartFrame, EndFrame);
     }
 
     public int FrameFromPixel(double pixelX)
@@ -218,7 +258,7 @@ public sealed class TimelineViewModel : ObservableObject
     public void ScrubToPixel(double pixelX)
     {
         IsPlaying = false;
-        CurrentFrame = FrameFromPixel(pixelX);
+        PositionFrame = PositionFromPixel(pixelX);
     }
 
     public TimelineTrackViewModel? SelectTrackFromCanvasY(double pixelY)
@@ -245,9 +285,10 @@ public sealed class TimelineViewModel : ObservableObject
         set
         {
             int normalized = Math.Max(StartFrame + 1, value);
+            if (normalized != _endFrame) CancelKeyDrag();
             if (SetProperty(ref _endFrame, normalized))
             {
-                CurrentFrame = Math.Min(CurrentFrame, normalized);
+                PositionFrame = Math.Min(PositionFrame, normalized);
                 FitTimeline();
             }
         }
@@ -320,7 +361,7 @@ public sealed class TimelineViewModel : ObservableObject
         ((EndFrame - StartFrame) * PixelsPerFrame) +
         TimelineRightPadding);
 
-    public double CurrentFramePixelX => ToPixel(CurrentFrame);
+    public double CurrentFramePixelX => ToPixel(PositionFrame);
 
     public double DopeSheetCanvasHeight => Math.Max(
         CurveCanvasHeight,
@@ -402,55 +443,35 @@ public sealed class TimelineViewModel : ObservableObject
             return;
         }
 
-        double accumulatedFrames =
-            _playbackFrameRemainder +
-            (elapsed.TotalSeconds * FramesPerSecond);
-        long wholeFrames;
-        if (!double.IsFinite(accumulatedFrames) ||
-            accumulatedFrames >= long.MaxValue)
+        double advance = elapsed.TotalSeconds * FramesPerSecond;
+        if (!double.IsFinite(advance) || advance < 0) return;
+        double from = PositionFrame;
+        double accumulated = from - StartFrame + _playbackFrameRemainder + advance;
+        double span = (double)EndFrame - StartFrame + 1;
+        long loops = 0;
+        double to;
+        if (IsLooping)
         {
-            wholeFrames = long.MaxValue;
-            _playbackFrameRemainder = 0.0;
+            loops = (long)Math.Min(long.MaxValue, Math.Floor(accumulated / span));
+            double offset = accumulated % span;
+            to = Math.Min(EndFrame, StartFrame + offset);
+            _playbackFrameRemainder = Math.Max(0, StartFrame + offset - to);
         }
         else
         {
-            wholeFrames = (long)Math.Floor(accumulatedFrames + 1.0e-9);
-            _playbackFrameRemainder = Math.Max(
-                0.0,
-                accumulatedFrames - wholeFrames);
+            to = Math.Min(EndFrame, StartFrame + accumulated);
+            _playbackFrameRemainder = 0;
         }
-
-        if (wholeFrames <= 0)
-        {
-            return;
-        }
-
-        if (IsLooping)
-        {
-            long span = (long)EndFrame - StartFrame + 1L;
-            long offset =
-                ((long)CurrentFrame - StartFrame +
-                 (wholeFrames % span)) %
-                span;
-            SetCurrentFrameFromPlayback(
-                checked(StartFrame + (int)offset));
-            return;
-        }
-
-        long framesRemaining = (long)EndFrame - CurrentFrame;
-        if (wholeFrames >= framesRemaining)
-        {
-            SetCurrentFrameFromPlayback(EndFrame);
-            IsPlaying = false;
-            return;
-        }
-
-        SetCurrentFrameFromPlayback(
-            checked(CurrentFrame + (int)wholeFrames));
+        _settingFrameFromPlayback = true;
+        try { PositionFrame = to; }
+        finally { _settingFrameFromPlayback = false; }
+        PlaybackAdvanced?.Invoke(this, new TimelinePlaybackAdvance(from, to, loops));
+        if (!IsLooping && to >= EndFrame) IsPlaying = false;
     }
 
     public void ReplaceTracks(IEnumerable<TimelineTrackViewModel> tracks)
     {
+        CancelKeyDrag();
         ArgumentNullException.ThrowIfNull(tracks);
         string? selectedId = SelectedTrack?.Id;
         Tracks.Clear();
@@ -461,6 +482,7 @@ public sealed class TimelineViewModel : ObservableObject
         }
 
         RebuildFilteredTracks(selectedId);
+        OnKeyContentReplaced(curvesChanged: false);
     }
 
     public void SelectTrack(string? trackId)
@@ -484,6 +506,7 @@ public sealed class TimelineViewModel : ObservableObject
     public void ReplaceCurves(
         IEnumerable<TimelineCurveTrackViewModel> curves)
     {
+        CancelKeyDrag();
         ArgumentNullException.ThrowIfNull(curves);
         _allCurves.Clear();
         foreach (TimelineCurveTrackViewModel curve in curves)
@@ -493,12 +516,14 @@ public sealed class TimelineViewModel : ObservableObject
         }
 
         FilterCurves();
+        OnKeyContentReplaced(curvesChanged: true);
     }
 
     private void Stop()
     {
         IsPlaying = false;
         CurrentFrame = StartFrame;
+        PlaybackStopped?.Invoke(this, EventArgs.Empty);
     }
 
     private void SetCurrentFrameFromPlayback(int frame)
@@ -546,13 +571,13 @@ public sealed class TimelineViewModel : ObservableObject
             track = SelectedTrack ?? Tracks[0];
         }
 
-        if (track.Keyframes.All(item => item.Frame != CurrentFrame))
+        if (track.Keyframes.All(item => item.Frame != SourceFrame))
         {
             track.Keyframes.Add(
                 new TimelineKeyframeViewModel(
                     track.Name,
-                    CurrentFrame,
-                    ToPixel(CurrentFrame),
+                    SourceFrame,
+                    ToPixel(PositionFrame),
                     12.0));
         }
 
@@ -645,6 +670,7 @@ public sealed class TimelineViewModel : ObservableObject
         OnPropertyChanged(nameof(CurveGridHeight));
         RebuildFrameMarkers();
         RebuildVisibleKeyframes();
+        RefreshEventGeometry();
         RebuildCurveGeometry();
     }
 
@@ -683,6 +709,7 @@ public sealed class TimelineViewModel : ObservableObject
     {
         string? selection = preferredTrackId ?? SelectedTrack?.Id;
         VisibleTracks.Clear();
+        foreach (TimelineTrackViewModel lane in EventLanes.Where(MatchesTrackFilter)) VisibleTracks.Add(lane);
         foreach (TimelineTrackViewModel track in Tracks.Where(MatchesTrackFilter))
         {
             VisibleTracks.Add(track);
@@ -699,6 +726,7 @@ public sealed class TimelineViewModel : ObservableObject
         OnPropertyChanged(nameof(DopeSheetCanvasHeight));
         OnPropertyChanged(nameof(TimelineGridHeight));
         RebuildVisibleKeyframes();
+        RefreshEventGeometry();
     }
 
     private bool MatchesTrackFilter(TimelineTrackViewModel track)
@@ -709,6 +737,7 @@ public sealed class TimelineViewModel : ObservableObject
             "Authored edits" => track.Group == "Authored edits",
             "Facial" => track.Group == "Facial",
             "IK / attachments" => track.Group is "IK" or "Attachments",
+            "Events" => track.Group == "Events",
             _ => true,
         };
         if (!scopeMatches || string.IsNullOrWhiteSpace(TrackSearchText))
@@ -730,12 +759,12 @@ public sealed class TimelineViewModel : ObservableObject
             TimelineTrackViewModel track = VisibleTracks[trackIndex];
             bool isSelected = ReferenceEquals(track, SelectedTrack);
             IEnumerable<TimelineKeyframeViewModel> presentationKeys;
-            if (track.ExactKeyFrames.Count > 0)
+            if (track.ExactKeyPositions.Count > 0)
             {
-                IEnumerable<int> exactFrames = isSelected
-                    ? track.ExactKeyFrames
+                IEnumerable<double> exactFrames = isSelected
+                    ? track.ExactKeyPositions
                     : SelectEvenlySpacedPresentationFrames(
-                        track.ExactKeyFrames,
+                        track.ExactKeyPositions,
                         maximumCount: 12);
                 presentationKeys = exactFrames.Select(frame =>
                     new TimelineKeyframeViewModel(
@@ -757,10 +786,12 @@ public sealed class TimelineViewModel : ObservableObject
             {
                 VisibleKeyframes.Add(keyframe with
                 {
-                    PixelX = ToPixel(keyframe.Frame),
+                    PixelX = ToPixel(keyframe.Frame - SourceFrameOffset),
                     TrackY = TrackHeaderHeight + 9.0 +
                              (trackIndex * TrackRowHeight),
                     IsSelectedTrack = isSelected,
+                    TrackId = track.Id,
+                    IsSelected = isSelected && SelectedKeyFrame is { } selectedFrame && Math.Abs(selectedFrame - keyframe.Frame) < 1e-7,
                 });
             }
         }
@@ -788,8 +819,8 @@ public sealed class TimelineViewModel : ObservableObject
         return selected;
     }
 
-    private static IEnumerable<int> SelectEvenlySpacedPresentationFrames(
-        IReadOnlyList<int> frames,
+    private static IEnumerable<double> SelectEvenlySpacedPresentationFrames(
+        IReadOnlyList<double> frames,
         int maximumCount)
     {
         if (frames.Count <= maximumCount)
@@ -797,7 +828,7 @@ public sealed class TimelineViewModel : ObservableObject
             return frames;
         }
 
-        var selected = new int[maximumCount];
+        var selected = new double[maximumCount];
         for (var index = 0; index < maximumCount; index++)
         {
             int sourceIndex = checked((int)Math.Round(
@@ -811,6 +842,7 @@ public sealed class TimelineViewModel : ObservableObject
 
     private void FilterCurves()
     {
+        string? selectedComponent = SelectedCurve?.Name;
         Curves.Clear();
         bool usesTrackOwnership = _allCurves.Any(
             static curve => curve.OwnerTrackId is not null);
@@ -828,6 +860,10 @@ public sealed class TimelineViewModel : ObservableObject
             Curves.Add(curve);
         }
 
+        _selectedCurve = selectedComponent is null ? null : Curves.FirstOrDefault(curve => curve.Name == selectedComponent);
+        if (_selectedCurve is null && SelectedTrack is not null) _selectedCurve = Curves.FirstOrDefault();
+        SynchronizeKeyInspector();
+
         OnPropertyChanged(nameof(CurveStatusLabel));
         RebuildCurveGeometry();
     }
@@ -836,7 +872,8 @@ public sealed class TimelineViewModel : ObservableObject
     {
         CurveSegments.Clear();
         CurvePoints.Clear();
-        TimelineCurveKeyViewModel[] keys = Curves
+        IEnumerable<TimelineCurveTrackViewModel> plotted = SelectedCurve is null ? Curves : [SelectedCurve];
+        TimelineCurveKeyViewModel[] keys = plotted
             .SelectMany(static curve => curve.Keys)
             .ToArray();
         if (keys.Length == 0)
@@ -858,7 +895,12 @@ public sealed class TimelineViewModel : ObservableObject
             maximum += 1.0;
         }
 
-        foreach (TimelineCurveTrackViewModel curve in Curves)
+        _curveMinimum = _keyDrag?.Minimum ?? minimum;
+        _curveMaximum = _keyDrag?.Maximum ?? maximum;
+        minimum = _curveMinimum;
+        maximum = _curveMaximum;
+
+        foreach (TimelineCurveTrackViewModel curve in plotted)
         {
             double curveBottom = Math.Max(
                 CurveTop + 1.0,
@@ -869,11 +911,12 @@ public sealed class TimelineViewModel : ObservableObject
                     curve.Color,
                     key.Frame,
                     key.Value,
-                    ToPixel(key.Frame),
+                    ToPixel(key.Frame - SourceFrameOffset),
                     curveBottom -
                     ((key.Value - minimum) /
                      (maximum - minimum) *
-                     (curveBottom - CurveTop))))
+                      (curveBottom - CurveTop)),
+                    SelectedKeyFrame is { } frame && Math.Abs(frame - key.Frame) < 1e-7))
                 .ToArray();
             foreach (TimelineCurvePointViewModel point in points)
             {
@@ -918,7 +961,8 @@ public sealed class TimelineTrackViewModel : ObservableObject
         string group,
         bool isReadOnly,
         int? totalKeyCount = null,
-        IEnumerable<int>? exactKeyFrames = null)
+        IEnumerable<int>? exactKeyFrames = null,
+        IEnumerable<double>? exactKeyPositions = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
@@ -933,9 +977,13 @@ public sealed class TimelineTrackViewModel : ObservableObject
             .Distinct()
             .Order()
             .ToArray() ?? [];
+        ExactKeyPositions = (exactKeyPositions ?? ExactKeyFrames.Select(static frame => (double)frame))
+            .Distinct().Order().ToArray();
+        if (ExactKeyPositions.Any(static frame => !double.IsFinite(frame)))
+            throw new ArgumentException("Key frames must be finite.", nameof(exactKeyPositions));
         TotalKeyCount = totalKeyCount ??
-            (ExactKeyFrames.Count > 0
-                ? ExactKeyFrames.Count
+            (ExactKeyPositions.Count > 0
+                ? ExactKeyPositions.Count
                 : null);
         Keyframes.CollectionChanged += (_, _) =>
         {
@@ -957,14 +1005,15 @@ public sealed class TimelineTrackViewModel : ObservableObject
     public int? TotalKeyCount { get; }
 
     public IReadOnlyList<int> ExactKeyFrames { get; }
+    public IReadOnlyList<double> ExactKeyPositions { get; }
 
     public int EffectiveKeyCount => TotalKeyCount ?? Keyframes.Count;
 
     public string KeyCountLabel => $"{EffectiveKeyCount:N0}";
 
     public string KeyPresentationLabel =>
-        ExactKeyFrames.Count > 0
-            ? $"{ExactKeyFrames.Count:N0} exact source keys. The selected row draws every key; unselected dense rows use representative markers."
+        ExactKeyPositions.Count > 0
+            ? $"{ExactKeyPositions.Count:N0} exact source keys. The selected row draws every key; unselected dense rows use representative markers."
             : EffectiveKeyCount > Keyframes.Count
             ? $"{EffectiveKeyCount:N0} source keys; {Keyframes.Count:N0} representative markers are drawn for responsive navigation."
             : $"{EffectiveKeyCount:N0} keys";
@@ -974,10 +1023,12 @@ public sealed class TimelineTrackViewModel : ObservableObject
 
 public sealed record TimelineKeyframeViewModel(
     string Track,
-    int Frame,
+    double Frame,
     double PixelX,
     double TrackY,
-    bool IsSelectedTrack = false);
+    bool IsSelectedTrack = false,
+    string? TrackId = null,
+    bool IsSelected = false);
 
 public sealed record TimelineFrameMarkerViewModel(int Frame, double PixelX);
 
@@ -1037,7 +1088,8 @@ public readonly record struct TimelineCurvePointViewModel(
     double Frame,
     double Value,
     double PixelX,
-    double PixelY);
+    double PixelY,
+    bool IsSelected = false);
 
 public readonly record struct TimelineCurveSegmentViewModel(
     string Track,

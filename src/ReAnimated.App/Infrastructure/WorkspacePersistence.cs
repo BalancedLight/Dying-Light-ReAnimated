@@ -26,9 +26,10 @@ public sealed record WorkspaceSnapshot(
     bool? SkeletonOverlayVisible = null,
     ImmutableArray<PendingProjectAssetReceipt> PendingAssets = default,
     bool? KeepFramed = null,
-    ImmutableArray<PendingSecondaryMotionEdit> PendingSecondaryMotionEdits = default)
+    ImmutableArray<PendingSecondaryMotionEdit> PendingSecondaryMotionEdits = default,
+    double? PositionFrame = null)
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public const int LegacySchemaVersion = 1;
 }

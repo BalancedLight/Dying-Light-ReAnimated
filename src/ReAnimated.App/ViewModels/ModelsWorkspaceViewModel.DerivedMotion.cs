@@ -78,7 +78,7 @@ public sealed partial class ModelsWorkspaceViewModel
         OnBodyModelApplyRequested(sender,e);
         SelectedAnimation=Animations.FirstOrDefault(a=>a.Id==id);RefreshTimeline();RefreshPreview();
     }
-    private ImmutableArray<MorphWeight> SampleAnimationMorphs(FbxModelAuthoringImportResult model,AnimationClip? clip,int frame)
+    private ImmutableArray<MorphWeight> SampleAnimationMorphs(FbxModelAuthoringImportResult model,AnimationClip? clip,double frame)
     {
         if(clip is null||clip.ScalarTracks.IsEmpty)return MergeGuidedMorphOverrides(model, []);
         Guid? id=DerivedReviewActive?Conformance.DerivedMotionPreview?.ClipId:SelectedAnimation?.Id;

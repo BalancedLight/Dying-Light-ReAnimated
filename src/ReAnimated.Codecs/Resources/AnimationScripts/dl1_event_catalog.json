@@ -1,0 +1,6885 @@
+{
+  "format": 1,
+  "events": [
+    {
+      "symbol": "EVENT_ACTIVATE_SLOT",
+      "id": 1,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DEACTIVATE_SLOT",
+      "id": 2,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SLOT_DEACTIVATED",
+      "id": 3,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_ITEM_ACTIVATED",
+      "id": 4,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ITEM_DEACTIVATED",
+      "id": 5,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_RANGED_DAMAGE",
+      "id": 6,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 553,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FALL",
+      "id": 7,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 115,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_STOOD_UP",
+      "id": 8,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 207,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TURN_OFF_PHYSICS",
+      "id": 9,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 317,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TURN_ON_PHYSICS",
+      "id": 10,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 281,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_LEFT",
+      "id": 11,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 232,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_RIGHT",
+      "id": 12,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 291,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_UP",
+      "id": 13,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 73,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_DOWN",
+      "id": 14,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 85,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_FORWARD",
+      "id": 15,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 288,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_BACKWARD",
+      "id": 16,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FALL_ON_HIT_ENABLE",
+      "id": 17,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 367,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FALL_ON_HIT_DISABLE",
+      "id": 18,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 342,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FINISHER_LAYING_STOMP",
+      "id": 19,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FINISHER_LAYING_KILL",
+      "id": 20,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FINAL_POSITION",
+      "id": 21,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 365,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FINAL_ROTATION",
+      "id": 22,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 507,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOT_RIGHT_HAND",
+      "id": 23,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOT_LEFT_HAND",
+      "id": 24,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DROP_ACTIVE_ITEM",
+      "id": 25,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DIE",
+      "id": 26,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CROUCHED",
+      "id": 27,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_GRAB_DAMAGE",
+      "id": 28,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_RELEASE",
+      "id": 29,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 14,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LYING_ELLIPSOID",
+      "id": 31,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 110,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_STAND_UP_ELLIPSOID",
+      "id": 32,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 103,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_PLAY_LP_SOUND",
+      "id": 33,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ACTIVITY_END",
+      "id": 34,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LEANED",
+      "id": 35,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TRACK_ENABLE",
+      "id": 36,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1248,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TRACK_DISABLE",
+      "id": 37,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2383,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BREAK_DOOR",
+      "id": 38,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_MELEE_ATTACK_START",
+      "id": 39,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_HARD_MELEE_ATTACK",
+      "id": 40,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RELOADED",
+      "id": 41,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 14,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_OPEN_DOOR",
+      "id": 42,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CLOSE_DOOR",
+      "id": 43,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LEANED_LEFT",
+      "id": 44,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LEANED_RIGHT",
+      "id": 45,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CROUCHED_LEFT",
+      "id": 46,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CROUCHED_RIGHT",
+      "id": 47,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BREAK_WINDOW",
+      "id": 48,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_RANGED_DAMAGE_LEFT",
+      "id": 49,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LAUNCH_ROCKET",
+      "id": 52,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DESTROY_SER_OBJECT",
+      "id": 53,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_REACT_ON_HIT_DISABLED",
+      "id": 55,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 542,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_REACT_ON_HIT_ENABLED",
+      "id": 56,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 625,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_DODGE_DISABLED",
+      "id": 57,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 316,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_DODGE_ENABLED",
+      "id": 58,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 878,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TAKE_DAMAGE_ENABLED",
+      "id": 59,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 133,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TAKE_DAMAGE_DISABLED",
+      "id": 60,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 126,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AI_THROWABLE_THROW",
+      "id": 61,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AI_THROWABLE_PREPARE",
+      "id": 62,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GET_UP_PLAYER",
+      "id": 63,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_LIGHT_PUSH",
+      "id": 64,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 110,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_MEDIUM_PUSH",
+      "id": 65,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 32,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_HEAVY_PUSH",
+      "id": 66,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_HANDLE_DEATH_EFFECT",
+      "id": 67,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 34,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BE_FINISHED_START",
+      "id": 68,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 63,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BE_FINISHED_END",
+      "id": 69,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 51,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BE_KICKED_START",
+      "id": 70,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 42,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BE_KICKED_END",
+      "id": 71,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 36,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BE_HANDCUFFED_START",
+      "id": 72,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BE_HANDCUFFED_END",
+      "id": 73,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_REACT_ON_HANDCUFF",
+      "id": 74,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_TRACK_DEST_ENABLE",
+      "id": 76,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_TRACK_DEST_DISABLE",
+      "id": 77,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 26,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "HIT_REACTION_MOVE_START",
+      "id": 78,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "HIT_REACTION_WITH_MOVEMENT",
+      "id": 79,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LANDED",
+      "id": 80,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FINAL_POSITION_2",
+      "id": 83,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 154,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FINAL_ROTATION_2",
+      "id": 84,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 230,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AVOID_COLLISION_ENABLED",
+      "id": 85,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 239,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AVOID_COLLISION_DISABLED",
+      "id": 86,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 190,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_IS_MOVING",
+      "id": 87,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_IMPACT_TO_DYN_OBJECT",
+      "id": 88,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LEFT_HAND_ATTACK_START",
+      "id": 89,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 14,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LEFT_HAND_ATTACK_STOP",
+      "id": 90,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RIGHT_HAND_ATTACK_START",
+      "id": 91,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RIGHT_HAND_ATTACK_STOP",
+      "id": 92,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 20,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CARRIED",
+      "id": 93,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_FORCE_FALL",
+      "id": 94,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 26,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_JUMPED",
+      "id": 95,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 39,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ALLOW_CHANGE_IDLE_ANIM",
+      "id": 96,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 202,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_DENY_CHANGE_IDLE_ANIM",
+      "id": 97,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 158,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BREAK_ATTACK_ENABLED",
+      "id": 98,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BREAK_ATTACK_DISABLED",
+      "id": 99,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ATTRACT_HORDE",
+      "id": 100,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SNAP_TO_ATTRACTOR_POS",
+      "id": 101,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 34,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FALL_FROM_EDGE_ENABLED",
+      "id": 102,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 76,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FALL_FROM_EDGE_DISABLED",
+      "id": 103,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 111,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_IMMORTAL_ENABLED",
+      "id": 104,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_IMMORTAL_DISABLED",
+      "id": 105,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ATTRACTOR_START_SYNCHRONIZATION",
+      "id": 106,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_PULL_OUT_WEAPON",
+      "id": 107,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CLENCH_CHECK_START",
+      "id": 108,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CLENCH_CHECK_END",
+      "id": 109,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_CHECK_START",
+      "id": 110,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 113,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_CHECK_END",
+      "id": 111,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 98,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BERSERKER_ATTACK",
+      "id": 112,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_KNOCKED_DOWN",
+      "id": 113,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BREAK_ATTACK",
+      "id": 114,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CANNOT_ATTACK",
+      "id": 115,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 11,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_ATTACK",
+      "id": 116,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FORCE_EXECUTE_BERSERKER_ATTACK",
+      "id": 117,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_START_RAM",
+      "id": 118,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_STOP_RAM",
+      "id": 119,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_TAKE_STAMINA",
+      "id": 120,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_IDLE_CORPSE_EATING",
+      "id": 121,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAUSE_TRANSFORM",
+      "id": 122,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ENABLE_STINGER",
+      "id": 123,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_ENABLE",
+      "id": 124,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 49,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_DISABLE",
+      "id": 125,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 36,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_VOLATILE_SUMMON",
+      "id": 126,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_VOLATILE_ENEMY_FOUND",
+      "id": 127,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_OBJECT_THROW",
+      "id": 128,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SCREAM_DAMAGE_START",
+      "id": 129,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 16,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SCREAM_DAMAGE_END",
+      "id": 130,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CREATE_THROWABLE_OBJECT",
+      "id": 131,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_START_GAS_ATTACK",
+      "id": 132,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_EXPLODE",
+      "id": 133,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 26,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_KNOCK_DOWN",
+      "id": 134,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_TARGET_VISIBILITY",
+      "id": 135,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 34,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_COUNTER_GRAB_CLEAN",
+      "id": 136,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 36,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_COUNTER_GRAB_NAGEWAZA_RIGHT",
+      "id": 137,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_COUNTER_GRAB_NAGEWAZA_LEFT",
+      "id": 138,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SPITTER_SPIT",
+      "id": 139,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 27,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_KICK_ENABLE",
+      "id": 140,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 265,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_KICK_DISABLE",
+      "id": 141,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 248,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOW_WEAPON",
+      "id": 142,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_HIDE_WEAPON",
+      "id": 143,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_GRAB_STATE",
+      "id": 144,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_REACTION_ON_COLIDED_ENEMY_START",
+      "id": 145,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 12,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_REACTION_ON_COLIDED_ENEMY_END",
+      "id": 146,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 12,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LEG_GRAB_ENABLE",
+      "id": 147,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LEG_GRAB_DISABLE",
+      "id": 148,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SPEECH_ENABLE",
+      "id": 149,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SPEECH_DISABLE",
+      "id": 150,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_FOR_REBAR_COLLISION_START",
+      "id": 151,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 10,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_FOR_REBAR_COLLISION_END",
+      "id": 152,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 10,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ENTER_HIGHER_ALARM_LEVEL_ENABLE",
+      "id": 153,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 27,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ENTER_HIGHER_ALARM_LEVEL_DISABLE",
+      "id": 154,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 27,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TAKE_DAMAGE_AVOIDABLE",
+      "id": 155,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 116,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TAKE_DAMAGE_NOT_AVOIDABLE",
+      "id": 156,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 105,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TRANSFORM_ZOMBIES_SHOUT",
+      "id": 157,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TRANSFORM_ZOMBIES_SCREAMER_SHOUT",
+      "id": 158,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_VIS_AIM_LOOK_ENABLE",
+      "id": 159,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 16,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_VIS_AIM_LOOK_DISABLE",
+      "id": 160,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 12,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SET_IS_NOT_MOVING",
+      "id": 161,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 42,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LAYING_ON_BACK",
+      "id": 162,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 16,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LAYING_ON_FRONT",
+      "id": 163,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 45,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_STOP_MOVE_COLLISION",
+      "id": 164,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BREAK_ELEMENTAL_EFFECT_ENABLE",
+      "id": 165,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 12,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BREAK_ELEMENTAL_EFFECT_DISABLE",
+      "id": 166,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 12,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_COLLISION_TO_FALL_ENABLE",
+      "id": 167,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 24,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_COLLISION_TO_FALL_DISABLE",
+      "id": 168,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 24,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_VIS_SYNCHRO_ENABLE",
+      "id": 169,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_VIS_SYNCHRO_DISABLE",
+      "id": 170,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DESTROY_PHYSICS_TARGETS_ON_HEAD",
+      "id": 171,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_DANGEROUS_ATTACK_ON_AHEAD",
+      "id": 172,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_DANGEROUS_ATTACK_AROUND",
+      "id": 173,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_COUNTER_ATTACK_STARTED",
+      "id": 174,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 33,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ENABLE_NEVER_HOLSTER_WEAPON",
+      "id": 175,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_DISABLE_NEVER_HOLSTER_WEAPON",
+      "id": 176,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LAY_DOWN",
+      "id": 177,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_MAKE_PUSH_DAMAGE_TO_PLAYER",
+      "id": 178,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CLEAR_ENEMIES_SENSE",
+      "id": 179,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_BREAK_GRAB_ON_DAMAGE",
+      "id": 180,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 26,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_LEFT_LH",
+      "id": 181,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_RIGHT_LH",
+      "id": 182,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_UP_LH",
+      "id": 183,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_DOWN_LH",
+      "id": 184,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_FORWARD_LH",
+      "id": 185,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 52,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_BACKWARD_LH",
+      "id": 186,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_LEFT_RH",
+      "id": 187,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_RIGHT_RH",
+      "id": 188,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_UP_RH",
+      "id": 189,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_DOWN_RH",
+      "id": 190,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_FORWARD_RH",
+      "id": 191,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 61,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_DAMAGE_BACKWARD_RH",
+      "id": 192,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_NAVI_FOR_MOVING",
+      "id": 193,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_NAVI_FOR_MOVING_PERIOD",
+      "id": 194,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 106,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CHECK_NAVI_FOR_MOVING_STOP",
+      "id": 195,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 106,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ENABLE_ATTACK_IN_DODGE",
+      "id": 196,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 18,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GUIDED_ATTACK_START",
+      "id": 197,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 40,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GUIDED_ATTACK_STOP",
+      "id": 198,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 39,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_KO_DAMAGE",
+      "id": 199,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BLAST_SCREAM_DAMAGE_START",
+      "id": 200,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BLAST_SCREAM_DAMAGE_END",
+      "id": 201,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_BREAK_ENABLE",
+      "id": 202,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GRAB_BREAK_DISABLE",
+      "id": 203,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FORCE_ATTACK_TRACKING_USES_EVENTS_ONLY",
+      "id": 204,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_RANGED_DAMAGE_MAGIC",
+      "id": 205,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_JUMPED_AWAY_WITHOUT_COUNTER_RANGE_ATTACK",
+      "id": 206,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_RANGED_DAMAGE_MAGIC_LEFT_HAND",
+      "id": 207,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SET_TARGET_MAGIC_SHOOT_POSITION",
+      "id": 208,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_APPLY_STOMP_ATTACK",
+      "id": 209,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TURN_DURING_ATTACK_DISABLED",
+      "id": 210,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 17,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_TURN_DURING_ATTACK_ENABLED",
+      "id": 211,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 31,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_THROW_PROJECTILE_MAGIC_SEAL",
+      "id": 212,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FORCED_CHANGE_GOAL_DISABLED",
+      "id": 213,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_FORCED_CHANGE_GOAL_ENABLED",
+      "id": 214,
+      "category": "AI timing and gameplay",
+      "definition_file": "ai_timing.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_WINDSHIELD_PUSH1",
+      "id": 300,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_WINDSHIELD_PUSH2",
+      "id": 301,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_STOMPFINISHER_KICK",
+      "id": 400,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_STOMPFINISHER_STOMP",
+      "id": 401,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_STOMPFINISHER_KILL",
+      "id": 402,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_STOMPFINISHER_PLAYSOUND",
+      "id": 403,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_STOMPFINISHER_KICKSTAND",
+      "id": 404,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_THROWABLE_THROW",
+      "id": 501,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 29,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_MOLOTOV_LIGHT",
+      "id": 502,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_THROWABLE_PREPARE",
+      "id": 502,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_GENTLEPUSH_PUSH_LEFT",
+      "id": 503,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GENTLEPUSH_PUSH_RIGHT",
+      "id": 504,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAM_HIT_TARGET",
+      "id": 505,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RAM_INPUT_HIT_START",
+      "id": 506,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAM_INPUT_HIT_END",
+      "id": 507,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "CAN_BODY_ROTATE",
+      "id": 508,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ENEMY_GRAB_THROW",
+      "id": 509,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PUNCH_HIT",
+      "id": 510,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 123,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "REST_START",
+      "id": 515,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 33,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SHOTGUN_AFTERSHOT",
+      "id": 516,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_HELP_GET_UP_CAN_SELF_STAND",
+      "id": 522,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_CAN_STOP_RELOAD_ANIM",
+      "id": 523,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_ADD_RELOAD_BULLETS",
+      "id": 524,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "SNAPSHOT",
+      "id": 525,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOW_BULLET",
+      "id": 531,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_HIDE_BULLET",
+      "id": 532,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_UPDATE_BULLETS_RIGHT",
+      "id": 533,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_UPDATE_BULLETS_LEFT",
+      "id": 534,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_UPDATE_BULLETS_RIGHT_1",
+      "id": 535,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_UPDATE_BULLETS_LEFT_1",
+      "id": 536,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_RIGHT",
+      "id": 537,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_LEFT",
+      "id": 538,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "CLIMBING_LENGTH",
+      "id": 539,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 57,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GRAB_INPUT_START",
+      "id": 540,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GRAB_INPUT_STOP",
+      "id": 541,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "JUMP_PUSH_OFF",
+      "id": 542,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 40,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "MELEE_SWING_RIGHT",
+      "id": 543,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 97,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "MELEE_SWING_LEFT",
+      "id": 544,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SPECIAL_EFFECT",
+      "id": 545,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 16,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "CAN_START_KICK",
+      "id": 546,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "END_GIVE_DAMAGE",
+      "id": 547,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 79,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "START_GIVE_DAMAGE",
+      "id": 548,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 86,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PLAY_NM_FX",
+      "id": 549,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 81,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PLAY_EDGE_GRAB_SOUND",
+      "id": 550,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 43,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_ADD_BARREL_SMOKE",
+      "id": 552,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BLOW_SMOKE",
+      "id": 553,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EXECUTE_TRIGGER",
+      "id": 555,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 14,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "START_GIVE_DAMAGE_RIGHT",
+      "id": 557,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "END_GIVE_DAMAGE_RIGHT",
+      "id": 558,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "START_GIVE_DAMAGE_LEFT",
+      "id": 559,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "END_GIVE_DAMAGE_LEFT",
+      "id": 560,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "ENABLE_DUCK",
+      "id": 561,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 54,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "REPL_EARLY_ANIM_END",
+      "id": 562,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RELOAD_ADD_BULLET",
+      "id": 600,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 33,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RELOAD_ALLOW_BREAK",
+      "id": 601,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_RELOAD_FORBID_BREAK",
+      "id": 602,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INTERACTION_TRIGGER_USE",
+      "id": 603,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 116,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INTERACTION_TRIGGER_ANIMATE_ITEM",
+      "id": 604,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 271,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INTERACTION_TRIGGER_RELEASE_POSE",
+      "id": 605,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 88,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SWIM_LEFT_HAND_PUSH",
+      "id": 606,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 18,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SWIM_RIGHT_HAND_PUSH",
+      "id": 607,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 24,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SWIM_MOVE_IMPULSE",
+      "id": 608,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 35,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "CAN_START_CUSTOM_IDLE",
+      "id": 609,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "CAN_WALK",
+      "id": 610,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 56,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GIVE_GRAB_DAMAGE",
+      "id": 611,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 31,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "END_ANIMATION",
+      "id": 612,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 238,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GRAB_RELEASE",
+      "id": 613,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 48,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GRAB_FAILED_RELEASE",
+      "id": 614,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 33,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SHIELD_BLOCK_HIT",
+      "id": 615,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PLAY_PICKUP_SOUND",
+      "id": 616,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "TRIGGER_HANDS_AIM_ON",
+      "id": 617,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "TRIGGER_HANDS_AIM_OFF",
+      "id": 618,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INTERACTION_TRIGGER_SWITCH_VISUAL_STATE",
+      "id": 620,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 41,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ACTIVATE_FLY_MODE",
+      "id": 621,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 22,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GRAB_DESTROY_HEAD",
+      "id": 622,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "GRAB_MAKE_CHEST_HOLE",
+      "id": 623,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "SHIELD_BLOCK_HEAVY_HIT",
+      "id": 624,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SHOW_DEATH_SCREEN",
+      "id": 625,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 10,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ADD_CAMO_SPLAT_LEFT",
+      "id": 626,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ADD_CAMO_SPLAT_RIGHT",
+      "id": 627,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INTERACTION_TRIGGER_SWITCH_VISUAL_STATE_SECOND",
+      "id": 628,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ROPE_LOCOMOTION_ATTACH",
+      "id": 700,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 14,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ROPE_LOCOMOTION_DETACH",
+      "id": 701,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 11,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_POUNCE_CAN_TACKLE",
+      "id": 702,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 18,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ROPE_LOCOMOTION_ENABLE_GRAVITY",
+      "id": 703,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_APPLY_DAMAGE",
+      "id": 704,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 18,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_JUMP_RELEASE",
+      "id": 705,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_SLAM",
+      "id": 706,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ABILITIES_SPIT_SHOOT",
+      "id": 707,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "CAN_CANCEL",
+      "id": 708,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "ROPE_LOCOMOTION_CAN_ATTACH",
+      "id": 710,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_RELEASE_VICTIM",
+      "id": 711,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_CAN_LOOK",
+      "id": 712,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_CAN_MOVE",
+      "id": 713,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 31,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_ORIENT_START",
+      "id": 714,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_ORIENT_END",
+      "id": 715,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_EXPLODE_LOCAL_PLAYER_ONLY",
+      "id": 716,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_EXPLODE",
+      "id": 717,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_BLOOD_SPLATTER",
+      "id": 718,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_SHOW_ROPE_VIS",
+      "id": 719,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 12,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_HIDE_ROPE_VIS",
+      "id": 720,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 17,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_ROPE_VIS_END_ANIM",
+      "id": 721,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_APPLY_TACKLE_IMPULSE",
+      "id": 722,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 18,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "PVP_GRAB_APPLY_TACKLE_IMPULSE_AND_RELEASE",
+      "id": 723,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SPECIAL_USE_CALLBACK",
+      "id": 724,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "BUGGY_LAND_ATTACH_LEFT",
+      "id": 725,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "BUGGY_LAND_ATTACH_RIGHT",
+      "id": 726,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "BUGGY_LAND_ATTACH_FRONT",
+      "id": 727,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INFECTION_SHOW_ITEM",
+      "id": 728,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "INFECTION_HIDE_ITEM",
+      "id": 729,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "BOSSFIGHT_SHOW_FLASHBACKS",
+      "id": 730,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_STEP_LEFT",
+      "id": 1001,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 6223,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_STEP_RIGHT",
+      "id": 1002,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 6147,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_MOVEMENT_MOD_START",
+      "id": 1003,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 375,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_MOVEMENT_MOD_END",
+      "id": 1004,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 379,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_ROTATION_MOD_START",
+      "id": 1005,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 1048,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_ROTATION_MOD_END",
+      "id": 1006,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 925,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_ALLOW_SPEED_MOD",
+      "id": 1007,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_MAX_ANIM_CUT_TIME",
+      "id": 1008,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 640,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_FIXED_HEIGHT_ANIM",
+      "id": 1009,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 59,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_FOOT_PRE_LAND",
+      "id": 1010,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_FOOT_LAND",
+      "id": 1011,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 8499,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_FOOT_PRE_LIFT",
+      "id": 1012,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_FOOT_LIFT",
+      "id": 1013,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 6836,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_FOOT_PRE_LAND",
+      "id": 1014,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_FOOT_LAND",
+      "id": 1015,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 8506,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_FOOT_PRE_LIFT",
+      "id": 1016,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_FOOT_LIFT",
+      "id": 1017,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 6810,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_IK_ENABLE",
+      "id": 1040,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 2935,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_IK_DISABLE",
+      "id": 1041,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 933,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_IK_ENABLING_START",
+      "id": 1042,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 368,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_IK_DISABLING_START",
+      "id": 1043,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 279,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_FEET_FORWARD",
+      "id": 1050,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 69,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_FEET_FORWARD",
+      "id": 1051,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 49,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_HAND_IK_START",
+      "id": 1060,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 13,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_LEFT_HAND_IK_STOP",
+      "id": 1061,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 134,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_HAND_IK_START",
+      "id": 1062,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_RIGHT_HAND_IK_STOP",
+      "id": 1063,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 121,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_THROW_ITEM",
+      "id": 1070,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_STOPANIM",
+      "id": 1100,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 4761,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_CAN_BREAK_ANIM",
+      "id": 1101,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 146,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_ORIGINAL_BODY_SCALE",
+      "id": 1102,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 68,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_BLOCK_GENERIC_MIMIC",
+      "id": 1103,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 1004,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_BLOCK_GENERIC_EYES",
+      "id": 1104,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 856,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_NORMALIZED_BODY_SCALE",
+      "id": 1105,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_MAKE_SOUND",
+      "id": 1200,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_PUKE",
+      "id": 1201,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_PUKE_END",
+      "id": 1202,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_PUKE_SPLAT",
+      "id": 1203,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_HIT_FX",
+      "id": 1204,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 58,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_THREATENING",
+      "id": 1205,
+      "category": "Human visual, contact, IK and locomotion",
+      "definition_file": "human_vis_events.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_STEP_SHUFFLE_LEFT",
+      "id": 2001,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_STEP_SHUFFLE_RIGHT",
+      "id": 2002,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_GRAB_SPLAT_LEFT",
+      "id": 2003,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_GRAB_SPLAT_CENTER",
+      "id": 2004,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_GRAB_SPLAT_RIGHT",
+      "id": 2005,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_PUKE_ATTACK",
+      "id": 2010,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_PUKE_ATTACK_END",
+      "id": 2011,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_STINGER_SOUND",
+      "id": 2013,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 20,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_EATING_BITE",
+      "id": 2020,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_EATING_TEAR_LEFT_HAND",
+      "id": 2021,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "VIS_EVENT_EATING_TEAR_RIGHT_HAND",
+      "id": 2022,
+      "category": "Infected visual events",
+      "definition_file": "vessel_vis_events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_PAIN",
+      "id": 3000,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_ATTACK",
+      "id": 3001,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 722,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_SHORT_ATTACK",
+      "id": 3002,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 31,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_HAND_WOOSH",
+      "id": 3003,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 503,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_GRAB_END_EATEN",
+      "id": 3004,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_FALLING",
+      "id": 3005,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_FAKE_ATTACK",
+      "id": 3006,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_RANDOM_BARK",
+      "id": 3007,
+      "category": "Human semantic sounds",
+      "definition_file": "human_sound_events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_GRAB_ATTACK",
+      "id": 3501,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 74,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_SPIT",
+      "id": 3502,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_TAUNT",
+      "id": 3503,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 94,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_IDLE_RAGE",
+      "id": 3504,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_BITE",
+      "id": 3505,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 39,
+      "observed_in": [
+        "DL Base Game Paks.zip",
+        "DL - Hellraid.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_IDLE_TWITCH",
+      "id": 3506,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 9,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_SPECIAL_ATTACK",
+      "id": 3507,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 41,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_MOVEMENT_LOOP_SOUND",
+      "id": 3508,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "SOUND_IDLE_CALM_LOOP_SOUND",
+      "id": 3509,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_TRANSFORM_V1",
+      "id": 3510,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_TRANSFORM_V2",
+      "id": 3511,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_TRANSFORM_V3",
+      "id": 3512,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_TRANSFORM_V4",
+      "id": 3513,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_SUMMON",
+      "id": 3514,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_BERSERKER_ATTACK",
+      "id": 3515,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 37,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_DODGE",
+      "id": 3516,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_DODGE_LONG",
+      "id": 3517,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 25,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_LEAVING_PIT",
+      "id": 3518,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 10,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_CAR_GRAB_JUMP_TAUNT",
+      "id": 3519,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 7,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_CAR_GRAB_TAUNT",
+      "id": 3520,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 30,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_CAR_GRAB_ATTACK",
+      "id": 3521,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 96,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_CAR_GRAB_LEAN",
+      "id": 3522,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 30,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "SOUND_EVENT_CAR_GRAB_DROP",
+      "id": 3523,
+      "category": "Infected semantic sounds",
+      "definition_file": "vessel_sound_events.def",
+      "legacy": false,
+      "observed_count": 15,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD",
+      "id": 5003,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_LEFT",
+      "id": 5004,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_COOP",
+      "id": 5005,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_COOP_LEFT",
+      "id": 5006,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_PRE_RELOAD",
+      "id": 5007,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD",
+      "id": 5008,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_POST_RELOAD",
+      "id": 5009,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_PRE_RELOAD_LEFT",
+      "id": 5010,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_LEFT",
+      "id": 5011,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_POST_RELOAD_LEFT",
+      "id": 5012,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_UZI_RELOAD",
+      "id": 5013,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_UZI_RELOAD_LEFT",
+      "id": 5014,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD",
+      "id": 5015,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_POST_RELOAD",
+      "id": 5016,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_AFTERSHOT",
+      "id": 5017,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD",
+      "id": 5018,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_COOP",
+      "id": 5019,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DRAGUNOV_RELOAD",
+      "id": 5020,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_DRAGUNOV_RELOAD_COOP",
+      "id": 5021,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_M60_RELOAD",
+      "id": 5022,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GRANADE_PREPARE",
+      "id": 5023,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GRANADE_THROW",
+      "id": 5024,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 4,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_COLA_USE",
+      "id": 5025,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_01",
+      "id": 5029,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_02",
+      "id": 5030,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_03",
+      "id": 5031,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_01",
+      "id": 5032,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_02",
+      "id": 5033,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_03",
+      "id": 5034,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_04",
+      "id": 5035,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_05",
+      "id": 5036,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_M16_RELOAD_01",
+      "id": 5037,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_M16_RELOAD_02",
+      "id": 5038,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_M16_RELOAD_03",
+      "id": 5039,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_M16_RELOAD_04",
+      "id": 5040,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_M16_RELOAD_05",
+      "id": 5041,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_01",
+      "id": 5042,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_02",
+      "id": 5043,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_03",
+      "id": 5044,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD_01",
+      "id": 5045,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD_02",
+      "id": 5046,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD_03",
+      "id": 5047,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD_04",
+      "id": 5048,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD_05",
+      "id": 5049,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_04",
+      "id": 5050,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_05",
+      "id": 5051,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_AFTERSHOT",
+      "id": 5052,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BERETTA_RELOAD_FULL",
+      "id": 5053,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_AK47_RELOAD_FULL",
+      "id": 5054,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_M16_RELOAD_FULL",
+      "id": 5055,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_RAGINGBULL_RELOAD_FULL",
+      "id": 5056,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_PRE_RELOAD_FULL",
+      "id": 5057,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_RELOAD_FULL",
+      "id": 5058,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SHOTGUN_POST_RELOAD_FULL",
+      "id": 5059,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_WOODENBOX_PICKUP",
+      "id": 5060,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_WOODENBOX_THROW",
+      "id": 5061,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_WOODENBOX_PUT",
+      "id": 5062,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GASCANISTER_PICKUP",
+      "id": 5063,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GASCANISTER_THROW",
+      "id": 5064,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_GASCANISTER_PUT",
+      "id": 5065,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_FUELCANISTER_PICKUP",
+      "id": 5066,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_FUELCANISTER_THROW",
+      "id": 5067,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_FUELCANISTER_PUT",
+      "id": 5068,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_FUELCANISTER_LOOP",
+      "id": 5069,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_GOING_UP_START",
+      "id": 5100,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_GOING_UP_FINISH",
+      "id": 5101,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_GOING_DOWN_START",
+      "id": 5102,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_GOING_DOWN_FINISH",
+      "id": 5103,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_BREAK_DOOR_SUCCESS",
+      "id": 5110,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_BREAK_DOOR_FAIL",
+      "id": 5111,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 2,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_SHIELD_TAKE_DMG",
+      "id": 5112,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_JUMP_ATTACK",
+      "id": 5113,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 6,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_HIT_MACHETE",
+      "id": 5114,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_PULL_OUT_MACHETE",
+      "id": 5115,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_MACHETE_UP_ATTACK",
+      "id": 5116,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_EDGE_GRAB_FROM_TOP",
+      "id": 5117,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 1,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_EDGE_GRAB_FROM_BOTTOM",
+      "id": 5118,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 26,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LAND_HEAVY",
+      "id": 5119,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 3,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_JUMP",
+      "id": 5120,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 36,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_JUMP_OVER",
+      "id": 5121,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_GET_OFF_TOP",
+      "id": 5122,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_LADDER_ENTER",
+      "id": 5123,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_SLIDE_START",
+      "id": 5124,
+      "category": "Player, interactions, gameplay and description-driven effects",
+      "definition_file": "events.def",
+      "legacy": false,
+      "observed_count": 5,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "BLEND_OUT",
+      "id": 7001,
+      "category": "Locomotion transition annotations",
+      "definition_file": "locomotion_annotations.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "BLEND_OUT_TO_START",
+      "id": 7002,
+      "category": "Locomotion transition annotations",
+      "definition_file": "locomotion_annotations.def",
+      "legacy": false,
+      "observed_count": 21,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "BLEND_OUT_TO_FAST_JUMP",
+      "id": 7003,
+      "category": "Locomotion transition annotations",
+      "definition_file": "locomotion_annotations.def",
+      "legacy": false,
+      "observed_count": 0,
+      "observed_in": [
+        null
+      ]
+    },
+    {
+      "symbol": "EVENT_OPENDOOR",
+      "id": 9110,
+      "category": "Legacy vehicle-local constants",
+      "definition_file": "vehanim_all.scr",
+      "legacy": true,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    },
+    {
+      "symbol": "EVENT_CLOSEDOOR",
+      "id": 9111,
+      "category": "Legacy vehicle-local constants",
+      "definition_file": "vehanim_all.scr",
+      "legacy": true,
+      "observed_count": 8,
+      "observed_in": [
+        "DL Base Game Paks.zip"
+      ]
+    }
+  ],
+  "aliases": [
+    {
+      "id": 502,
+      "symbols": [
+        "EVENT_MOLOTOV_LIGHT",
+        "EVENT_THROWABLE_PREPARE"
+      ],
+      "note": "Same numeric value; preserve the source symbol and context."
+    }
+  ],
+  "unresolved": [
+    {
+      "expression": "EVENT_END_SPIN_ATTACK_DAMAGE",
+      "count": 1,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "EVENT_NEXT_DAMAGE_STRONG",
+      "count": 2,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "EVENT_START_SPIN_ATTACK_DAMAGE",
+      "count": 1,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "SOUND_EVENT_ATTACK_LONG",
+      "count": 2,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "SOUND_EVENT_FALL_BODY",
+      "count": 5,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "SOUND_EVENT_FALL_KNEES",
+      "count": 3,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "SOUND_EVENT_HEAVY_GROUND_HIT",
+      "count": 4,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    },
+    {
+      "expression": "VIS_EVENT_APPLY_GROUND_HIT_FX",
+      "count": 4,
+      "status": "No matching definition in recovered definition set. Do not assign an invented ID."
+    }
+  ],
+  "actions": [
+    {
+      "keyword": "activateslowmo",
+      "signature": [
+        "f",
+        "f",
+        "f"
+      ],
+      "parameter_names": [
+        "duration",
+        "blend_in",
+        "blend_out"
+      ],
+      "usage_count": 29,
+      "semantic_summary": "Duration and blend-in/blend-out; not a speed-factor triple."
+    },
+    {
+      "keyword": "enableupdateextents",
+      "signature": [],
+      "parameter_names": [],
+      "usage_count": 107,
+      "semantic_summary": "Bounds/extents-related action. Parameterless. Detailed update lifetime not traced."
+    },
+    {
+      "keyword": "forcereaction",
+      "signature": [
+        "v3",
+        "f",
+        "f",
+        "i"
+      ],
+      "parameter_names": [
+        "local_direction",
+        "cone_angle_degrees",
+        "range",
+        "wanted_conflict_side"
+      ],
+      "usage_count": 16,
+      "semantic_summary": "Direction, cone angle, range and wanted conflict side. Native loader normalizes the direction and stores half the supplied cone angle."
+    },
+    {
+      "keyword": "hideelement",
+      "signature": [
+        "s"
+      ],
+      "parameter_names": [
+        "element_name"
+      ],
+      "usage_count": 2,
+      "semantic_summary": "Model-element visibility action; not an inventory deletion operation."
+    },
+    {
+      "keyword": "playaisound",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "f",
+        "f",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "volume",
+        "min_range",
+        "fade_out_time",
+        "ai_sound_type"
+      ],
+      "usage_count": 1151,
+      "semantic_summary": "AI-aware sound route. Named loader attaches to head, enables stop-on-end, and handles the final AI sound type. Game/Editor execution has a branch."
+    },
+    {
+      "keyword": "playforcefeedback",
+      "signature": [
+        "s",
+        "f",
+        "f",
+        "i"
+      ],
+      "parameter_names": [
+        "feedback_name",
+        "power_factor",
+        "duration_factor",
+        "controller_type"
+      ],
+      "usage_count": 58,
+      "semantic_summary": "Named feedback preset with power/duration multipliers and controller selector; these are not left/right motor strengths."
+    },
+    {
+      "keyword": "playfx",
+      "signature": [
+        "s",
+        "v3",
+        "s",
+        "i",
+        "v3",
+        "i"
+      ],
+      "parameter_names": [
+        "fx_sequence_name",
+        "local_normal",
+        "element_name",
+        "attach",
+        "local_position",
+        "stop_on_anim_end"
+      ],
+      "usage_count": 396,
+      "semantic_summary": "FX sequence with local normal, element attachment, position and stop policy."
+    },
+    {
+      "keyword": "playplayersound2",
+      "signature": [
+        "i",
+        "s"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name"
+      ],
+      "usage_count": 4,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound3",
+      "signature": [
+        "i",
+        "s",
+        "f"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time"
+      ],
+      "usage_count": 0,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound4",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end"
+      ],
+      "usage_count": 0,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound5",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end",
+        "sound_flag_selector"
+      ],
+      "usage_count": 28,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound6",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i",
+        "f"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end",
+        "sound_flag_selector",
+        "probability"
+      ],
+      "usage_count": 228,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound7",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i",
+        "f",
+        "f"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end",
+        "sound_flag_selector",
+        "probability",
+        "volume"
+      ],
+      "usage_count": 35,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound8",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i",
+        "f",
+        "f",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end",
+        "sound_flag_selector",
+        "probability",
+        "volume",
+        "priority"
+      ],
+      "usage_count": 45,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound9",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i",
+        "f",
+        "f",
+        "i",
+        "f"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end",
+        "sound_flag_selector",
+        "probability",
+        "volume",
+        "priority",
+        "min_range"
+      ],
+      "usage_count": 0,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playplayersound10",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i",
+        "f",
+        "f",
+        "i",
+        "f",
+        "f"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "fade_out_time",
+        "stop_on_anim_end",
+        "sound_flag_selector",
+        "probability",
+        "volume",
+        "priority",
+        "min_range",
+        "max_range"
+      ],
+      "usage_count": 15,
+      "semantic_summary": "Arity-specific player sound action. Keep suffix/arity exactly. Parameter 3 is fade-out time, not volume. Selector 0 maps to Always, 1 to IfStopped, 2 to Item; those selectors are not the native bit values 1/2/4."
+    },
+    {
+      "keyword": "playsound2d",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "volume",
+        "stop_on_anim_end"
+      ],
+      "usage_count": 46,
+      "semantic_summary": "Non-spatial sound action; volume is argument 3. Stop-on-animation-end is argument 4."
+    },
+    {
+      "keyword": "playsound2dexternal",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "i",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "volume",
+        "stop_on_anim_end",
+        "external_flag_bit_1"
+      ],
+      "usage_count": 59,
+      "semantic_summary": "Separate external sound action. Final integer sets bit 1 of its native sound flags; do not expose an invented descriptive meaning for that bit."
+    },
+    {
+      "keyword": "playsound3d",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "f",
+        "s",
+        "i",
+        "v3",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "volume",
+        "min_range",
+        "element_name",
+        "attach",
+        "local_position",
+        "stop_on_anim_end"
+      ],
+      "usage_count": 544,
+      "semantic_summary": "Spatial sound with element attachment, local position, minimum range and stop policy."
+    },
+    {
+      "keyword": "playsound23d",
+      "signature": [
+        "i",
+        "s",
+        "f",
+        "f",
+        "s",
+        "i",
+        "v3",
+        "i"
+      ],
+      "parameter_names": [
+        "volume_source",
+        "sound_name",
+        "volume",
+        "min_range",
+        "element_name",
+        "attach",
+        "local_position",
+        "stop_on_anim_end"
+      ],
+      "usage_count": 577,
+      "semantic_summary": "Context-dependent 2D/3D variant. Is3D consults the model/player visual state; not a fixed 3D synonym."
+    },
+    {
+      "keyword": "setragdollbehavior",
+      "signature": [
+        "s",
+        "v3",
+        "f"
+      ],
+      "parameter_names": [
+        "behavior_name",
+        "direction",
+        "strength_multiplier"
+      ],
+      "usage_count": 5,
+      "semantic_summary": "Select named behavior on source actor with direction and strength multiplier; gameplay context required."
+    },
+    {
+      "keyword": "setragdollbehaviorontarget",
+      "signature": [
+        "s",
+        "v3",
+        "f"
+      ],
+      "parameter_names": [
+        "behavior_name",
+        "direction",
+        "strength_multiplier"
+      ],
+      "usage_count": 11,
+      "semantic_summary": "Target variant; target selection and valid gameplay context are additional dependencies."
+    },
+    {
+      "keyword": "screenfadein",
+      "signature": [
+        "f"
+      ],
+      "parameter_names": [
+        "duration_candidate"
+      ],
+      "usage_count": 1,
+      "semantic_summary": "One float. Declared and observed; complete fade timing behavior not traced."
+    },
+    {
+      "keyword": "screenfadeout",
+      "signature": [
+        "f"
+      ],
+      "parameter_names": [
+        "duration_candidate"
+      ],
+      "usage_count": 0,
+      "semantic_summary": "One float. Declared, not observed in scanned event children; complete fade timing behavior not traced."
+    },
+    {
+      "keyword": "showelement",
+      "signature": [
+        "s"
+      ],
+      "parameter_names": [
+        "element_name"
+      ],
+      "usage_count": 2,
+      "semantic_summary": "Model-element visibility action; not an inventory spawn operation."
+    },
+    {
+      "keyword": "_attributes",
+      "signature": [
+        "i"
+      ],
+      "parameter_names": [
+        "trigger_time"
+      ],
+      "usage_count": 0,
+      "semantic_summary": "Engine metadata pseudo-action. RTTI trigger_time enum: 0 TriggerHere, 1 TriggerOnActivation. Its own execution is disabled; no use observed in scanned event children."
+    }
+  ],
+  "sound_mappings": [
+    {
+      "event_id": 5003,
+      "event_symbol": "EVENT_BERETTA_RELOAD",
+      "sound_name": "beretta_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5004,
+      "event_symbol": "EVENT_BERETTA_RELOAD_LEFT",
+      "sound_name": "beretta_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon_Left"
+    },
+    {
+      "event_id": 5005,
+      "event_symbol": "EVENT_BERETTA_RELOAD_COOP",
+      "sound_name": "Coop_beretta_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5006,
+      "event_symbol": "EVENT_BERETTA_RELOAD_COOP_LEFT",
+      "sound_name": "Coop_beretta_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon_Left"
+    },
+    {
+      "event_id": 5007,
+      "event_symbol": "EVENT_RAGINGBULL_PRE_RELOAD",
+      "sound_name": "RagingBull_bullets_out.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5008,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD",
+      "sound_name": "RagingBull_bullet_insert_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5009,
+      "event_symbol": "EVENT_RAGINGBULL_POST_RELOAD",
+      "sound_name": "RagingBull_reload.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5010,
+      "event_symbol": "EVENT_RAGINGBULL_PRE_RELOAD_LEFT",
+      "sound_name": "RagingBull_bullets_out.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon_Left"
+    },
+    {
+      "event_id": 5011,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_LEFT",
+      "sound_name": "RagingBull_bullet_insert_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon_Left"
+    },
+    {
+      "event_id": 5012,
+      "event_symbol": "EVENT_RAGINGBULL_POST_RELOAD_LEFT",
+      "sound_name": "RagingBull_reload.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon_Left"
+    },
+    {
+      "event_id": 5013,
+      "event_symbol": "EVENT_UZI_RELOAD",
+      "sound_name": "uzi_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5014,
+      "event_symbol": "EVENT_UZI_RELOAD_LEFT",
+      "sound_name": "uzi_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon_Left"
+    },
+    {
+      "event_id": 5015,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD",
+      "sound_name": "Shotgun_Insert_Bullet_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5016,
+      "event_symbol": "EVENT_SHOTGUN_POST_RELOAD",
+      "sound_name": "Shotgun_Reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5017,
+      "event_symbol": "EVENT_SHOTGUN_AFTERSHOT",
+      "sound_name": "Shotgun_Reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5018,
+      "event_symbol": "EVENT_AK47_RELOAD",
+      "sound_name": "ak47_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5019,
+      "event_symbol": "EVENT_AK47_RELOAD_COOP",
+      "sound_name": "coop_Ak47_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5022,
+      "event_symbol": "EVENT_M60_RELOAD",
+      "sound_name": "weapon_m60_reload.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5020,
+      "event_symbol": "EVENT_DRAGUNOV_RELOAD",
+      "sound_name": "ak47_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5021,
+      "event_symbol": "EVENT_DRAGUNOV_RELOAD_COOP",
+      "sound_name": "coop_Ak47_reload_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5023,
+      "event_symbol": "EVENT_GRANADE_PREPARE",
+      "sound_name": "clothes_throw_prepare.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5024,
+      "event_symbol": "EVENT_GRANADE_THROW",
+      "sound_name": "clothes_throw.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5025,
+      "event_symbol": "EVENT_COLA_USE",
+      "sound_name": "drinking.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5100,
+      "event_symbol": "EVENT_LADDER_GOING_UP_START",
+      "sound_name": "climb_ladder_going_up_start.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5101,
+      "event_symbol": "EVENT_LADDER_GOING_UP_FINISH",
+      "sound_name": "climb_ladder_going_up_finish.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5102,
+      "event_symbol": "EVENT_LADDER_GOING_DOWN_START",
+      "sound_name": "climb_ladder_going_down_start.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5103,
+      "event_symbol": "EVENT_LADDER_GOING_DOWN_FINISH",
+      "sound_name": "climb_ladder_going_down_finish.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5029,
+      "event_symbol": "EVENT_BERETTA_RELOAD_01",
+      "sound_name": "beretta_reload_part_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5030,
+      "event_symbol": "EVENT_BERETTA_RELOAD_02",
+      "sound_name": "beretta_reload_part_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5031,
+      "event_symbol": "EVENT_BERETTA_RELOAD_03",
+      "sound_name": "beretta_reload_part_02.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5032,
+      "event_symbol": "EVENT_AK47_RELOAD_01",
+      "sound_name": "ak47_reload_part_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5033,
+      "event_symbol": "EVENT_AK47_RELOAD_02",
+      "sound_name": "ak47_reload_part_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5034,
+      "event_symbol": "EVENT_AK47_RELOAD_03",
+      "sound_name": "ak47_reload_part_02.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5035,
+      "event_symbol": "EVENT_AK47_RELOAD_04",
+      "sound_name": "ak47_reload_part_03.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5036,
+      "event_symbol": "EVENT_AK47_RELOAD_05",
+      "sound_name": "ak47_reload_part_04.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5037,
+      "event_symbol": "EVENT_M16_RELOAD_01",
+      "sound_name": "weapon_m16_reload_part_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5038,
+      "event_symbol": "EVENT_M16_RELOAD_02",
+      "sound_name": "weapon_m16_reload_part_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5039,
+      "event_symbol": "EVENT_M16_RELOAD_03",
+      "sound_name": "weapon_m16_reload_part_02.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5040,
+      "event_symbol": "EVENT_M16_RELOAD_04",
+      "sound_name": "weapon_m16_reload_part_03.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5041,
+      "event_symbol": "EVENT_M16_RELOAD_05",
+      "sound_name": "weapon_m16_reload_part_04.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5042,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_01",
+      "sound_name": "colt_reload_part_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5043,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_02",
+      "sound_name": "colt_reload_part_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5044,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_03",
+      "sound_name": "colt_reload_part_02.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5050,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_04",
+      "sound_name": "colt_reload_part_03.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5051,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_05",
+      "sound_name": "colt_reload_part_04.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5045,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD_01",
+      "sound_name": "Shotgun_Move_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5046,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD_02",
+      "sound_name": "Shotgun_Insert_Bullet_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5047,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD_03",
+      "sound_name": "Shotgun_Reload_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5048,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD_04",
+      "sound_name": "Shotgun_Move_before_full_reload_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5049,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD_05",
+      "sound_name": "Shotgun_Reload_full_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_ReloadCutted",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5052,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_AFTERSHOT",
+      "sound_name": "colt_load_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5053,
+      "event_symbol": "EVENT_BERETTA_RELOAD_FULL",
+      "sound_name": "beretta_reload_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5054,
+      "event_symbol": "EVENT_AK47_RELOAD_FULL",
+      "sound_name": "ak47_reload_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5055,
+      "event_symbol": "EVENT_M16_RELOAD_FULL",
+      "sound_name": "weapon_m16_reload.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5056,
+      "event_symbol": "EVENT_RAGINGBULL_RELOAD_FULL",
+      "sound_name": "colt_reload_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5057,
+      "event_symbol": "EVENT_SHOTGUN_PRE_RELOAD_FULL",
+      "sound_name": "Shotgun_Move_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5058,
+      "event_symbol": "EVENT_SHOTGUN_RELOAD_FULL",
+      "sound_name": "Shotgun_Insert_Bullet_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5059,
+      "event_symbol": "EVENT_SHOTGUN_POST_RELOAD_FULL",
+      "sound_name": "Shotgun_Reload_full_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_Reload",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5060,
+      "event_symbol": "EVENT_WOODENBOX_PICKUP",
+      "sound_name": "default_pickup_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5061,
+      "event_symbol": "EVENT_WOODENBOX_THROW",
+      "sound_name": "object_throw.ogg",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5062,
+      "event_symbol": "EVENT_WOODENBOX_PUT",
+      "sound_name": "wooden_box_put_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5063,
+      "event_symbol": "EVENT_GASCANISTER_PICKUP",
+      "sound_name": "gas_bottle_pickup_00.ogg",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5064,
+      "event_symbol": "EVENT_GASCANISTER_THROW",
+      "sound_name": "gas_bottle_throw_00.ogg",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5065,
+      "event_symbol": "EVENT_GASCANISTER_PUT",
+      "sound_name": "default_pickup_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5066,
+      "event_symbol": "EVENT_FUELCANISTER_PICKUP",
+      "sound_name": "fuel_canister_pickup_00.ogg",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5067,
+      "event_symbol": "EVENT_FUELCANISTER_THROW",
+      "sound_name": "fuel_canister_throw_00.ogg",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5068,
+      "event_symbol": "EVENT_FUELCANISTER_PUT",
+      "sound_name": "fuel_canister_put_00.ogg",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5069,
+      "event_symbol": "EVENT_FUELCANISTER_LOOP",
+      "sound_name": "fuel_canister_carry_loop_00.wav",
+      "sound_type_symbol": "AnimEventSoundType_CarriableLoop",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5110,
+      "event_symbol": "EVENT_BREAK_DOOR_SUCCESS",
+      "sound_name": "Break_Door_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5111,
+      "event_symbol": "EVENT_BREAK_DOOR_FAIL",
+      "sound_name": "Press_Door_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5112,
+      "event_symbol": "EVENT_SHIELD_TAKE_DMG",
+      "sound_name": "blunt_metal_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5113,
+      "event_symbol": "EVENT_JUMP_ATTACK",
+      "sound_name": "player_jump_attack_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5114,
+      "event_symbol": "EVENT_HIT_MACHETE",
+      "sound_name": "hit_machete_jump_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5115,
+      "event_symbol": "EVENT_PULL_OUT_MACHETE",
+      "sound_name": "hit_machete_pull_out_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5116,
+      "event_symbol": "EVENT_MACHETE_UP_ATTACK",
+      "sound_name": "player_machete_up_attack.wav",
+      "sound_type_symbol": "AnimEventSoundType_None",
+      "target_symbol": "AnimEventTarget_Weapon"
+    },
+    {
+      "event_id": 5117,
+      "event_symbol": "EVENT_EDGE_GRAB_FROM_TOP",
+      "sound_name": "Edge_Grab_FT_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5118,
+      "event_symbol": "EVENT_EDGE_GRAB_FROM_BOTTOM",
+      "sound_name": "Edge_Grab_FB_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5119,
+      "event_symbol": "EVENT_LAND_HEAVY",
+      "sound_name": "Landing_Heavy_Concrete_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5120,
+      "event_symbol": "EVENT_JUMP",
+      "sound_name": "clothes_jump_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5121,
+      "event_symbol": "EVENT_JUMP_OVER",
+      "sound_name": "clothes_jump_over_XX.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5122,
+      "event_symbol": "EVENT_LADDER_GET_OFF_TOP",
+      "sound_name": "Ladder_Get_Off_Top_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5123,
+      "event_symbol": "EVENT_LADDER_ENTER",
+      "sound_name": "Ladder_Enter_01.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    },
+    {
+      "event_id": 5124,
+      "event_symbol": "EVENT_SLIDE_START",
+      "sound_name": "player_slide.wav",
+      "sound_type_symbol": "AnimEventSoundType_MoveSound",
+      "target_symbol": "AnimEventTarget_Player"
+    }
+  ],
+  "editor": {
+    "definition_registry": [
+      "events.def",
+      "human_sound_events.def",
+      "human_vis_events.def",
+      "vessel_sound_events.def",
+      "vessel_vis_events.def",
+      "ai_timing.def",
+      "game_volume_source.def",
+      "anim_actions.def",
+      "Locomotion_annotations.def"
+    ],
+    "ik_events": [
+      "VIS_EVENT_LEFT_FOOT_LAND",
+      "VIS_EVENT_LEFT_FOOT_LIFT",
+      "VIS_EVENT_RIGHT_FOOT_LAND",
+      "VIS_EVENT_RIGHT_FOOT_LIFT",
+      "VIS_EVENT_IK_ENABLE",
+      "VIS_EVENT_IK_DISABLE",
+      "VIS_EVENT_IK_ENABLING_START",
+      "VIS_EVENT_IK_DISABLING_START"
+    ],
+    "step_analyzer_events": [
+      {
+        "role": "EventLeftFootLand",
+        "symbol": "VIS_EVENT_LEFT_FOOT_LAND",
+        "source": {
+          "source_id": "S365",
+          "line": 17,
+          "end_line": 17
+        }
+      },
+      {
+        "role": "EventLeftFootLift",
+        "symbol": "VIS_EVENT_LEFT_FOOT_LIFT",
+        "source": {
+          "source_id": "S365",
+          "line": 18,
+          "end_line": 18
+        }
+      },
+      {
+        "role": "EventRightFootLand",
+        "symbol": "VIS_EVENT_RIGHT_FOOT_LAND",
+        "source": {
+          "source_id": "S365",
+          "line": 19,
+          "end_line": 19
+        }
+      },
+      {
+        "role": "EventRightFootLift",
+        "symbol": "VIS_EVENT_RIGHT_FOOT_LIFT",
+        "source": {
+          "source_id": "S365",
+          "line": 20,
+          "end_line": 20
+        }
+      },
+      {
+        "role": "EventIKEnable",
+        "symbol": "VIS_EVENT_IK_ENABLE",
+        "source": {
+          "source_id": "S365",
+          "line": 21,
+          "end_line": 21
+        }
+      }
+    ],
+    "colors": [
+      {
+        "symbols": [],
+        "is_default": true,
+        "rgb": [
+          220,
+          150,
+          150
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_LEFT_FOOT_LAND"
+        ],
+        "is_default": false,
+        "rgb": [
+          0,
+          90,
+          55
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_LEFT_FOOT_LIFT"
+        ],
+        "is_default": false,
+        "rgb": [
+          190,
+          250,
+          190
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_RIGHT_FOOT_LAND"
+        ],
+        "is_default": false,
+        "rgb": [
+          20,
+          80,
+          220
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_RIGHT_FOOT_LIFT"
+        ],
+        "is_default": false,
+        "rgb": [
+          155,
+          170,
+          215
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_MOVEMENT_MOD_END",
+          "VIS_EVENT_ROTATION_MOD_END"
+        ],
+        "is_default": false,
+        "rgb": [
+          250,
+          119,
+          100
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_MOVEMENT_MOD_START",
+          "VIS_EVENT_ROTATION_MOD_START"
+        ],
+        "is_default": false,
+        "rgb": [
+          209,
+          51,
+          29
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_IK_ENABLE"
+        ],
+        "is_default": false,
+        "rgb": [
+          255,
+          255,
+          255
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_IK_DISABLE"
+        ],
+        "is_default": false,
+        "rgb": [
+          0,
+          0,
+          0
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_IK_ENABLING_START"
+        ],
+        "is_default": false,
+        "rgb": [
+          200,
+          200,
+          200
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_IK_DISABLING_START"
+        ],
+        "is_default": false,
+        "rgb": [
+          70,
+          70,
+          70
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_STOPANIM",
+          "EVENT_FINAL_POSITION",
+          "EVENT_FINAL_ROTATION",
+          "EVENT_FINAL_POSITION_2",
+          "EVENT_FINAL_ROTATION_2",
+          "BLEND_OUT",
+          "BLEND_OUT_TO_FAST_JUMP",
+          "BLEND_OUT_TO_START"
+        ],
+        "is_default": false,
+        "rgb": [
+          200,
+          130,
+          50
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_MAX_ANIM_CUT_TIME"
+        ],
+        "is_default": false,
+        "rgb": [
+          100,
+          10,
+          10
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_STEP_RIGHT"
+        ],
+        "is_default": false,
+        "rgb": [
+          30,
+          80,
+          150
+        ]
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_STEP_LEFT"
+        ],
+        "is_default": false,
+        "rgb": [
+          10,
+          90,
+          55
+        ]
+      }
+    ],
+    "groups": [
+      {
+        "symbols": [],
+        "is_default": true,
+        "name": ""
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_LEFT_FOOT_LAND",
+          "VIS_EVENT_LEFT_FOOT_LIFT"
+        ],
+        "is_default": false,
+        "name": "IK L foot"
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_RIGHT_FOOT_LAND",
+          "VIS_EVENT_RIGHT_FOOT_LIFT"
+        ],
+        "is_default": false,
+        "name": "IK R foot"
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_STEP_LEFT"
+        ],
+        "is_default": false,
+        "name": "L foot"
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_STEP_RIGHT"
+        ],
+        "is_default": false,
+        "name": "R foot"
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_MAX_ANIM_CUT_TIME",
+          "VIS_EVENT_STOPANIM",
+          "BLEND_OUT",
+          "BLEND_OUT_TO_FAST_JUMP",
+          "BLEND_OUT_TO_START"
+        ],
+        "is_default": false,
+        "name": "ANIM"
+      },
+      {
+        "symbols": [
+          "EVENT_FINAL_POSITION",
+          "EVENT_FINAL_POSITION_2"
+        ],
+        "is_default": false,
+        "name": "Final Pos"
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_MOVEMENT_MOD_START",
+          "VIS_EVENT_MOVEMENT_MOD_END"
+        ],
+        "is_default": false,
+        "name": "Pos Correction"
+      },
+      {
+        "symbols": [
+          "EVENT_FINAL_ROTATION",
+          "EVENT_FINAL_ROTATION_2"
+        ],
+        "is_default": false,
+        "name": "Final Pos"
+      },
+      {
+        "symbols": [
+          "VIS_EVENT_ROTATION_MOD_START",
+          "VIS_EVENT_ROTATION_MOD_END"
+        ],
+        "is_default": false,
+        "name": "Rot Correction"
+      }
+    ]
+  }
+}

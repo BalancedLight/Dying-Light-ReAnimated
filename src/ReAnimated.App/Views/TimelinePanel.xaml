@@ -1,120 +1,74 @@
 <UserControl x:Class="ReAnimated.App.Views.TimelinePanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:ReAnimated.App.Views"
+             Focusable="True"
+             PreviewKeyDown="TimelinePanel_OnPreviewKeyDown"
              Loaded="TimelinePanel_OnLoaded"
              PreviewMouseWheel="TimelinePanel_OnPreviewMouseWheel"
              SizeChanged="TimelinePanel_OnSizeChanged">
     <Border Style="{StaticResource PaneBorderStyle}">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="40" />
-                <RowDefinition Height="38" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Grid Grid.Row="0" Background="{StaticResource PanelRaisedBrush}">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" Margin="4,0">
-                    <Button Command="{Binding StepBackwardCommand}"
-                            Content="|&lt;"
-                            ToolTip="Previous frame" />
-                    <Button Command="{Binding TogglePlaybackCommand}"
-                            Content="{Binding PlaybackLabel}"
-                            MinWidth="76" />
-                    <Button Command="{Binding StopCommand}"
-                            Content="Stop"
-                            ToolTip="Stop and return to the first frame" />
-                    <Button Command="{Binding StepForwardCommand}"
-                            Content="&gt;|"
-                            ToolTip="Next frame" />
-                    <Button Command="{Binding AddKeyframeCommand}"
-                            Content="+ Key"
-                            ToolTip="Key the selected editable channel" />
-                </StackPanel>
-                <Slider Grid.Column="1"
-                        Margin="10,0"
-                        VerticalAlignment="Center"
-                        Minimum="{Binding StartFrame}"
-                        Maximum="{Binding EndFrame}"
-                        Value="{Binding CurrentFrame, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                <StackPanel Grid.Column="2"
-                            Orientation="Horizontal"
-                            VerticalAlignment="Center"
-                            Margin="8,0">
-                    <TextBlock VerticalAlignment="Center" Text="Frame " />
-                    <TextBox Width="62"
-                             Text="{Binding CurrentFrame, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" />
-                    <TextBlock Margin="4,0,0,0"
-                               VerticalAlignment="Center"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="{Binding EndFrame, StringFormat=/ {0:N0}}" />
-                    <CheckBox Margin="10,0,0,0"
-                              VerticalAlignment="Center"
-                              Content="Loop"
-                              IsChecked="{Binding IsLooping}" />
-                </StackPanel>
-            </Grid>
+            <WrapPanel Grid.Row="0" Background="{StaticResource PanelRaisedBrush}" Margin="2">
+                <Button Command="{Binding StepBackwardCommand}" Content="|&lt;" ToolTip="Previous frame" />
+                <Button Command="{Binding TogglePlaybackCommand}" Content="{Binding PlaybackLabel}" MinWidth="55" />
+                <Button Command="{Binding StopCommand}" Content="Stop" />
+                <Button Command="{Binding StepForwardCommand}" Content="&gt;|" ToolTip="Next frame" />
+                <Button Command="{Binding AddKeyframeCommand}" Content="+ Key" ToolTip="Add a key to the selected track" />
+                <TextBlock Text="Frame" VerticalAlignment="Center" Margin="8,0,4,0" />
+                <TextBox Width="58" Text="{Binding PositionFrame, Mode=TwoWay, UpdateSourceTrigger=LostFocus}" VerticalContentAlignment="Center" />
+                <TextBlock Margin="4,0" VerticalAlignment="Center" Foreground="{StaticResource MutedTextBrush}" Text="{Binding EndFrame, StringFormat=/ {0:N0}}" />
+                <CheckBox Margin="8,0" VerticalAlignment="Center" Content="Loop" IsChecked="{Binding IsLooping}" />
+            </WrapPanel>
 
-            <Grid Grid.Row="1"
-                  Background="{StaticResource PanelBackgroundBrush}"
-                  Margin="0,1,0,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="220" />
-                    <ColumnDefinition Width="158" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Margin="8,0,6,0"
-                           VerticalAlignment="Center"
-                           Text="Tracks" />
-                <TextBox Grid.Column="1"
-                         Margin="0,5,6,5"
-                         ToolTip="Filter by bone, morph, layer, or channel name"
-                         Text="{Binding TrackSearchText, UpdateSourceTrigger=PropertyChanged}" />
-                <ComboBox Grid.Column="2"
-                          Margin="0,5,6,5"
-                          ItemsSource="{Binding TrackScopeOptions}"
-                          SelectedItem="{Binding SelectedTrackScope}" />
-                <TextBlock Grid.Column="3"
-                           Margin="4,0"
-                           VerticalAlignment="Center"
-                           Foreground="{StaticResource MutedTextBrush}"
-                           Text="{Binding VisibleTrackCountLabel}" />
-                <StackPanel Grid.Column="4"
-                            Margin="4,0"
-                            Orientation="Horizontal">
-                    <Button Command="{Binding FitTimelineCommand}"
-                            Content="Fit"
-                            ToolTip="Fit the complete clip into the timeline" />
-                    <Button Command="{Binding ZoomOutCommand}"
-                            Content="-"
-                            Width="30"
-                            ToolTip="Zoom out" />
-                    <Button Command="{Binding ZoomInCommand}"
-                            Content="+"
-                            Width="30"
-                            ToolTip="Zoom in" />
-                    <TextBlock Width="82"
-                               Margin="5,0,3,0"
-                               VerticalAlignment="Center"
-                               TextAlignment="Right"
-                               Foreground="{StaticResource MutedTextBrush}"
-                               Text="{Binding ZoomLabel}" />
+            <DockPanel Grid.Row="1" Margin="6,2,6,4" LastChildFill="True">
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                    <Button Command="{Binding FitTimelineCommand}" Content="Fit" ToolTip="Fit the clip" />
+                    <Button Command="{Binding ZoomOutCommand}" Content="−" Width="28" MinWidth="28" Padding="4,2" ToolTip="Zoom out" />
+                    <Button Command="{Binding ZoomInCommand}" Content="+" Width="28" MinWidth="28" Padding="4,2" ToolTip="Zoom in" />
                 </StackPanel>
-            </Grid>
+                <ComboBox DockPanel.Dock="Right" Width="112" Margin="4,2" ItemsSource="{Binding TrackScopeOptions}" SelectedItem="{Binding SelectedTrackScope}" />
+                <TextBox MinWidth="70" Margin="0,2,4,2" ToolTip="Find a track" Text="{Binding TrackSearchText, UpdateSourceTrigger=PropertyChanged}" />
+            </DockPanel>
 
+            <Border Grid.Row="3" Background="{StaticResource PanelRaisedBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="6,3">
+                <StackPanel>
+                    <DockPanel LastChildFill="True">
+                        <Button DockPanel.Dock="Right" Content="Create edit layer" Command="{Binding CreateEditLayerCommand}" Visibility="{Binding CanCreateEditLayer, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                        <TextBlock DockPanel.Dock="Right" Text="{Binding TrackAccessLabel}" Foreground="{StaticResource MutedTextBrush}" Margin="8,0" VerticalAlignment="Center" />
+                        <TextBlock Text="{Binding SelectedTrackLabel}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" ToolTip="{Binding SelectedTrackLabel}" />
+                    </DockPanel>
+                    <WrapPanel PreviewKeyDown="KeyEditor_OnPreviewKeyDown" PreviewTextInput="KeyEditor_OnPreviewTextInput" DataObject.Pasting="KeyEditor_OnPasting" Visibility="{Binding HasSelectedKey, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock Text="Frame" VerticalAlignment="Center" Margin="0,0,4,0" />
+                        <TextBox x:Name="KeyFrameInput" Width="65" Text="{Binding KeyFrameText, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanEditSelectedKey}" />
+                        <TextBlock Text="Value" VerticalAlignment="Center" Margin="8,0,4,0" />
+                        <TextBox x:Name="KeyValueInput" MinWidth="94" MaxWidth="164" Text="{Binding KeyValueText, UpdateSourceTrigger=PropertyChanged}" ToolTip="{Binding KeyValueEdit, StringFormat=G17}" IsEnabled="{Binding CanEditKeyValue}" />
+                        <Button Content="Apply" Command="{Binding ApplyKeyEditCommand}">
+                            <Button.Style><Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}"><Style.Triggers>
+                                <DataTrigger Binding="{Binding ElementName=KeyFrameInput, Path=(Validation.HasError)}" Value="True"><Setter Property="IsEnabled" Value="False" /></DataTrigger>
+                                <DataTrigger Binding="{Binding ElementName=KeyValueInput, Path=(Validation.HasError)}" Value="True"><Setter Property="IsEnabled" Value="False" /></DataTrigger>
+                            </Style.Triggers></Style></Button.Style>
+                        </Button>
+                        <Button Content="Delete" Command="{Binding DeleteKeyCommand}" />
+                        <CheckBox Content="Snap" IsChecked="{Binding SnapKeyFrames}" VerticalAlignment="Center" Margin="8,0" />
+                    </WrapPanel>
+                    <TextBlock Text="{Binding KeyEditFeedback}" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                </StackPanel>
+            </Border>
             <TabControl x:Name="TimelineTabs"
                         Grid.Row="2"
                         SelectionChanged="TimelineTabs_OnSelectionChanged">
                 <TabItem Header="Dope sheet">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="300" />
+                            <ColumnDefinition Width="170" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
 
@@ -196,6 +150,7 @@
                                     Height="{Binding DopeSheetCanvasHeight}"
                                     Background="#11161E"
                                     Cursor="SizeWE"
+                                    LostMouseCapture="KeyCanvas_OnLostMouseCapture"
                                     MouseLeftButtonDown="TimelineCanvas_OnMouseLeftButtonDown"
                                     MouseLeftButtonUp="TimelineCanvas_OnMouseLeftButtonUp"
                                     MouseMove="TimelineCanvas_OnMouseMove">
@@ -239,7 +194,7 @@
                                     </ItemsControl.ItemContainerStyle>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Polygon Points="5,0 10,5 5,10 0,5">
+                                            <Polygon Points="5,0 10,5 5,10 0,5" Tag="{Binding}" MouseLeftButtonDown="KeyMarker_OnMouseLeftButtonDown" Cursor="Hand">
                                                 <Polygon.Style>
                                                     <Style TargetType="Polygon">
                                                         <Setter Property="Width" Value="5" />
@@ -247,6 +202,7 @@
                                                         <Setter Property="Margin" Value="-2.5" />
                                                         <Setter Property="Fill" Value="#6F8298" />
                                                         <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="Stroke" Value="White"/><Setter Property="StrokeThickness" Value="1.5"/></DataTrigger>
                                                             <DataTrigger Binding="{Binding IsSelectedTrack}"
                                                                          Value="True">
                                                                 <Setter Property="Width" Value="10" />
@@ -260,7 +216,7 @@
                                                 <Polygon.ToolTip>
                                                     <StackPanel>
                                                         <TextBlock Text="{Binding Track}" />
-                                                        <TextBlock Text="{Binding Frame, StringFormat=Frame {0:N0}}" />
+                                                        <TextBlock Text="{Binding Frame, StringFormat=Source frame {0:0.###}}" />
                                                     </StackPanel>
                                                 </Polygon.ToolTip>
                                             </Polygon>
@@ -268,7 +224,26 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
-                                <Border Canvas.Left="{Binding CurrentFramePixelX}"
+                                <ItemsControl ItemsSource="{Binding EventSpans}" Width="{Binding CanvasWidth}" Height="{Binding DopeSheetCanvasHeight}" IsHitTestVisible="False">
+                                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemContainerStyle><Style TargetType="ContentPresenter"><Setter Property="Canvas.Left" Value="{Binding PixelX}"/><Setter Property="Canvas.Top" Value="{Binding TrackY}"/></Style></ItemsControl.ItemContainerStyle>
+                                    <ItemsControl.ItemTemplate><DataTemplate><Border Width="{Binding Width}" Height="22" Background="#224AC8A0" CornerRadius="3"/></DataTemplate></ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <ItemsControl ItemsSource="{Binding EventMarkers}" Width="{Binding CanvasWidth}" Height="{Binding DopeSheetCanvasHeight}">
+                                    <ItemsControl.ItemsPanel><ItemsPanelTemplate><Canvas /></ItemsPanelTemplate></ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemContainerStyle><Style TargetType="ContentPresenter"><Setter Property="Canvas.Left" Value="{Binding PixelX}"/><Setter Property="Canvas.Top" Value="{Binding TrackY}"/></Style></ItemsControl.ItemContainerStyle>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Border Tag="{Binding}" Background="{Binding Color}" CornerRadius="2" MinWidth="10" Height="12" Margin="-5,0,0,0" ToolTip="{Binding ToolTip}" MouseLeftButtonDown="EventMarker_OnMouseLeftButtonDown" Cursor="SizeWE">
+                                                <Border.Style><Style TargetType="Border"><Setter Property="BorderThickness" Value="0"/><Setter Property="BorderBrush" Value="White"/><Style.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="BorderThickness" Value="2"/></DataTrigger></Style.Triggers></Style></Border.Style>
+                                                <TextBlock Text="{Binding Count}" FontSize="9" Foreground="#11161E" Margin="2,0"/>
+                                            </Border>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+
+                                <Border IsHitTestVisible="False" Canvas.Left="{Binding CurrentFramePixelX}"
                                         Width="2"
                                         Height="{Binding DopeSheetCanvasHeight}"
                                         Background="{StaticResource ErrorBrush}" />
@@ -280,7 +255,7 @@
                 <TabItem Header="Curves">
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="300" />
+                            <ColumnDefinition Width="170" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <Border BorderBrush="{StaticResource BorderBrush}"
@@ -298,8 +273,8 @@
                                                Text="{Binding CurveStatusLabel}" />
                                 </StackPanel>
                                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                                    <ItemsControl ItemsSource="{Binding Curves}">
-                                        <ItemsControl.ItemTemplate>
+                                    <ListBox ItemsSource="{Binding Curves}" SelectedItem="{Binding SelectedCurve}" BorderThickness="0">
+                                        <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Height="25" Margin="8,0">
                                                     <Grid.ColumnDefinitions>
@@ -319,8 +294,8 @@
                                                                ToolTip="{Binding OwnerLabel}" />
                                                 </Grid>
                                             </DataTemplate>
-                                        </ItemsControl.ItemTemplate>
-                                    </ItemsControl>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
                                 </ScrollViewer>
                             </DockPanel>
                         </Border>
@@ -335,6 +310,7 @@
                                     Height="{Binding CurveCanvasHeight}"
                                     Background="#11161E"
                                     Cursor="SizeWE"
+                                    LostMouseCapture="KeyCanvas_OnLostMouseCapture"
                                     MouseLeftButtonDown="TimelineCanvas_OnMouseLeftButtonDown"
                                     MouseLeftButtonUp="TimelineCanvas_OnMouseLeftButtonUp"
                                     MouseMove="TimelineCanvas_OnMouseMove">
@@ -397,10 +373,11 @@
                                     </ItemsControl.ItemContainerStyle>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Ellipse Width="7"
-                                                     Height="7"
-                                                     Margin="-3.5"
+                                            <Ellipse Tag="{Binding}" MouseLeftButtonDown="CurvePoint_OnMouseLeftButtonDown" Cursor="Hand" Width="9"
+                                                     Height="9"
+                                                     Margin="-4.5"
                                                      Fill="{Binding Color}">
+                                                <Ellipse.Style><Style TargetType="Ellipse"><Setter Property="StrokeThickness" Value="0"/><Setter Property="Stroke" Value="White"/><Style.Triggers><DataTrigger Binding="{Binding IsSelected}" Value="True"><Setter Property="StrokeThickness" Value="2"/></DataTrigger></Style.Triggers></Style></Ellipse.Style>
                                                 <Ellipse.ToolTip>
                                                     <StackPanel>
                                                         <TextBlock Text="{Binding Track}" />
@@ -413,7 +390,7 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
 
-                                <Border Canvas.Left="{Binding CurrentFramePixelX}"
+                                <Border IsHitTestVisible="False" Canvas.Left="{Binding CurrentFramePixelX}"
                                         Width="2"
                                         Height="{Binding CurveCanvasHeight}"
                                         Background="{StaticResource ErrorBrush}" />

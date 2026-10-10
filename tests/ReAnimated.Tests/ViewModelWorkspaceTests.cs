@@ -18,6 +18,60 @@ public sealed class ViewModelWorkspaceTests : IDisposable
         Path.Combine(Path.GetTempPath(), $"ReAnimated-ViewModelTests-{Guid.NewGuid():N}");
 
     [Fact]
+    [Trait("ValidationTier", "Focused")]
+    [Trait("Gate", "ViewModelWpf")]
+    public async Task EventEditingUnlocksAfterProjectOpenAndPreservesPendingScriptEdits()
+    {
+        Directory.CreateDirectory(_temporaryDirectory);
+        string projectPath = Path.Combine(_temporaryDirectory, "event-editing.dlraproj");
+        DlraProject project = CreateExportEditProject(Guid.NewGuid(), 'e');
+        project = project with
+        {
+            Models = [project.Models[0] with { Name = "Generic character" }],
+            AnimationSources = [project.AnimationSources[0] with { Name = "generic_motion", FrameCount = 20 }],
+            AnimationVariants = [project.AnimationVariants[0] with { Name = "generic_motion", OutputAnm2Name = "generic_motion.anm2" }],
+            AnimationLibraries = [project.AnimationLibraries[0] with { ResourceName = "generic_events", DisplayName = "Generic events" }],
+        };
+        ProjectSerializer.SaveAtomic(project, projectPath);
+        await using var assets = new Dl1AssetWorkspace(
+            Path.Combine(_temporaryDirectory, "events.sqlite3"),
+            Path.Combine(_temporaryDirectory, "events-cache"));
+        await using var viewModel = new MainWindowViewModel(CreateStore(), new TestProjectFileDialogs(projectPath), assets);
+
+        await viewModel.OpenWorkspaceCommand.ExecuteAsync(null);
+
+        Assert.False(viewModel.IsBusy);
+        Assert.True(viewModel.Timeline.Events.AddEventCommand.CanExecute(null));
+        Guid sequenceId = Assert.Single(viewModel.Timeline.Events.Sequences).Id;
+        var busyProperty = typeof(MainWindowViewModel).GetProperty(nameof(MainWindowViewModel.IsBusy))!;
+        busyProperty.SetValue(viewModel, true);
+        Assert.False(viewModel.Timeline.Events.AddEventCommand.CanExecute(null));
+        Assert.False(viewModel.Timeline.Events.NewSequenceCommand.CanExecute(null));
+        busyProperty.SetValue(viewModel, false);
+        Assert.True(viewModel.Timeline.Events.AddEventCommand.CanExecute(null));
+        Assert.Equal(sequenceId, viewModel.Timeline.Events.SelectedSequence!.Id);
+
+        var editor = viewModel.Timeline.Events;
+        editor.AddEventCommand.Execute(null);
+        editor.IdText = "VIS_EVENT_LEFT_FOOT_LAND";
+        editor.FrameText = "2.5";
+        editor.SlotText = "2";
+        editor.Delivery = "Must send";
+        editor.ApplyCommand.Execute(null);
+        AnimationEvent savedEvent = Assert.Single(Assert.Single(viewModel.CurrentProject.AnimationLibraries).SequenceUses[0].Events);
+        Assert.Equal(1011, savedEvent.EventId);
+        Assert.Equal(2.5, savedEvent.LocalFrame);
+        Assert.Equal((short)2, savedEvent.RequiredSlot);
+        Assert.Equal(AnimationEventDelivery.MustSendEvent, savedEvent.Delivery);
+        Assert.Equal(savedEvent.Id, editor.SelectedEvent?.Id);
+
+        viewModel.AnimationScriptText += "\n// pending edit";
+        busyProperty.SetValue(viewModel, true);
+        busyProperty.SetValue(viewModel, false);
+        Assert.False(viewModel.Timeline.Events.AddEventCommand.CanExecute(null));
+    }
+
+    [Fact]
     public void TargetTreeSelectionResolvesSourceThroughMappingInsteadOfArrayIndex()
     {
         RigDefinition source = new(

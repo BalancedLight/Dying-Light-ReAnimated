@@ -23,7 +23,7 @@
   ],
   "properties": {
     "schemaVersion": {
-      "const": 3
+      "const": 4
     },
     "format": {
       "const": "dl-reanimated-csharp-project"
@@ -245,6 +245,29 @@
           "minLength": 1,
           "maxLength": 4194304,
           "description": "Hand-authored loose .scr source. Absent means the source is generated from the sequence inventory. Event blocks here reach the loose script only; the compiled type-322 resource always carries an event count of zero."
+        },
+        "sequenceUses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/animationSequenceUse"
+          }
+        },
+        "importedBinaryScript": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "recordsAndNames": {
+              "type": "string",
+              "contentEncoding": "base64"
+            },
+            "indexAndNames": {
+              "type": "string",
+              "contentEncoding": "base64"
+            }
+          }
         }
       },
       "allOf": [
@@ -2512,6 +2535,258 @@
         }
       },
       "additionalProperties": false
+    },
+    "animationSequenceUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "name": {
+          "type": "string"
+        },
+        "anm2Name": {
+          "type": "string"
+        },
+        "sourceStartFrame": {
+          "type": "number"
+        },
+        "sourceEndFrame": {
+          "type": "number"
+        },
+        "fps": {
+          "type": "number"
+        },
+        "weightMode": {
+          "type": "integer"
+        },
+        "weightTime": {
+          "type": "number"
+        },
+        "animationReferenceId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/animationEvent"
+          }
+        },
+        "sourceSpan": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "length": {
+              "type": "integer"
+            }
+          }
+        },
+        "originalSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceStartFrameExpression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceEndFrameExpression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fpsExpression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weightModeExpression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weightTimeExpression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "animationEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "localFrame": {
+          "type": "number"
+        },
+        "frameExpression": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "eventId": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "idExpression": {
+          "type": "string"
+        },
+        "requiredSlot": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": -32768,
+          "maximum": 32767
+        },
+        "slotExpression": {
+          "type": "string"
+        },
+        "delivery": {
+          "type": "string",
+          "enum": [
+            "Event",
+            "MustSendEvent"
+          ]
+        },
+        "rawTicks": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rawFlags": {
+          "type": "integer"
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/animationEventAction"
+          }
+        },
+        "sourceSpan": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "length": {
+              "type": "integer"
+            }
+          }
+        },
+        "originalSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rawActionReference": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      }
+    },
+    "animationEventAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "keyword": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/animationEventArgument"
+          }
+        },
+        "sourceSpan": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "length": {
+              "type": "integer"
+            }
+          }
+        },
+        "originalSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "animationEventArgument": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceSpan": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer"
+            },
+            "length": {
+              "type": "integer"
+            }
+          }
+        }
+      }
     }
   }
 }

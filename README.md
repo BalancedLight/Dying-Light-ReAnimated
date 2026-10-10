@@ -22,6 +22,16 @@ resource-specific names, dependency checks and rollback ownership. See the
 Both package building and deployment honor the saved
 [existing animation bank](docs/stock-animation-reference-export.md) choice.
 
+## Keyframes and curves
+
+Open **Retarget / Edit → Timeline / curves**, select a track, and choose **Dope sheet** or **Curves**. **Create edit layer** copies the mapped track’s current authored motion across the full clip, including existing edits. Select a key to change its frame and component value, or drag it in the graph. **Snap** controls whole-frame dragging; numeric frame edits accept fractional values. Changing only the frame preserves the component value. Changes support project save, undo and redo.
+
+## Animation events
+
+Open **Events**, choose a sequence, and use **+ Event** to add a notification. New sequences use the full clip range and its native frame rate. Events share the motion ruler and support fractional timing, multi-selection, dragging, duplication, undo/redo, slots, delivery policies, and ordered action parameters. **Range → Review** shows retiming changes before applying them. **Details** contains native IDs, raw timing and preview slot settings.
+
+**Import** accepts script source or a compiled animation bank. **Export script** writes the edited `.scr`, including child actions. Audio audition accepts a local sound file; scrubbing updates visibility and configured IK state without replaying sounds. Compiled notification tables can be edited and exported. Creating compiled child actions requires an action-bank serializer; those exports stop with a specific diagnostic rather than discarding actions.
+
 ## Build
 
 The SDK is pinned by `global.json`.
@@ -97,6 +107,14 @@ See [the C# implementation status](docs/CSHARP_REWRITE.md),
 [the first-release support matrix](docs/DL1_FIRST_RELEASE_SUPPORT_MATRIX.md),
 [the ANM2 format notes](docs/ANM2_FORMAT.md), and
 [the stability gates](docs/DL1_STABILITY_ACCEPTANCE.md).
+
+## Animation export defaults
+
+New animations assigned to a stock player model use `anims_player_dlc99`.
+Saved script assignments are retained. Custom characters use their own
+animation script and can import stock scripts without becoming DLC overrides.
+Animation RPack exports and Developer Tools deployment use
+`common_anims_sp_PC.rpack`.
 
 ## License
 

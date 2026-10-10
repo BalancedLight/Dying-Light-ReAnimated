@@ -702,7 +702,7 @@ public sealed record CustomModelBuildSettings
 /// </summary>
 public sealed record CustomModelDocument
 {
-    public const int CurrentSchemaVersion = 9;
+    public const int CurrentSchemaVersion = 10;
 
     public const string EmptyMorphSignature =
         "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
@@ -710,6 +710,8 @@ public sealed record CustomModelDocument
     public const string CurrentFormat = "dl-reanimated-csharp-model";
 
     public int SchemaVersion { get; init; } = CurrentSchemaVersion;
+
+    public ImmutableArray<AnimationSequenceUse> SequenceUses { get; init; } = [];
 
     public string Format { get; init; } = CurrentFormat;
 
@@ -794,6 +796,7 @@ public sealed record CustomModelDocument
                 $"Only DL ReAnimated C# custom-model schema {CurrentSchemaVersion} is supported.");
         }
 
+        AnimationEventPersistence.Validate(SequenceUses);
         if (ModelId == Guid.Empty)
         {
             throw new ArgumentException("Custom-model identifiers cannot be empty.");

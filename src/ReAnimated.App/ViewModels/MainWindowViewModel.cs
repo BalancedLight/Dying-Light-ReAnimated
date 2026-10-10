@@ -324,7 +324,7 @@ public sealed partial class MainWindowViewModel :
         MeshRenderData[] SourceMeshes,
         MeshRenderData[] TargetMeshes,
         TargetBindingStatus TargetBindingStatus,
-        int Frame,
+        double Frame,
         bool IsPlaying,
         EditorWorkspaceMode Workspace,
         string LegacyWorkspace,
@@ -626,7 +626,7 @@ public sealed partial class MainWindowViewModel :
     private string? _recoverySnapshotContentSha256;
     private string _statusText =
         "Ready - loading the saved Dying Light 1 asset catalog";
-    private string _animationRpackFileName = "animation-library_pc.rpack";
+    private string _animationRpackFileName = AnimationExportDefaults.DeveloperToolsRpackFileName;
     private string? _animationRpackAppendSourcePath;
     private bool _replaceAnimationRpackConflicts;
     private string? _lastDeveloperToolsBatchReceiptPath;
@@ -1200,6 +1200,8 @@ public sealed partial class MainWindowViewModel :
         BoneEditor.GizmoModeChanged += OnBoneGizmoModeChanged;
         BoneEditor.GizmoSpaceChanged += OnBoneGizmoSpaceChanged;
         Timeline.CurrentFrameChanged += OnTimelineFrameChanged;
+        InitializeAnimationEvents();
+        InitializeTimelineEditing();
         Timeline.PropertyChanged += OnTimelinePropertyChanged;
         Timeline.KeyframeRequested += OnTimelineKeyframeRequested;
         FacialFpp.LensChanged += OnLensChanged;
@@ -2015,6 +2017,7 @@ public sealed partial class MainWindowViewModel :
                     .NotifyCanExecuteChanged();
                 AssignAnimationLibraryCommand.NotifyCanExecuteChanged();
                 NotifyAnimationLibraryCommands();
+                RefreshAnimationEventPermissions();
             }
         }
     }
@@ -2050,7 +2053,7 @@ public sealed partial class MainWindowViewModel :
                 BoneEditor.Bone = value;
                 UpdateBoneLayerSelectionContext();
                 SyncBoneEditorFromProject();
-                RefreshTimelineTracks();
+                RefreshTimelineTracks(followBoneSelection: !_handlingTimelineTrackSelection);
                 SelectBoneOnViewports();
                 RefreshEditableSkeletonPreview();
                 OnPropertyChanged(nameof(SelectedBoneLabel));
@@ -3556,7 +3559,8 @@ public sealed partial class MainWindowViewModel :
                     StringComparer.OrdinalIgnoreCase)
                 .ToImmutableArray(),
             KeepFramed,
-            CaptureSecondaryMotionRecoveryEdits());
+            CaptureSecondaryMotionRecoveryEdits(),
+            Timeline.PositionFrame);
     }
 
     public void RestoreSnapshot(WorkspaceSnapshot snapshot)
@@ -3595,7 +3599,7 @@ public sealed partial class MainWindowViewModel :
         if (snapshot.Project is null) RestoreSecondaryMotionRecoveryEdits(recoveredSecondaryEdits);
         ProjectPath = snapshot.ProjectPath;
         AssetBrowser.SearchText = snapshot.AssetSearch;
-        Timeline.CurrentFrame = snapshot.CurrentFrame;
+        Timeline.PositionFrame = snapshot.PositionFrame ?? snapshot.CurrentFrame;
         IsViewportsLinked = snapshot.ViewportsLinked;
         FacialFpp.FieldOfView = snapshot.FppFieldOfView;
         FacialFpp.NearPlane = snapshot.FppNearPlane;
@@ -3707,7 +3711,7 @@ public sealed partial class MainWindowViewModel :
 
         return string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{ActiveWorkspaceMode}|{_activeAnimationId}|{Timeline.CurrentFrame}|{PreviewLayout}|{IsSourceViewportVisible}|{ShowMeshes}|{ShowSkeletonOverlay}");
+            $"{ActiveWorkspaceMode}|{_activeAnimationId}|{Timeline.SourceFrame}|{PreviewLayout}|{IsSourceViewportVisible}|{ShowMeshes}|{ShowSkeletonOverlay}");
     }
 
     /// <summary>
@@ -3965,9 +3969,13 @@ public sealed partial class MainWindowViewModel :
         TargetViewport.SceneSource.SetTransformGizmoTarget(null);
         SourceViewport.SceneSource.SetTranslationGizmoTarget(null);
         TargetViewport.SceneSource.SetTranslationGizmoTarget(null);
+        _eventAudio.Dispose();
         Timeline.CurrentFrameChanged -= OnTimelineFrameChanged;
         Timeline.PropertyChanged -= OnTimelinePropertyChanged;
         Timeline.KeyframeRequested -= OnTimelineKeyframeRequested;
+        Timeline.SelectedTrackChanged -= OnTimelineSelectedTrackChanged;
+        Timeline.KeyEditRequested -= OnTimelineKeyEditRequested;
+        Timeline.EditLayerRequested -= OnTimelineEditLayerRequested;
         FacialFpp.LensChanged -= OnLensChanged;
         FacialFpp.MorphWeightsChanged -= OnMorphWeightsChanged;
         FacialFpp.PropertyChanged -= OnFacialFppPropertyChanged;
@@ -6222,6 +6230,21 @@ public sealed partial class MainWindowViewModel :
             packageAsset,
             modelEntry,
             payload);
+        if (!payload.SequenceUses.IsDefaultOrEmpty && rootAnimationLibraryId is { } eventLibraryId)
+        {
+            int eventLibraryIndex = Array.FindIndex(reconciled.AnimationLibraries.ToArray(), l => l.Id == eventLibraryId);
+            if (eventLibraryIndex >= 0)
+            {
+                ProjectAnimationLibrary eventLibrary = reconciled.AnimationLibraries[eventLibraryIndex];
+                var copied = payload.SequenceUses.Where(sequence => eventLibrary.SequenceUses.All(existing => existing.Id != sequence.Id)).Select(sequence =>
+                {
+                    ProjectAnimationSource? eventSource = reconciled.AnimationSources.FirstOrDefault(source => source.EmbeddedCustomModelStack?.ClipId == sequence.AnimationReferenceId);
+                    ProjectAnimationVariant? eventVariant = reconciled.AnimationVariants.FirstOrDefault(variant => variant.SourceId == eventSource?.Id && variant.TargetModelId == modelEntry.Id);
+                    return sequence with { AnimationReferenceId = eventVariant?.Id, Anm2Name = string.IsNullOrWhiteSpace(eventVariant?.OutputAnm2Name) ? sequence.Anm2Name : eventVariant.OutputAnm2Name };
+                }).ToImmutableArray();
+                reconciled = reconciled with { AnimationLibraries = reconciled.AnimationLibraries.SetItem(eventLibraryIndex, eventLibrary with { SequenceUses = eventLibrary.SequenceUses.AddRange(copied) }) };
+            }
+        }
         DlraProject updated = reconciled with
         {
             ModelsWorkspace = payload.CreateProjectState(packageAssetId),
@@ -13528,7 +13551,7 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
-        double frame = Timeline.CurrentFrame;
+        double frame = Timeline.SourceFrame;
         int layerIndex = FindFacialEditorLayerIndex(
             animation.MorphEditLayers);
         MorphEditLayer layer = layerIndex >= 0
@@ -13672,7 +13695,7 @@ public sealed partial class MainWindowViewModel :
 
         try
         {
-            double frame = Timeline.CurrentFrame;
+            double frame = Timeline.SourceFrame;
             QuaternionD? orientation =
                 IkEditor.UseEndOrientation
                     ? CreateEditorQuaternion(
@@ -16072,7 +16095,7 @@ public sealed partial class MainWindowViewModel :
             _sourceBaseMeshes,
             _targetBaseMeshes,
             _targetBindingStatus,
-            Timeline.CurrentFrame,
+            Timeline.PositionFrame,
             Timeline.IsPlaying,
             ActiveWorkspace,
             ActiveWorkspaceMode,
@@ -16129,11 +16152,11 @@ public sealed partial class MainWindowViewModel :
                     snapshot.LegacyWorkspace,
                     "Cutscene",
                     StringComparison.Ordinal));
-        Timeline.CurrentFrame = snapshot.Frame;
+        Timeline.PositionFrame = snapshot.Frame;
         Timeline.IsPlaying = snapshot.IsPlaying;
         _editorSessionCoordinator.Reset(
             snapshot.ActiveAnimationId,
-            snapshot.Frame);
+            checked((int)Math.Floor(snapshot.Frame)));
         OnPropertyChanged(nameof(ActiveSourceModelLabel));
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
         UpdateDirtyState();
@@ -18552,8 +18575,8 @@ public sealed partial class MainWindowViewModel :
 
     /// <summary>
     /// Reuses the number already in use for this base when one exists, so
-    /// reselecting the same target does not silently renumber a script; new
-    /// bases start at the conventional 60.
+    /// reselecting the same target does not silently renumber a script;
+    /// new bases start at DLC 99.
     /// </summary>
     private int AllocateDlcNumber(string target)
     {
@@ -18581,7 +18604,7 @@ public sealed partial class MainWindowViewModel :
             used.Add(number);
         }
 
-        int candidate = 60;
+        int candidate = AnimationExportDefaults.DlcNumber;
         while (used.Contains(candidate) && candidate < 1000)
         {
             candidate++;
@@ -18701,6 +18724,8 @@ public sealed partial class MainWindowViewModel :
             OnPropertyChanged(nameof(AnimationScriptStateSummary));
             CommitAnimationScriptTextCommand.NotifyCanExecuteChanged();
             RevertAnimationScriptTextCommand.NotifyCanExecuteChanged();
+            RefreshAnimationEventPermissions();
+            Timeline.Events.Status = HasUncommittedAnimationScript() ? "Save or discard script edits before editing events" : string.Empty;
         }
     }
 
@@ -18711,13 +18736,13 @@ public sealed partial class MainWindowViewModel :
             if (SelectedScriptLibrary is not { } selected)
             {
                 return AnimationScriptLibraries.Count == 0
-                    ? "This project has no animation scripts yet. Assign an animation to a script first."
-                    : "Select an animation script to edit its source.";
+                    ? "Assign an animation script"
+                    : "Select an animation script";
             }
 
             if (!selected.IsAuthored)
             {
-                return $"{selected.ResourceName}.scr is generated from the sequence inventory. Editing and saving switches it to authored source, which you own from then on.";
+                return $"{selected.ResourceName}.scr · Generated";
             }
 
             bool hasEvents;
@@ -18732,8 +18757,8 @@ public sealed partial class MainWindowViewModel :
             }
 
             return hasEvents
-                ? $"{selected.ResourceName}.scr is authored and declares event blocks. The loose .scr keeps them for Developer Tools and the official compiler; an RPack export cannot carry them and will say so."
-                : $"{selected.ResourceName}.scr is authored. Revert to generated to hand it back to the sequence inventory.";
+                ? $"{selected.ResourceName}.scr · Authored events"
+                : $"{selected.ResourceName}.scr · Authored";
         }
     }
 
@@ -18784,6 +18809,7 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(AnimationScriptStateSummary));
         CommitAnimationScriptTextCommand.NotifyCanExecuteChanged();
         RevertAnimationScriptTextCommand.NotifyCanExecuteChanged();
+        RefreshAnimationEvents();
     }
 
     /// <summary>
@@ -18793,6 +18819,14 @@ public sealed partial class MainWindowViewModel :
     private string BuildGeneratedAnimationScriptText(
         ProjectAnimationLibrary library)
     {
+        if (library.ImportedBinaryScript is not null) return "// Imported compiled animation script.\n";
+
+        if (!library.SequenceUses.IsEmpty)
+        {
+            string imports = string.Join("", library.Imports.Select(import => import.Kind == ProjectAnimationLibraryImportKind.ProjectLibrary ? ResolveAnimationLibrary(import.ProjectLibraryId)?.ResourceName : import.RetailScriptIdentity?.ResourceName).Where(name => !string.IsNullOrWhiteSpace(name)).Select(name => $"!include(\"{name}.scr\")\n"));
+            return imports + AnimationSequenceExport.Source(library.SequenceUses);
+        }
+
         Dictionary<Guid, ProjectAnimationLibrary> libraries =
             _project.AnimationLibraries.ToDictionary(
                 static candidate => candidate.Id);
@@ -18845,12 +18879,13 @@ public sealed partial class MainWindowViewModel :
             return;
         }
 
+        if (_project.AnimationLibraries[index].ImportedBinaryScript is not null) { StatusText = "Edit imported compiled events on the timeline"; return; }
         string text = _animationScriptText;
         try
         {
             // Parse before storing so a broken edit is caught here rather
             // than at deployment, where it would abort a staged commit.
-            _ = AnimationScriptSourceParser.ParseSeqTracks(text);
+            _ = ReAnimated.Codecs.AnimationScripts.AnimationScriptTextCodec.Read(text);
         }
         catch (InvalidDataException exception)
         {
@@ -18870,6 +18905,7 @@ public sealed partial class MainWindowViewModel :
                 _project.AnimationLibraries[index] with
                 {
                     AuthoredScriptText = text,
+                    SequenceUses = ReconcileEventIdentities(ReAnimated.Codecs.AnimationScripts.AnimationScriptTextCodec.Read(text).Sequences, _project.AnimationLibraries[index].SequenceUses),
                 }),
         };
         try
@@ -18919,6 +18955,7 @@ public sealed partial class MainWindowViewModel :
                 _project.AnimationLibraries[index] with
                 {
                     AuthoredScriptText = null,
+                    SequenceUses = [],
                 }),
         });
         StatusText =
@@ -19969,7 +20006,7 @@ public sealed partial class MainWindowViewModel :
                                     StringComparison.OrdinalIgnoreCase),
                             63);
                     writes.Add(new ProjectArtifactWrite(
-                        $"out/ReAnimated/{projectOutputName}/animations/{projectOutputName}_animations_pc.rpack",
+                        $"out/ReAnimated/{projectOutputName}/animations/{AnimationExportDefaults.DeveloperToolsRpackFileName}",
                         pack.Rpack));
 
                     if (MountAuthoredAnimationPackInEditor &&
@@ -20245,6 +20282,7 @@ public sealed partial class MainWindowViewModel :
     private async Task ExportStandaloneSelectionAsync(
         StandaloneExportMode mode)
     {
+        await Task.Yield();
         if (!TryGetCheckedVariantIds(
                 out ImmutableHashSet<Guid> selectedVariantIds))
         {
@@ -21247,8 +21285,11 @@ public sealed partial class MainWindowViewModel :
             ImmutableArray<AnimationScrSequence> effective =
                 ResolveEffectiveSequences(libraryId);
             ProjectAnimationLibrary library = libraries[libraryId];
+            var eventUses = AnimationSequenceExport.Merge(effective, library.SequenceUses, library.AuthoredScriptText);
+            AnimationSequenceExport.AddAnimationAliases(animations, eventUses);
+            effective = AnimationSequenceExport.Records(eventUses);
             effectiveByLibrary[library.ResourceName] = effective;
-            AnimationScrSections sections = AnimationScrCodec.Build(effective);
+            AnimationScrSections sections = AnimationSequenceExport.BuildCompiled(eventUses);
             scripts.Add(
                 library.ResourceName,
                 new Rp6lAnimationScript(
@@ -21275,14 +21316,7 @@ public sealed partial class MainWindowViewModel :
                     localSequences.GetValueOrDefault(libraryId) ?? []);
             }
             looseScripts.Add(library.ResourceName, looseScript);
-            if (library.AuthoredScriptText is not null &&
-                AnimationScriptSourceParser.ContainsEventBlocks(looseScript))
-            {
-                // The binary section above came from AnimationScrCodec.Build,
-                // which always writes an event count of zero. The events exist
-                // only in the loose text.
-                eventOnlyScripts.Add(library.ResourceName);
-            }
+
         }
 
         // A compiled type-322 record carries a name and timing but no
@@ -21458,6 +21492,12 @@ public sealed partial class MainWindowViewModel :
                 .Append(name)
                 .Append(".scr\")")
                 .AppendLine();
+        }
+
+        if (!library.SequenceUses.IsEmpty)
+        {
+            text.Append(AnimationSequenceExport.Source(AnimationSequenceExport.Merge(localSequences, library.SequenceUses)));
+            return text.ToString();
         }
 
         foreach (AnimationScrSequence sequence in localSequences
@@ -23520,7 +23560,7 @@ public sealed partial class MainWindowViewModel :
         {
             int currentSampleIndex =
                 ResolveRootMotionTrailSampleIndex(
-                    Timeline.CurrentFrame,
+                    Timeline.SourceFrame,
                     cache.FrameCount,
                     cache.WorldPositions.Length);
             targetTrail = new RootMotionTrailRenderData(
@@ -25623,7 +25663,7 @@ public sealed partial class MainWindowViewModel :
         Timeline.IsPlaying = false;
         int frozenFrame = Math.Max(
             0,
-            Timeline.CurrentFrame);
+            Timeline.SourceFrame);
         TargetTransitionToken transition =
             _editorSessionCoordinator.BeginTargetTransition(
                 previousAnimation?.Id,
@@ -27966,7 +28006,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         double frameNumber = Math.Min(
-            Timeline.CurrentFrame,
+            Timeline.SourceFrame,
             animation.FrameCount - 1);
         _boneGizmoDrag = new BoneGizmoDragContext(
             side,
@@ -28255,10 +28295,68 @@ public sealed partial class MainWindowViewModel :
         bone.ScaleZ = transform.Scale.Z;
     }
 
-    private void OnTimelineKeyframeRequested(
+    private async void OnTimelineKeyframeRequested(
         object? sender,
         EventArgs args)
     {
+        try
+        {
+            await AddTimelineKeyForSelectionAsync();
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or KeyNotFoundException or OverflowException)
+        {
+            Timeline.SetKeyEditFeedback(exception.Message);
+        }
+    }
+
+    private async Task AddTimelineKeyForSelectionAsync()
+    {
+        if (TryParseAuthoredBoneTrack(Timeline.SelectedTrackId, out Guid layerId, out int targetBone) &&
+            TryResolveTimelineBone(Timeline.SelectedTrackId, out _))
+        {
+            SkeletonNodeViewModel? mappedBone = FindBone(targetBone);
+            if (mappedBone is not null)
+            {
+                SelectedBone = mappedBone;
+                if (TryGetActiveAnimation(out ProjectAnimation animation, out int animationIndex))
+                {
+                    double frame = Math.Clamp(Timeline.SourceFrameOffset + Timeline.PositionFrame,
+                        Timeline.StartFrame + Timeline.SourceFrameOffset,
+                        Timeline.EndFrame + Timeline.SourceFrameOffset);
+                    BoneEditLayer? selectedLayer = animation.EditLayers.FirstOrDefault(layer => layer.Id == layerId);
+                    int selectedTrack = selectedLayer is null ? -1 : FindTrackIndex(selectedLayer.Tracks, targetBone);
+                    TransformTRS transform = selectedTrack >= 0
+                        ? selectedLayer!.Tracks[selectedTrack].Sample(frame)
+                        : _targetRig?.Bones[targetBone].LocalBindPose ?? TransformTRS.Identity;
+                    ImmutableArray<BoneEditLayer> layers = UpsertBoneKeyframe(
+                        animation.EditLayers, targetBone, frame, transform, Guid.NewGuid(), layerId);
+                    CommitProject(WithUpdatedActiveAnimation(_project,
+                        animation with { EditLayers = layers }, animationIndex));
+                    RefreshAnimationPreview();
+                    string trackId = Timeline.SelectedTrackId!;
+                    FocusTimelineTrack(trackId, frame, "Translation X");
+                    return;
+                }
+                PersistBoneKeyframe(mappedBone);
+                return;
+            }
+        }
+        if (TryResolveSourceTransformTrack(Timeline.SelectedTrackId, out TransformTrack? sourceTrack, out int mappedSourceBone))
+        {
+            await CreateBoneLayerFromSource(sourceTrack!, mappedSourceBone);
+            return;
+        }
+        if (TryResolveTimelineMorph(Timeline.SelectedTrackId, out string? selectedMorph))
+        {
+            KeySelectedTimelineMorph(selectedMorph!);
+            return;
+        }
+        if (TryResolveSourceScalarTrack(Timeline.SelectedTrackId, out ScalarTrack? sourceScalar,
+                out (string Morph, double Weight, double Bias) scalarMapping))
+        {
+            await CreateMorphLayerFromSource(sourceScalar!, scalarMapping);
+            return;
+        }
         if (SelectedBone is { } bone)
         {
             PersistBoneKeyframe(bone);
@@ -28404,7 +28502,7 @@ public sealed partial class MainWindowViewModel :
             }
 
             frame = Math.Min(
-                Timeline.CurrentFrame,
+                Timeline.SourceFrame,
                 animation.FrameCount - 1);
             preferredLayerId =
                 SelectedBoneEditLayer?.Id;
@@ -28475,7 +28573,7 @@ public sealed partial class MainWindowViewModel :
         }
 
         double currentFrame = Math.Min(
-            Timeline.CurrentFrame,
+            Timeline.SourceFrame,
             animation.FrameCount - 1);
         return Math.Abs(currentFrame - drag.Frame) <= 1.0e-9;
     }
@@ -28547,7 +28645,7 @@ public sealed partial class MainWindowViewModel :
     {
         _editorSessionCoordinator.SynchronizeTimeline(
             _activeAnimationId,
-            Math.Max(0, Timeline.CurrentFrame),
+            Math.Max(0, Timeline.SourceFrame),
             Timeline.IsPlaying);
         if (_boneGizmoDrag is not null)
         {
@@ -28556,6 +28654,7 @@ public sealed partial class MainWindowViewModel :
                 "Transform drag canceled because the timeline frame changed";
         }
 
+        if (!Timeline.IsPlaying) StopAnimationEventAudio();
         SyncBoneEditorFromProject();
         RefreshEditableSkeletonPreview();
     }
@@ -28568,7 +28667,7 @@ public sealed partial class MainWindowViewModel :
         {
             _editorSessionCoordinator.SynchronizeTimeline(
                 _activeAnimationId,
-                Math.Max(0, Timeline.CurrentFrame),
+                Math.Max(0, Timeline.SourceFrame),
                 Timeline.IsPlaying);
         }
     }
@@ -28579,7 +28678,7 @@ public sealed partial class MainWindowViewModel :
             ?? throw new InvalidOperationException(
                 "No animation source is loaded.");
         double seconds = source.Clip.FrameRate.SecondsForFrame(
-            Timeline.CurrentFrame);
+            ResolveEventSourceFrame(Timeline.PositionFrame));
         return source.Clip.SamplePose(
             source.Rig,
             seconds,
@@ -28696,7 +28795,7 @@ public sealed partial class MainWindowViewModel :
             long generation = Interlocked.Increment(
                 ref _previewGeneration);
             double seconds = source.Clip.FrameRate.SecondsForFrame(
-                Timeline.CurrentFrame);
+                ResolveEventSourceFrame(Timeline.PositionFrame));
             EvaluationRequest request = CreateEvaluationRequest(
                 projectAnimation,
                 seconds,
@@ -28717,7 +28816,7 @@ public sealed partial class MainWindowViewModel :
                     ? BuildCameraHelperGizmos(frame.CameraHelpers)
                     : [];
             GizmoRenderData[] targetGizmos =
-                boneGizmos.Concat(cameraGizmos).Concat(_secondaryGizmos).Concat(BuildAttachmentGripGizmos(frame,false)).ToArray();
+                boneGizmos.Concat(cameraGizmos).Concat(_secondaryGizmos).Concat(BuildAttachmentGripGizmos(frame,false)).Concat(BuildAnimationEventFxLocators()).ToArray();
             MorphWeight[] targetMorphs =
                 frame.DisplayMorphWeights.Select(static pair =>
                     new MorphWeight(
@@ -28738,7 +28837,7 @@ public sealed partial class MainWindowViewModel :
                 RigSignature.Compute(target);
             int publicationFrame = Math.Max(
                 0,
-                Timeline.CurrentFrame);
+                Timeline.SourceFrame);
             AnimationVariantKey? activeVariant = null;
             try
             {
@@ -28780,6 +28879,8 @@ public sealed partial class MainWindowViewModel :
                 return;
             }
 
+            var eventState = ReAnimated.Evaluation.AnimationEventPreviewState.Reconstruct(Timeline.Events.SelectedSequence, Timeline.PositionFrame, Timeline.Events.PreviewSlot);
+            targetMeshes = targetMeshes.Where(mesh => !eventState.ElementVisibility.TryGetValue(mesh.Id, out bool visible) || visible).ToArray();
             _viewportCoordinator.PublishScenePair(() =>
             {
                 PublishAuthoredSourcePreview(
@@ -28827,7 +28928,7 @@ public sealed partial class MainWindowViewModel :
             ClearLinkedTargetExternalView(
                 evaluationUnavailable: true);
             StatusText =
-                $"Preview failed at frame {Timeline.CurrentFrame:0.###} — see Diagnostics";
+                $"Preview failed at frame {Timeline.SourceFrame:0.###} — see Diagnostics";
             if (!string.Equals(
                     _lastPreviewDiagnostic,
                     exception.Message,
@@ -28869,7 +28970,7 @@ public sealed partial class MainWindowViewModel :
                 RigSignature.Compute(target);
             int publicationFrame = Math.Max(
                 0,
-                Timeline.CurrentFrame);
+                Timeline.SourceFrame);
             AnimationVariantKey? activeVariant = null;
             try
             {
@@ -29425,7 +29526,7 @@ public sealed partial class MainWindowViewModel :
             dl1AuthoringPolicy: policy,
             morphBindings: morphBindings,
             morphEditLayers: animation.MorphEditLayers,
-            ikLayers: BuildIkLayers(animation, target),
+            ikLayers: BuildIkLayers(animation, target, purpose == EvaluationPurpose.Preview),
             dl1PreviewInputs: CreateDl1PreviewInputs(
                 previewProfile,
                 purpose),
@@ -30543,9 +30644,10 @@ public sealed partial class MainWindowViewModel :
             checked((float)value.Y),
             checked((float)value.Z));
 
-    private static IkConstraintLayer[] BuildIkLayers(
+    private IkConstraintLayer[] BuildIkLayers(
         ProjectAnimation animation,
-        RigDefinition rig)
+        RigDefinition rig,
+        bool applyEventGates = false)
     {
         Dictionary<string, TwoBoneIkChainDefinition> chains =
             rig.IkChains.ToDictionary(
@@ -30575,7 +30677,7 @@ public sealed partial class MainWindowViewModel :
                             key.Effector,
                             key.Pole,
                             key.EndOrientation)),
-                    layer.Enabled,
+                    layer.Enabled && (!applyEventGates || ReAnimated.Evaluation.AnimationEventPreviewState.Reconstruct(Timeline.Events.SelectedSequence, Timeline.PositionFrame, Timeline.Events.PreviewSlot).AllowsIk(layer.ChainName)),
                     layer.BakeToEditLayer));
         }
 
@@ -30592,15 +30694,20 @@ public sealed partial class MainWindowViewModel :
 
         TransformTRS edit = TrySampleEditorTransform(
             bone.Index,
-            Timeline.CurrentFrame,
+            Timeline.SourceFrame,
             out TransformTRS sampled)
                 ? sampled
                 : TransformTRS.Identity;
         BoneEditor.SetTransform(edit);
     }
 
-    private void RefreshTimelineTracks()
+    private void RefreshTimelineTracks(bool followBoneSelection = false)
     {
+        bool wasHandlingSelection = _handlingTimelineTrackSelection;
+        _handlingTimelineTrackSelection = true;
+        try
+        {
+        string? currentTrackId = Timeline.SelectedTrackId;
         ProjectAnimation? animation = GetActiveAnimation();
         if (animation is null)
         {
@@ -30632,9 +30739,7 @@ public sealed partial class MainWindowViewModel :
                     "Source animation",
                     isReadOnly: true,
                     totalKeyCount: track.Keyframes.Length,
-                    exactKeyFrames: track.Keyframes.Select(
-                        static keyframe => checked((int)Math.Round(
-                            keyframe.Frame))));
+                    exactKeyPositions: track.Keyframes.Select(static keyframe => keyframe.Frame));
 
                 viewModels.Add(sourceTrack);
                 AddTransformCurves(
@@ -30662,9 +30767,7 @@ public sealed partial class MainWindowViewModel :
                     "Facial",
                     isReadOnly: true,
                     totalKeyCount: track.Keyframes.Length,
-                    exactKeyFrames: track.Keyframes.Select(
-                        static keyframe => checked((int)Math.Round(
-                            keyframe.Frame))));
+                    exactKeyPositions: track.Keyframes.Select(static keyframe => keyframe.Frame));
 
                 viewModels.Add(sourceTrack);
                 curveModels.Add(
@@ -30699,7 +30802,7 @@ public sealed partial class MainWindowViewModel :
                     isReadOnly: false);
                 foreach (TransformKeyframe keyframe in track.Keyframes)
                 {
-                    int frame = checked((int)Math.Round(keyframe.Frame));
+                    double frame = keyframe.Frame;
                     viewModel.Keyframes.Add(
                         new TimelineKeyframeViewModel(
                             viewModel.Name,
@@ -30735,7 +30838,7 @@ public sealed partial class MainWindowViewModel :
                     isReadOnly: false);
                 foreach (ScalarKeyframe keyframe in track.Keyframes)
                 {
-                    int frame = checked((int)Math.Round(keyframe.Frame));
+                    double frame = keyframe.Frame;
                     viewModel.Keyframes.Add(
                         new TimelineKeyframeViewModel(
                             viewModel.Name,
@@ -30768,7 +30871,7 @@ public sealed partial class MainWindowViewModel :
                 isReadOnly: false);
             foreach (ProjectIkKeyframe keyframe in layer.Keyframes)
             {
-                int frame = checked((int)Math.Round(keyframe.Frame));
+                double frame = keyframe.Frame;
                 viewModel.Keyframes.Add(
                     new TimelineKeyframeViewModel(
                         viewModel.Name,
@@ -30821,9 +30924,18 @@ public sealed partial class MainWindowViewModel :
                     attachment.LocalOffset)]);
         }
 
+        if (!followBoneSelection && currentTrackId is not null && viewModels.Any(track =>
+            string.Equals(track.Id, currentTrackId, StringComparison.Ordinal)))
+            preferredTrackId = currentTrackId;
         Timeline.ReplaceTracks(viewModels);
         Timeline.SelectTrack(preferredTrackId);
         Timeline.ReplaceCurves(curveModels);
+        }
+        finally
+        {
+            _handlingTimelineTrackSelection = wasHandlingSelection;
+            UpdateTimelineAuthoringAvailability();
+        }
     }
 
     private int? ResolveSourceCurveBoneIndex(
@@ -31488,7 +31600,7 @@ public sealed partial class MainWindowViewModel :
             FacialFpp.Morphs,
             _targetRig,
             ResolvePreviewProfile(),
-            Timeline.CurrentFrame);
+            Timeline.SourceFrame);
         bool showingExternalTarget =
             SourceViewport.SceneSource.HasExternalPreviewScene;
         if (!showingExternalTarget)
@@ -31657,7 +31769,7 @@ public sealed partial class MainWindowViewModel :
             if (GetActiveAnimation() is { } animation)
             {
                 double frame = Math.Min(
-                    Timeline.CurrentFrame,
+                    Timeline.SourceFrame,
                     animation.FrameCount - 1);
                 ImmutableArray<BoneEditLayer> layers =
                     GetEvaluationEditLayers(

@@ -100,6 +100,7 @@ public sealed class Dl1MultiModelPortableExporterTests
 
             foreach (Dl1PortableModelOutputResult model in result.Models)
             {
+                Assert.Equal("common_anims_sp_PC.rpack", Path.GetFileName(model.AnimationRpackPath));
                 Rp6lAnimationLibrary reopened =
                     await Rp6lAnimationLibraryCodec.ExtractAsync(model.AnimationRpackPath);
                 Assert.True(reopened.AnimationScripts.ContainsKey(model.AnimationLibraryName));

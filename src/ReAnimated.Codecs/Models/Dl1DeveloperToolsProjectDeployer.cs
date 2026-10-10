@@ -1017,7 +1017,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 string? expectedPreimage = null;
                 if (File.Exists(destination) && (acceptedReplacement || ownedExistingPack))
                 {
-                    AnimationScrSections sections = AnimationScrCodec.Build(library.Sequences);
+                    AnimationScrSections sections = AnimationSequenceExport.BuildCompiled(AnimationSequenceExport.Merge(library.Sequences, library.SequenceUses, library.LooseScriptText));
                     EditorAnimationPackMountPlan mount = await EditorAnimationPackMountPlanner.PrepareAsync(
                         validated.ProjectRoot,
                         deploymentModel.Package.Document.ModelId,
@@ -1049,7 +1049,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             {
                 artifacts.Add(new StagedArtifact(
                     NormalizeRelativePath(
-                        $"out/ReAnimated/{validated.ModelResourceName}/{validated.AnimationLibraryName}_pc.rpack"),
+                        $"out/ReAnimated/{validated.ModelResourceName}/{AnimationExportDefaults.DeveloperToolsRpackFileName}"),
                     Dl1DeploymentArtifactRole.PortableOnly,
                     runtimePackPath,
                     Required: false,
@@ -1528,7 +1528,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
             LegacyOutputPaths = legacyPaths,
             PortableRpackRelativePath = request.ExportPortableAnimationRpack
                 ? NormalizeRelativePath(
-                    $"out/ReAnimated/{validated.ModelResourceName}/{validated.AnimationLibraryName}_pc.rpack")
+                    $"out/ReAnimated/{validated.ModelResourceName}/{AnimationExportDefaults.DeveloperToolsRpackFileName}")
                 : null,
             AnimationRuntimePackRelativePath = effectiveArtifacts.FirstOrDefault(artifact =>
                 artifact.Role == Dl1DeploymentArtifactRole.ManifestOwned &&
@@ -3195,6 +3195,7 @@ public static partial class Dl1DeveloperToolsProjectDeployer
                 string.Equals(relative, "assets_pc/local_dx11_debug.mp", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(relative, "assets_pc/local_dx11_refs_debug.mp", StringComparison.OrdinalIgnoreCase),
             Dl1DeploymentArtifactRole.PortableOnly =>
+                string.Equals(relative, NormalizeRelativePath($"out/ReAnimated/{model}/{AnimationExportDefaults.DeveloperToolsRpackFileName}"), StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(
                     relative,
                     NormalizeRelativePath($"out/ReAnimated/{model}/{library}_pc.rpack"),

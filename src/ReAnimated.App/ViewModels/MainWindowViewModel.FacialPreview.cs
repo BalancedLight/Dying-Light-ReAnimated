@@ -70,11 +70,11 @@ public sealed partial class MainWindowViewModel
     /// <summary>Invoke after the ordinary animation morph evaluation, never before it.</summary>
     private void UpdateFacialSpeechPreview()
     {
-        double seconds = Timeline.CurrentFrame / Timeline.FramesPerSecond;
+        double seconds = Timeline.SourceFrame / Timeline.FramesPerSecond;
         if (_speechPreviewLayer is not null && EnableSpeechPreview)
         {
             FacialFpp.SetSpeechPreview(_speechPreviewLayer.Tracks.ToDictionary(x => x.MorphName,
-                x => x.Sample(Timeline.CurrentFrame), StringComparer.OrdinalIgnoreCase));
+                x => x.Sample(Timeline.SourceFrame), StringComparer.OrdinalIgnoreCase));
         }
         else FacialFpp.RefreshActiveExpressionPreview();
         _speechAudio?.Update(seconds, Timeline.IsPlaying && EnableSpeechPreview &&

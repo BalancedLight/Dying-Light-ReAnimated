@@ -87,7 +87,7 @@ public sealed class ViewModelTimelineTests
     }
 
     [Fact]
-    public void PauseSeekAndRateChangesResetFractionalPlaybackTime()
+    public void PauseSeekAndRateChangesPreservePositionAndResetClock()
     {
         TimelineViewModel timeline = new()
         {
@@ -104,7 +104,8 @@ public sealed class ViewModelTimelineTests
         timeline.IsPlaying = true;
         timeline.Tick(started.AddSeconds(30));
         timeline.Tick(started.AddSeconds(30).AddMilliseconds(20));
-        Assert.Equal(0, timeline.CurrentFrame);
+        Assert.Equal(1, timeline.CurrentFrame);
+        Assert.Equal(1.0, timeline.PositionFrame, 8);
 
         timeline.CurrentFrame = 10;
         timeline.Tick(started.AddSeconds(31));
@@ -114,7 +115,7 @@ public sealed class ViewModelTimelineTests
         timeline.FramesPerSecond = 50.0;
         timeline.Tick(started.AddSeconds(32));
         timeline.Tick(started.AddSeconds(32).AddMilliseconds(10));
-        Assert.Equal(10, timeline.CurrentFrame);
+        Assert.Equal(11, timeline.CurrentFrame);
         timeline.Tick(started.AddSeconds(32).AddMilliseconds(20));
         Assert.Equal(11, timeline.CurrentFrame);
     }

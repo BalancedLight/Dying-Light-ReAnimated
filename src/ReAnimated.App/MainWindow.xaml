@@ -272,6 +272,7 @@
                                       CommandParameter="Export"
                                       Content="Export"
                                       IsChecked="{Binding IsExportWorkspace, Mode=OneWay}" />
+                        <Button Content="Events" Click="OnOpenAnimationEvents" />
                         <Button Margin="8,2,4,2" Padding="10,4" Content="Change workflow" Command="{Binding ChangeStartWorkflowCommand}" />
                         <Button Content="Save to model" Command="{Binding SaveAnimationToModelCommand}"
                                 Visibility="{Binding HasModelAnimationCapture, Converter={StaticResource BooleanToVisibilityConverter}}" />
@@ -1260,7 +1261,7 @@
                                 <TextBlock Grid.Row="1"
                                            Margin="0,3,0,8"
                                            Foreground="{StaticResource MutedTextBrush}"
-                                           Text="Edit sequences and events in the game's .scr format. RPack export does not carry script events."
+                                           Text=""
                                            TextWrapping="Wrap" />
                                 <DockPanel Grid.Row="2" Margin="0,0,0,8">
                                     <WrapPanel DockPanel.Dock="Right">

@@ -245,6 +245,10 @@ public sealed record ProjectAnimationLibrary
     /// </remarks>
     public string? AuthoredScriptText { get; init; }
 
+    public ImmutableArray<AnimationSequenceUse> SequenceUses { get; init; } = [];
+
+    public AnimationScriptBinaryBacking? ImportedBinaryScript { get; init; }
+
     public const int MaximumAuthoredScriptLength = 4 * 1024 * 1024;
 
     internal void Validate(string parameterName)
@@ -273,6 +277,8 @@ public sealed record ProjectAnimationLibrary
             }
         }
 
+        AnimationEventPersistence.Validate(SequenceUses);
+        if (ImportedBinaryScript is { } binary && (binary.RecordsAndNames is null || binary.IndexAndNames is null || binary.RecordsAndNames.Length > 64 * 1024 * 1024 || binary.IndexAndNames.Length > 64 * 1024 * 1024)) throw new ArgumentException("Invalid imported animation script.", parameterName);
         ValidateAnimationResourceName(ResourceName, parameterName);
         ArgumentException.ThrowIfNullOrWhiteSpace(DisplayName, parameterName);
         if (DisplayName.Length > 256 ||
@@ -2426,7 +2432,7 @@ public sealed record Dl1MovieReferenceCameraCapture
 
 public sealed record DlraProject
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public const string FormatIdentifier = "dl-reanimated-csharp-project";
 
@@ -2485,7 +2491,7 @@ public sealed record DlraProject
 
     public void Validate()
     {
-        if (SchemaVersion is not (1 or 2 or CurrentSchemaVersion))
+        if (SchemaVersion is not (1 or 2 or 3 or CurrentSchemaVersion))
         {
             throw new ProjectFormatException(
                 $"Only C# schema-1, schema-2, and schema-{CurrentSchemaVersion} projects are supported in memory.");

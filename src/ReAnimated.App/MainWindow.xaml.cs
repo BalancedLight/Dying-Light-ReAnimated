@@ -25,6 +25,17 @@ public partial class MainWindow : Window
     ];
 
     private readonly MainWindowViewModel _viewModel;
+    private ReAnimated.App.Views.AnimationEventInspector? _eventEditor;
+
+    private void OnOpenAnimationEvents(object sender, RoutedEventArgs e)
+    {
+        var editor = _viewModel.IsCustomModelAuthoringSurfaceVisible
+            ? _viewModel.Models.Timeline.Events
+            : _viewModel.Timeline.Events;
+        if (_eventEditor is null || !ReferenceEquals(_eventEditor.DataContext, editor))
+            _eventEditor = new ReAnimated.App.Views.AnimationEventInspector { DataContext = editor };
+        _eventEditor.OpenEditor(this);
+    }
     private readonly WorkspaceAutosaveService _autosave;
     private readonly WorkflowDockController _dockController;
     private readonly DockLayoutUpdateScheduler _dockLayoutScheduler;
@@ -130,9 +141,7 @@ public partial class MainWindow : Window
         try
         {
             close = await RecoveryCloseCoordinator.TryCloseAsync(
-                () => _viewModel.CanSaveWorkspaceSnapshot
-                    ? _autosave.SaveNowAsync("window-closing")
-                    : Task.FromResult(!_viewModel.HasAppControlUnsavedChanges),
+                SaveRecoveryForCloseAsync,
                 () =>
                 {
                     var dialog = new RecoverySaveFailureDialog(_lastAutosaveError ??
@@ -161,6 +170,15 @@ public partial class MainWindow : Window
             _closeApproved = true;
             _ = Dispatcher.BeginInvoke(new Action(Close));
         }
+    }
+
+    private async Task<bool> SaveRecoveryForCloseAsync()
+    {
+        if (!_viewModel.CanSaveWorkspaceSnapshot)
+            return !_viewModel.RequiresRecoverySaveOnClose;
+
+        bool saved = await _autosave.SaveNowAsync("window-closing");
+        return saved || !_viewModel.RequiresRecoverySaveOnClose;
     }
 
     private async Task<bool> SaveProjectElsewhereForCloseAsync()
@@ -413,7 +431,7 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.Models, "models.preview", "Model preview", Detach(ModelsPreviewPane), 320, 240),
 
             Pane(EditorDockWorkflow.Animations, "animations.preview", "Source preview", Detach(AnimationsSourcePreviewPane), 320, 220, _viewModel.SourceViewport),
-            Pane(EditorDockWorkflow.Animations, "animations.timeline", "Source timeline", Detach(AnimationsSourceTimelinePane), 340, 170, _viewModel.Timeline),
+            Pane(EditorDockWorkflow.Animations, "animations.timeline", "Source timeline", Detach(AnimationsSourceTimelinePane), 420, 280, _viewModel.Timeline),
             Pane(EditorDockWorkflow.Animations, "animations.details", "Animation details", Detach(AnimationsDetailsPane), 240, 180),
             Pane(EditorDockWorkflow.Animations, "animations.browser", "Base-game animations", Detach(RetailAnimationBrowserPane), 260, 220),
             Pane(EditorDockWorkflow.Animations, "animations.library", "Animation library", Detach(AnimationsLibraryPane), 360, 220),
@@ -421,7 +439,7 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.Playback, "playback.context", "Playback context", Detach(PlaybackContextPane), 300, 120),
             Pane(EditorDockWorkflow.Playback, "playback.fpp-camera", "FPP camera", Detach(PlaybackFppViewportPane), 280, 220, _viewModel.SourceViewport),
             Pane(EditorDockWorkflow.Playback, "playback.target-camera", "DL1 target camera", Detach(PlaybackTargetViewportPane), 320, 240, _viewModel.TargetViewport),
-            Pane(EditorDockWorkflow.Playback, "playback.timeline", "Timeline / curves", Detach(PlaybackTimelinePane), 340, 180, _viewModel.Timeline),
+            Pane(EditorDockWorkflow.Playback, "playback.timeline", "Timeline / curves", Detach(PlaybackTimelinePane), 420, 280, _viewModel.Timeline),
 
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.context", "Animation context", Detach(AnimationContextStrip), 320, 80),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.source-camera", "Source camera", Detach(SourceViewportPane), 280, 220, _viewModel.SourceViewport),
@@ -438,7 +456,7 @@ public partial class MainWindow : Window
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.fpp-camera", "FPP / camera", DetachTabContent(RetargetFppCameraTab), 340, 280),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.movie-camera", "Movie camera", DetachTabContent(RetargetMovieCameraTab), 340, 280),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.animations", "Animations", DetachTabContent(RetargetAnimationsTab), 340, 180),
-            Pane(EditorDockWorkflow.RetargetEdit, "retarget.timeline", "Timeline / curves", DetachTabContent(RetargetTimelineTab), 340, 180, _viewModel.Timeline),
+            Pane(EditorDockWorkflow.RetargetEdit, "retarget.timeline", "Timeline / curves", DetachTabContent(RetargetTimelineTab), 420, 280, _viewModel.Timeline),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.jobs", "Jobs", DetachTabContent(JobsTab), 320, 180),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.diagnostics", "Diagnostics", DetachTabContent(DiagnosticsTab), 320, 180),
             Pane(EditorDockWorkflow.RetargetEdit, "retarget.fidelity", "Fidelity", DetachTabContent(FidelityTab), 320, 180),

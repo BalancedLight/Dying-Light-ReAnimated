@@ -2,7 +2,263 @@
   "type": "object",
   "properties": {
     "schemaVersion": {
-      "const": 9
+      "const": 10
+    },
+    "sequenceUses": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "anm2Name": {
+            "type": "string"
+          },
+          "sourceStartFrame": {
+            "type": "number"
+          },
+          "sourceEndFrame": {
+            "type": "number"
+          },
+          "fps": {
+            "type": "number"
+          },
+          "weightMode": {
+            "type": "integer"
+          },
+          "weightTime": {
+            "type": "number"
+          },
+          "sourceStartFrameExpression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "sourceEndFrameExpression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fpsExpression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "weightModeExpression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "weightTimeExpression": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "animationReferenceId": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "localFrame": {
+                  "type": "number"
+                },
+                "frameExpression": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "eventId": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "idExpression": {
+                  "type": "string"
+                },
+                "requiredSlot": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "slotExpression": {
+                  "type": "string"
+                },
+                "delivery": {
+                  "enum": [
+                    "event",
+                    "mustSendEvent"
+                  ]
+                },
+                "rawTicks": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "rawFlags": {
+                  "type": "integer"
+                },
+                "rawActionReference": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "actions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "keyword": {
+                        "type": "string"
+                      },
+                      "arguments": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "text": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "type": [
+                                "string",
+                                "null"
+                              ]
+                            },
+                            "sourceSpan": {
+                              "type": [
+                                "object",
+                                "null"
+                              ],
+                              "properties": {
+                                "start": {
+                                  "type": "integer"
+                                },
+                                "length": {
+                                  "type": "integer"
+                                },
+                                "end": {
+                                  "type": "integer"
+                                }
+                              },
+                              "additionalProperties": false
+                            }
+                          },
+                          "additionalProperties": false
+                        }
+                      },
+                      "sourceSpan": {
+                        "type": [
+                          "object",
+                          "null"
+                        ],
+                        "properties": {
+                          "start": {
+                            "type": "integer"
+                          },
+                          "length": {
+                            "type": "integer"
+                          },
+                          "end": {
+                            "type": "integer"
+                          }
+                        },
+                        "additionalProperties": false
+                      },
+                      "originalSource": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "sourceSpan": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "properties": {
+                    "start": {
+                      "type": "integer"
+                    },
+                    "length": {
+                      "type": "integer"
+                    },
+                    "end": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "originalSource": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "sourceSpan": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "start": {
+                "type": "integer"
+              },
+              "length": {
+                "type": "integer"
+              },
+              "end": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "originalSource": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
     },
     "format": {
       "const": "dl-reanimated-csharp-model"

@@ -8,6 +8,38 @@ namespace ReAnimated.Tests;
 public sealed class AnimationLibraryEditorTests
 {
     [Fact]
+    public void RenamingALibraryPreservesAuthoredEventsAndCompiledBacking()
+    {
+        var sequence = new AnimationSequenceUse
+        {
+            Name = "generic_motion",
+            Anm2Name = "generic_motion.anm2",
+            SourceEndFrame = 20,
+            Events = [new AnimationEvent { LocalFrame = 2.5, EventId = 1012, RequiredSlot = -1 }],
+        };
+        var library = Library(Guid.NewGuid(), "generic_events") with
+        {
+            AuthoredScriptText = "// retained source",
+            SequenceUses = [sequence],
+            ImportedBinaryScript = new AnimationScriptBinaryBacking { RecordsAndNames = [1, 2, 3], IndexAndNames = [4, 5] },
+        };
+        var viewModel = new AnimationLibraryEditorViewModel(new AnimationLibraryEditorRequest
+        {
+            Assignment = Assignment("generic_motion.anm2"),
+            Libraries = [library],
+            SelectedLibraryId = library.Id,
+        });
+        viewModel.SelectedLibrary!.ResourceName = "generic_renamed_events";
+
+        Assert.True(viewModel.TryCreateResult(out var result));
+        var edited = Assert.Single(result!.Libraries);
+        Assert.Equal("generic_renamed_events", edited.ResourceName);
+        Assert.Equal(library.AuthoredScriptText, edited.AuthoredScriptText);
+        Assert.Equal(sequence, Assert.Single(edited.SequenceUses));
+        Assert.Equal(library.ImportedBinaryScript, edited.ImportedBinaryScript);
+    }
+
+    [Fact]
     public void EmptyProjectCanCreateAndAssignItsFirstLibrary()
     {
         var viewModel = new AnimationLibraryEditorViewModel(

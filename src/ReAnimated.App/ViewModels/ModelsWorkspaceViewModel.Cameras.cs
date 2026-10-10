@@ -19,7 +19,7 @@ public sealed partial class ModelsWorkspaceViewModel
         RefreshPreview();
     }
 
-    private RenderCamera? PrepareCameraReview(SkeletonRenderData? skeleton, bool active, AnimationClip? clip, int frame)
+    private RenderCamera? PrepareCameraReview(SkeletonRenderData? skeleton, bool active, AnimationClip? clip, double frame)
     {
         _cameraViewFrame = null;
         if (!active || skeleton is null || Conformance.CameraCalibrationPreview is not { } preview)

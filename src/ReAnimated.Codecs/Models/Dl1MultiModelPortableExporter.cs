@@ -7,6 +7,7 @@ using ReAnimated.Codecs.Anm2;
 using ReAnimated.Codecs.CompactMesh;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.ModelAuthoring;
+using ReAnimated.Core.Domain;
 
 namespace ReAnimated.Codecs.Models;
 
@@ -84,6 +85,10 @@ public sealed record Dl1PortableModelOutputRequest
     /// Stable retail resource identity only. It is metadata, not payload.
     /// </summary>
     public string? RetailResourceReference { get; init; }
+
+    public ImmutableArray<AnimationSequenceUse> SequenceUses { get; init; } = [];
+
+    public string? AnimationScriptText { get; init; }
 }
 
 public sealed record Dl1MultiModelPortableExportRequest
@@ -288,8 +293,9 @@ public static class Dl1MultiModelPortableExporter
             }
         }
 
-        AnimationScrSections script = AnimationScrCodec.Build(
-            bodySequences.ToImmutable());
+        var sequenceUses = AnimationSequenceExport.Merge(bodySequences.ToImmutable(), model.Source.SequenceUses, model.Source.AnimationScriptText);
+        AnimationSequenceExport.AddAnimationAliases(payloads, sequenceUses);
+        AnimationScrSections script = AnimationSequenceExport.BuildCompiled(sequenceUses);
         byte[] animationRpack = Rp6lAnimationLibraryCodec.Build(
             payloads,
             new Dictionary<string, Rp6lAnimationScript>(StringComparer.OrdinalIgnoreCase)
@@ -300,7 +306,7 @@ public static class Dl1MultiModelPortableExporter
             });
         string animationRpackPath = Path.Combine(
             directory,
-            model.AnimationLibraryName + "_pc.rpack");
+            ReAnimated.Core.Project.AnimationExportDefaults.DeveloperToolsRpackFileName);
         await WriteFileDurablyAsync(
             animationRpackPath,
             animationRpack,
@@ -315,6 +321,7 @@ public static class Dl1MultiModelPortableExporter
                 $"Portable animation RPack for '{model.Source.ModelName}' failed its offline round trip.");
         }
 
+        await WriteFileDurablyAsync(Path.Combine(directory, model.AnimationLibraryName + ".scr"), Encoding.UTF8.GetBytes(model.Source.AnimationScriptText ?? AnimationSequenceExport.Source(sequenceUses)), cancellationToken).ConfigureAwait(false);
         string? customModelPath = null;
         var morphPaths = ImmutableArray.CreateBuilder<string>();
         if (model.Source.TargetKind == Dl1PortableTargetKind.CustomModel)

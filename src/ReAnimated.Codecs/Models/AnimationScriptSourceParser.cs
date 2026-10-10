@@ -48,7 +48,14 @@ public sealed record AnimationScriptSeqTrack(
     AnimationScriptValue FramesPerSecond,
     AnimationScriptValue Enabled,
     AnimationScriptValue Blend,
-    bool HasEventBlock);
+    bool HasEventBlock)
+{
+    /// <summary>The sixth native SeqTrack argument; the legacy Enabled name remains available.</summary>
+    public AnimationScriptValue WeightMode => Enabled;
+
+    /// <summary>The seventh native SeqTrack argument; the legacy Blend name remains available.</summary>
+    public AnimationScriptValue WeightTime => Blend;
+}
 
 /// <summary>
 /// Reads the loose <c>.scr</c> animation-script source grammar.
@@ -272,6 +279,11 @@ public static partial class AnimationScriptSourceParser
 
         return tracks.ToImmutable();
     }
+
+    /// <summary>Parses the editable event document while retaining the original text.</summary>
+    public static ReAnimated.Codecs.AnimationScripts.AnimationScriptTextDocument
+        ParseEventDocument(string source) =>
+            ReAnimated.Codecs.AnimationScripts.AnimationScriptTextCodec.Read(source);
 
     /// <summary>
     /// True when the source carries authored event blocks. Callers use this to

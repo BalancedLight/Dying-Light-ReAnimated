@@ -1,4 +1,4 @@
-﻿using System.Collections.Immutable;
+using System.Collections.Immutable;
 using System.Globalization;
 using System.IO;
 using System.Numerics;
@@ -360,9 +360,12 @@ public sealed class CustomModelPreviewSession
                 model.Package.Document.BuildSettings.FlipTextureCoordinateV;
     }
 
+    public SkeletonRenderData? CreateSkeleton(AnimationClip? clip, int frame, int? selectedBoneIndex = null, bool reviewedPolicy = false) =>
+        CreateSkeleton(clip, (double)frame, selectedBoneIndex, reviewedPolicy);
+
     public SkeletonRenderData? CreateSkeleton(
         AnimationClip? clip,
-        int frame,
+        double frame,
         int? selectedBoneIndex = null,
         bool reviewedPolicy = false)
     {
@@ -383,7 +386,7 @@ public sealed class CustomModelPreviewSession
     /// </summary>
     public ImmutableArray<MeshRenderData> CreateMeshes(
         AnimationClip? clip,
-        int frame,
+        double frame,
         bool reviewedPolicy = false)
     {
         if (_model.Rig is null || _rigidGeometryOwners.IsEmpty)
@@ -495,7 +498,7 @@ public sealed class CustomModelPreviewSession
     /// </summary>
     public SkeletonRenderData CreateReviewedPolicySkeleton(
         AnimationClip clip,
-        int frame,
+        double frame,
         int? selectedBoneIndex = null)
     {
         ArgumentNullException.ThrowIfNull(clip);
@@ -503,7 +506,7 @@ public sealed class CustomModelPreviewSession
         return CorePreviewAdapter.ToRenderSkeleton(posed, MapSourceBoneIndex(selectedBoneIndex));
     }
 
-    private SkeletonPose CreateClipPresentationPose(AnimationClip? clip, int frame, bool reviewedPolicy)
+    private SkeletonPose CreateClipPresentationPose(AnimationClip? clip, double frame, bool reviewedPolicy)
     {
         if (reviewedPolicy)
         {
@@ -559,7 +562,7 @@ public sealed class CustomModelPreviewSession
 
     public RenderCamera? CreatePreviewCamera(
         AnimationClip? clip,
-        int frame,
+        double frame,
         string? nodeName,
         bool reviewedPolicy = false)
     {
@@ -595,7 +598,7 @@ public sealed class CustomModelPreviewSession
 
     public CustomModelPreviewPayload CreatePayload(
         AnimationClip? clip,
-        int frame,
+        double frame,
         int? selectedBoneIndex = null,
         bool reviewedPolicy = false) =>
         new(
@@ -613,7 +616,7 @@ public sealed class CustomModelPreviewSession
                 ? _authoredRig.Contract.SourceToPhysicalIndices[sourceIndex]
                 : null;
 
-    private SkeletonPose SampleClipPose(AnimationClip clip, int frame)
+    private SkeletonPose SampleClipPose(AnimationClip clip, double frame)
     {
         var rig = _model.Rig!;
         var pose = clip.SamplePose(rig, clip.FrameRate.SecondsForFrame(Math.Clamp(frame, 0,
@@ -655,7 +658,7 @@ public static class CustomModelPreviewAdapter
     public static CustomModelPreviewPayload Create(
         FbxModelAuthoringImportResult imported,
         AnimationClip? clip,
-        int frame,
+        double frame,
         int? selectedBoneIndex = null,
         CustomModelPreviewMode mode = CustomModelPreviewMode.SourceFbx,
         bool reviewedPolicy = false)

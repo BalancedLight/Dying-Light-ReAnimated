@@ -217,6 +217,25 @@ public sealed partial class AnimationEvaluator : IAnimationEvaluator
     }
 
     /// <summary>
+    /// Evaluates the retargeted pose after authored bone edit layers and before
+    /// IK, DL1 root policy, retarget-helper replacement, or attachment IK.
+    /// This stage is useful when authoring keys that will pass through those
+    /// later stages during normal evaluation.
+    /// </summary>
+    public static SkeletonPose EvaluateAuthoredPoseBeforePostProcessing(
+        EvaluationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        return EvaluateAuthoredPoseBeforeIk(
+            request,
+            request.TimeSeconds,
+            request.PlaybackMode,
+            out _,
+            out _,
+            out _);
+    }
+
+    /// <summary>
     /// Evaluates only the authored/exportable pose for a bounded set of sample
     /// times. The first authored pose required by DL1 root-motion policy is
     /// evaluated once and shared by every sample, while the pose pipeline stays
@@ -314,9 +333,28 @@ public sealed partial class AnimationEvaluator : IAnimationEvaluator
         out CompatibilityReport? compatibility,
         out SkeletonPose sourcePose)
     {
-        double sampleFrame = request.Clip.ResolveFrame(
+        SkeletonPose authoredPose = EvaluateAuthoredPoseBeforeIk(
+            request,
             timeSeconds,
-            playbackMode);
+            playbackMode,
+            out compatibility,
+            out sourcePose,
+            out double sampleFrame);
+        return ApplyIkConstraints(
+            authoredPose,
+            ResolveIkConstraints(request, sampleFrame),
+            IkConstraintScope.AuthoredExportable);
+    }
+
+    private static SkeletonPose EvaluateAuthoredPoseBeforeIk(
+        EvaluationRequest request,
+        double timeSeconds,
+        PlaybackMode playbackMode,
+        out CompatibilityReport? compatibility,
+        out SkeletonPose sourcePose,
+        out double sampleFrame)
+    {
+        sampleFrame = request.Clip.ResolveFrame(timeSeconds, playbackMode);
         sourcePose = request.Clip.SamplePose(
             request.SourceRig,
             timeSeconds,
@@ -354,15 +392,11 @@ public sealed partial class AnimationEvaluator : IAnimationEvaluator
                 sourcePose.LocalTransforms);
         }
 
-        SkeletonPose authoredPose = BoneEditLayerEvaluator.ApplyLayers(
+        return BoneEditLayerEvaluator.ApplyLayers(
             basePose,
             sampleFrame,
             request.EditLayers,
             BoneEditLayerScope.AuthoredExportable);
-        return ApplyIkConstraints(
-            authoredPose,
-            ResolveIkConstraints(request, sampleFrame),
-            IkConstraintScope.AuthoredExportable);
     }
 
     private static SkeletonPose ApplyRetargetHelperOverrides(

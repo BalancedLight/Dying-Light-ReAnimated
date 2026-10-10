@@ -141,7 +141,7 @@ public static class ProjectSerializer
                 throw new ProjectFormatException("The project does not declare an integer schemaVersion.");
             }
 
-            if (schemaVersion is not (1 or 2 or DlraProject.CurrentSchemaVersion))
+            if (schemaVersion is not (1 or 2 or 3 or DlraProject.CurrentSchemaVersion))
             {
                 throw new ProjectFormatException(
                     $"Project schema {schemaVersion} is not supported by this application.");
@@ -157,7 +157,7 @@ public static class ProjectSerializer
             {
                 1 => MigrateSchema1(project),
                 2 => MigrateSchema2(project),
-                DlraProject.CurrentSchemaVersion => NormalizeSchema3(project),
+                3 or DlraProject.CurrentSchemaVersion => NormalizeSchema3(project),
                 _ => throw new UnreachableException(),
             };
             project.Validate();
@@ -189,7 +189,7 @@ public static class ProjectSerializer
         {
             1 => MigrateSchema1(project),
             2 => MigrateSchema2(project),
-            DlraProject.CurrentSchemaVersion => NormalizeSchema3(project),
+            3 or DlraProject.CurrentSchemaVersion => NormalizeSchema3(project),
             _ => throw new ProjectFormatException(
                 $"Project schema {project.SchemaVersion} is not supported by this application."),
         };
@@ -222,6 +222,7 @@ public static class ProjectSerializer
                 FileOptions.WriteThrough))
             {
                 JsonSerializer.Serialize(stream, normalized, SerializerOptions);
+                if (stream.Length > MaximumProjectBytes) throw new ProjectFormatException($"Project files cannot exceed {MaximumProjectBytes} bytes.");
                 stream.Flush(flushToDisk: true);
             }
 
@@ -1455,7 +1456,7 @@ public static class ProjectSerializer
         {
             1 => RequiredSchema1RootProperties,
             2 => RequiredSchema2RootProperties,
-            DlraProject.CurrentSchemaVersion =>
+            3 or DlraProject.CurrentSchemaVersion =>
                 RequiredSchema3RootProperties,
             _ => throw new ProjectFormatException(
                 $"Project schema {schemaVersion} is not supported by this application."),

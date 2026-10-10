@@ -2,6 +2,8 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Collections.Immutable;
 using System.Text;
+using ReAnimated.Codecs.AnimationScripts;
+using ReAnimated.Core.Domain;
 
 namespace ReAnimated.Codecs.Anm2;
 
@@ -12,7 +14,14 @@ public sealed record AnimationScrSequence(
     float EndFrame,
     float FramesPerSecond,
     int Enabled = 1,
-    float Blend = 0.5f);
+    float Blend = 0.5f)
+{
+    // Kept for source compatibility with callers that used the old, misleading
+    // names. These values are the native SeqTrack weight mode and weight time.
+    public int WeightMode => Enabled;
+
+    public float WeightTime => Blend;
+}
 
 public sealed record AnimationScrSections(byte[] RecordsAndNames, byte[] IndexAndNames);
 
@@ -28,6 +37,12 @@ public sealed record ParsedAnimationScrSequence(
     int EventCount)
 {
     public uint RawEventCount { get; init; }
+
+    public ImmutableArray<AnimationScrEventRow> Events { get; init; } = [];
+
+    public int WeightMode => Enabled;
+
+    public float WeightTime => Blend;
 }
 
 public sealed record ParsedAnimationScr(
@@ -66,19 +81,128 @@ public static class AnimationScrCodec
         AnimationScrSequence[] ordered = sequences
             .OrderBy(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase)
             .ToArray();
+        return BuildCore(ordered, default);
+    }
+
+    public static AnimationScrSections BuildWithEvents(IReadOnlyList<AnimationSequenceUse> sequences)
+    {
+        ArgumentNullException.ThrowIfNull(sequences);
+        AnimationSequenceUse[] ordered = sequences
+            .OrderBy(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        foreach (AnimationSequenceUse sequence in ordered)
+        {
+            AnimationScriptCompilationValidator.ValidateSequence(sequence);
+            if (sequence.Events.IsDefault)
+            {
+                throw new ArgumentException(
+                    $"SeqTrack '{sequence.Name}' has an uninitialized event list.",
+                    nameof(sequences));
+            }
+
+            foreach (AnimationEvent authored in sequence.Events)
+            {
+                AnimationScriptCompilationValidator.ValidateEvent(sequence, authored);
+            }
+        }
+
+        AnimationScrSequence[] records = ordered
+            .Select(static sequence => new AnimationScrSequence(
+                sequence.Name,
+                sequence.Anm2Name,
+                checked((float)sequence.SourceStartFrame),
+                checked((float)sequence.SourceEndFrame),
+                checked((float)sequence.FPS),
+                sequence.WeightMode,
+                checked((float)sequence.WeightTime)))
+            .ToArray();
+        ValidateSequenceSet(records);
+        var eventRows = new List<ImmutableArray<AnimationScrEventRow>>(ordered.Length);
+        foreach (AnimationSequenceUse sequence in ordered)
+        {
+            var rows = ImmutableArray.CreateBuilder<AnimationScrEventRow>(sequence.Events.Length);
+            foreach (AnimationEvent authored in sequence.Events)
+            {
+                if (!authored.Actions.IsDefaultOrEmpty)
+                {
+                    throw new NotSupportedException(
+                        $"Compiled actions for SeqTrack '{sequence.Name}' cannot be built because the action-bank and fixup output has not been validated against a Windows compiler resource.");
+                }
+
+                if (authored.RawActionReference is uint actionReference &&
+                    actionReference != uint.MaxValue)
+                {
+                    throw new NotSupportedException(
+                        $"SeqTrack '{sequence.Name}' carries a compiled action reference but no matching action-bank payload was supplied.");
+                }
+
+                ushort eventId = authored.EventId is int id && id is >= 0 and <= ushort.MaxValue
+                    ? (ushort)id
+                    : throw new ArgumentOutOfRangeException(
+                        nameof(sequences),
+                        $"SeqTrack '{sequence.Name}' has an event without a numeric ID from 0 to 65535.");
+                ushort ticks = authored.RawTicks is ushort rawTicks &&
+                    authored.LocalFrame == rawTicks / 5d
+                        ? rawTicks
+                        : AnimationEventTiming.ToTicks(authored.LocalFrame);
+                ushort flags = (ushort)(
+                    (authored.RawFlags & ~AnimationScrEventCodec.MustSendFlag) |
+                    (authored.Delivery == AnimationEventDelivery.MustSendEvent
+                        ? AnimationScrEventCodec.MustSendFlag
+                        : 0));
+                rows.Add(new AnimationScrEventRow(
+                    ticks,
+                    eventId,
+                    authored.RawActionReference ?? uint.MaxValue,
+                    authored.RequiredSlot ?? -1,
+                    flags,
+                    0));
+            }
+
+            eventRows.Add(rows.ToImmutable());
+        }
+
+        return BuildCore(records, eventRows.ToImmutableArray());
+    }
+
+    private static AnimationScrSections BuildCore(
+        AnimationScrSequence[] ordered,
+        ImmutableArray<ImmutableArray<AnimationScrEventRow>> eventRows)
+    {
         ValidateSequenceSet(ordered);
         byte[] names = BuildNames(ordered.Select(static sequence => sequence.Name.ToLowerInvariant()));
         int[] offsets = ReadSequentialNameOffsets(names, ordered.Length);
-        var section0 = new byte[checked((RecordSize * ordered.Length) + names.Length)];
+        int totalEvents = eventRows.IsDefault
+            ? 0
+            : eventRows.Aggregate(0, static (sum, rows) => checked(sum + rows.Length));
+        int eventTableBytes = checked(totalEvents * EventRecordSize);
+        int recordsLength = checked(RecordSize * ordered.Length);
+        var section0 = new byte[checked(recordsLength + eventTableBytes + names.Length)];
         for (var index = 0; index < ordered.Length; index++)
         {
             WriteRecord(
                 section0.AsSpan(index * RecordSize, RecordSize),
                 ordered[index],
-                offsets[index]);
+                offsets[index],
+                eventRows.IsDefault ? 0 : checked((uint)eventRows[index].Length));
         }
 
-        names.CopyTo(section0, RecordSize * ordered.Length);
+        int cursor = recordsLength;
+        if (!eventRows.IsDefault)
+        {
+            for (int sequenceIndex = 0; sequenceIndex < eventRows.Length; sequenceIndex++)
+            {
+                foreach (AnimationScrEventRow row in eventRows[sequenceIndex])
+                {
+                    AnimationScrEventCodec.WriteRow(
+                        section0.AsSpan(cursor, EventRecordSize),
+                        row);
+                    cursor = checked(cursor + EventRecordSize);
+                }
+            }
+        }
+
+        names.CopyTo(section0, checked(recordsLength + eventTableBytes));
         var section1 = new byte[checked(8 + names.Length)];
         BinaryPrimitives.WriteUInt32LittleEndian(
             section1,
@@ -137,12 +261,31 @@ public static class AnimationScrCodec
             recordBytes,
             expectedEventTableLength);
         var parsed = ImmutableArray.CreateBuilder<ParsedAnimationScrSequence>(count);
+        int eventRowOffset = recordBytes;
+        bool hasCanonicalEventTableLayout =
+            expectedEventTableLength == nameTableOffset - recordBytes;
         for (var index = 0; index < count; index++)
         {
             int recordOffset = index * RecordSize;
             ReadOnlySpan<byte> record = section0.Slice(recordOffset, RecordSize);
             uint rawEventCount =
                 BinaryPrimitives.ReadUInt32LittleEndian(record[48..]);
+            int sequenceEventCount = rawEventCount <= int.MaxValue
+                ? checked((int)rawEventCount)
+                : throw new InvalidDataException(
+                    $"AnimationScr sequence at record {recordOffset} declares too many events.");
+            ImmutableArray<AnimationScrEventRow> events = [];
+            if (hasCanonicalEventTableLayout)
+            {
+                events = AnimationScrEventCodec.ReadRows(
+                    section0,
+                    eventRowOffset,
+                    sequenceEventCount);
+                eventRowOffset = checked(
+                    eventRowOffset +
+                    (sequenceEventCount * EventRecordSize));
+            }
+
             if (!IsSupportedRecordMarkerPair(record))
             {
                 continue;
@@ -178,9 +321,10 @@ public static class AnimationScrCodec
                 ReadSingle(record[24..]),
                 ReadSingle(record[28..]),
                 ReadSingle(record[32..]),
-                unchecked((int)rawEventCount))
+                sequenceEventCount)
             {
                 RawEventCount = rawEventCount,
+                Events = events,
             });
         }
 
@@ -194,9 +338,58 @@ public static class AnimationScrCodec
             OpaquePayloadLength = opaquePayloadLength,
             TotalDeclaredEventCount = totalDeclaredEventCount,
             ExpectedEventTableLength = expectedEventTableLength,
-            HasCanonicalEventTableLayout =
-                expectedEventTableLength == opaquePayloadLength,
+            HasCanonicalEventTableLayout = hasCanonicalEventTableLayout,
         };
+    }
+
+    /// <summary>
+    /// Maps a canonical compiled AnimationScr to editable sequence uses while
+    /// retaining the raw row data needed for lossless event round-trips.
+    /// </summary>
+    public static ImmutableArray<AnimationSequenceUse> ReadSequenceUses(
+        AnimationScrSections sections,
+        Func<string, string> anm2NameResolver)
+    {
+        ArgumentNullException.ThrowIfNull(anm2NameResolver);
+        ParsedAnimationScr parsed = Parse(sections);
+        if (!parsed.HasCanonicalEventTableLayout ||
+            parsed.Sequences.Length != parsed.DeclaredSequenceCount)
+        {
+            throw new NotSupportedException(
+                "This AnimationScr resource does not have a supported canonical sequence and event layout.");
+        }
+
+        return parsed.Sequences
+            .Select(sequence =>
+            {
+                string anm2Name = anm2NameResolver(sequence.Name);
+                ArgumentException.ThrowIfNullOrWhiteSpace(anm2Name);
+                return new AnimationSequenceUse
+                {
+                    Name = sequence.Name,
+                    Anm2Name = anm2Name,
+                    SourceStartFrame = sequence.StartFrame,
+                    SourceEndFrame = sequence.EndFrame,
+                    FPS = sequence.FramesPerSecond,
+                    WeightMode = sequence.WeightMode,
+                    WeightTime = sequence.WeightTime,
+                    Events = sequence.Events.Select(ToDomainEvent).ToImmutableArray(),
+                };
+            })
+            .ToImmutableArray();
+    }
+
+    public static ImmutableArray<AnimationSequenceUse> ReadSequenceUses(
+        AnimationScrSections sections,
+        IReadOnlyDictionary<string, string> anm2Names)
+    {
+        ArgumentNullException.ThrowIfNull(anm2Names);
+        return ReadSequenceUses(
+            sections,
+            name => anm2Names.TryGetValue(name, out string? anm2Name)
+                ? anm2Name
+                : throw new KeyNotFoundException(
+                    $"No ANM2 name was supplied for compiled SeqTrack '{name}'."));
     }
 
     public static AnimationScrSections PatchRanges(
@@ -207,6 +400,15 @@ public static class AnimationScrCodec
         ParsedAnimationScr parsed = Parse(sections);
         Dictionary<string, ParsedAnimationScrSequence> byName = parsed.Sequences
             .ToDictionary(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (ParsedAnimationScrSequence sequence in parsed.Sequences)
+        {
+            ValidateRange(sequence.StartFrame, sequence.EndFrame, sequence.FramesPerSecond);
+            if (!float.IsFinite(sequence.WeightTime))
+            {
+                throw new InvalidDataException($"AnimationScr sequence '{sequence.Name}' has a non-finite weight time.");
+            }
+        }
+
         byte[] section0 = sections.RecordsAndNames.ToArray();
         foreach ((string name, (float start, float end, float fps)) in ranges)
         {
@@ -224,6 +426,149 @@ public static class AnimationScrCodec
 
         return new AnimationScrSections(section0, sections.IndexAndNames.ToArray());
     }
+
+    /// <summary>
+    /// Rebuilds the canonical event table while preserving existing action references.
+    /// New rows use the native no-action sentinel unless an existing reference is supplied.
+    /// </summary>
+    public static AnimationScrSections PatchEvents(
+        AnimationScrSections sections,
+        IReadOnlyDictionary<string, ImmutableArray<AnimationEvent>> eventsBySequence)
+    {
+        ArgumentNullException.ThrowIfNull(eventsBySequence);
+        ParsedAnimationScr parsed = Parse(sections);
+        if (!parsed.HasCanonicalEventTableLayout)
+        {
+            throw new NotSupportedException(
+                "This AnimationScr resource does not have a canonical event table; its event rows cannot be edited safely.");
+        }
+
+        if (parsed.Sequences.Length != parsed.DeclaredSequenceCount)
+        {
+            throw new NotSupportedException(
+                "This AnimationScr resource contains unsupported sequence records; event allocation cannot be rewritten safely.");
+        }
+
+        Dictionary<string, ParsedAnimationScrSequence> byName = parsed.Sequences
+            .ToDictionary(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, AnimationSequenceUse> validationSequences = ReadSequenceUses(
+                sections,
+                name => name + ".anm2")
+            .ToDictionary(static sequence => sequence.Name, StringComparer.OrdinalIgnoreCase);
+        foreach (string name in eventsBySequence.Keys)
+        {
+            if (!byName.ContainsKey(name))
+            {
+                throw new KeyNotFoundException(
+                    $"AnimationScr section is missing sequence '{name}'.");
+            }
+        }
+
+        var rowsBySequence = new ImmutableArray<AnimationScrEventRow>[parsed.DeclaredSequenceCount];
+        foreach (ParsedAnimationScrSequence sequence in parsed.Sequences)
+        {
+            ImmutableArray<AnimationEvent> authoredEvents = eventsBySequence.TryGetValue(
+                sequence.Name,
+                out ImmutableArray<AnimationEvent> replacement)
+                    ? replacement
+                    : sequence.Events.Select(ToDomainEvent).ToImmutableArray();
+            if (authoredEvents.IsDefault)
+            {
+                throw new ArgumentException(
+                    $"Compiled event edits for '{sequence.Name}' use an uninitialized event list.",
+                    nameof(eventsBySequence));
+            }
+
+            AnimationSequenceUse validationSequence = validationSequences[sequence.Name];
+            AnimationScriptCompilationValidator.ValidateSequence(validationSequence);
+
+            var rows = ImmutableArray.CreateBuilder<AnimationScrEventRow>(authoredEvents.Length);
+            for (var index = 0; index < authoredEvents.Length; index++)
+            {
+                AnimationEvent authored = authoredEvents[index];
+                AnimationScriptCompilationValidator.ValidateEvent(validationSequence, authored);
+                AnimationScrEventRow? original = authored.RawActionReference is not null &&
+                    index < sequence.Events.Length
+                    ? sequence.Events[index]
+                    : null;
+                if (!authored.Actions.IsDefaultOrEmpty)
+                {
+                    throw new NotSupportedException(
+                        $"Compiled action editing for '{sequence.Name}' is unavailable. Export the .scr source.");
+                }
+
+                ushort eventId = authored.EventId is int id && id is >= 0 and <= ushort.MaxValue
+                    ? (ushort)id
+                    : throw new ArgumentOutOfRangeException(
+                        nameof(eventsBySequence),
+                        $"Compiled event '{sequence.Name}' row {index} needs a numeric event ID from 0 to 65535.");
+                if (authored.RawActionReference is { } reference && reference != uint.MaxValue && !parsed.Sequences.SelectMany(s => s.Events).Any(e => e.ActionReference == reference))
+                    throw new NotSupportedException("The edited event refers to an action bank outside this resource.");
+                short requiredSlot = authored.RequiredSlot!.Value;
+                ushort ticks = authored.RawTicks is ushort rawTicks && authored.LocalFrame == rawTicks / 5d
+                    ? rawTicks
+                    : AnimationEventTiming.ToTicks(authored.LocalFrame);
+                ushort flags = (ushort)(
+                    (authored.RawFlags & ~AnimationScrEventCodec.MustSendFlag) |
+                    (authored.Delivery == AnimationEventDelivery.MustSendEvent
+                        ? AnimationScrEventCodec.MustSendFlag
+                        : 0));
+                rows.Add(new AnimationScrEventRow(
+                    ticks,
+                    eventId,
+                    authored.RawActionReference ?? uint.MaxValue,
+                    requiredSlot,
+                    flags,
+                    0));
+            }
+
+            rowsBySequence[sequence.RecordOffset / RecordSize] = rows.ToImmutable();
+        }
+
+        int recordBytes = checked(parsed.DeclaredSequenceCount * RecordSize);
+        int eventCount = rowsBySequence.Sum(static rows => rows.Length);
+        int eventBytes = checked(eventCount * EventRecordSize);
+        ReadOnlySpan<byte> namesAndTrailingData = sections.RecordsAndNames.AsSpan(parsed.NameTableOffset);
+        byte[] section0 = new byte[checked(recordBytes + eventBytes + namesAndTrailingData.Length)];
+        sections.RecordsAndNames.AsSpan(0, recordBytes).CopyTo(section0);
+        int cursor = recordBytes;
+        for (var sequenceIndex = 0; sequenceIndex < rowsBySequence.Length; sequenceIndex++)
+        {
+            ImmutableArray<AnimationScrEventRow> rows = rowsBySequence[sequenceIndex];
+            if (rows.IsDefault)
+            {
+                throw new NotSupportedException(
+                    $"AnimationScr sequence record {sequenceIndex} has no editable identity.");
+            }
+
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                section0.AsSpan((sequenceIndex * RecordSize) + 48),
+                checked((uint)rows.Length));
+            foreach (AnimationScrEventRow row in rows)
+            {
+                AnimationScrEventCodec.WriteRow(section0.AsSpan(cursor, EventRecordSize), row);
+                cursor = checked(cursor + EventRecordSize);
+            }
+        }
+
+        namesAndTrailingData.CopyTo(section0.AsSpan(recordBytes + eventBytes));
+        return new AnimationScrSections(section0, sections.IndexAndNames.ToArray());
+    }
+
+    private static AnimationEvent ToDomainEvent(AnimationScrEventRow row) => new()
+    {
+        LocalFrame = row.LocalFrame,
+        EventId = row.EventId,
+        IdExpression = row.EventId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        RequiredSlot = row.RequiredSlot,
+        SlotExpression = row.RequiredSlot.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        Delivery = row.MustSend
+            ? AnimationEventDelivery.MustSendEvent
+            : AnimationEventDelivery.Event,
+        RawTicks = row.Ticks,
+        RawFlags = row.RawFlags,
+        RawActionReference = row.ActionReference,
+    };
 
     public static AnimationScrSections Append(
         AnimationScrSections sections,
@@ -246,7 +591,7 @@ public static class AnimationScrCodec
         if (parsed.NameTableOffset != recordsEnd)
         {
             throw new NotSupportedException(
-                "AnimationScr resources with auxiliary/event data between records and names cannot be appended losslessly; preserve the full base resource or choose a different library identity.");
+                "AnimationScr resources with auxiliary/event data between records and names cannot be appended losslessly; preserve the base resource or use a different library identity.");
         }
 
         HashSet<string> existing = parsed.Sequences
@@ -272,7 +617,8 @@ public static class AnimationScrCodec
             WriteRecord(
                 newRecords.AsSpan(index * RecordSize, RecordSize),
                 ordered[index],
-                checked(oldNames.Length + newOffsets[index]));
+                checked(oldNames.Length + newOffsets[index]),
+                0);
         }
 
         var section0 = new byte[checked(
@@ -316,16 +662,18 @@ public static class AnimationScrCodec
     private static void WriteRecord(
         Span<byte> destination,
         AnimationScrSequence sequence,
-        int nameOffset)
+        int nameOffset,
+        uint eventCount)
     {
         ValidateSequence(sequence);
         BinaryPrimitives.WriteUInt32LittleEndian(destination, checked((uint)nameOffset));
         BinaryPrimitives.WriteUInt32LittleEndian(destination[4..], RecordMagic);
-        BinaryPrimitives.WriteInt32LittleEndian(destination[16..], sequence.Enabled);
-        WriteSingle(destination[20..], sequence.Blend);
+        BinaryPrimitives.WriteInt32LittleEndian(destination[16..], sequence.WeightMode);
+        WriteSingle(destination[20..], sequence.WeightTime);
         WriteSingle(destination[24..], sequence.FramesPerSecond);
         WriteSingle(destination[28..], sequence.StartFrame);
         WriteSingle(destination[32..], sequence.EndFrame);
+        BinaryPrimitives.WriteUInt32LittleEndian(destination[48..], eventCount);
         BinaryPrimitives.WriteUInt32LittleEndian(destination[52..], RecordSentinel);
     }
 
@@ -367,7 +715,7 @@ public static class AnimationScrCodec
             sequence.StartFrame,
             sequence.EndFrame,
             sequence.FramesPerSecond);
-        if (!float.IsFinite(sequence.Blend))
+        if (!float.IsFinite(sequence.WeightTime))
         {
             throw new ArgumentOutOfRangeException(nameof(sequence));
         }

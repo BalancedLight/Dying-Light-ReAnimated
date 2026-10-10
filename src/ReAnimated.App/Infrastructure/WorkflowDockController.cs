@@ -107,6 +107,7 @@ public sealed class WorkflowDockController
             ShowRequiredPanes(workflow);
         }
         ConstrainPlaybackContext();
+        ConstrainTimeline();
     }
 
     public void ResetCurrentLayout()
@@ -119,6 +120,7 @@ public sealed class WorkflowDockController
         CloseFloatingWindowsAndDetachCurrentLayout();
         ApplyDefaultLayout(workflow);
         ConstrainPlaybackContext();
+        ConstrainTimeline();
         SaveCurrentLayout();
     }
 
@@ -443,7 +445,7 @@ public sealed class WorkflowDockController
         LayoutAnchorablePane fpp = Pane(panes, "playback.fpp-camera");
         LayoutAnchorablePane target = Pane(panes, "playback.target-camera");
         LayoutAnchorablePane timeline = Pane(panes, "playback.timeline");
-        timeline.DockHeight = new GridLength(270.0);
+        timeline.DockHeight = new GridLength(350.0);
         return Split(
             Orientation.Vertical,
             header,
@@ -469,12 +471,12 @@ public sealed class WorkflowDockController
             Pane(panes, "retarget.target-camera"));
         LayoutAnchorablePane bottom = Pane(
             panes,
-            "retarget.animations",
             "retarget.timeline",
+            "retarget.animations",
             "retarget.jobs",
             "retarget.diagnostics",
             "retarget.fidelity");
-        bottom.DockHeight = new GridLength(245.0);
+        bottom.DockHeight = new GridLength(350.0);
         LayoutPanel center = Split(
             Orientation.Vertical,
             context,
@@ -550,6 +552,26 @@ public sealed class WorkflowDockController
         parent.DockMinWidth = Math.Max(parent.DockMinWidth, definition.MinimumWidth);
         if (parent.DockHeight.IsAbsolute && parent.DockHeight.Value < minimumHeight)
             parent.DockHeight = new GridLength(minimumHeight);
+    }
+
+    private void ConstrainTimeline()
+    {
+        string? id = _activeWorkflow switch
+        {
+            EditorDockWorkflow.Animations => "animations.timeline",
+            EditorDockWorkflow.Playback => "playback.timeline",
+            EditorDockWorkflow.RetargetEdit => "retarget.timeline",
+            _ => null,
+        };
+        if (id is null || !_activeAnchorables.TryGetValue(id, out LayoutAnchorable? timeline) ||
+            !_panes[_activeWorkflow!.Value].TryGetValue(id, out EditorDockPaneDefinition? definition)) return;
+        definition.Content.MinWidth = definition.MinimumWidth;
+        definition.Content.MinHeight = definition.MinimumHeight;
+        if (timeline.Parent is not LayoutAnchorablePane pane) return;
+        pane.DockMinHeight = Math.Max(pane.DockMinHeight, definition.MinimumHeight + 30);
+        pane.DockMinWidth = Math.Max(pane.DockMinWidth, definition.MinimumWidth);
+        if (pane.DockHeight.IsAbsolute && pane.DockHeight.Value < pane.DockMinHeight)
+            pane.DockHeight = new GridLength(pane.DockMinHeight);
     }
 
     private static LayoutPanel Split(

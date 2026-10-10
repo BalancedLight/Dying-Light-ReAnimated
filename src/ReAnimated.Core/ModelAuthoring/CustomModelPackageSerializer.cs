@@ -393,6 +393,7 @@ public static class CustomModelPackageSerializer
             6 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion, AuthoredLayer = null },
             7 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
             8 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
+            9 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
             _ => throw new CustomModelFormatException(
                 $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 through {CustomModelDocument.CurrentSchemaVersion}."),
         };

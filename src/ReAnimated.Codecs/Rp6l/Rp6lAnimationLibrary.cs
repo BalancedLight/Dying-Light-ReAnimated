@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using ReAnimated.Codecs.Anm2;
 
 namespace ReAnimated.Codecs.Rp6l;
 
@@ -60,6 +61,7 @@ public static class Rp6lAnimationLibraryCodec
             ArgumentNullException.ThrowIfNull(script, name);
             ArgumentNullException.ThrowIfNull(script.HeaderSection, name);
             ArgumentNullException.ThrowIfNull(script.BodySection, name);
+            ValidateActionlessAnimationScript(name, script);
         }
 
         var names = new List<string>(
@@ -419,6 +421,34 @@ public static class Rp6lAnimationLibraryCodec
 
                 destination[name] = value;
             }
+        }
+    }
+
+    private static void ValidateActionlessAnimationScript(
+        string name,
+        Rp6lAnimationScript script)
+    {
+        if (script.HeaderSection.Length < AnimationScrCodec.RecordSize ||
+            script.BodySection.Length < 8)
+        {
+            return;
+        }
+
+        uint marker = BinaryPrimitives.ReadUInt32LittleEndian(
+            script.HeaderSection.AsSpan(4));
+        if (marker is not (AnimationScrCodec.RecordMagic or AnimationScrCodec.Retail155RecordMagic))
+        {
+            return;
+        }
+
+        ParsedAnimationScr parsed = AnimationScrCodec.Parse(
+            new AnimationScrSections(script.HeaderSection, script.BodySection));
+        if (parsed.HasCanonicalEventTableLayout &&
+            parsed.Sequences.SelectMany(static sequence => sequence.Events)
+                .Any(static row => row.ActionReference != uint.MaxValue))
+        {
+            throw new NotSupportedException(
+                $"Animation script '{name}' contains action-bank references. This RP6L writer accepts only its two sequence sections and cannot preserve the separate action fixups; use the original resource backing until that stream is supported.");
         }
     }
 

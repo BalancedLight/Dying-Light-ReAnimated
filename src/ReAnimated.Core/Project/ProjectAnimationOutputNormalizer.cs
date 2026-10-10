@@ -64,6 +64,7 @@ public static class ProjectAnimationOutputNormalizer
                     : CreateDefaultLibrary(
                         project.ProjectId,
                         model,
+                        project.Assets.FirstOrDefault(asset => asset.Id == model.AssetId),
                         libraries,
                         libraryIds,
                         resourceNames);
@@ -129,10 +130,47 @@ public static class ProjectAnimationOutputNormalizer
     private static Guid CreateDefaultLibrary(
         Guid projectId,
         ProjectModelEntry model,
+        ProjectAssetReference? asset,
         List<ProjectAnimationLibrary> libraries,
         HashSet<Guid> libraryIds,
         HashSet<string> resourceNames)
     {
+        string? stock = AnimationExportDefaults.StockScript(model, asset);
+        if (stock is not null)
+        {
+            string desired = AnimationExportDefaults.DlcScript(stock);
+            ProjectAnimationLibrary? existing = libraries.FirstOrDefault(library =>
+                library.ResourceName.Equals(desired, StringComparison.OrdinalIgnoreCase) &&
+                library.Mode == ProjectAnimationLibraryMode.CustomAdditive);
+            if (existing is not null)
+            {
+                return existing.Id;
+            }
+            int number = AnimationExportDefaults.DlcNumber;
+            while (resourceNames.Contains(desired))
+            {
+                desired = AnimationExportDefaults.DlcScript(stock, ++number);
+            }
+            resourceNames.Add(desired);
+            Guid id = CreateDeterministicGuid(
+                "dlra-default-dlc-animation-library-v1", projectId.ToString("N"), desired);
+            int dlcSalt = 2;
+            while (!libraryIds.Add(id))
+            {
+                id = CreateDeterministicGuid(
+                    "dlra-default-dlc-animation-library-v1", projectId.ToString("N"), desired,
+                    (dlcSalt++).ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+            libraries.Add(new ProjectAnimationLibrary
+            {
+                Id = id,
+                ResourceName = desired,
+                DisplayName = desired,
+                Mode = ProjectAnimationLibraryMode.CustomAdditive,
+            });
+            return id;
+        }
+
         string stem = SanitizeIdentity(model.Name, 52);
         if (string.IsNullOrWhiteSpace(stem))
         {

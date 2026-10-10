@@ -5,6 +5,7 @@ using Microsoft.Win32;
 using ReAnimated.App.ViewModels;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Models;
+using ReAnimated.Core.Project;
 
 namespace ReAnimated.App.Infrastructure;
 
@@ -1276,10 +1277,10 @@ public sealed partial class WindowsProjectFileDialogService :
             AddExtension = true,
             CheckPathExists = true,
             DefaultExt = ".rpack",
-            FileName = $"{MakeSafeFileName(suggestedName)}_animations.rpack",
+            FileName = AnimationExportDefaults.DeveloperToolsRpackFileName,
             Filter = RpackFilter,
             OverwritePrompt = true,
-            Title = "Export optional portable animation RPack copy",
+            Title = "Export animation RPack",
         };
         ApplyInitialPath(dialog, initialPath);
         return ShowOwnedDialog(dialog) == true ? dialog.FileName : null;

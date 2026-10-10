@@ -15,4 +15,9 @@
       Include="Resources\MimicProfiles\human_common46.dlrmimic.json"
       LogicalName="ReAnimated.Codecs.MimicProfiles.human_common46.dlrmimic.json" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource
+      Include="Resources\AnimationScripts\dl1_event_catalog.json"
+      LogicalName="ReAnimated.Codecs.AnimationScripts.dl1_event_catalog.json" />
+  </ItemGroup>
 </Project>

@@ -63,7 +63,8 @@ internal sealed record ModelsWorkspacePersistencePayload(
     bool ShowBones,
     bool ShowHelpers,
     bool ShowCameraHelpers,
-    bool ShowPropHelpers)
+    bool ShowPropHelpers,
+    ImmutableArray<AnimationSequenceUse> SequenceUses = default)
 {
     public ProjectModelsWorkspaceState CreateProjectState(Guid packageAssetId) =>
         new()
@@ -243,6 +244,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 ViewportSide.Target,
                 new System.Numerics.Vector4(0.075f, 0.095f, 0.125f, 1.0f)));
         Timeline = new TimelineViewModel();
+        InitializeModelAnimationEvents();
         Timeline.CurrentFrameChanged += OnTimelineFrameChanged;
         Conformance = new RigConformanceWizardViewModel(
             resolveRigTemplate ?? ((profile, _) => Task.FromResult(
@@ -727,7 +729,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
             if (!ReferenceExistingAnimationLibrary && ExportPortableAnimationRpack)
             {
-                lines.Add($"out/ReAnimated/{model}/{library}_pc.rpack (optional portable copy)");
+                lines.Add($"out/ReAnimated/{model}/{AnimationExportDefaults.DeveloperToolsRpackFileName}");
             }
 
             return string.Join(Environment.NewLine, lines);
@@ -949,6 +951,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 }
 
                 RefreshTimeline();
+                RefreshModelAnimationEvents();
                 RefreshPreview();
                 OpenSelectedAnimationInAnimateCommand.NotifyCanExecuteChanged();
                 _prepareSelectedAnimationCommand?.NotifyCanExecuteChanged();
@@ -2385,7 +2388,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             ShowBones,
             ShowHelpers,
             ShowCameraHelpers,
-            ShowPropHelpers);
+            ShowPropHelpers,
+            package.Document.SequenceUses);
     }
 
     internal async Task<PreparedModelsWorkspaceRestore> PrepareProjectRestoreAsync(
@@ -2600,6 +2604,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         }
 
         RefreshTimeline();
+        RefreshModelAnimationEvents();
         RefreshPreview();
         FrameModel();
     }
@@ -2739,6 +2744,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             OnPropertyChanged(nameof(CanChangeRigMode));
             NotifyCommands();
             RefreshTimeline();
+            RefreshModelAnimationEvents();
         }
         finally
         {
@@ -2971,9 +2977,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             !derivedReview &&
             displayModel.Package.Document.RigConformance?.AppliedOutputRigSignature is not null &&
             SelectedAnimation?.Contract.DerivedMotion is null;
-        int frame = clip is null
+        double frame = clip is null
             ? 0
-            : Math.Clamp(Timeline.CurrentFrame, 0, checked((int)Math.Min(int.MaxValue, clip.FrameCount - 1)));
+            : Math.Clamp((Timeline.Events.SelectedSequence?.SourceStartFrame ?? 0) + Timeline.PositionFrame, 0, clip.FrameCount - 1);
         bool replacePreparedScene;
         CustomModelPreviewSession session;
         if (_previewSession is null ||
@@ -3028,6 +3034,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         }
         IReadOnlyList<MeshRenderData> posedRigidMeshes =
             session.CreateMeshes(clip, frame, reviewedPolicyApplied);
+        var eventState = ReAnimated.Evaluation.AnimationEventPreviewState.Reconstruct(Timeline.Events.SelectedSequence, Timeline.PositionFrame, Timeline.Events.PreviewSlot);
+        posedRigidMeshes = posedRigidMeshes.Where(mesh => !eventState.ElementVisibility.TryGetValue(mesh.Id, out bool visible) || visible).ToArray();
         ImmutableArray<MorphWeight> stressMorphs = SampleAnimationMorphs(displayModel, clip, frame);
         if (stressReview && Conformance.TryGetStressPreview(out var stressPose, out stressMorphs))
         {
@@ -3061,7 +3069,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         }
         else
         {
-            if (session.HasRigidGeometry && !paintingWeights)
+            if ((session.HasRigidGeometry || Timeline.Events.SelectedSequence is not null) && !paintingWeights)
                 Viewport.SceneSource.SetMeshes(posedRigidMeshes);
             Viewport.SceneSource.SetSkeleton(skeleton);
         }
@@ -3652,6 +3660,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         ApplyPreparedHelpersCommand.NotifyCanExecuteChanged();
         CancelCommand.NotifyCanExecuteChanged();
         NotifyAnimationRefreshCommands();
+        RefreshModelAnimationEventPermissions();
     }
 
     private static string NormalizeTextureExtension(string path)
@@ -3729,6 +3738,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             return;
         }
 
+        _modelEventAudio.Dispose();
         StopFacePicking();
         _disposed = true;
         InvalidateConformancePreview();

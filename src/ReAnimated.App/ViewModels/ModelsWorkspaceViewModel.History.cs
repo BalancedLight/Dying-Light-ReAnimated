@@ -7,7 +7,7 @@ public sealed partial class ModelsWorkspaceViewModel
 {
     private sealed record AuthoringSnapshot(
         FbxModelAuthoringImportResult Model, Guid? SelectedHelperId, long? SelectedSourceId,
-        string? SelectedName, Guid? SelectedClipId, int Frame, bool ExplicitCharacterId, Guid? SelectedBodyGuideId);
+        string? SelectedName, Guid? SelectedClipId, double Frame, bool ExplicitCharacterId, Guid? SelectedBodyGuideId);
 
     private AuthoringSnapshot CaptureAuthoringSnapshot()
     {
@@ -15,7 +15,7 @@ public sealed partial class ModelsWorkspaceViewModel
         long? sourceId = SelectedBone is { } selected && selected.Index < model.Package.Document.Bones.Length
             ? model.Package.Document.Bones[selected.Index].FbxObjectId : null;
         return new(model, SelectedBone?.AuthoredHelperId, sourceId is 0 ? null : sourceId,
-            SelectedBone?.Name, SelectedAnimation?.Id, Timeline.CurrentFrame, _characterIdWasExplicitlyEdited, Conformance.SelectedBodyGuideId);
+            SelectedBone?.Name, SelectedAnimation?.Id, Timeline.PositionFrame, _characterIdWasExplicitlyEdited, Conformance.SelectedBodyGuideId);
     }
 
     private void RecordAuthoringUndo(AuthoringSnapshot snapshot)
@@ -50,7 +50,8 @@ public sealed partial class ModelsWorkspaceViewModel
         UpdateConformanceViewportBinding();
         PopulateHierarchyRows(selectedName);
         SelectedAnimation = target.SelectedClipId is { } clipId ? Animations.FirstOrDefault(a => a.Id == clipId) : null;
-        Timeline.CurrentFrame = Math.Clamp(target.Frame, Timeline.StartFrame, Timeline.EndFrame);
+        Timeline.PositionFrame = Math.Clamp(target.Frame, Timeline.StartFrame, Timeline.EndFrame);
+        RefreshModelAnimationEvents();
         from.Pop();
         to.Push(current);
         BuildStatus = status;

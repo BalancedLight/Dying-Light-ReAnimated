@@ -6,6 +6,14 @@ public sealed partial class MainWindowViewModel
         Models.PersistenceRevision != _savedModelsRevision || !_modelsTargetRefreshTask.IsCompleted ||
         HasPendingSecondaryMotionEdits;
 
+    // Workspace navigation can dirty an untitled project before any content is added.
+    internal bool RequiresRecoverySaveOnClose => HasAppControlUnsavedChanges &&
+        (ProjectPath is not null || Models.HasModel || HasPendingSecondaryMotionEdits ||
+         !_project.Assets.IsEmpty || !_project.Models.IsEmpty ||
+         !_project.AnimationSources.IsEmpty || !_project.AnimationVariants.IsEmpty ||
+         !_project.AnimationLibraries.IsEmpty || !_project.Animations.IsEmpty ||
+         _project.ModelsWorkspace is not null);
+
     public async Task OpenWorkspaceForAppControlAsync(string projectPath, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using ReAnimated.Codecs.Anm2;
+using ReAnimated.Codecs.AnimationScripts;
 using ReAnimated.Codecs.Fbx;
 using ReAnimated.Codecs.Rp6l;
 using ReAnimated.Core.Domain;
@@ -77,14 +78,16 @@ public sealed record PreparedCustomModelAnimationLibrary(
     /// </summary>
     public bool IsAuthoredScript { get; init; }
 
+    public ImmutableArray<ReAnimated.Core.Domain.AnimationSequenceUse> SequenceUses { get; init; } = [];
+
     public byte[] BuildPortableRpack()
     {
-        AnimationScrSections sections = AnimationScrCodec.Build(Sequences);
+        var uses = AnimationSequenceExport.Merge(Sequences, SequenceUses, LooseScriptText);
+        AnimationScrSections sections = AnimationSequenceExport.BuildCompiled(uses);
+        var payloads = Animations.ToDictionary(static animation => animation.Name, static animation => animation.Payload, StringComparer.OrdinalIgnoreCase);
+        AnimationSequenceExport.AddAnimationAliases(payloads, uses);
         return Rp6lAnimationLibraryCodec.Build(
-            Animations.ToDictionary(
-                static animation => animation.Name,
-                static animation => animation.Payload,
-                StringComparer.OrdinalIgnoreCase),
+            payloads,
             new Dictionary<string, Rp6lAnimationScript>(StringComparer.OrdinalIgnoreCase)
             {
                 [AnimationScriptName] = new Rp6lAnimationScript(
@@ -118,7 +121,7 @@ public static class CustomModelAnimationLibraryExporter
         ArgumentNullException.ThrowIfNull(library);
         if (!library.IsAuthoredScript)
         {
-            string expected = BuildLooseAnimationScript(library.Sequences);
+            string expected = library.SequenceUses.Any(s => !s.Events.IsEmpty) ? AnimationSequenceExport.Source(library.SequenceUses) : BuildLooseAnimationScript(library.Sequences);
             if (!string.Equals(
                     library.LooseScriptText,
                     expected,
@@ -369,12 +372,19 @@ public static class CustomModelAnimationLibraryExporter
         }
 
         ImmutableArray<AnimationScrSequence> sequenceRows = sequences.MoveToImmutable();
+        ImmutableArray<PreparedCustomModelAnimation> animationRows = preparedAnimations.MoveToImmutable();
+        var authoredUses = request.Model.Package.Document.SequenceUses.Where(sequence => included.Any(clip => clip.Id == sequence.AnimationReferenceId)).Select(sequence =>
+        {
+            int clipIndex = Array.FindIndex(included, clip => clip.Id == sequence.AnimationReferenceId);
+            return sequence with { Anm2Name = animationRows[clipIndex].Anm2FileName };
+        }).ToImmutableArray();
+        var uses = AnimationSequenceExport.Merge(sequenceRows, authoredUses);
         return new PreparedCustomModelAnimationLibrary(
             scriptName,
-            preparedAnimations.MoveToImmutable(),
-            sequenceRows,
-            BuildLooseAnimationScript(sequenceRows),
-            warnings.ToImmutable());
+            animationRows,
+            AnimationSequenceExport.Records(uses),
+            authoredUses.IsEmpty ? BuildLooseAnimationScript(sequenceRows) : AnimationSequenceExport.Source(uses),
+            warnings.ToImmutable()) { SequenceUses = uses };
     }
 
     public static string BuildLooseAnimationScript(IEnumerable<AnimationScrSequence> sequences)
@@ -422,6 +432,7 @@ public static class CustomModelAnimationLibraryExporter
             static animation => animation.Name,
             static animation => animation.Payload,
             StringComparer.OrdinalIgnoreCase);
+        AnimationSequenceExport.AddAnimationAliases(animations, prepared.SequenceUses);
         string outputPath = Path.GetFullPath(request.OutputPath);
         if (!string.Equals(Path.GetExtension(outputPath), ".rpack", StringComparison.OrdinalIgnoreCase))
         {
@@ -434,6 +445,7 @@ public static class CustomModelAnimationLibraryExporter
             animations,
             prepared.AnimationScriptName,
             prepared.Sequences,
+            prepared.SequenceUses,
             cancellationToken).ConfigureAwait(false);
         string manifestPath = Path.ChangeExtension(outputPath, ".animations.json");
         Dl1PreparedAuthoredRig preparedRig = Dl1CustomModelRigPreparer.Prepare(
@@ -503,6 +515,7 @@ public static class CustomModelAnimationLibraryExporter
         IReadOnlyDictionary<string, byte[]> expectedAnimations,
         string expectedScriptName,
         IReadOnlyList<AnimationScrSequence> expectedSequences,
+        IReadOnlyList<ReAnimated.Core.Domain.AnimationSequenceUse> expectedUses,
         CancellationToken cancellationToken)
     {
         string? directory = Path.GetDirectoryName(outputPath);
@@ -528,7 +541,8 @@ public static class CustomModelAnimationLibraryExporter
                 reopened,
                 expectedAnimations,
                 expectedScriptName,
-                expectedSequences);
+                expectedSequences,
+                expectedUses);
             File.Move(stagingPath, outputPath, overwrite: true);
         }
         finally
@@ -544,7 +558,8 @@ public static class CustomModelAnimationLibraryExporter
         Rp6lAnimationLibrary reopened,
         IReadOnlyDictionary<string, byte[]> expectedAnimations,
         string expectedScriptName,
-        IReadOnlyList<AnimationScrSequence> expectedSequences)
+        IReadOnlyList<AnimationScrSequence> expectedSequences,
+        IReadOnlyList<ReAnimated.Core.Domain.AnimationSequenceUse> expectedUses)
     {
         if (reopened.Animations.Count != expectedAnimations.Count ||
             reopened.AnimationScripts.Count != 1 ||
@@ -591,7 +606,7 @@ public static class CustomModelAnimationLibraryExporter
                 actual.FramesPerSecond != expected.FramesPerSecond ||
                 actual.Enabled != expected.Enabled ||
                 actual.Blend != expected.Blend ||
-                actual.EventCount != 0)
+                actual.EventCount != (expectedUses.FirstOrDefault(s => s.Name.Equals(expected.Name, StringComparison.OrdinalIgnoreCase))?.Events.Length ?? 0))
             {
                 throw new InvalidDataException(
                     $"Reopened animation RPack script sequence '{expected.Name}' differs from the staged timing contract.");
