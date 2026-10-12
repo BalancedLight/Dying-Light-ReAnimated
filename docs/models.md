@@ -6,7 +6,7 @@
   />
   <br />
   <a href="../README.md">Back to README</a> ·
-  <a href="exporting.md">Models</a> ·
+  <a href="exporting.md">Exporting</a> ·
   <a href="animations.md">Animations</a>
 </div>
 
