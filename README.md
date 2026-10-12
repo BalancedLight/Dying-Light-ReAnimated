@@ -128,3 +128,7 @@ See [C# application architecture](docs/CSHARP_REWRITE.md) for the solution's mai
 - [Dying Light Developer Tools wiki](https://dldt.byethost4.com)
 - [Report a bug](https://github.com/BalancedLight/Dying-Light-ReAnimated/issues) — include the app version or build, what you were doing, and the message from Jobs / diagnostics. Attach a small example you can share if possible.
 - [License](LICENSE)
+
+## AI usage disclosure
+
+ReAnimated was helped developed with use of AI tools.
