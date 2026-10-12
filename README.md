@@ -1,121 +1,130 @@
-# DL ReAnimated
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/51f5eba4-3e85-4436-8b81-48c9151d6ab9"
+    alt="ReAnimated logo"
+    width="628"
+  />
+</p>
 
-DL ReAnimated is a Windows C# authoring application for Dying Light 1
-animation work. It provides a WPF/MVVM editor, a Direct3D 11 preview viewport,
-retail RPack asset browsing, FBX/ANM2 import, retargeting, non-destructive bone
-edits, facial preview, FPP/EyeCamera preview, ANM2 export, and animation-library
-RPack output.
+Create custom cutscenes, make zombies do the Thriller dance, have Kyle Crane twerk, mocap yourself and import it; Create whatever you want and import it directly into your custom projects!
 
-This repository contains the C# application. Its build, packaging and core validation do not require Python. Optional direct SPB inspection uses a configured DyingAudio Python environment; importing an already-generated speech exchange does not require that tool. The checked-in JSON compatibility fixtures are static C# test inputs that preserve reviewed historical behavior.
+## What is ReAnimated?
 
-Model-owned expression presets, FED writing and synchronized speech preview are
-described in [Speech and facial preview](docs/speech-preview.md). The
-[secondary-motion preview](docs/secondary-motion-preview.md) supports a
-deterministic cloth/hair approximation, collision and anchor overlays, and
-validated native sidecar syntax. Preview simulation is separate from authored
-animation and is not proof of native game behavior.
+DL ReAnimated is a Windows app for making and editing models and animations for **Dying Light 1**. Import your own FBX files, work with assets from your installed game, set up a rig, adapt animations to another character, and export files for your custom project.
 
-The normal model source, complete-package and Developer Tools deployment paths
-include saved facial presets as FED and imported PHX/MPCloth companions, with
-resource-specific names, dependency checks and rollback ownership. See the
-[native export workflow](docs/secondary-motion-preview.md#native-export-from-the-model-workflow).
-Both package building and deployment honor the saved
-[existing animation bank](docs/stock-animation-reference-export.md) choice.
+You can:
 
-## Keyframes and curves
+- Import models, materials, and animation takes from binary FBX files.
+- Adapt or repair a rig, or build a draft rig from geometry.
+- Browse game models and animations from local RPack archives.
+- Retarget motion, edit bones and keyframes, and work with animation events.
+- Preview movement, facial expressions, first-person cameras, and secondary motion.
+- Save editable models and projects, export ANM2 animations, build RPack packages, and deploy to a Developer Tools project.
 
-Open **Retarget / Edit → Timeline / curves**, select a track, and choose **Dope sheet** or **Curves**. **Create edit layer** copies the mapped track’s current authored motion across the full clip, including existing edits. Select a key to change its frame and component value, or drag it in the graph. **Snap** controls whole-frame dragging; numeric frame edits accept fractional values. Changing only the frame preserves the component value. Changes support project save, undo and redo.
+This branch contains the C# application. It targets Dying Light 1; the older Python application's Dying Light 2 support does not carry over to this version -- *yet*.
 
-## Animation events
+## Before you start
 
-Open **Events**, choose a sequence, and use **+ Event** to add a notification. New sequences use the full clip range and its native frame rate. Events share the motion ruler and support fractional timing, multi-selection, dragging, duplication, undo/redo, slots, delivery policies, and ordered action parameters. **Range → Review** shows retiming changes before applying them. **Details** contains native IDs, raw timing and preview slot settings.
+ReAnimated is in early development. Expect errors, bugs, and unfinished features.
 
-**Import** accepts script source or a compiled animation bank. **Export script** writes the edited `.scr`, including child actions. Audio audition accepts a local sound file; scrubbing updates visibility and configured IK state without replaying sounds. Compiled notification tables can be edited and exported. Creating compiled child actions requires an action-bank serializer; those exports stop with a specific diagnostic rather than discarding actions.
+It isn't a miracle product. You'll still need to use the outputs in the editor or game, and some models will need work on their rigs, weights, textures, or animation setup. Check your results in the Developer Tools editor before using them in your project.
 
-## Build
+## Get started
 
-The SDK is pinned by `global.json`.
+1. Open the repository's [GitHub Actions builds](https://github.com/BalancedLight/Dying-Light-ReAnimated/actions/workflows/dotnet.yml).
+2. Choose a successful run for the **refactor** branch. Download the **DL-ReAnimated-CSharp-win-x64** artifact at the bottom of the run page. Sign in to GitHub if it asks.
+3. Extract the download. If you use the included `DL-ReAnimated-CSharp-win-x64.zip`, extract that too.
+4. Run `DLReAnimated.exe`.
+5. Read the startup notice and choose **Models**, **Animations**, or **Models + Animations**.
+
+The packaged app is self-contained. You don't need the .NET SDK or Python to run it. Building from source is covered below.
+
+## Requirements
+
+| What you want to do | What you need |
+| --- | --- |
+| Run ReAnimated | 64-bit Windows and graphics support for Direct3D 11 |
+| Import your own models or animations | Binary FBX files; ANM2 is also supported for animation import |
+| Browse retail assets | A local Dying Light 1 installation and its RPack archives |
+| Compile complete model packages or deploy compiled character output | Dying Light Developer Tools and its model compiler; compilation also needs the required retail game resources |
+| Edit or test exported content in a custom map | A Developer Tools project |
+| Export supported mesh/animation FBX files | Blender, selected through the app's **Blender…** button |
+| Build the application | The .NET SDK selected by `global.json`, PowerShell, and access to restore NuGet packages |
+
+Retail assets are read from your installation and aren't bundled with the app. Keep the game files available when reopening projects that reference them.
+
+## Choose your workflow
+
+| Starting point | Where to begin |
+| --- | --- |
+| Import, adapt, or repair a model | **Models** — [model guide](docs/models.md) |
+| Import, retarget, or edit animation | **Animations** — [animation guide](docs/animations.md) |
+| Work on a character and its animations together | **Models + Animations** — start with the model guide, then prepare its clips in Animations |
+| Produce files for the editor or game | **Export** — [export and deployment guide](docs/exporting.md) |
+
+Save early with **File → Save project**. A `.dlraproj` saves the overall workspace; a `.dlrmodel` saves an editable model package. Neither is a replacement for exporting game resources.
+
+## Build and develop
+
+Clone this repository and switch to the `refactor` branch. Run the following commands from the repository root. Install the SDK pinned by [global.json](global.json), currently **.NET 10.0.401**; later patches in that SDK feature band are permitted.
+
+### Build
 
 ```powershell
 .\build_csharp.ps1 -Configuration Debug
 ```
 
-Every solution build also publishes one self-contained `win-x64` executable
-to:
+For a Release build:
 
-```text
-artifacts\csharp\solution-build\<Configuration>\win-x64\DLReAnimated.exe
+```powershell
+.\build_csharp.ps1 -Configuration Release
 ```
 
-The CLI is hosted by that same executable; no second executable is shipped.
+The script restores locked dependencies, builds the solution, and runs the tests. Use `-SkipTests` when you only need a build.
 
-## Validate
+Every solution build also publishes a self-contained executable:
 
-Run the fast development gates:
+```text
+artifacts/csharp/solution-build/<Configuration>/win-x64/DLReAnimated.exe
+```
+
+The regular development output is under `src/ReAnimated.App/bin/<Configuration>/net10.0-windows10.0.19041.0/`. Close any app running from an output directory before rebuilding it. The same executable hosts the desktop app and CLI.
+
+### Validate
 
 ```powershell
 .\tools\validate_csharp.ps1 -Tier Focused -Configuration Release
-```
-
-Run the hermetic C# gates:
-
-```powershell
 .\tools\validate_csharp.ps1 -Tier Hermetic -Configuration Release
+.\tools\validate_csharp.ps1 -Tier Release -Configuration Release
 ```
 
-Release validation runs portable C# gates: renderer goldens and, when supplied, the optional Blender handoff:
+**Focused** runs a smaller set of checks for development. **Hermetic** runs the broader checks without a local game installation. **Release** adds renderer checks and optional installed-Blender checks. Supply `-BlenderExecutable` to select Blender, or `-SkipUnavailableOptionalBlender` when that optional check cannot run.
 
-```powershell
-.\tools\validate_csharp.ps1 `
-    -Tier Release `
-    -Configuration Release
-```
+Validation can reuse results for unchanged inputs. Add `-ForceAll` to rerun all checks for the selected tier. These commands check the application; test your exported content in the editor separately.
 
-Create the self-contained release folder and ZIP with:
+### Package
 
 ```powershell
 .\package_csharp.ps1
 ```
 
-Validation is content-addressed and fail-closed. `-ForceAll` on the validation script and `-ForceAllValidation` on the packaging script deliberately bypass reusable receipts.
+This builds and validates a self-contained Release package. Outputs go to:
 
-## Scope
+```text
+artifacts/csharp/win-x64/DLReAnimated.exe
+artifacts/csharp/DL-ReAnimated-CSharp-win-x64.zip
+artifacts/csharp/SHA256SUMS.txt
+```
 
-- Dying Light 1 PC only.
-- Fresh C# schema-1 `.dlraproj` projects only.
-- Legacy Python schema 1-10 projects are detected and refused without being
-  modified.
-- Retail meshes, textures, animations, FED files, and other proprietary game
-  assets are referenced locally and are never embedded in projects or
-  releases.
-- Blender remains optional and is used only for the reverse FBX writer.
-- The independent **Models** workspace accepts user-owned binary FBX models,
-  previews either their exact FBX bind or the authored DL1 rig contract, and
-  stores deterministic schema-1 `.dlrmodel` packages. It builds Chrome source
-  `.msh`, structured CHR v4 `.chr`, `.bscr`, and optional `.ascr` files. Every
-  selected FBX animation stack is rebased through that same rig and exported
-  in one animation RPack with an extensionless type-322 AnimationScr identity;
-  the loose `.ascr` resolves the matching virtual `.scr` filename.
-  With an installed DL1 Developer Tools compiler and retail compiler bootstrap,
-  one transaction also creates and structurally validates the `.msh_obj`, type-272 model
-  RPack, and `local_dx11.mp`, then atomically publishes a complete package. It
-  never embeds retail game assets. This compiler/archive validation is not a
-  claim of in-game playback; unproven `.skn` generation still fails
-  closed instead of emitting a placeholder.
+Use `-OutputRoot` to choose another output folder. For machines without the optional Blender check, use `-SkipUnavailableOptionalBlenderOracle`. Use `-ForceAllValidation` to rerun packaging validation instead of reusing previous results.
 
-See [the C# implementation status](docs/CSHARP_REWRITE.md),
-[the first-release support matrix](docs/DL1_FIRST_RELEASE_SUPPORT_MATRIX.md),
-[the ANM2 format notes](docs/ANM2_FORMAT.md), and
-[the stability gates](docs/DL1_STABILITY_ACCEPTANCE.md).
+See [C# application architecture](docs/CSHARP_REWRITE.md) for the solution's main components.
 
-## Animation export defaults
+## Help and license
 
-New animations assigned to a stock player model use `anims_player_dlc99`.
-Saved script assignments are retained. Custom characters use their own
-animation script and can import stock scripts without becoming DLC overrides.
-Animation RPack exports and Developer Tools deployment use
-`common_anims_sp_PC.rpack`.
-
-## License
-
-See [LICENSE](LICENSE).
+- [Models and rig setup](docs/models.md)
+- [Animations and editing](docs/animations.md)
+- [Exporting and Developer Tools deployment](docs/exporting.md)
+- [Dying Light Developer Tools wiki](https://dldt.byethost4.com)
+- [Report a bug](https://github.com/BalancedLight/Dying-Light-ReAnimated/issues) — include the app version or build, what you were doing, and the message from Jobs / diagnostics. Attach a small example you can share if possible.
+- [License](LICENSE)

@@ -74,6 +74,14 @@ public partial class App : Application, IDisposable
         MainWindow = window;
         _startupSmoke?.Attach(this, window, viewModel);
         window.Show();
+        if (_startupSmoke is null)
+        {
+            DevelopmentNoticeSettingsStore noticeSettings = DevelopmentNoticeSettingsStore.CreateDefault();
+            if (!noticeSettings.IsDismissed())
+            {
+                new DevelopmentNoticeDialog(noticeSettings) { Owner = window }.ShowDialog();
+            }
+        }
         Task workspaceInitialization = _startupSmoke is null
             ? InitializeWorkspaceAsync(viewModel) : Task.CompletedTask;
         Task installedBuildInitialization = InitializeInstalledBuildStatusAsync(viewModel);
