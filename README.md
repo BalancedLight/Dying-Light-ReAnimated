@@ -32,7 +32,7 @@ It isn't a miracle product. You'll still need to use the outputs in the editor o
 ## Get started
 
 1. Open the repository's [GitHub Actions builds](https://github.com/BalancedLight/Dying-Light-ReAnimated/actions/workflows/dotnet.yml).
-2. Choose a successful run for the **refactor** branch. Download the **DL-ReAnimated-CSharp-win-x64** artifact at the bottom of the run page. Sign in to GitHub if it asks.
+2. Choose a successful run for the **main** branch. Download the **DL-ReAnimated-CSharp-win-x64** artifact at the bottom of the run page. Sign in to GitHub if it asks.
 3. Extract the download. If you use the included `DL-ReAnimated-CSharp-win-x64.zip`, extract that too.
 4. Run `DLReAnimated.exe`.
 5. Read the startup notice and choose **Models**, **Animations**, or **Models + Animations**.
@@ -66,7 +66,7 @@ Save early with **File → Save project**. A `.dlraproj` saves the overall works
 
 ## Build and develop
 
-Clone this repository and switch to the `refactor` branch. Run the following commands from the repository root. Install the SDK pinned by [global.json](global.json), currently **.NET 10.0.401**; later patches in that SDK feature band are permitted.
+Clone this repository and switch to the `main` branch. Run the following commands from the repository root. Install the SDK pinned by [global.json](global.json), currently **.NET 10.0.401**; later patches in that SDK feature band are permitted.
 
 ### Build
 
