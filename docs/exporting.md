@@ -1,6 +1,18 @@
-# Exporting and Developer Tools deployment
+<div align="center">
+  <img
+    src="https://github.com/user-attachments/assets/c1ac55ac-c7ae-4698-9618-51a67050c43a"
+    alt="EXPORTING header"
+    width="1200"
+  />
+  <br />
+  <a href="../README.md">Back to README</a> ·
+  <a href="models.md">Models</a> ·
+  <a href="animations.md">Animations</a>
+</div>
 
-[Back to README](../README.md) · [Models](models.md) · [Animations](animations.md)
+<hr>
+
+# Exporting and Developer Tools deployment
 
 Save your model and project before exporting. Preview the intended model and animation variant, then choose the output route that matches your project.
 

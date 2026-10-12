@@ -1,6 +1,16 @@
-# Models and rig setup
+<div align="center">
+  <img
+    src="https://github.com/user-attachments/assets/32fafce0-5d8b-4876-b1f3-1a9864db7cb6"
+    alt="MODELS header"
+    width="1200"
+  />
+  <br />
+  <a href="../README.md">Back to README</a> ·
+  <a href="exporting.md">Models</a> ·
+  <a href="animations.md">Animations</a>
+</div>
 
-[Back to README](../README.md) · [Animations](animations.md) · [Exporting](exporting.md)
+<hr>
 
 Use **Models** when you want to import a character or prop, work on its rig, or prepare it for export. Choose **Models + Animations** if you also want to edit its motion.
 

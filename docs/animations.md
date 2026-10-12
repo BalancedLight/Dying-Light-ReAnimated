@@ -1,6 +1,16 @@
-# Animations and editing
+<div align="center">
+  <img
+    src="https://github.com/user-attachments/assets/16994c3e-29e5-40c9-a424-b6576fc453d5"
+    alt="ANIMATIONS header"
+    width="1200"
+  />
+  <br />
+  <a href="../README.md">Back to README</a> ·
+  <a href="models.md">Models</a> ·
+  <a href="exporting.md">Exporting</a>
+</div>
 
-[Back to README](../README.md) · [Models](models.md) · [Exporting](exporting.md)
+<hr>
 
 Use **Animations** to import clips, choose the characters they belong to, and prepare their motion. Use **Playback** to inspect them and **Retarget / Edit** to change mapping and animation.
 
