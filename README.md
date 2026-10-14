@@ -66,7 +66,19 @@ Save early with **File → Save project**. A `.dlraproj` saves the overall works
 
 ## Build and develop
 
-Clone this repository and switch to the `main` branch. Run the following commands from the repository root. Install the SDK pinned by [global.json](global.json), currently **.NET 10.0.401**; later patches in that SDK feature band are permitted.
+Clone this repository and switch to the `main` branch. Run the following commands from the repository root. Install the exact SDK pinned by [global.json](global.json), currently **.NET 10.0.401**. SDK roll-forward is disabled, including patch updates; newer SDKs can coexist but cannot replace the selected version.
+
+### Toolchain and dependency upgrades
+
+CI installs the SDK from `global.json` and verifies the selected version before packaging. SDK patches can change implicit NuGet dependencies such as `Microsoft.NET.ILLink.Tasks`, so an SDK update and its dependency lockfiles must be reviewed together. Normal builds retain `dotnet restore --locked-mode`; CI must not regenerate lockfiles or retry with unlocked restore.
+
+To deliberately upgrade the SDK or NuGet packages:
+
+1. Install the intended stable SDK and update `sdk.version` in `global.json`, keeping `rollForward: disable` and `allowPrerelease: false`. For explicit package updates, change the versions in `Directory.Packages.props`.
+2. From the repository root, confirm `dotnet --version`, then run `dotnet restore DLReAnimated.slnx --force-evaluate`. Regenerate any affected tool-project lockfiles by restoring their `.csproj` files with `--force-evaluate` as well.
+3. Review and commit the intended version changes and affected `packages.lock.json` files together. Run `dotnet restore DLReAnimated.slnx --locked-mode`, then `./package_csharp.ps1 -SkipUnavailableOptionalBlenderOracle` to build, test, validate, and package with the new toolchain. Require a passing GitHub Actions run before merging the upgrade.
+
+Direct NuGet versions are centrally specified; checked-in lockfiles preserve the resolved direct and transitive dependency graph and package hashes. The hosted runner stays on `windows-2022` to avoid automatic OS-generation migrations, but that image still receives updates. Actions use major-version tags and can receive compatible updates; installed runtimes used for tests can also receive patches. These remain intentional update surfaces, and SDK pinning does not guarantee immunity to runner, runtime, action, or service changes. The published app remains self-contained.
 
 ### Build
 

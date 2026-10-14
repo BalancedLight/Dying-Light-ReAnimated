@@ -26,7 +26,21 @@ jobs:
       - name: Install .NET SDK
         uses: actions/setup-dotnet@v6
         with:
+          # global.json disables roll-forward: SDK patches also change implicit
+          # NuGet dependencies (for example ILLink), which are locked in Git.
           global-json-file: csharp/global.json
+
+      - name: Verify selected .NET SDK
+        shell: powershell
+        working-directory: csharp
+        run: |
+          $expected = (Get-Content global.json -Raw | ConvertFrom-Json).sdk.version
+          $actual = dotnet --version
+          if ($LASTEXITCODE -ne 0 -or $actual.Trim() -ne $expected) {
+            throw "Expected .NET SDK $expected from global.json; selected '$actual'."
+          }
+          dotnet --info
+          if ($LASTEXITCODE -ne 0) { throw "Could not report .NET SDK information." }
 
       - name: Build, test, validate, and package
         shell: powershell
