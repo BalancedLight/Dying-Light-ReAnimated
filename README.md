@@ -125,7 +125,7 @@ See [C# application architecture](docs/CSHARP_REWRITE.md) for the solution's mai
 - [Models and rig setup](docs/models.md)
 - [Animations and editing](docs/animations.md)
 - [Exporting and Developer Tools deployment](docs/exporting.md)
-- [Dying Light Developer Tools wiki](https://dldt.byethost4.com)
+- [Dying Light Developer Tools wiki](https://dldt.miraheze.org/wiki/)
 - [Report a bug](https://github.com/BalancedLight/Dying-Light-ReAnimated/issues) — include the app version or build, what you were doing, and the message from Jobs / diagnostics. Attach a small example you can share if possible.
 - [License](LICENSE)
 

@@ -75,4 +75,4 @@ When you're ready to produce game files, follow the [export guide](exporting.md)
 | Game models are missing | Refresh the catalog and check that the game installation and any project RPack folders are still available. |
 | **Source model changed** appears | Use **Re-match changed model** and review its mapping before fitting again. |
 
-For placing and using the character in a custom map, see the [Developer Tools wiki](https://dldt.byethost4.com).
+For placing and using the character in a custom map, see the [Developer Tools wiki](https://dldt.miraheze.org/wiki/).

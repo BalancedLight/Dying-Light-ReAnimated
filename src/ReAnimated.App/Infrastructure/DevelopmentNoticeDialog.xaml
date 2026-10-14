@@ -11,7 +11,7 @@
             Text="Despite ReAnimating the dead, this isn't a miracle product. You'll still need to set up and use its outputs in the Developer Tools editor or game, and may need to fix issues yourself, such as bad rigs, skin weights, or other asset problems." />
         <TextBlock Margin="0,14,0,0" TextWrapping="Wrap">
             <Hyperlink Foreground="{StaticResource AccentBrush}"
-                NavigateUri="https://dldt.byethost4.com" RequestNavigate="Wiki_RequestNavigate">Dying
+                NavigateUri="https://dldt.miraheze.org/wiki/" RequestNavigate="Wiki_RequestNavigate">Dying
                 Light Developer Tools wiki</Hyperlink>
             <Run Text=" — help with using the editor and Developer Tools." />
         </TextBlock>

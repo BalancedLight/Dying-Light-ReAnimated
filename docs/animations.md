@@ -81,4 +81,4 @@ For ANM2 or RPack output, follow the [export guide](exporting.md).
 | Blender export fails | Select an existing `blender.exe`, check the export status, and inspect Jobs / diagnostics. |
 | An event behaves differently in the editor | Check the script assignment, sequence range, event timing, and action parameters in the exported script. |
 
-Use the [Developer Tools wiki](https://dldt.byethost4.com) for animation setup in the editor and custom maps.
+Use the [Developer Tools wiki](https://dldt.miraheze.org/wiki/) for animation setup in the editor and custom maps.

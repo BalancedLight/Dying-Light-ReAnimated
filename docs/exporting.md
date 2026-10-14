@@ -108,7 +108,7 @@ If the editor is already open, the **Refresh animations in Editor** section offe
 
 Deployment can report conflicts with existing or changed files. Review those destinations rather than replacing them blindly. Where a rollback is offered, it respects changes made after deployment; resolve a modified-file conflict before retrying.
 
-For resource placement, character setup, custom maps, and editor use, follow the [Dying Light Developer Tools wiki](https://dldt.byethost4.com).
+For resource placement, character setup, custom maps, and editor use, follow the [Dying Light Developer Tools wiki](https://dldt.miraheze.org/wiki/).
 
 ## Troubleshooting
 

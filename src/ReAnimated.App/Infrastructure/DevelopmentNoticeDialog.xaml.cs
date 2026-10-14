@@ -40,11 +40,11 @@ public partial class DevelopmentNoticeDialog : Window
         args.Handled = true;
         try
         {
-            Process.Start(new ProcessStartInfo("https://dldt.byethost4.com") { UseShellExecute = true });
+            Process.Start(new ProcessStartInfo("https://dldt.miraheze.org/wiki/") { UseShellExecute = true });
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
         {
-            ErrorMessage.Text = "Couldn't open your browser. Visit https://dldt.byethost4.com for the wiki.";
+            ErrorMessage.Text = "Couldn't open your browser. Visit https://dldt.miraheze.org/wiki/ for the wiki.";
             ErrorMessage.Visibility = Visibility.Visible;
         }
     }
