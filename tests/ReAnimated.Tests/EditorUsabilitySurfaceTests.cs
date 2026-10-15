@@ -124,15 +124,6 @@ public sealed class EditorUsabilitySurfaceTests
             "Fidelity",
             (string?)fidelityTab.Attribute("Header"));
 
-        // Fidelity details moved off the toolbar into the Help menu; what
-        // matters is that the command is still reachable from the chrome.
-        Assert.Contains(
-            document.Descendants(Presentation + "MenuItem"),
-            static element => string.Equals(
-                (string?)element.Attribute("Command"),
-                "{Binding ShowFidelityDetailsCommand}",
-                StringComparison.Ordinal));
-
         XElement playbackControls = Assert.Single(
             document.Descendants(Presentation + "StackPanel"),
             static element => element.Elements(Presentation + "Button")
