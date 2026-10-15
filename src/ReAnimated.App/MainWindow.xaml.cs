@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
@@ -36,6 +37,29 @@ public partial class MainWindow : Window
             _eventEditor = new ReAnimated.App.Views.AnimationEventInspector { DataContext = editor };
         _eventEditor.OpenEditor(this);
     }
+
+    private void OnOpenHelpLinkClick(object sender, RoutedEventArgs args)
+    {
+        if (sender is not MenuItem { CommandParameter: string url })
+        {
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        {
+            MessageBox.Show(
+                this,
+                $"Couldn't open your browser. Visit {url}.",
+                "Help link unavailable",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
     private readonly WorkspaceAutosaveService _autosave;
     private readonly WorkflowDockController _dockController;
     private readonly DockLayoutUpdateScheduler _dockLayoutScheduler;

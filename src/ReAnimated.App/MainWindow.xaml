@@ -144,8 +144,18 @@
                           Click="OnResetDockLayoutClick" />
             </MenuItem>
             <MenuItem Header="_Help">
-                <MenuItem Command="{Binding ShowFidelityDetailsCommand}"
-                          Header="DL1 _fidelity status" />
+                <MenuItem Header="_Models guide"
+                          CommandParameter="https://github.com/BalancedLight/Dying-Light-ReAnimated/blob/main/docs/models.md"
+                          Click="OnOpenHelpLinkClick" />
+                <MenuItem Header="_Animations guide"
+                          CommandParameter="https://github.com/BalancedLight/Dying-Light-ReAnimated/blob/main/docs/animations.md"
+                          Click="OnOpenHelpLinkClick" />
+                <MenuItem Header="_Exporting guide"
+                          CommandParameter="https://github.com/BalancedLight/Dying-Light-ReAnimated/blob/main/docs/exporting.md"
+                          Click="OnOpenHelpLinkClick" />
+                <MenuItem Header="Dying Light _Wiki"
+                          CommandParameter="https://dldt.miraheze.org/wiki/Main_Page"
+                          Click="OnOpenHelpLinkClick" />
             </MenuItem>
         </Menu>
 
