@@ -89,6 +89,7 @@ public sealed partial class RigConformanceWizardViewModel
         }
 
         RigConformedBone bone = fit.Bones[boneIndex];
+        if (IsStockNativeNode(bone.Name)) return false;
         if (SelectedJointBoneName is { } selected &&
             !string.Equals(selected, bone.Name, StringComparison.OrdinalIgnoreCase))
         {
@@ -179,7 +180,7 @@ public sealed partial class RigConformanceWizardViewModel
     /// </summary>
     private void ApplyPlacement(string boneName, Vector3D position)
     {
-        if (!position.IsFinite)
+        if (!position.IsFinite || IsStockNativeNode(boneName))
         {
             return;
         }

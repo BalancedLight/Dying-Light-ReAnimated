@@ -394,6 +394,13 @@ public static class CustomModelPackageSerializer
             7 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
             8 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
             9 => document with { SchemaVersion = CustomModelDocument.CurrentSchemaVersion },
+            10 => document with
+            {
+                SchemaVersion = CustomModelDocument.CurrentSchemaVersion,
+                RigConformance = document.RigConformance is { } fit
+                    ? fit with { FitStrategy = CustomModelRigFitStrategy.Legacy,
+                        StockFppNativeBoneCount = 0, StockFppNativeFrameSignature = null } : null,
+            },
             _ => throw new CustomModelFormatException(
                 $"Unsupported custom-model schema {document.SchemaVersion}; expected schema 1 through {CustomModelDocument.CurrentSchemaVersion}."),
         };

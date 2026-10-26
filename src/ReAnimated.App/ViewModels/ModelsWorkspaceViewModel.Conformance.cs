@@ -180,7 +180,7 @@ public sealed partial class ModelsWorkspaceViewModel
         CancellationTokenSource? cancellation = null;
         try
         {
-            string topologyKey = BuildConformanceTopologyKey(fit);
+            string topologyKey = BuildConformanceTopologyKey(fit, Conformance.FitStrategy);
             if (_conformanceSession is not null &&
                 string.Equals(_conformanceTopologyKey, topologyKey, StringComparison.Ordinal))
             {
@@ -192,9 +192,10 @@ public sealed partial class ModelsWorkspaceViewModel
             cancellation = new CancellationTokenSource();
             _conformancePreviewPreparationCancellation = cancellation;
             CustomModelRigConformance? settings = Conformance.CreateSettings();
+            Dl1RigTemplate? referenceTemplate = Conformance.Template;
             int selectedFit = Conformance.SelectedBoneIndex;
             PreparedConformancePreview prepared = await ConformancePreviewPreparationScheduler.PrepareAsync(
-                token => PrepareConformancePreview(model, fit, settings, topologyKey, selectedFit, token),
+                token => PrepareConformancePreview(model, fit, settings, referenceTemplate, topologyKey, selectedFit, token),
                 cancellation.Token).ConfigureAwait(true);
             if (!IsCurrentConformancePreviewPreparation(revision, model, fit, cancellation.Token)) return;
             PublishConformancePreview(model, prepared, rebuilt: true);
@@ -223,13 +224,14 @@ public sealed partial class ModelsWorkspaceViewModel
         FbxModelAuthoringImportResult model,
         RigConformanceResult fit,
         CustomModelRigConformance? settings,
+        Dl1RigTemplate? referenceTemplate,
         string topologyKey,
         int selectedFit,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Dl1RigConformanceApplyResult applied = Dl1RigConformanceApplier.ApplyDetailed(
-            model, fit, settings, cancellationToken);
+            model, fit, settings, referenceTemplate: referenceTemplate, cancellationToken: cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         CustomModelPreviewSession session = CustomModelPreviewAdapter.CreateSession(
             applied.Model, CustomModelPreviewMode.Dl1Output);
@@ -347,9 +349,10 @@ public sealed partial class ModelsWorkspaceViewModel
     /// Include exact fit frames so meshes, palettes and the prepared skeleton
     /// always describe the same authoring candidate.
     /// </summary>
-    private static string BuildConformanceTopologyKey(RigConformanceResult fit)
+    private static string BuildConformanceTopologyKey(RigConformanceResult fit, CustomModelRigFitStrategy strategy)
     {
         var builder = new StringBuilder(fit.Bones.Length * 16);
+        builder.Append((int)strategy).Append('|');
         foreach (RigConformedBone bone in fit.Bones)
         {
             builder.Append(bone.Name)
@@ -384,6 +387,9 @@ public sealed partial class ModelsWorkspaceViewModel
 
     private void OnConformancePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
+        if (e.PropertyName == nameof(RigConformanceWizardViewModel.FitStrategy)) RefreshGripState();
+        if (e.PropertyName == nameof(RigConformanceWizardViewModel.Template))
+            SyncPendingExistingBankDefaults();
         if (e.PropertyName == nameof(RigConformanceWizardViewModel.IsBusy))
         {
             ModelBatch?.RefreshAvailability();
@@ -477,17 +483,28 @@ public sealed partial class ModelsWorkspaceViewModel
             FbxModelAuthoringImportResult conformed = Dl1RigConformanceApplier.Apply(
                 model,
                 fit,
-                Conformance.CreateSettings());
+                Conformance.CreateSettings(), referenceTemplate: Conformance.Template);
+            bool stockFpp = conformed.Package.Document.RigConformance?.FitStrategy == CustomModelRigFitStrategy.StockFppRegional;
+            if (!stockFpp) conformed = FitHandGripsAfterConformance(conformed);
 
             // Prove the emitted rig before adopting it, so a refusal leaves the
             // imported model untouched.
             Dl1PreparedAuthoredRig prepared =
                 Dl1CustomModelRigPreparer.Prepare(conformed);
+            _existingBankDefaultsPending = ReferenceExistingAnimationLibrary && !stockFpp;
+            CustomModelDocument bankDocument = stockFpp ? conformed.Package.Document : ApplyPendingExistingBankDefaults(conformed.Package.Document);
+            conformed = conformed with { Package = conformed.Package with { Document = bankDocument } };
             conformed = _captureAuthoredLayer(conformed, CancellationToken.None);
 
             AuthoringSnapshot before = CaptureAuthoringSnapshot();
             InvalidateConformancePreview();
             CommitModel(conformed, _sourcePath, _packagePath, preserveAuthoringHistory: true);
+            if (ReferenceExistingAnimationLibrary && ExistingAnimationBankDefaults.IsSelected(bankDocument))
+            {
+                _useReviewedPolicyPreview = SelectedPreviewMode.Mode == CustomModelPreviewMode.Dl1Output;
+                OnPropertyChanged(nameof(UseReviewedPolicyPreview));
+                RefreshPreview();
+            }
             RecordAuthoringUndo(before);
             PopulateHierarchyRows();
 

@@ -222,7 +222,7 @@ public sealed partial class RigConformanceWizardViewModel
             model,
             fit,
             CreateSettings(),
-            cancellationToken);
+            referenceTemplate: Template, cancellationToken: cancellationToken);
         Dl1PreparedAuthoredRig prepared =
             Dl1CustomModelRigPreparer.Prepare(conformed, cancellationToken);
         RigDefinition rig = conformed.Rig

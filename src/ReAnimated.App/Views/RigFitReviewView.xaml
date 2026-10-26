@@ -26,10 +26,18 @@
 
     <Grid Margin="7" Background="#191E27">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
-        <Grid Grid.Row="0">
+        <StackPanel Margin="0,0,0,8">
+            <TextBlock Text="Player fit" FontWeight="SemiBold" />
+            <ComboBox ItemsSource="{Binding PlayerRigFitChoices}" SelectedItem="{Binding SelectedPlayerRigFit}"
+                      DisplayMemberPath="Label" IsEnabled="{Binding CanChangePlayerRigFit}" Margin="0,3,0,3" />
+            <TextBlock Text="{Binding PlayerRigFitSummary}" TextWrapping="Wrap" FontSize="10"
+                       Foreground="{StaticResource MutedTextBrush}" />
+        </StackPanel>
+        <Grid Grid.Row="1">
 
             <!-- 1: Target -->
             <Grid Background="#191E27">
@@ -53,7 +61,8 @@
                                Text="Choose a skeleton from your installed game." />
                     <TextBlock Margin="0,4,0,2" Text="Profile" />
                     <TextBox Text="{Binding TemplateProfileName, UpdateSourceTrigger=PropertyChanged}"
-                             ToolTip="The player profile uses the third-person skeleton; the first-person resource shares it." />
+                             IsEnabled="{Binding CanEditConformanceScale}"
+                             ToolTip="The player and player_fpp profiles use their own reference skeletons." />
                     <Button Margin="0,8,0,0"
                             HorizontalAlignment="Left"
                             Command="{Binding ResolveTemplateCommand}"
@@ -220,7 +229,7 @@
                                Foreground="{StaticResource MutedTextBrush}"
                                TextWrapping="Wrap"
                                Text="Fitting changes the rest pose. Preview a stock clip or derive motion for this rig to check the result." />
-                    <StackPanel Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <StackPanel IsEnabled="{Binding CanEditConformanceScale}" Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
                     <TextBlock Margin="0,4,0,2" Text="Limb proportions" />
                     <ComboBox DisplayMemberPath="Label"
                               ItemsSource="{Binding FitModeChoices}"
@@ -401,7 +410,7 @@
             </Grid>
         </Grid>
 
-        <Border Grid.Row="1"
+        <Border Grid.Row="2"
                 Margin="0,8,0,0"
                 Padding="8"
                 Background="{StaticResource PanelRaisedBrush}"

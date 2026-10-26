@@ -12,7 +12,7 @@ using ReAnimated.DL1.Assets.Meshes;
 
 namespace ReAnimated.Tests;
 
-public sealed class RigChannelPolicyWorkflowTests : IDisposable
+public sealed partial class RigChannelPolicyWorkflowTests : IDisposable
 {
     private readonly string _directory = RpackTestData.CreateTemporaryDirectory();
 

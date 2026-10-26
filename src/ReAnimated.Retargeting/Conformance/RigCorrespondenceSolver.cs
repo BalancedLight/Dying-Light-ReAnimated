@@ -90,6 +90,7 @@ public static class RigCorrespondenceSolver
         }
         var ambiguities = ImmutableArray.CreateBuilder<RigCorrespondenceAmbiguity>();
         var claimedSource = new HashSet<int>();
+        var mappedParents = new Dictionary<int, int>();
         var rows = ImmutableArray.CreateBuilder<RigCorrespondenceRow>();
 
         foreach (Dl1RigTemplateEntity entity in template.Entities)
@@ -98,6 +99,7 @@ public static class RigCorrespondenceSolver
             string? role = ResolveTemplateRole(entity);
             int chosen = -1;
             bool ambiguous = false;
+            bool nativeIdentity = false;
             string evidence;
             double confidence;
 
@@ -111,6 +113,12 @@ public static class RigCorrespondenceSolver
                 }
 
                 chosen = manual;
+            }
+            else if (RigNativeHierarchyIdentity.Find(entity, sourceRig, mappedParents,
+                         claimedSource, reservedSource, options) is >= 0 and var native)
+            {
+                chosen = native;
+                nativeIdentity = true;
             }
             else if (role is not null &&
                 candidatesByRole.TryGetValue(role, out List<int>? candidates) &&
@@ -151,12 +159,14 @@ public static class RigCorrespondenceSolver
             if (chosen >= 0)
             {
                 claimedSource.Add(chosen);
+                mappedParents.Add(entity.Index, chosen);
                 bool explicitChoice = role is not null &&
                     explicitByRole.TryGetValue(role, out int selected) &&
                     selected == chosen;
-                confidence = explicitChoice ? 1.0 : ambiguous ? 0.6 : 0.95;
+                confidence = explicitChoice || nativeIdentity ? 1.0 : ambiguous ? 0.6 : 0.95;
                 evidence = explicitChoice
                     ? $"explicit user choice joined '{sourceRig.Bones[chosen].Name}' to '{entity.Name}'"
+                    : nativeIdentity ? "exact native name and mapped parent identify the source entity"
                     : $"role '{role}' joined '{sourceRig.Bones[chosen].Name}' to '{entity.Name}'";
                 rows.Add(new RigCorrespondenceRow
                 {

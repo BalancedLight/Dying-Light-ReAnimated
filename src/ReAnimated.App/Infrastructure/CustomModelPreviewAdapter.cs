@@ -580,8 +580,17 @@ public sealed class CustomModelPreviewSession
 
         TransformMatrix world = previewPose.GlobalMatrices[nodeIndex];
         Vector3 eye = ToVector3(world.Translation);
-        Vector3 forward = ToVector3(world.TransformDirection(Vector3D.UnitZ));
-        Vector3 up = ToVector3(world.TransformDirection(-Vector3D.UnitY));
+        BoneDefinition node = previewPose.Rig.Bones[nodeIndex];
+        bool nativeCamera = EffectiveMode == CustomModelPreviewMode.Dl1Output &&
+            _authoredRig is not null && node.Kind == BoneKind.Camera &&
+            (node.Name.Equals(Dl1PreviewContract.EyeCameraBoneName, StringComparison.OrdinalIgnoreCase) ||
+             node.Name.Equals(Dl1PreviewContract.ReferenceCameraBoneName, StringComparison.OrdinalIgnoreCase));
+        // Native DL1 camera helpers face -Y with -Z up. Source FBX cameras
+        // and editor-only camera anchors retain their imported +Z/-Y basis.
+        Vector3D forwardAxis = nativeCamera ? -Vector3D.UnitY : Vector3D.UnitZ;
+        Vector3D upAxis = nativeCamera ? -Vector3D.UnitZ : -Vector3D.UnitY;
+        Vector3 forward = ToVector3(world.TransformDirection(forwardAxis));
+        Vector3 up = ToVector3(world.TransformDirection(upAxis));
         if (!IsUsableDirection(forward) || !IsUsableDirection(up))
         {
             return null;

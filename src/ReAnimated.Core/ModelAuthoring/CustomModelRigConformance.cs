@@ -7,6 +7,12 @@ namespace ReAnimated.Core.ModelAuthoring;
 
 public enum CustomModelCorrespondenceMethod { LegacyNameRoles, GeometryHierarchyV1 }
 
+public enum CustomModelRigFitStrategy
+{
+    Legacy = 0,
+    StockFppRegional = 1,
+}
+
 /// <summary>
 /// Which corresponding segments the uniform conformance scale is solved from.
 /// </summary>
@@ -88,6 +94,13 @@ public sealed record CustomModelConformancePositionOverride
 /// </remarks>
 public sealed record CustomModelRigConformance
 {
+    /// <summary>Older fits retain their original scale, strength and placement behavior.</summary>
+    public CustomModelRigFitStrategy FitStrategy { get; init; } = CustomModelRigFitStrategy.Legacy;
+
+    /// <summary>Applied stock FPP contract metadata; pending fits leave these unset.</summary>
+    public int StockFppNativeBoneCount { get; init; }
+    public string? StockFppNativeFrameSignature { get; init; }
+
     /// <summary>Missing in older documents: retain the original name-only replay behavior.</summary>
     public CustomModelCorrespondenceMethod CorrespondenceMethod { get; init; }
     /// <summary>Stable identity of the target skeleton these settings targeted.</summary>
@@ -153,7 +166,14 @@ public sealed record CustomModelRigConformance
         {
             ProjectAssetReference.ValidateSha256(appliedSignature, parameterName);
         }
+        if (StockFppNativeBoneCount is < 0 or > 4096 ||
+            (StockFppNativeBoneCount == 0) != (StockFppNativeFrameSignature is null))
+            throw new ArgumentException("The stock FPP frame contract requires both a native bone count and frame signature.", parameterName);
+        if (StockFppNativeFrameSignature is { } nativeSignature)
+            ProjectAssetReference.ValidateSha256(nativeSignature, parameterName);
 
+        if (!Enum.IsDefined(FitStrategy))
+            throw new ArgumentException("The conformance fit strategy is not supported.", parameterName);
         if (!Enum.IsDefined(ScaleMode) || !Enum.IsDefined(CorrespondenceMethod))
         {
             throw new ArgumentException(

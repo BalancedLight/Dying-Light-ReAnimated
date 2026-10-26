@@ -37,13 +37,26 @@ public static class Dl1RigConformanceApplier
         FbxModelAuthoringImportResult model,
         RigConformanceResult fit,
         CustomModelRigConformance? settings = null,
-        CancellationToken cancellationToken = default) => ApplyDetailed(model, fit, settings, cancellationToken).Model;
+        CancellationToken cancellationToken = default) =>
+        ApplyDetailed(model, fit, settings, referenceTemplate: null, cancellationToken).Model;
+
+    public static FbxModelAuthoringImportResult Apply(FbxModelAuthoringImportResult model,
+        RigConformanceResult fit, CustomModelRigConformance? settings, Dl1RigTemplate? referenceTemplate,
+        CancellationToken cancellationToken = default) => ApplyDetailed(model,fit,settings,referenceTemplate,cancellationToken).Model;
 
     public static Dl1RigConformanceApplyResult ApplyDetailed(FbxModelAuthoringImportResult model, RigConformanceResult fit,
-        CustomModelRigConformance? settings = null, CancellationToken cancellationToken = default)
+        CustomModelRigConformance? settings = null, CancellationToken cancellationToken = default) =>
+        ApplyDetailed(model,fit,settings,referenceTemplate:null,cancellationToken);
+
+    public static Dl1RigConformanceApplyResult ApplyDetailed(FbxModelAuthoringImportResult model, RigConformanceResult fit,
+        CustomModelRigConformance? settings, Dl1RigTemplate? referenceTemplate, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(fit);
+        if (settings?.FitStrategy == CustomModelRigFitStrategy.StockFppRegional)
+            return Dl1StockFppModelFitter.ApplyDetailed(model, fit,
+                referenceTemplate ?? throw new InvalidOperationException("Resolve the native first-person reference before applying the stock FPP fit."),
+                settings, cancellationToken: cancellationToken);
         RigDefinition sourceRig = model.Rig ?? throw new InvalidOperationException(
             "A static model has no rig to conform.");
 

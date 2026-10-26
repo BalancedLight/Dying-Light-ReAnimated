@@ -111,6 +111,7 @@
     </Grid>
     <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" Visibility="{Binding IsStudioHelpers, Converter={StaticResource BooleanToVisibilityConverter}}"><StackPanel>
      <TextBlock Text="Choose a helper task" FontWeight="SemiBold" Margin="0,0,0,7"/>
+     <Expander Header="Hand grips" IsExpanded="True" Margin="0,0,0,7"><views:RigGripView DataContext="{Binding StudioWorkspace}"/></Expander>
      <Expander Header="Add or edit bone helpers" Margin="0,0,0,7"><views:RigHierarchyEditorView DataContext="{Binding StudioWorkspace}" Height="340"/></Expander>
      <Expander Header="Unmatched terminal helpers" Margin="0,0,0,7">
       <StackPanel Margin="4">

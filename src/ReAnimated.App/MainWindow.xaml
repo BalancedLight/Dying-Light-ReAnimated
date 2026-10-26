@@ -2095,6 +2095,9 @@
                                     <Run Text="  →  Target: " />
                                     <Run Text="{Binding ActiveTargetModelLabel, Mode=OneWay}" />
                                 </TextBlock>
+                                <Button Content="Adjust target model" Command="{Binding AdjustTargetModelCommand}"
+                                        HorizontalAlignment="Left" Margin="0,4,0,0"
+                                        ToolTip="Open the current custom target's saved hand-grip and helper adjustments." />
                                 <Border Margin="0,5,0,0"
                                         Padding="7,5"
                                         Background="{StaticResource PanelRaisedBrush}"

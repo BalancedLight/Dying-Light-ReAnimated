@@ -1949,6 +1949,7 @@ public sealed partial class MainWindowViewModel :
         {
             if (SetProperty(ref _isBusy, value))
             {
+                NotifyTargetModelAuthoringCommands();
                 NewWorkspaceCommand.NotifyCanExecuteChanged();
                 OpenWorkspaceCommand.NotifyCanExecuteChanged();
                 SaveWorkspaceCommand.NotifyCanExecuteChanged();
@@ -2498,6 +2499,7 @@ public sealed partial class MainWindowViewModel :
         {
             if (SetProperty(ref _isTargetSwitching, value))
             {
+                NotifyTargetModelAuthoringCommands();
                 OnPropertyChanged(nameof(TargetBindingStatusText));
                 OnPropertyChanged(nameof(TargetPlaybackMessage));
             }
@@ -16159,6 +16161,7 @@ public sealed partial class MainWindowViewModel :
             checked((int)Math.Floor(snapshot.Frame)));
         OnPropertyChanged(nameof(ActiveSourceModelLabel));
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
+        NotifyTargetModelAuthoringCommands();
         UpdateDirtyState();
         NotifyAnimationLibraryCommands();
         if (_sourceAnimation is not null)
@@ -16235,6 +16238,7 @@ public sealed partial class MainWindowViewModel :
             _activeDirectRigBinding = prepared.DirectBinding;
             SetCustomTargetPreviewPresentation(customTarget);
             OnPropertyChanged(nameof(ActiveTargetModelLabel));
+            NotifyTargetModelAuthoringCommands();
             SetTargetPreviewScene(
                 customTarget.Meshes,
                 customTarget.Skeleton);
@@ -16344,6 +16348,7 @@ public sealed partial class MainWindowViewModel :
         _customTargetPreviewSession = model.CustomPreviewSession;
         SynchronizeSecondaryMotionModel();
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
+        NotifyTargetModelAuthoringCommands();
         SetTargetPreviewScene(model.PreviewMeshes, model.Skeleton);
         UpdateTargetPreviewPresentation();
         ReplaceSkeleton(model.Skeleton);
@@ -23461,6 +23466,7 @@ public sealed partial class MainWindowViewModel :
         OnPropertyChanged(nameof(ActiveAnimationLabel));
         OnPropertyChanged(nameof(ActiveSourceModelLabel));
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
+        NotifyTargetModelAuthoringCommands();
         OnPropertyChanged(nameof(TargetBindingStatusText));
         OnPropertyChanged(nameof(TargetPlaybackMessage));
         OnPropertyChanged(nameof(IsTargetPlaybackBlocked));
@@ -26255,6 +26261,7 @@ public sealed partial class MainWindowViewModel :
         _targetRig = payload.Source.Rig;
         _targetProjectAsset = targetCandidate;
         OnPropertyChanged(nameof(ActiveTargetModelLabel));
+        NotifyTargetModelAuthoringCommands();
         SetBlenderExportTarget(payload, retailAsset);
         if (_sourceAnimation is null)
         {

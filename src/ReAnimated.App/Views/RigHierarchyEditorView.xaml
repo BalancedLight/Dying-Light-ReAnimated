@@ -34,6 +34,8 @@
         </DataGrid>
         <StackPanel Grid.Row="2" Margin="0,7,0,0">
             <TextBlock FontWeight="SemiBold" Text="Helper and camera authoring" />
+            <Button Content="Adjust hand grips" Command="{Binding OpenGripAdjustmentsCommand}"
+                    HorizontalAlignment="Left" Margin="0,3,0,5" />
             <WrapPanel>
                 <ComboBox Width="92"
                           ItemsSource="{Binding HelperKinds}"

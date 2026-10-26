@@ -210,6 +210,8 @@ public static class CustomModelHelperAuthoring
                 {
                     LocalFrame = helper.ExactLocalMatrix, ParentEntityId = parentId, UserApproved = false,
                     FramePolicy = recipe.FramePolicy is RigFramePolicy.PreserveSource or RigFramePolicy.GeneratedDeform ? RigFramePolicy.Manual : recipe.FramePolicy,
+                    PlacementProvenance = recipe.FramePolicy is RigFramePolicy.Socket or RigFramePolicy.Contact
+                        ? RigEvidenceKind.UserOverride : recipe.PlacementProvenance,
                 };
             }
             else

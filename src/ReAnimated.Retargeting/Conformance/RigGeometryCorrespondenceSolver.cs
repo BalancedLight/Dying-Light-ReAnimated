@@ -113,6 +113,20 @@ internal static class RigGeometryCorrespondenceSolver
                 .Select(e => anchors[Role(e)!]).ToArray();
             var candidates = new List<RigCorrespondenceCandidateEvidence>();
             int manual = role is not null && overrides.TryGetValue(role, out int selected) ? selected : -1;
+            if (manual < 0 && RigNativeHierarchyIdentity.Find(entity, source, mapped,
+                    claimed, reserved, options) is >= 0 and var native)
+            {
+                claimed.Add(native);
+                mapped.Add(entity.Index, native);
+                rows.Add(new()
+                {
+                    Disposition = RigBoneDisposition.Mapped, TemplateIndex = entity.Index,
+                    SourceBoneIndex = native, Name = entity.Name, TemplateName = entity.Name,
+                    SourceName = source.Bones[native].Name, Role = role, Confidence = 1,
+                    Evidence = "exact native name and mapped parent identify the source entity",
+                });
+                continue;
+            }
             if (role is not null)
             {
                 foreach (var bone in source.Bones)

@@ -111,13 +111,15 @@ public sealed partial class RigConformanceWizardViewModel
         if (!_editingAppliedOutputRig && _model.Package.Document.RigConformance is null)
         {
             UseGeometryCorrespondence = true;
-            ScaleMode = CustomModelConformanceScaleMode.Automatic;
-            ConformanceStrength = preserveSourceProportions ? 0.0 : 1.0;
+            ScaleMode = IsStockFppRig ? CustomModelConformanceScaleMode.Manual : CustomModelConformanceScaleMode.Automatic;
+            if (IsStockFppRig) ManualScale = 1;
+            ConformanceStrength = IsStockFppRig ? 1 : preserveSourceProportions ? 0.0 : 1.0;
         }
 
         if (_sourceConformanceReviewRequired)
         {
             _roleOverrides = ImmutableDictionary<string, string>.Empty;
+            _reviewedRoleOverrides = _reviewedRoleOverrides.Clear();
             _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
             _previousPositionOverrides = null;
             _sourceConformanceReviewRequired = false;
@@ -137,7 +139,7 @@ public sealed partial class RigConformanceWizardViewModel
         // editable and undoable.
         if (HasPendingMappingReview)
         {
-            AcceptMappingProposals();
+            AcceptMappingProposals(markReviewed: false);
             await StartSolveAsync(debounce: false, cancellationToken).ConfigureAwait(true);
         }
 
@@ -162,7 +164,7 @@ public sealed partial class RigConformanceWizardViewModel
 
     /// <summary>Whether the primary guided flow can place joints on a solved rig.</summary>
     public bool CanPlaceGuidedBodyJoints =>
-        !IsBusy && IsFitCurrent && _model?.Rig is not null && !RequiresSourceRematch;
+        !IsStockFppRig && !IsBusy && IsFitCurrent && _model?.Rig is not null && !RequiresSourceRematch;
 
     /// <summary>Whether an existing hand setup is ready for the optional hand review.</summary>
     public bool CanReviewGuidedHands => !IsBusy && HasHandSetup && CanReviewHandSetup;

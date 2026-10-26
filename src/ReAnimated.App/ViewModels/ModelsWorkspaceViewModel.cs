@@ -362,6 +362,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             RedoHelperEdit,
             () => _helperRedo.Count > 0 && !IsBusy);
         Conformance.SetAuthoringHistoryCommands(UndoHelperEditCommand, RedoHelperEditCommand);
+        InitializeGrips(resolveRigTemplate);
         ApplyPreparedHelpersCommand = new RelayCommand(ApplyPreparedHelpers,
             () => _model is { } model && model.Package.Document.RiggingSession is { } studio &&
                 studio.Recipe.Helpers.Any(h => h.OwnerAssetId == model.Package.Document.ModelId) && !IsBusy);
@@ -614,6 +615,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 MarkAuthoringChanged();
                 InvalidateDeploymentPreflight();
                 OnPropertyChanged(nameof(AnimationScriptAliasSummary));
+                SyncPendingExistingBankDefaults();
             }
         }
     }
@@ -626,7 +628,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         string.IsNullOrWhiteSpace(AnimationScriptAlias)
             ? "No library set. Set the animation bank before deploying this character."
             : ReferenceExistingAnimationLibrary
-                ? $"References the existing '{AnimationScriptAlias.Trim()}.scr' bank without publishing local clips. Stock position keys can change a small or large model's limb lengths. Review its animation-channel choices, compare raw and reviewed DL1 Output poses, then test the exact model and bank in Editor and Player."
+                ? $"Uses '{AnimationScriptAlias.Trim()}.scr'. Newly fitted body joints keep the model's proportions; saved channel choices take precedence."
                 : $"The deployed ASCR redirects to '{AnimationScriptAlias.Trim()}.scr' " +
                 $"(data/characters/animations/animscripts/{AnimationScriptAlias.Trim()}.scr).";
 
@@ -636,6 +638,16 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         set
         {
             if (!SetProperty(ref _referenceExistingAnimationLibrary, value)) return;
+            if (!_suppressPersistenceNotifications)
+            {
+                _existingBankDefaultsPending = value;
+                if (!value && _useReviewedPolicyPreview)
+                {
+                    _useReviewedPolicyPreview = false;
+                    OnPropertyChanged(nameof(UseReviewedPolicyPreview));
+                }
+                SyncPendingExistingBankDefaults();
+            }
             MarkAuthoringChanged();
             InvalidateDeploymentPreflight();
             OnPropertyChanged(nameof(AnimationScriptAliasSummary));
@@ -754,6 +766,12 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 if (value.Mode != CustomModelPreviewMode.Dl1Output && _useReviewedPolicyPreview)
                 {
                     _useReviewedPolicyPreview = false;
+                    OnPropertyChanged(nameof(UseReviewedPolicyPreview));
+                }
+                else if (value.Mode == CustomModelPreviewMode.Dl1Output && ReferenceExistingAnimationLibrary &&
+                    _model is { } model && ExistingAnimationBankDefaults.IsSelected(model.Package.Document))
+                {
+                    _useReviewedPolicyPreview = true;
                     OnPropertyChanged(nameof(UseReviewedPolicyPreview));
                 }
                 OnPropertyChanged(nameof(CanUseReviewedPolicyPreview));
@@ -2619,6 +2637,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         if (markAuthoringChanged && preserveAuthoringHistory && _model is { } current)
             FbxProfileEditGuard.RequireAllowed(current, imported);
         InvalidateDeploymentInspection();
+        bool previousBankDefaults = _model is { } previousModel &&
+            ExistingAnimationBankDefaults.IsSelected(previousModel.Package.Document);
         imported = FbxDerivedMotionAuthoring.RestoreAvailability(imported);
         imported = NormalizeBuildReceipt(imported, out string buildStatus);
         bool previousPersistenceSuppression = _suppressPersistenceNotifications;
@@ -2635,7 +2655,13 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             _model = imported;
             if (!preserveAuthoringHistory)
             {
-                _useReviewedPolicyPreview = false;
+                _existingBankDefaultsPending = false;
+            }
+            if (!preserveAuthoringHistory || previousBankDefaults != ExistingAnimationBankDefaults.IsSelected(imported.Package.Document))
+            {
+                _useReviewedPolicyPreview = imported.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary &&
+                    ExistingAnimationBankDefaults.IsSelected(imported.Package.Document) &&
+                    SelectedPreviewMode.Mode == CustomModelPreviewMode.Dl1Output;
                 OnPropertyChanged(nameof(UseReviewedPolicyPreview));
             }
             // A cached conformance preview belongs to the model it was built
@@ -2888,7 +2914,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             ReferenceExistingAnimationLibrary = ReferenceExistingAnimationLibrary,
         };
         CustomModelDocument current = _model.Package.Document;
-        bool invalidatesBuildReceipt =
+        CustomModelDocument policyDocument = ApplyPendingExistingBankDefaults(current);
+        bool invalidatesBuildReceipt = !ReferenceEquals(policyDocument, current) ||
             !string.Equals(current.Name, ModelName, StringComparison.Ordinal) ||
             !current.AnimationClips.SequenceEqual(selections) ||
             current.BuildSettings != buildSettings;
@@ -2896,8 +2923,8 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         CustomModelBuildSettings comparableSettings = _characterIdWasExplicitlyEdited ? current.BuildSettings
             : current.BuildSettings with { CharacterId = buildSettings.CharacterId };
         bool recordsEdit = !_suppressPersistenceNotifications &&
-            (!string.Equals(current.Name, ModelName, StringComparison.Ordinal) || !current.AnimationClips.SequenceEqual(selections) || comparableSettings != buildSettings);
-        CustomModelDocument document = current with
+            (!ReferenceEquals(policyDocument, current) || !string.Equals(current.Name, ModelName, StringComparison.Ordinal) || !current.AnimationClips.SequenceEqual(selections) || comparableSettings != buildSettings);
+        CustomModelDocument document = policyDocument with
         {
             Name = ModelName,
             AnimationClips = selections,
@@ -3088,7 +3115,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         string previewLabel = session.IsSourceFallback
             ? "Source FBX fallback"
             : cameraReview ? "Prepared camera review" : SelectedPreviewMode.Label;
-        if (reviewedPolicyApplied) previewLabel += " / reviewed BSCR";
+        if (reviewedPolicyApplied) previewLabel += " / saved bone channels";
         Viewport.SetPresentation(
             $"{previewLabel} preview - {ModelName}",
             clip is null
@@ -3101,7 +3128,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                     ? $"Unadapted FBX source clip: {SelectedAnimation!.DisplayName} | frame {frame:N0} | derive motion before judging DL1 playback"
                     : $"Animation stack: {(derivedReview ? clip.Name : SelectedAnimation!.DisplayName)} | frame {frame:N0}" +
                         (session.IsSourceFallback ? " | Source FBX fallback" : string.Empty) +
-                        (reviewedPolicyApplied ? " | reviewed BSCR-mask approximation" : " | raw clip channels"));
+                        (reviewedPolicyApplied ? " | saved bone channels" : " | raw clip channels"));
         const string unadaptedMotionWarning =
             "This original FBX clip is reindexed but not retargeted to the conformed rig. Its pose is diagnostic only; use Derive Motion for a separately reviewed compatible clip.";
         IEnumerable<string> previewDiagnostics = unadaptedSourceClip
@@ -3110,7 +3137,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         if (reviewedPolicyFailure is not null)
             previewDiagnostics = previewDiagnostics.Append(
                 "Reviewed BSCR comparison unavailable: " + reviewedPolicyFailure + " Showing raw clip channels.");
-        else if (reviewedPolicyApplied)
+        else if (reviewedPolicyApplied && !ExistingAnimationBankDefaults.IsSelected(displayModel.Package.Document))
             previewDiagnostics = previewDiagnostics.Append(
                 "Reviewed BSCR-mask preview is an authoring approximation; native blending, LOD and runtime binding remain unverified.");
         string[] visibleDiagnostics = previewDiagnostics.ToArray();
@@ -3628,6 +3655,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
 
     private void NotifyCommands()
     {
+        RefreshGripState();
         ModelBatch?.RefreshAvailability();
         OnPropertyChanged(nameof(CanCheckInstalledDeployment));
         CheckInstalledDeploymentCommand?.NotifyCanExecuteChanged();

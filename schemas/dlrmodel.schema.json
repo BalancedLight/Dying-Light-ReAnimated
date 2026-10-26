@@ -2,7 +2,7 @@
   "type": "object",
   "properties": {
     "schemaVersion": {
-      "const": 10
+      "const": 11
     },
     "sequenceUses": {
       "type": "array",
@@ -1748,6 +1748,21 @@
         "null"
       ],
       "properties": {
+        "fitStrategy": {
+          "enum": [
+            "legacy",
+            "stockFppRegional"
+          ]
+        },
+        "stockFppNativeBoneCount": {
+          "type": "integer"
+        },
+        "stockFppNativeFrameSignature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "correspondenceMethod": {
           "enum": [
             "legacyNameRoles",

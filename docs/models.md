@@ -39,6 +39,8 @@ For a rigged model, select a reference skeleton, choose **Use this skeleton**, a
 
 Use the fitting controls to adjust **Scale** and **Place joints**, then move to **Verify**. Imported rigs retain their weights until you edit them. Moving joints does not automatically fix every skinning problem.
 
+**Player fit** offers two choices. **TPP – Keep proportions** uses the existing third-person fitting controls. **FPP – Stock player rig** fits the body and hands around the stock first-person skeleton and uses its animation channels. Stock joint, camera, and grip frames stay fixed; retained garment helpers remain editable.
+
 When building from geometry, review the body guides before **Build draft body rig**. Check the generated binding and use stress poses to find areas that need weight adjustments.
 
 ## Review the result
@@ -49,7 +51,21 @@ When building from geometry, review the body guides before **Build draft body ri
 - Review **Imported animation clips**. Select the takes you intend to use, and use **Prepare animation** when a clip needs preparation for the authored rig.
 - Check the **Animation bank** choice. Referencing an existing bank and exporting your own clips are different setups; choose the one your character needs.
 
+When you choose an existing bank for a newly fitted model, body joints keep their fitted distances and scale while using the bank's rotations. The body root uses bank position and rotation with bind scale. Existing channel choices take precedence; advanced root choices remain available in **Channel Policies**.
+
+**DL1 Output** previews these saved channels by default. Clear **Use saved bone channels** under **Preview options** to inspect the raw clip keys. Reopening a model retains its channel choices; older packages are not changed automatically.
+
 **Advanced controls** exposes more detailed helper, hierarchy, camera, and rig settings. Start with the guided stages and open those controls when you need a specific correction.
+
+## Adjust hand grips
+
+Applying a fit places the left and right hand grips from the fitted palm frames and the selected reference skeleton. Open **Setup → Helpers → Hand grips** to review them, or choose **Adjust hand grips** on the **Bones** tab.
+
+Select a grip, adjust its position in metres and rotation in degrees relative to its hand, then choose **Save grip adjustment**. **Place grips in palms** keeps saved manual adjustments; **Recalibrate hand grips** replaces unlocked adjustments using the current fitted palms. Model undo/redo includes these changes, and saving the model retains them for reopening.
+
+In Retarget/Edit, **Adjust target model** opens the current custom target's saved model package in Helpers. Check the grip with the intended prop and motion after adjusting it.
+
+The rotation controls edit the grip's bind orientation. Existing-bank playback uses the saved grip position and scale with the bank's rotation. Review these choices in **Channel Policies** when your model needs different component ownership.
 
 ## Save your work
 

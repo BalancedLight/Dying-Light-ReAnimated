@@ -279,6 +279,7 @@ public static class Dl1CustomModelRigPreparer
             model.Package.Document.Source.ContentSha256,
             nodes.MoveToImmutable(),
             sourceRig.MorphChannels);
+        Dl1StockFppRigValidation.RequirePrepared(model.Package.Document, contract);
         var preparedSurfaces = ImmutableArray.CreateBuilder<Dl1PreparedSkinSurface>(model.Surfaces.Length);
         foreach (FbxModelSurface surface in model.Surfaces)
         {

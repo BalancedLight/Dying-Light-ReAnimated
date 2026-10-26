@@ -101,6 +101,14 @@ public static class Dl1SourceModelWriter
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        Dl1StockFppRigValidation.RequireApplied(request.Model.Package.Document);
+        if (request.Model.Package.Document.RigConformance?.FitStrategy == CustomModelRigFitStrategy.StockFppRegional &&
+            request.Model.Package.Document.FirstPersonVisibility is { } visibility)
+        {
+            FbxModelAuthoringImportResult exportView = FbxModelPerspectiveAuthoring.CreateFirstPersonExportView(request.Model, visibility).Model;
+            exportView = exportView with { Package = exportView.Package with { Document = exportView.Package.Document with { FirstPersonVisibility = null } } };
+            request = request with { Model = exportView };
+        }
         CharacterActorSourceAuthoring.RevalidateAll(request.Model.Package);
         CharacterMaterialFallbackAuthoring.Revalidate(request.Model.Package);
         CharacterTextureFallbackAuthoring.Revalidate(request.Model.Package);
@@ -133,8 +141,8 @@ public static class Dl1SourceModelWriter
         ImmutableArray<Dl1PreparedPhysicalNodeExpectation> preparedPhysicalNodeExpectations =
             BuildPreparedPhysicalNodeExpectations(prepared);
         byte[] chr = BuildCharacterDefinition(request.Model.Package, BuildChrObjects(prepared));
-        ImmutableArray<Dl1SkinGenerationDefinition> skins=Dl1CharacterSkinAuthoring.FromInventory(request.Model.Package.Document.CharacterResources,prepared.MaterialNames);
-        string? skinSource=skins.IsEmpty?null:Dl1SkinDefinitionCodec.GenerateCanonical(skins).Write();
+        ImmutableArray<Dl1SkinGenerationDefinition> skins = Dl1CharacterSkinAuthoring.FromInventory(request.Model.Package.Document.CharacterResources, prepared.MaterialNames);
+        string? skinSource = skins.IsEmpty ? null : Dl1SkinDefinitionCodec.GenerateCanonical(skins).Write();
         string bscr = BuildBoneScript(prepared.BoneNames, componentPolicies);
         string? animationScriptAlias = string.IsNullOrWhiteSpace(request.AnimationScriptAlias)
             ? null
@@ -157,7 +165,7 @@ public static class Dl1SourceModelWriter
             [$"{resourceName}.bscr"] = Encoding.UTF8.GetBytes(bscr),
             ["BLOCKED_OUTPUTS.txt"] = Encoding.UTF8.GetBytes(blocked),
         };
-        if(skinSource is not null) files[$"{resourceName}.skn"]=Encoding.UTF8.GetBytes(skinSource);
+        if (skinSource is not null) files[$"{resourceName}.skn"] = Encoding.UTF8.GetBytes(skinSource);
         if (!componentPolicies.IsDefault)
             files[$"{resourceName}.components.json"] = JsonSerializer.SerializeToUtf8Bytes(new
             {
@@ -241,8 +249,13 @@ public static class Dl1SourceModelWriter
                 materialSourceFiles = prepared.MaterialFiles.Count,
                 nativeCompanionFiles = companions.Files.Count,
             },
-            nativeCompanions = new { files = companions.Files.Keys.Order(StringComparer.Ordinal), notes = companions.Notes,
-                compiledPhysicsBoundsValidated = false, runtimeValidated = false },
+            nativeCompanions = new
+            {
+                files = companions.Files.Keys.Order(StringComparer.Ordinal),
+                notes = companions.Notes,
+                compiledPhysicsBoundsValidated = false,
+                runtimeValidated = false
+            },
             outputs = hashes.OrderBy(static pair => pair.Key, StringComparer.Ordinal)
                 .Select(static pair => new { path = pair.Key, sha256 = pair.Value })
                 .ToArray(),
@@ -314,8 +327,8 @@ public static class Dl1SourceModelWriter
             ])
         {
             CapabilityDiagnostics = capabilityDiagnostics,
-            SkinDefinitionSourcePath=skinSource is null?null:Path.Combine(outputDirectory,$"{resourceName}.skn"),
-            PreparedSkinDefinitions=skins,
+            SkinDefinitionSourcePath = skinSource is null ? null : Path.Combine(outputDirectory, $"{resourceName}.skn"),
+            PreparedSkinDefinitions = skins,
             NativeCompanionFiles = companions.Files.Keys.Order(StringComparer.Ordinal).ToImmutableArray(),
             BoneScriptPolicies = componentPolicies,
             AuthoredRigContract = prepared.RigContract,
@@ -426,7 +439,8 @@ public static class Dl1SourceModelWriter
                     lod.Indices.Select(checkedIndex => checked((int)checkedIndex)).Distinct().Order().ToImmutableArray(),
                     lod.Subsets.Select(subset => new Dl1PreparedSkinSubsetExpectation(subset.Palette, subset.IndexCount)
                     { DeclaredMaterialSlotIndex = checked((ushort)subset.MaterialIndex), DeclaredMaterialReference = model.MaterialNames[subset.MaterialIndex], FirstIndex = subset.FirstIndex }).ToImmutableArray(),
-                    vertices.ToImmutable()) { IndexBuffer = lod.Indices });
+                    vertices.ToImmutable())
+                { IndexBuffer = lod.Indices });
             }
         }
         return expectations.ToImmutable();
@@ -495,12 +509,12 @@ public static class Dl1SourceModelWriter
         var records = package.Document.CharacterResources?.Resources.Where(r => !r.IsOriginalArchive && r.EntryPath is not null &&
             Path.GetExtension(r.LogicalName).Equals(".chr", StringComparison.OrdinalIgnoreCase)).ToArray() ?? [];
         if (records.Length > 1) throw new InvalidDataException("Multiple character definitions need an explicit selected output definition.");
-        if (records.Length == 0) return Dl1ChrV4Codec.Build(Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(ordered,"default"));
+        if (records.Length == 0) return Dl1ChrV4Codec.Build(Dl1ChrV4Codec.CreateEditorMenuOneDefaultVariant(ordered, "default"));
         var original = Dl1ChrV4Codec.Parse(package.CompanionPayloads[records[0].EntryPath!].AsSpan());
-        var indexes = original.ObjectNames.Select((name,index) => (name,index)).ToDictionary(r=>r.name,r=>r.index,StringComparer.Ordinal);
-        if (original.ObjectNames.Any(name=>!ordered.Any(o=>o.Name==name))) throw new InvalidDataException("Original CHR object references are missing from the emitted hierarchy.");
-        return Dl1ChrV4Codec.Build(new(ordered.Select(o=>o.Name).ToImmutableArray(), original.Variants.Select(v=>v with
-            { ObjectTransforms = ordered.Select(o=>indexes.TryGetValue(o.Name,out int index)?v.ObjectTransforms[index]:o.LocalTransform).ToImmutableArray() }).ToImmutableArray()));
+        var indexes = original.ObjectNames.Select((name, index) => (name, index)).ToDictionary(r => r.name, r => r.index, StringComparer.Ordinal);
+        if (original.ObjectNames.Any(name => !ordered.Any(o => o.Name == name))) throw new InvalidDataException("Original CHR object references are missing from the emitted hierarchy.");
+        return Dl1ChrV4Codec.Build(new(ordered.Select(o => o.Name).ToImmutableArray(), original.Variants.Select(v => v with
+        { ObjectTransforms = ordered.Select(o => indexes.TryGetValue(o.Name, out int index) ? v.ObjectTransforms[index] : o.LocalTransform).ToImmutableArray() }).ToImmutableArray()));
     }
 
     private static PreparedSourceModel Prepare(
@@ -943,8 +957,11 @@ public static class Dl1SourceModelWriter
         int indexOffset = 0;
         foreach (SourceLod draw in draws)
         {
-            subsets.AddRange(draw.Subsets.Select(subset => subset with {
-                FirstIndex = checked(subset.FirstIndex + indexOffset), FirstVertex = checked(subset.FirstVertex + vertexOffset) }));
+            subsets.AddRange(draw.Subsets.Select(subset => subset with
+            {
+                FirstIndex = checked(subset.FirstIndex + indexOffset),
+                FirstVertex = checked(subset.FirstVertex + vertexOffset)
+            }));
             indices.AddRange(draw.Indices.Select(index => checked(index + (uint)vertexOffset)));
             vertexOffset = checked(vertexOffset + draw.Positions.Length);
             indexOffset = checked(indexOffset + draw.Indices.Length);

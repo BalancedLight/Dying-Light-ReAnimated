@@ -15,6 +15,41 @@ namespace ReAnimated.Tests;
 
 public sealed class CustomModelPreviewSessionTests
 {
+    [Theory]
+    [InlineData("eyecamera", true)]
+    [InlineData("RefCamera", true)]
+    [InlineData("ImportedCamera", false)]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "CustomModelPreview")]
+    public void CanonicalDl1OutputCameraUsesNativeBasisWithoutChangingImportedCameras(string name, bool native)
+    {
+        FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
+        CustomModelDocument document = CustomModelHelperAuthoring.DuplicateAsHelper(
+            model.Package.Document, 0, CustomModelAuthoredHelperKind.Camera, name);
+        var transform = new TransformTRS(new Vector3D(2, 3, 4),
+            QuaternionD.FromAxisAngle(Vector3D.UnitX, Math.PI / 6), Vector3D.One);
+        document = CustomModelHelperAuthoring.SetLocalTransform(document, document.AuthoredHelpers[^1].Id, transform);
+        model = model with { Package = model.Package with { Document = document }, Rig = document.CreateRigDefinition() };
+        CustomModelPreviewSession imported = CustomModelPreviewAdapter.CreateSession(model, CustomModelPreviewMode.SourceFbx);
+        CustomModelPreviewSession output = CustomModelPreviewAdapter.CreateSession(model, CustomModelPreviewMode.Dl1Output);
+        Assert.Equal(CustomModelPreviewMode.Dl1Output, output.EffectiveMode);
+        RenderCamera sourceCamera = Assert.IsType<RenderCamera>(imported.CreatePreviewCamera(null, 0, name));
+        RenderCamera targetCamera = Assert.IsType<RenderCamera>(output.CreatePreviewCamera(null, 0, name));
+        TransformMatrix world = transform.ToMatrix();
+        TransformMatrix outputWorld = Dl1CustomModelRigPreparer.Prepare(model).Contract.Nodes
+            .Single(node => node.Name == name).GlobalBindMatrix;
+        static System.Numerics.Vector3 Vector(Vector3D value) => new((float)value.X, (float)value.Y, (float)value.Z);
+        static void Direction(System.Numerics.Vector3 actual, Vector3D expected) =>
+            Assert.True(System.Numerics.Vector3.Distance(System.Numerics.Vector3.Normalize(actual),
+                System.Numerics.Vector3.Normalize(Vector(expected))) < 1e-5f);
+        Direction(sourceCamera.Target - sourceCamera.Eye, world.TransformDirection(Vector3D.UnitZ));
+        Direction(sourceCamera.Up, world.TransformDirection(-Vector3D.UnitY));
+        Direction(targetCamera.Target - targetCamera.Eye, outputWorld.TransformDirection(native ? -Vector3D.UnitY : Vector3D.UnitZ));
+        Direction(targetCamera.Up, outputWorld.TransformDirection(native ? -Vector3D.UnitZ : -Vector3D.UnitY));
+        Assert.True(System.Numerics.Vector3.Distance(sourceCamera.Eye, Vector(world.Translation)) < 1e-5f);
+        Assert.True(System.Numerics.Vector3.Distance(targetCamera.Eye, Vector(outputWorld.Translation)) < 1e-5f);
+    }
+
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelPreview")]

@@ -276,7 +276,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     private sealed record MappingEditSnapshot(
         ImmutableDictionary<string, string> Roles,
         ImmutableDictionary<string, Vector3D>? Positions,
-        bool RequiresSourceReview);
+        bool RequiresSourceReview,
+        ImmutableHashSet<string> ReviewedRoles);
     private sealed record PendingRoleOverride(
         ImmutableDictionary<string, string> RolesBefore,
         MappingEditSnapshot? PreviousUndo,
@@ -423,7 +424,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             : Mappings.Where(row => row.Row.TemplateIndex >= 0 &&
                 row.Role is "body.root" ||
                 row.Row.TemplateIndex >= 0 &&
-                CoreRoles.Contains(row.Role, StringComparer.Ordinal))
+                row.Role is { } role && IsRequiredFitRole(role))
                 .ToArray();
 
     /// <summary>
@@ -592,7 +593,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     public bool HasMissingAnatomicalCorrespondence => UseGeometryCorrespondence && _geometryEvidence is not null && _template is { } template &&
         Correspondence?.Rows.Any(r => r.Disposition == RigBoneDisposition.Synthesized && r.Role is not null &&
-            CoreRoles.Contains(r.Role, StringComparer.Ordinal) && template[r.TemplateIndex].IsDeform) == true;
+            IsRequiredFitRole(r.Role) && template[r.TemplateIndex].IsDeform) == true;
 
     public string MappingReviewMessage => HasMissingAnatomicalCorrespondence ? "Some anatomical roles need a source bone. Choose them in the mapping table before applying." :
         HasPendingMappingReview ? "Review the proposed mappings, then accept them or choose different source bones." : string.Empty;
@@ -657,6 +658,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         try
         {
             _model = model;
+            if (freshModel) { _legacyFitDraft = null; _reviewedRoleOverrides = _reviewedRoleOverrides.Clear(); }
             _previousMappingEdit = null;
             _previousPositionOverrides = null;
             _pendingRoleOverride = null;
@@ -680,6 +682,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             }
             else if (freshModel)
             {
+                _legacyFitDraft = null;
+                if (IsStockFppRig) { TemplateProfileName = "player"; _template = null; }
+                SetFitStrategy(CustomModelRigFitStrategy.Legacy);
                 _roleOverrides = ImmutableDictionary<string, string>.Empty;
                 _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
                 UseGeometryCorrespondence = true;
@@ -712,6 +717,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         MirrorBodyGuide = mirrorGuide && CanMirrorBodyGuide;
         if (solveSynchronously) Solve();
         NotifyStateChanged();
+        if (IsStockFppRig && _template is null && _model is not null)
+            _ = ResolvePlayerRigFitAsync();
     }
 
     internal FbxModelAuthoringImportResult? UpdateWorkflowMode(CustomModelWorkflowMode workflowMode)
@@ -739,6 +746,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         CustomModelRigConformance settings,
         string? sourceFbxSha256)
     {
+        SetFitStrategy(settings.FitStrategy);
         TemplateProfileName = settings.TemplateProfileName;
         KeepExtraBones = !settings.DropExtraBones;
         ScaleMode = settings.ScaleMode;
@@ -749,11 +757,13 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             static row => row.Role,
             static row => row.SourceBoneName,
             StringComparer.Ordinal);
+        _reviewedRoleOverrides = settings.RoleOverrides.Select(row => row.Role).ToImmutableHashSet(StringComparer.Ordinal);
         _positionOverrides = settings.PositionOverrides.ToImmutableDictionary(
             static row => row.BoneName,
             static row => row.Position,
             StringComparer.OrdinalIgnoreCase);
         _sourceConformanceReviewRequired = !settings.MatchesSource(sourceFbxSha256);
+        if (IsStockFppRig && _template?.TemplateId != settings.TemplateId) _template = null;
 
         SolveStatus = settings.MatchesSource(sourceFbxSha256)
             ? "Restored the saved conformance settings."
@@ -768,6 +778,15 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         // original source mapping with current-output names.
         if (_editingAppliedOutputRig)
         {
+            if (_model?.Package.Document.RigConformance is { } saved && _template is { } target &&
+                (IsStockFppRig || saved.FitStrategy == CustomModelRigFitStrategy.StockFppRegional))
+                return ApplyStrategySettings(saved with
+                {
+                    TemplateId = target.TemplateId, TemplateProfileName = target.ProfileName,
+                    TemplateSourceResourceName = target.SourceResourceName, TemplateFingerprint = target.SourceFingerprint,
+                    ScaleMode = ScaleMode, ManualScale = ScaleMode == CustomModelConformanceScaleMode.Manual ? ManualScale : null,
+                    ConformanceStrength = ConformanceStrength,
+                });
             return null;
         }
 
@@ -779,7 +798,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
             return null;
         }
 
-        return new CustomModelRigConformance
+        return ApplyStrategySettings(new CustomModelRigConformance
         {
             CorrespondenceMethod = UseGeometryCorrespondence ? CustomModelCorrespondenceMethod.GeometryHierarchyV1 : CustomModelCorrespondenceMethod.LegacyNameRoles,
             TemplateId = template.TemplateId,
@@ -810,7 +829,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                     Position = pair.Value,
                 })
                 .ToImmutableArray(),
-        };
+        });
     }
 
     private async Task ResolveTemplateAsync(CancellationToken cancellationToken)
@@ -857,6 +876,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public void Solve()
     {
         if (_settingModel) return;
+        SeedStockSourceRoles();
         CancelPendingFitSolve();
         long revision = Interlocked.Increment(ref _fitInputRevision);
         IsBusy = false;
@@ -910,19 +930,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 template,
                 source,
                 Correspondence,
-                new RigLandmarkOptions
-                {
-                    ScaleOverride = ScaleMode == CustomModelConformanceScaleMode.Manual
-                        ? ManualScale
-                        : null,
-                    RestrictScaleToRegion = ScaleMode switch
-                    {
-                        CustomModelConformanceScaleMode.Leg => RigScaleRegion.Leg,
-                        CustomModelConformanceScaleMode.Torso => RigScaleRegion.Torso,
-                        CustomModelConformanceScaleMode.Arm => RigScaleRegion.Arm,
-                        _ => null,
-                    },
-                });
+                CreateLandmarkOptions(template, FitStrategy, ScaleMode, ManualScale));
             Fit = RigConformanceSolver.Solve(
                 template,
                 source,
@@ -930,8 +938,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 Landmark,
                 new RigConformanceOptions
                 {
-                    ConformanceStrength = ConformanceStrength,
-                    PositionOverrides = _positionOverrides,
+                    ConformanceStrength = IsStockFppRig ? 1 : ConformanceStrength,
+                    PositionOverrides = EffectivePositionOverrides(template, FitStrategy, _positionOverrides),
                 });
             SolveStatus = _editingAppliedOutputRig
                 ? "Reopened the applied DL rig for editing. Original source mapping decisions remain saved; the current rig is the fit source. " +
@@ -1042,6 +1050,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private RigConformanceSolveRequest CaptureSolveRequest(long revision)
     {
+        SeedStockSourceRoles();
         FbxModelAuthoringImportResult? model = _model;
         Dl1RigTemplate? template = _template;
         bool useGeometry = UseGeometryCorrespondence;
@@ -1051,13 +1060,14 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         CustomModelConformanceScaleMode scaleMode = ScaleMode;
         double manualScale = ManualScale;
         double conformanceStrength = ConformanceStrength;
+        CustomModelRigFitStrategy fitStrategy = FitStrategy;
         ImmutableDictionary<string, string> roleOverrides = _roleOverrides;
         ImmutableDictionary<string, Vector3D> positionOverrides = _positionOverrides;
         RigGeometryEvidence? geometryEvidence = _geometryEvidence;
         bool geometryEvidenceCaptured = _geometryEvidenceCaptured;
         return new(revision, model, cancellationToken => ComputeSolveResult(
             model, template, useGeometry, requiresSourceReview, editingAppliedOutput,
-            keepExtraBones, scaleMode, manualScale, conformanceStrength,
+            keepExtraBones, scaleMode, manualScale, conformanceStrength, fitStrategy,
             roleOverrides, positionOverrides, geometryEvidence, geometryEvidenceCaptured,
             cancellationToken));
     }
@@ -1072,6 +1082,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         CustomModelConformanceScaleMode scaleMode,
         double manualScale,
         double conformanceStrength,
+        CustomModelRigFitStrategy fitStrategy,
         ImmutableDictionary<string, string> roleOverrides,
         ImmutableDictionary<string, Vector3D> positionOverrides,
         RigGeometryEvidence? geometryEvidence,
@@ -1116,17 +1127,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 template,
                 source,
                 correspondence,
-                new RigLandmarkOptions
-                {
-                    ScaleOverride = scaleMode == CustomModelConformanceScaleMode.Manual ? manualScale : null,
-                    RestrictScaleToRegion = scaleMode switch
-                    {
-                        CustomModelConformanceScaleMode.Leg => RigScaleRegion.Leg,
-                        CustomModelConformanceScaleMode.Torso => RigScaleRegion.Torso,
-                        CustomModelConformanceScaleMode.Arm => RigScaleRegion.Arm,
-                        _ => null,
-                    },
-                },
+                CreateLandmarkOptions(template, fitStrategy, scaleMode, manualScale),
                 cancellationToken);
             RigConformanceResult fit = RigConformanceSolver.Solve(
                 template,
@@ -1135,8 +1136,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 landmark,
                 new RigConformanceOptions
                 {
-                    ConformanceStrength = conformanceStrength,
-                    PositionOverrides = positionOverrides,
+                    ConformanceStrength = fitStrategy == CustomModelRigFitStrategy.StockFppRegional ? 1 : conformanceStrength,
+                    PositionOverrides = EffectivePositionOverrides(template, fitStrategy, positionOverrides),
                 },
                 cancellationToken);
             string status = editingAppliedOutput
@@ -1204,6 +1205,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
         _editingAppliedOutputRig = true;
         _roleOverrides = ImmutableDictionary<string, string>.Empty;
+        _reviewedRoleOverrides = _reviewedRoleOverrides.Clear();
         _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
         _previousMappingEdit = null;
         _previousPositionOverrides = null;
@@ -1211,8 +1213,9 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         _settingModel = true;
         try
         {
-            ScaleMode = CustomModelConformanceScaleMode.Automatic;
-            ConformanceStrength = 0.0;
+            ScaleMode = IsStockFppRig ? CustomModelConformanceScaleMode.Manual : CustomModelConformanceScaleMode.Automatic;
+            if (IsStockFppRig) ManualScale = 1;
+            ConformanceStrength = IsStockFppRig ? 1 : 0.0;
         }
         finally
         {
@@ -1288,12 +1291,17 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     partial void OnUseGeometryCorrespondenceChanged(bool value) => QueueSolve();
 
-    private void AcceptMappingProposals()
+    private void AcceptMappingProposals() => AcceptMappingProposals(markReviewed: true);
+
+    private void AcceptMappingProposals(bool markReviewed)
     {
         if (!HasPendingMappingReview || Correspondence is not { } correspondence) return;
         _previousMappingEdit = CaptureMappingEdit();
         foreach (var row in correspondence.Rows.Where(static r => r.Disposition == RigBoneDisposition.Mapped && r.Role is not null && r.SourceName is not null))
+        {
             _roleOverrides = _roleOverrides.SetItem(row.Role!, row.SourceName!);
+            if (markReviewed) _reviewedRoleOverrides = _reviewedRoleOverrides.Add(row.Role!);
+        }
         QueueSolve();
         MappingEditStatus = "Suggested matches accepted. Undo restores the previous mapping choices.";
     }
@@ -1309,6 +1317,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         bool sourceChanged = _sourceConformanceReviewRequired;
         _previousMappingEdit = previous.IsEmpty && !sourceChanged ? null : CaptureMappingEdit();
         _roleOverrides = ImmutableDictionary<string, string>.Empty;
+        _reviewedRoleOverrides = _reviewedRoleOverrides.Clear();
         if (sourceChanged)
         {
             _positionOverrides = ImmutableDictionary<string, Vector3D>.Empty;
@@ -1330,6 +1339,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         }
 
         _roleOverrides = previous.Roles;
+        _reviewedRoleOverrides = previous.ReviewedRoles;
         if (previous.Positions is { } positions)
         {
             _positionOverrides = positions;
@@ -1346,7 +1356,8 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     private MappingEditSnapshot CaptureMappingEdit() => new(
         _roleOverrides,
         _sourceConformanceReviewRequired ? _positionOverrides : null,
-        _sourceConformanceReviewRequired);
+        _sourceConformanceReviewRequired,
+        _reviewedRoleOverrides);
 
     private void RefreshLandmarks()
     {
@@ -1391,7 +1402,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                 .Select(static row => row.Role!)
                 .ToHashSet(StringComparer.Ordinal);
             MissingCoreRoles = CoreRoles
-                .Where(role => !mapped.Contains(role))
+                .Where(role => IsRequiredFitRole(role) && !mapped.Contains(role))
                 .ToImmutableArray();
         }
 
@@ -1452,13 +1463,14 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         if (_roleOverrides.TryGetValue(role, out string? current) &&
             string.Equals(current, sourceBoneName, StringComparison.OrdinalIgnoreCase))
         {
+            _reviewedRoleOverrides = _reviewedRoleOverrides.Add(role);
             return true;
         }
 
         ImmutableDictionary<string, string> previous = _roleOverrides;
         MappingEditSnapshot? previousUndo = _previousMappingEdit;
         int mappedBefore = MappedCount;
-        int coreBefore = CoreRoles.Length - MissingCoreRoles.Length;
+        int coreBefore = CoreRoles.Count(IsRequiredFitRole) - MissingCoreRoles.Length;
         _previousMappingEdit = CaptureMappingEdit();
         _pendingRoleOverride = new(previous, previousUndo, mappedBefore, coreBefore,
             role, sourceBoneName, IsAdvancedSetupMode);
@@ -1479,7 +1491,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
                          static row => row.Disposition == RigBoneDisposition.Mapped && row.Role is not null))
                 mappedCoreRoles.Add(row.Role!);
         }
-        int coreCount = CoreRoles.Count(mappedCoreRoles.Contains);
+        int coreCount = CoreRoles.Count(role => IsRequiredFitRole(role) && mappedCoreRoles.Contains(role));
         int lostMapped = pending.MappedBefore - mappedCount;
         int lostCore = pending.CoreBefore - coreCount;
         bool majorLoss =
@@ -1498,6 +1510,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
         }
 
         _pendingRoleOverride = null;
+        _reviewedRoleOverrides = _reviewedRoleOverrides.Add(pending.Role);
         MappingEditStatus = majorLoss
             ? $"This choice unmapped {lostMapped} bones. Undo restores the previous mapping."
             : lostMapped > 0
@@ -1535,7 +1548,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
     public void SetBonePosition(string boneName, Vector3D position)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(boneName);
-        if (_sourceConformanceReviewRequired || !position.IsFinite)
+        if (_sourceConformanceReviewRequired || !position.IsFinite || IsStockNativeNode(boneName))
         {
             return;
         }
@@ -1626,6 +1639,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     partial void OnConformanceStrengthChanged(double value)
     {
+        OnPropertyChanged(nameof(PlayerRigFitSummary));
         OnPropertyChanged(nameof(FitMode));
         OnPropertyChanged(nameof(SelectedFitModeChoice));
         QueueSolve();
@@ -1649,6 +1663,7 @@ public sealed partial class RigConformanceWizardViewModel : ObservableObject
 
     private void NotifyStateChanged()
     {
+        NotifyFitStrategyState();
         NotifySetupTransfer();
         OnPropertyChanged(nameof(Template));
         OnPropertyChanged(nameof(HasTemplate));
