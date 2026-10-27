@@ -19,6 +19,10 @@ import struct
 MAGIC = b"ANM2"
 DL2_SIGNATURE = 42
 DL2_SECONDARY_VERSION = 2
+# Header_Version3 (current DL2 clips): Version2 layout plus one 4-byte field after the fixed header
+# (u16 pose stream count + u16 padding). With zero pose streams it is rewritten to Version2 in memory.
+DL2_V3_VERSION = 3
+DL2_V3_EXTRA_BYTES = 4
 DL2_HEADER_STRUCT = struct.Struct("<4sHHI8H")
 DL2_HEADER_SIZE = DL2_HEADER_STRUCT.size
 _U16 = struct.Struct("<H")
@@ -335,6 +339,35 @@ class Anm2V2Layout:
 Dl2Anm2Header42 = Anm2V2Layout
 
 
+def header_version3_pose_stream_count(data: bytes) -> int:
+    return struct.unpack_from("<H", data, DL2_HEADER_SIZE)[0]
+
+
+def normalize_header_version3(data: bytes) -> bytes:
+    """Return Header_Version3 data rewritten as Header_Version2 (other data is returned unchanged).
+
+    The header keeps its declared size (padding fills the 4 removed bytes), so block offsets
+    and the payload are byte-identical to the original file.
+    """
+
+    if len(data) < DL2_HEADER_SIZE + DL2_V3_EXTRA_BYTES:
+        return data
+    magic, signature, header_version = struct.unpack_from("<4sHH", data, 0)
+    if magic != MAGIC or signature != DL2_SIGNATURE or header_version != DL2_V3_VERSION:
+        return data
+    pose_streams = header_version3_pose_stream_count(data)
+    if pose_streams:
+        raise ValueError(
+            f"ANM2 Header_Version3 with {pose_streams} pose stream(s) is not supported yet."
+        )
+    header_bytes = struct.unpack_from("<H", data, 12)[0] << 4
+    head = bytearray(data[:DL2_HEADER_SIZE])
+    struct.pack_into("<H", head, 6, DL2_SECONDARY_VERSION)
+    body = head + data[DL2_HEADER_SIZE + DL2_V3_EXTRA_BYTES:header_bytes]
+    body += b"\0" * (header_bytes - len(body))
+    return bytes(body) + data[header_bytes:]
+
+
 def detect_anm2_format(data_or_path: bytes | bytearray | str | Path) -> int:
     data = _coerce_data(data_or_path)
     if len(data) < 8:
@@ -348,9 +381,12 @@ def detect_anm2_format(data_or_path: bytes | bytearray | str | Path) -> int:
         return 1
     if header_version == DL2_SECONDARY_VERSION:
         return 42
+    if header_version == DL2_V3_VERSION:
+        normalize_header_version3(data)  # raises for pose streams > 0
+        return 42
     raise ValueError(
         f"Unsupported ANM2 container: signature {signature}, header version {header_version}. "
-        "Only Header_Version1 and Header_Version2 are supported."
+        "Only Header_Version1, Header_Version2 and Header_Version3 (without pose streams) are supported."
     )
 
 
@@ -481,7 +517,7 @@ def parse_anm2_v2_layout(path_or_data: str | Path | bytes | bytearray) -> Anm2V2
     problem; curve decode calls ``require_valid()`` before resolving offsets.
     """
 
-    data = _coerce_data(path_or_data)
+    data = normalize_header_version3(_coerce_data(path_or_data))
     header = Anm2V2Header.parse(data)
     if header.magic != MAGIC:
         raise ValueError(f"Expected ANM2 magic, found {header.magic!r}.")
@@ -718,6 +754,12 @@ def inspect_anm2(path: str | Path, target_descriptors: Sequence[int] | None = No
         layout = parse_anm2_v2_layout(source)
         report = layout.to_dict()
         report.update({"path": str(source), "detected_format": 42, "game_id": "dying_light_2"})
+        with source.open("rb") as handle:
+            source_header = handle.read(DL2_HEADER_SIZE + DL2_V3_EXTRA_BYTES)
+        source_version = int(struct.unpack_from("<H", source_header, 6)[0])
+        report["source_header_version"] = source_version
+        if source_version == DL2_V3_VERSION:
+            report["pose_stream_count"] = header_version3_pose_stream_count(source_header)
         if target_descriptors is not None:
             target = {int(value) for value in target_descriptors}
             source_descriptors = set(layout.descriptors)
@@ -749,6 +791,7 @@ __all__ = [
     "DL2_SIGNATURE",
     "Dl2Anm2Header42",
     "detect_anm2_format",
+    "normalize_header_version3",
     "evaluate_vfr_time",
     "inspect_anm2",
     "parse_anm2_v2_layout",
