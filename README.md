@@ -6,7 +6,13 @@
   />
 </p>
 
+<p align="center">
+
 Create custom cutscenes, make zombies do the Thriller dance, have Kyle Crane twerk, mocap yourself and import it; Create whatever you want and import it directly into your custom projects!
+
+</p>
+
+<hr>
 
 ## What is ReAnimated?
 
@@ -21,7 +27,7 @@ You can:
 - Preview movement, facial expressions, first-person cameras, and secondary motion.
 - Save editable models and projects, export ANM2 animations, build RPack packages, and deploy to a Developer Tools project.
 
-This branch contains the C# application. It targets Dying Light 1; the older Python application's Dying Light 2 support does not carry over to this version -- *yet*.
+This branch contains the C# application. It targets **Dying Light 1**; the older Python application's Dying Light 2 support does not carry over to this version -- *yet*. If you want **Dying Light 2** and **Dying Light: The Beast** support, check the **legacy** branch for the old experimental C-Engine interface.
 
 ## Before you start
 
