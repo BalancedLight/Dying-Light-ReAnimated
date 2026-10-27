@@ -242,7 +242,7 @@ def decode_all_frames_cached(
                 )
             )
         frame_count = layout.frame_count
-        header_version = 2
+        header_version = int(struct.unpack_from("<H", data, 6)[0])  # 2, or 3 (read as 2)
         container = layout.container
         signature = int(getattr(layout, "signature", 42))
         static_stream_count = int(layout.static_stream_count)
