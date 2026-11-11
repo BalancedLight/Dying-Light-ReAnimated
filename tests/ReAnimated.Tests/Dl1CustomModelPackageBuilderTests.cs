@@ -13,6 +13,164 @@ namespace ReAnimated.Tests;
 
 public sealed class Dl1CustomModelPackageBuilderTests
 {
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ExportRecoversSourceAndCandidateSeparatelyWithoutReplacingValidatedPackage(bool emitsCandidate)
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            string target = Path.Combine(parent, "transaction_model_dl1_package");
+            Directory.CreateDirectory(target);
+            string sentinel = Path.Combine(target, "known-good.bin");
+            await File.WriteAllTextAsync(sentinel, "known-good");
+            var request = CreateRequest(parent) with
+            {
+                ModelCompilerOverride = async (compiler, token) =>
+                {
+                    if (emitsCandidate) await File.WriteAllTextAsync(compiler.OutputRpackPath, "candidate", token);
+                    throw new InvalidDataException(emitsCandidate ? "Synthetic hierarchy read-back disagreement." : "No compiler output.");
+                },
+            };
+
+            Dl1CustomModelExportOutcome first = await Dl1CustomModelPackageBuilder.ExportAsync(request);
+            Dl1CustomModelExportOutcome second = await Dl1CustomModelPackageBuilder.ExportAsync(request);
+
+            Assert.Equal(emitsCandidate ? Dl1CustomModelExportStatus.BestEffort : Dl1CustomModelExportStatus.Failed, first.Status);
+            Assert.Null(first.Package);
+            Assert.NotEqual(first.ArtifactDirectory, second.ArtifactDirectory);
+            Assert.True(File.Exists(Path.Combine(first.ArtifactDirectory, "loose", "transaction_model.msh")));
+            Assert.True(File.Exists(Path.Combine(first.ArtifactDirectory, "editable-input.dlrmodel")));
+            Assert.Equal("known-good", await File.ReadAllTextAsync(sentinel));
+            Assert.True(File.Exists(first.DiagnosticsPath));
+            Assert.NotEmpty(first.Warnings);
+            using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync(first.DiagnosticsPath));
+            Assert.False(diagnostics.RootElement.GetProperty("runtimeVerified").GetBoolean());
+            Assert.False(diagnostics.RootElement.GetProperty("compilerValidated").GetBoolean());
+            Assert.Equal(emitsCandidate, Directory.EnumerateFiles(first.ArtifactDirectory, "*.rpack", SearchOption.AllDirectories).Any());
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task StrictBuildPreservesRecoveryPathOnOriginalException()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            var original = new InvalidDataException("Synthetic read-back failure.");
+            var request = CreateRequest(parent) with
+            {
+                ModelCompilerOverride = (_, _) => Task.FromException<Dl1OfficialModelCompilerResult>(original),
+            };
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Dl1CustomModelPackageBuilder.BuildAsync(request));
+            Assert.Same(original, error);
+            string recovery = Assert.IsType<string>(error.Data["Dl1ExportArtifactDirectory"]);
+            Assert.True(File.Exists(Path.Combine(recovery, "loose", "transaction_model.msh")));
+            Assert.True(File.Exists(Assert.IsType<string>(error.Data["Dl1ExportDiagnosticsPath"])));
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task ExportPropagatesCancellationWithoutBestEffortSuccess()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                Dl1CustomModelPackageBuilder.ExportAsync(CreateRequest(parent), cancellation.Token));
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task ExportCopiesRetainedCompilerJobCandidateAndReturnsValidatedPackageOnlyOnSuccess()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            string job = Path.Combine(parent, "isolated-job");
+            Directory.CreateDirectory(job);
+            string candidate = Path.Combine(job, "native.msh_obj");
+            await File.WriteAllTextAsync(candidate, "native-candidate");
+            var request = CreateRequest(parent) with
+            {
+                ModelCompilerOverride = (_, _) =>
+                {
+                    var error = new InvalidDataException("Native compact read-back failed.");
+                    error.Data["Dl1CompilerJobDirectory"] = job;
+                    error.Data["Dl1CompilerCandidatePaths"] = new[] { candidate };
+                    return Task.FromException<Dl1OfficialModelCompilerResult>(error);
+                },
+            };
+            var failed = await Dl1CustomModelPackageBuilder.ExportAsync(request);
+            Assert.Equal(Dl1CustomModelExportStatus.BestEffort, failed.Status);
+            Assert.Equal("native-candidate", await File.ReadAllTextAsync(Assert.Single(
+                Directory.EnumerateFiles(Path.Combine(failed.ArtifactDirectory, "compiled-candidates"), "native.msh_obj", SearchOption.AllDirectories))));
+            Assert.True(File.Exists(candidate));
+
+            var success = await Dl1CustomModelPackageBuilder.ExportAsync(CreateRequest(parent));
+            Assert.Equal(Dl1CustomModelExportStatus.CompilerValidated, success.Status);
+            Assert.NotNull(success.Package);
+            Assert.True(File.Exists(success.DiagnosticsPath));
+            Assert.True(Directory.Exists(failed.ArtifactDirectory));
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task UnwritableOutputLocationRetainsSourceAndActionableDiagnosticsInLocalRecovery()
+    {
+        string parent = CreateTemporaryDirectory();
+        string? recovery = null;
+        try
+        {
+            string blocked = Path.Combine(parent, "occupied-output-path");
+            await File.WriteAllTextAsync(blocked, "preserve-existing-file");
+            var result = await Dl1CustomModelPackageBuilder.ExportAsync(CreateRequest(blocked));
+            recovery = result.ArtifactDirectory;
+            Assert.Equal(Dl1CustomModelExportStatus.Failed, result.Status);
+            Assert.Equal("preserve-existing-file", await File.ReadAllTextAsync(blocked));
+            Assert.True(File.Exists(Path.Combine(recovery, "loose", "transaction_model.msh")));
+            Assert.True(File.Exists(result.DiagnosticsPath));
+            Assert.NotEmpty(result.Warnings);
+        }
+        finally
+        {
+            Directory.Delete(parent, recursive: true);
+            if (recovery is not null) Directory.Delete(recovery, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task EditableInputSerializationFailureDoesNotObscureOriginalCompilerFailure()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            var request = CreateRequest(parent);
+            var document = request.Model.Package.Document with
+            {
+                Source = request.Model.Package.Document.Source with { ContentSha256 = new string('f', 64) },
+            };
+            var original = new InvalidDataException("Keep this original compiler failure.");
+            request = request with
+            {
+                Model = request.Model with { Package = request.Model.Package with { Document = document } },
+                ModelCompilerOverride = (_, _) => Task.FromException<Dl1OfficialModelCompilerResult>(original),
+            };
+            var error = await Assert.ThrowsAsync<InvalidDataException>(() => Dl1CustomModelPackageBuilder.BuildAsync(request));
+            Assert.Same(original, error);
+            using var diagnostics = JsonDocument.Parse(await File.ReadAllTextAsync((string)error.Data["Dl1ExportDiagnosticsPath"]!));
+            Assert.Contains("SHA-256", diagnostics.RootElement.GetProperty("editableInputSaveError").GetString());
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
     private const string OwnershipMarker = ".dl-reanimated-package-owned";
 
     [Theory]

@@ -149,6 +149,9 @@ public static class Dl1CustomModelRigPreparer
 
         ValidateUniqueNames(sourceBones);
         ImmutableArray<int> depthFirstSource = BuildDepthFirstOrder(sourceBones);
+        HashSet<int>? emittedBoneDependencies = model.Package.Document.Source.Kind == CustomModelSourceKind.StockCharacter
+            ? null
+            : CollectSkinningNodeDependencies(model.Surfaces, sourceBones);
         var sourceToPhysical = ImmutableArray.CreateBuilder<int>(sourceBones.Length);
         sourceToPhysical.Count = sourceBones.Length;
         for (int physicalIndex = 0; physicalIndex < depthFirstSource.Length; physicalIndex++)
@@ -223,7 +226,13 @@ public static class Dl1CustomModelRigPreparer
                 : parent < 0
                     ? authoredGlobals[physicalIndex]
                     : authoredGlobals[parent].InvertedAffine() * authoredGlobals[physicalIndex];
-            bool deform = IsDeform(sourceBone);
+            // IsWeighted can describe the original/imported rig after authored
+            // weight transfer has replaced every use of this node. Chrome
+            // prunes type-8 Bones outside the emitted palettes and their parent
+            // closure. Keep those animation/attachment identities as Helpers.
+            // Frame solving above deliberately retains the original policy.
+            bool deform = IsDeform(sourceBone) &&
+                (emittedBoneDependencies is null || emittedBoneDependencies.Contains(sourceIndex));
             RigEntityFramePolicy? policy = physicalPolicies.IsDefault ? null : physicalPolicies[physicalIndex];
             TransformMatrix global = authoredGlobals[physicalIndex];
             TransformMatrix reference = global.InvertedAffine();
@@ -830,6 +839,27 @@ public static class Dl1CustomModelRigPreparer
 
     private static bool IsDeform(CustomModelBone bone) =>
         bone.IsWeighted && bone.Kind is BoneKind.Deform or BoneKind.Root;
+
+    private static HashSet<int> CollectSkinningNodeDependencies(
+        ImmutableArray<FbxModelSurface> surfaces,
+        ImmutableArray<CustomModelBone> bones)
+    {
+        var required = new HashSet<int>();
+        foreach (FbxModelSurface surface in surfaces)
+        {
+            if (!surface.IsSkinned) continue;
+            // The compiler marks all declared palette entries, even entries
+            // whose current vertex weights quantize to zero. Do not infer
+            // removal from a positive-weight threshold or just the first LOD.
+            foreach (int sourceIndex in surface.PaletteBoneIndices)
+            {
+                if ((uint)sourceIndex >= (uint)bones.Length)
+                    throw new InvalidDataException($"Surface '{surface.Id}' references unknown source bone {sourceIndex}.");
+                for (int index = sourceIndex; index >= 0 && required.Add(index); index = bones[index].ParentIndex) { }
+            }
+        }
+        return required;
+    }
 
     private static void ValidateUniqueNames(ImmutableArray<CustomModelBone> bones)
     {

@@ -15,7 +15,7 @@ public sealed record StructuralNodeReview(Guid EntityId, int SourceIndex, string
     public string RetentionStatus => IsRetentionHelper
         ? "This is a saved retention helper. Removal checks model and project dependencies and must be reviewed before Apply."
         : CanAddRetentionHelper
-        ? "This bone's prepared branch has no mesh influences or helper dependencies. A retention helper can be proposed; compiled retention remains unverified."
+        ? "This authored branch has no mesh influences or explicit helper dependencies. An optional retention marker can be proposed. Export already preserves unused custom nodes as Helpers; compiled retention remains unverified."
         : "No retention helper proposal is needed for this selection's observed dependencies. This is not compiled-retention proof.";
     public string Eligibility => Name.Equals("EyeCamera", StringComparison.OrdinalIgnoreCase) || Name.Equals("RefCamera", StringComparison.OrdinalIgnoreCase) || Kind == BoneKind.Camera
         ? "Use the camera calibration workflow."
@@ -77,7 +77,12 @@ public static class FbxStructuralHelperAuthoring
         for (int i = bones.Length - 1; i >= 0; i--) if (bones[i].ParentIndex >= 0) branch[bones[i].ParentIndex] |= branch[i];
         var prepared = preparedRig ?? Dl1CustomModelRigPreparer.Prepare(model, token);
         var bySource = prepared.Contract.Nodes.ToDictionary(n => n.SourceBoneIndex);
-        var dependencies = prepared.Contract.Nodes.Select(n => used[n.SourceBoneIndex] > 0 || !n.IsDeform).ToArray();
+        // Authored helper dependencies are distinct from the automatic Helper
+        // representation of an unused Bone at export. Preserve the explicit
+        // reviewed marker workflow without interpreting export types as edits.
+        static bool IsAuthoredDeform(CustomModelBone bone) => bone.IsWeighted && bone.Kind is BoneKind.Deform or BoneKind.Root;
+        var dependencies = prepared.Contract.Nodes.Select(n => used[n.SourceBoneIndex] > 0 ||
+            !IsAuthoredDeform(bones[n.SourceBoneIndex])).ToArray();
         for (int i = dependencies.Length - 1; i >= 0; i--)
             if (prepared.Contract.Nodes[i].ParentPhysicalIndex >= 0)
                 dependencies[prepared.Contract.Nodes[i].ParentPhysicalIndex] |= dependencies[i];
@@ -97,7 +102,7 @@ public static class FbxStructuralHelperAuthoring
                 model.AnimationClips.Values.Sum(c => c.TransformTracks.Count(t => t.BoneIndex == b.Index)),helper?.LockedFields ?? RigHelperEditFields.None,
                 bySource[b.Index].GlobalBindMatrix, !camera && !branch[b.Index] && b.Kind is BoneKind.Helper or BoneKind.Prop,
                 !camera && b.Index < doc.Bones.Length && b.Kind is BoneKind.Root or BoneKind.Deform, b.ParentIndex >= 0)
-            { CanAddRetentionHelper = bySource[b.Index].IsDeform && !dependencies[bySource[b.Index].PhysicalIndex],
+            { CanAddRetentionHelper = IsAuthoredDeform(b) && !dependencies[bySource[b.Index].PhysicalIndex],
                 IsRetentionHelper = helper?.RoleId == FbxCompilerRetentionAuthoring.RoleId };
         }).ToImmutableArray();
         static string Owners(RigChannelOwnership c) => c.Owners.IsEmpty ? "unresolved" : string.Join("+",c.Owners);

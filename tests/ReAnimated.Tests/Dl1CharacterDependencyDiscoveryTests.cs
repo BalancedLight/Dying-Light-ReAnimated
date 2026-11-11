@@ -207,8 +207,9 @@ public sealed class Dl1CharacterDependencyDiscoveryTests
         RetailAssetRecord root = catalog.AddMesh();
         const string provider = "shared-source";
         catalog.AddFile("hero.bel", ValidBel + " !include(\"data/characters/group/actor.bel\");", providerId: provider);
+        string relativeInclude = string.Join('\\', "..", "..", "surface.def");
         RetailAssetRecord actor = catalog.AddFile("data/characters/group/actor.bel",
-            ValidBel + " !include(\"..\\..\\surface.def\");", providerId: provider);
+            ValidBel + $" !include(\"{relativeInclude}\");", providerId: provider);
         RetailAssetRecord exact = catalog.AddFile("data/surface.def", "Setting(7);", providerId: provider);
         catalog.AddFile("elsewhere/surface.def", "Setting(99);");
 

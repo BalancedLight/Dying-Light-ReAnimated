@@ -16,6 +16,38 @@ namespace ReAnimated.Tests;
 
 public sealed class Dl1OfficialModelCompilerContractTests
 {
+    [Fact]
+    public void InputFingerprintIncludesTheSameAutomaticPoliciesAsCompilation()
+    {
+        var model = FbxModelAuthoringImporter.Import(BlenderFbxStrictValidationTests.CreateValidModelFixture(), "fingerprint.fbx");
+        var document = model.Package.Document;
+        document = document with { RiggingSession = RiggingSessions.Create(document, RigStudioEntryPath.RepairExistingRig) };
+        model = model with { Package = model.Package with { Document = document } };
+        var completed = model with { Package = model.Package with { Document = RigAnimationPolicyDefaults.Apply(document) } };
+
+        Assert.Equal(Dl1OfficialModelCompiler.CalculateInputFingerprint(completed, "sample", "default", null),
+            Dl1OfficialModelCompiler.CalculateInputFingerprint(model, "sample", "default", null));
+        Assert.Empty(document.RiggingSession!.Recipe.ComponentPolicies);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(7)]
+    [InlineData(-1073741819)]
+    public void AnyNonzeroModelExitWithEmittedOutputRequiresReadBackAndReturnsWarning(int exitCode)
+    {
+        string? warning = Dl1OfficialModelCompiler.AssessModelCompilerExitCode(exitCode, true, "example.msh_obj");
+        Assert.NotNull(warning);
+        Assert.Contains(exitCode.ToString(System.Globalization.CultureInfo.InvariantCulture), warning);
+        Assert.Contains("validation", warning, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    public void ModelExitWithoutExpectedOutputAlwaysBlocks(int exitCode) =>
+        Assert.Throws<InvalidDataException>(() => Dl1OfficialModelCompiler.AssessModelCompilerExitCode(exitCode, false, "missing.msh_obj"));
+
     [Theory]
     [InlineData(
         "// AnimScriptAlias(\"GenericLibrary.scr\")\nAnimScriptAlias(\"WrongLibrary.scr\")\n")]

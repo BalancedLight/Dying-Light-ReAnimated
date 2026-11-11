@@ -88,7 +88,7 @@ public sealed class Dl1BoneScriptPolicyTests
     }
 
     [Fact]
-    public async Task UnresolvedStudioPolicyFailsBeforeTouchingExistingOutput()
+    public async Task UnresolvedStudioPolicyExportsAutomaticDefaultsAndRetainsExistingFiles()
     {
         var model = Model(studio: true);
         var doc = model.Package.Document;
@@ -99,9 +99,12 @@ public sealed class Dl1BoneScriptPolicyTests
         {
             string sentinel = Path.Combine(directory, "existing.txt");
             await File.WriteAllTextAsync(sentinel, "retain");
-            await Assert.ThrowsAsync<InvalidDataException>(() => Dl1SourceModelWriter.WriteAsync(new() { Model = model, ResourceName = "policy_fixture", OutputDirectory = directory }));
+            var result = await Dl1SourceModelWriter.WriteAsync(new() { Model = model, ResourceName = "policy_fixture", OutputDirectory = directory });
             Assert.Equal("retain", await File.ReadAllTextAsync(sentinel));
-            Assert.Single(Directory.EnumerateFiles(directory));
+            Assert.NotEmpty(result.BoneScriptPolicies);
+            Assert.All(result.BoneScriptPolicies, policy => Assert.Equal(RigAnimationLod.Off, policy.AnimationLod));
+            Assert.Contains(RigAnimationPolicyDefaults.EvidenceId,
+                await File.ReadAllTextAsync(Path.Combine(directory, "policy_fixture.components.json")));
         }
         finally { RpackTestData.DeleteTemporaryDirectory(directory); }
     }

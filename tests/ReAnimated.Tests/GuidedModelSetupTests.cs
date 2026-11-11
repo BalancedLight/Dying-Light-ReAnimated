@@ -424,11 +424,13 @@ public sealed class GuidedModelSetupTests
     [Fact]
     [Trait("ValidationTier", "Focused")]
     [Trait("Gate", "ViewModelWpf")]
-    public async Task GuidedExportStaysOnExportUntilEmittedChannelPoliciesAreReviewed()
+    public async Task GuidedExportUsesAutomaticPoliciesAndStaysOnExportWhenOutputPickerIsCanceled()
     {
         FbxModelAuthoringImportResult source = GeneratedBodyWorkflowTests.WithFixtureGuides(GeneratedBodyWorkflowTests.Source());
         FbxModelAuthoringImportResult generated = FbxGeneratedBodyBinding.Generate(source);
-        using var workspace = CreateWorkspace(model: generated);
+        var dialogs = new NoDialogs(typeof(GuidedModelSetupTests).Assembly.Location);
+        using var workspace = CreateWorkspace(model: generated, fileDialogs: dialogs);
+        workspace.SelectModelCompilerCommand.Execute(null);
         workspace.SetGuidedPreviewHandler(static () => Task.FromResult(true));
 
         await workspace.BeginGuidedSetupAsync(CustomModelSkeletonChoice.MapToDl1);
@@ -436,12 +438,13 @@ public sealed class GuidedModelSetupTests
         await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
 
         Assert.True(workspace.IsGuidedExport);
-        Assert.True(workspace.GuidedChannelPolicyReviewRequired);
-        Assert.True(workspace.GuidedUnresolvedChannelDecisionCount > 0);
+        Assert.False(workspace.GuidedChannelPolicyReviewRequired);
+        Assert.Equal(0, workspace.GuidedUnresolvedChannelDecisionCount);
+        Assert.Contains("automatic defaults", workspace.GuidedChannelPolicyReviewSummary, StringComparison.OrdinalIgnoreCase);
         await workspace.GuidedPrimaryCommand.ExecuteAsync(null);
         Assert.True(workspace.IsGuidedExport);
-        Assert.Contains("emitted node(s) require explicit POS/ROT/SCL", workspace.GuidedStatus, StringComparison.Ordinal);
-        Assert.Contains("Review exact stock matches", workspace.GuidedChannelPolicyReviewSummary, StringComparison.Ordinal);
+        Assert.Equal(1, dialogs.OutputDirectoryRequests);
+        Assert.Contains("parent folder for the complete DL1 model package", workspace.GuidedStatus, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

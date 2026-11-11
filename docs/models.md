@@ -53,6 +53,8 @@ When building from geometry, review the body guides before **Build draft body ri
 
 When you choose an existing bank for a newly fitted model, body joints keep their fitted distances and scale while using the bank's rotations. The body root uses bank position and rotation with bind scale. Existing channel choices take precedence; advanced root choices remain available in **Channel Policies**.
 
+The **Use Player 1 third-person reference** shortcut selects the usual player TPP skeleton directly. In **Channel policies**, **Apply automatic defaults (keep saved edits)** completes unset nodes from exact stock matches where available; unmatched extras keep all animation tracks with `LOD_OFF`. Selected, filtered and all-node actions remain editable. Unweighted nodes are retained when exporting; their animation and hierarchy roles are separate from skin influence.
+
 **DL1 Output** previews these saved channels by default. Clear **Use saved bone channels** under **Preview options** to inspect the raw clip keys. Reopening a model retains its channel choices; older packages are not changed automatically.
 
 **Advanced controls** exposes more detailed helper, hierarchy, camera, and rig settings. Start with the guided stages and open those controls when you need a specific correction.

@@ -1580,6 +1580,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         try
         {
             SyncDocument();
+            await Conformance.ApplyAutomaticChannelPoliciesAsync(token);
+            EnsureCurrent(generation, token);
+            SyncDocument();
             Dl1SourceModelBuildResult result = await Dl1SourceModelWriter.WriteAsync(
                 new Dl1SourceModelBuildRequest
                 {
@@ -1596,7 +1599,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             BuildStatus =
                 $"Source model ready: {Path.GetFileName(result.SourceMshPath)}, " +
                 $"{Path.GetFileName(result.CharacterDefinitionPath)}, {Path.GetFileName(result.BoneScriptPath)}. " +
-                "Use Compile model RPack to create the validated .msh_obj and RPack; .skn remains unsupported. " +
+                "Use Compile model RPack for compiler checks and an export result; runtime testing is still required. " +
                 string.Join(" ", result.NativeCompanionNotes);
             _setStatus($"Built custom-model source files in {directory}");
         }
@@ -1668,6 +1671,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         try
         {
             SyncDocument();
+            await Conformance.ApplyAutomaticChannelPoliciesAsync(token);
+            EnsureCurrent(generation, token);
+            SyncDocument();
             FbxModelAuthoringImportResult buildModel = _model ??
                 throw new InvalidOperationException("The custom-model authoring document is no longer available.");
             long buildRevision = Volatile.Read(ref _authoringRevision);
@@ -1679,7 +1685,7 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 ReferenceExistingAnimationLibrary,
                 resourceName);
             BuildStatus = "Building and validating the complete DL1 model package in staging...";
-            Dl1CustomModelPackageResult result = await Dl1CustomModelPackageBuilder.BuildAsync(
+            Dl1CustomModelExportOutcome export = await Dl1CustomModelPackageBuilder.ExportAsync(
                 new Dl1CustomModelPackageRequest
                 {
                     Model = buildModel,
@@ -1693,6 +1699,16 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
                 },
                 token);
             EnsureCurrentGeneration(generation);
+            if (export.Package is not { } result)
+            {
+                ClearLastBuildReceipt();
+                BuildStatus = (export.Status == Dl1CustomModelExportStatus.BestEffort
+                    ? "Best-effort export available; compiler validation did not pass and runtime validity is unverified. "
+                    : "No compiled model was produced. ") +
+                    $"Source and diagnostics: {export.ArtifactDirectory}. " + string.Join(" ", export.Warnings);
+                _setStatus(BuildStatus);
+                return;
+            }
             bool currentDraftMatchesBuild = BuildSnapshotStillCurrent(buildModel, buildRevision, resourceName);
             CustomModelDocument document = (currentDraftMatchesBuild ? _model! : buildModel).Package.Document with
             {
@@ -1725,6 +1741,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
             if (result.AnimationLibrary is not null && GuidedIncludedPoseOnlyTakeCount > 0)
                 BuildStatus += $" Includes {GuidedIncludedPoseOnlyTakeCount} checked pose-only take(s); uncheck them in Export to omit the local animation library.";
             BuildStatus += " " + string.Join(" ", result.SourceModel.NativeCompanionNotes);
+            if (!result.CompiledModel.Warnings.IsEmpty)
+                BuildStatus += " Warnings: " + string.Join(" ", result.CompiledModel.Warnings);
+            BuildStatus += " Compiler checks passed; runtime verification remains untested. Diagnostics: " + export.DiagnosticsPath;
             if (!currentDraftMatchesBuild)
             {
                 BuildStatus += " The authoring draft changed during the build, so its compiler-validation receipt was not attached; rebuild the current draft before publishing it.";
@@ -1861,6 +1880,9 @@ public sealed partial class ModelsWorkspaceViewModel : ObservableObject, IDispos
         long generation = BeginOperation(CancellationToken.None, out CancellationToken token);
         try
         {
+            SyncDocument();
+            await Conformance.ApplyAutomaticChannelPoliciesAsync(token);
+            EnsureCurrent(generation, token);
             SyncDocument();
             BuildStatus = "Preparing canonical Developer Tools deployment preflight...";
             _setStatus(BuildStatus);

@@ -80,6 +80,10 @@ This route stages model source and related character files into the project. Out
 
 ## Compile a complete model package
 
+For an imported rigged character, choose **Use Player 1 third-person reference** in Setup, retarget/apply the fit, then export. **Channel policies → Apply automatic defaults (keep saved edits)** uses exact reference channel/LOD values where a matching stock node is available. It keeps your saved choices. Unmatched extra nodes keep position, rotation and scale tracks with `LOD_OFF`; this conservative authoring default preserves available animation data and is not a claim of verified native behavior. You can change a selected node or apply settings to a named filter or the entire node list. Source export also fills unset choices automatically.
+
+Unweighted extra nodes can still own animation, attachments or descendants. Export preserves them and their transforms. Nodes outside emitted skin palettes and their ancestor dependencies use the compiler's Helper representation so its unused-Bone pruning cannot silently discard authored nodes.
+
 **Needs:** a prepared model, the installed Developer Tools model compiler, and the retail resources required by the compiler.
 
 1. Finish the model's Setup stages and review its animation clips or existing animation-bank choice.
@@ -91,6 +95,10 @@ This route stages model source and related character files into the project. Out
 This route compiles the model and assembles its package, including `.msh_obj`, a model RPack, and `local_dx11.mp`, with animation and companion output as required by the settings. `.skn` generation is currently unsupported.
 
 Use the compiled resources with their matching character definition in your Developer Tools project. Test the model's materials, rig, and animations there before publishing your map.
+
+The result distinguishes **Compiler validated**, **Best-effort**, and **Failed**. Compiler validation covers the recorded offline checks; runtime behavior still requires testing. A nonzero compiler exit that produced output is reported as a warning while the output goes through the same checks. If validation cannot complete but compiler output exists, a separately named best-effort folder retains the candidate, loose source, editable model and diagnostics. It never replaces the previous validated package and is not approved for deployment. If no compiled model exists, the failed-export folder explains the blocker and preserves useful source output. Compiler job/intermediate output and transcripts are retained separately and linked from diagnostics.
+
+Repeated failed or best-effort exports create distinct folders. Read `export-diagnostics.json` before using a candidate; never treat the presence of an RPack or mesh object alone as proof that it will load or animate correctly.
 
 ## Deploy to Developer Tools
 

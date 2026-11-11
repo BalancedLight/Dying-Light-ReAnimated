@@ -80,6 +80,56 @@ public static class Dl1CustomModelPackageBuilder
         WriteIndented = true,
     };
 
+    /// <summary>Standalone authoring export; uncertain output is isolated from validated packages.</summary>
+    public static async Task<Dl1CustomModelExportOutcome> ExportAsync(
+        Dl1CustomModelPackageRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        try
+        {
+            Dl1CustomModelPackageResult package = await BuildAsync(request, cancellationToken).ConfigureAwait(false);
+            return new(Dl1CustomModelExportStatus.CompilerValidated, package, package.PackageDirectory,
+                Path.Combine(package.PackageDirectory, "export-diagnostics.json"), package.CompiledModel.Warnings);
+        }
+        catch (Exception error) when (Dl1CustomModelExportRecovery.IsRecoverable(error))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (error.Data[Dl1CustomModelExportRecovery.ArtifactKey] is not string ||
+                error.Data[Dl1CustomModelExportRecovery.DiagnosticsKey] is not string)
+            {
+                string resource = Dl1SourceModelWriter.SanitizeName(request.ResourceName, 55);
+                var (parent, staging) = Dl1CustomModelExportRecovery.CreateRecoveryStaging(
+                    Path.GetFullPath(request.ParentOutputDirectory), resource, error);
+                try
+                {
+                    var sourceRequest = new Dl1SourceModelBuildRequest
+                    {
+                        Model = request.Model, ResourceName = resource, OutputDirectory = Path.Combine(staging, "loose"),
+                        SurfaceName = request.SurfaceName, AnimationScriptAlias = request.AnimationScriptAlias,
+                        AllowIncompleteCharacterDiagnostics = true,
+                    };
+                    await (request.SourceWriterOverride?.Invoke(sourceRequest, cancellationToken) ??
+                        Dl1SourceModelWriter.WriteAsync(sourceRequest, cancellationToken)).ConfigureAwait(false);
+                }
+                catch (Exception sourceError) when (Dl1CustomModelExportRecovery.IsRecoverable(sourceError))
+                {
+                    error.Data["Dl1SourceRecoveryError"] = sourceError.Message;
+                    await File.WriteAllTextAsync(Path.Combine(staging, "source-recovery-failure.txt"),
+                        sourceError.ToString(), cancellationToken).ConfigureAwait(false);
+                }
+                Dl1CustomModelExportRecovery.Preserve(error, parent, resource, staging, request.Model.Package);
+            }
+            string artifacts = (string)error.Data[Dl1CustomModelExportRecovery.ArtifactKey]!;
+            string diagnostics = (string)error.Data[Dl1CustomModelExportRecovery.DiagnosticsKey]!;
+            var status = (Dl1CustomModelExportStatus)error.Data[Dl1CustomModelExportRecovery.StatusKey]!;
+            return new(status, null, artifacts, diagnostics,
+                [status == Dl1CustomModelExportStatus.BestEffort
+                    ? "Best-effort output; compiler validation failed. Runtime behavior is unverified."
+                    : "No validated compiled model was produced. Source and diagnostics were retained.", error.Message]);
+        }
+    }
+
     public static async Task<Dl1CustomModelPackageResult> BuildAsync(
         Dl1CustomModelPackageRequest request,
         CancellationToken cancellationToken = default)
@@ -139,6 +189,7 @@ public static class Dl1CustomModelPackageBuilder
             cancellationToken).ConfigureAwait(false);
 
         bool published = false;
+        bool retainFailedStaging = false;
         try
         {
             string looseDirectory = Path.Combine(staging, "loose");
@@ -198,6 +249,16 @@ public static class Dl1CustomModelPackageBuilder
             }
 
             ValidateStagedOutputs(request.Model, source, compiled, animations, alias, hasAnimations, request.ReuseVerifiedExistingMaterials);
+            await File.WriteAllTextAsync(Path.Combine(staging, "export-diagnostics.json"), JsonSerializer.Serialize(new
+            {
+                format = "dl-reanimated-custom-model-export-diagnostics", schemaVersion = 1,
+                status = Dl1CustomModelExportStatus.CompilerValidated.ToString(), compilerValidated = true,
+                runtimeVerified = false, warnings = compiled.Warnings, compilerJobDirectory = compiled.DiagnosticsDirectory,
+                compilerTranscript = compiled.CompilerLog,
+                nativeStageLogs = compiled.DiagnosticsDirectory is { } diagnosticsDirectory && Directory.Exists(diagnosticsDirectory)
+                    ? Directory.EnumerateFiles(diagnosticsDirectory, "native-*.log", SearchOption.TopDirectoryOnly).ToArray()
+                    : [],
+            }, ManifestJsonOptions), cancellationToken).ConfigureAwait(false);
             ImmutableDictionary<string, string> hashes = await HashOutputsAsync(
                 staging,
                 cancellationToken).ConfigureAwait(false);
@@ -255,9 +316,20 @@ public static class Dl1CustomModelPackageBuilder
                 StockAnimationReference = stockBank,
             };
         }
+        catch (Exception error) when (Dl1CustomModelExportRecovery.IsRecoverable(error))
+        {
+            retainFailedStaging = true;
+            try { Dl1CustomModelExportRecovery.Preserve(error, parent, resourceName, staging, request.Model.Package); }
+            catch (Exception recoveryError) when (recoveryError is IOException or UnauthorizedAccessException)
+            {
+                error.Data[Dl1CustomModelExportRecovery.ArtifactKey] = staging;
+                error.Data["Dl1RecoveryError"] = recoveryError.Message;
+            }
+            throw;
+        }
         finally
         {
-            if (!published && Directory.Exists(staging))
+            if (!published && !retainFailedStaging && Directory.Exists(staging))
             {
                 TryDeleteOwnedDirectory(staging);
             }

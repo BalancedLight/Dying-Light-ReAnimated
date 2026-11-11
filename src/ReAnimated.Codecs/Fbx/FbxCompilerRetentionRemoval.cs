@@ -97,14 +97,25 @@ public static partial class FbxCompilerRetentionAuthoring
         var candidate = model with { Package = model.Package with { Document = updated }, Rig = updated.CreateRigDefinition(), Surfaces = surfaces, AnimationClips = clips };
         FbxProfileEditGuard.RequireAllowed(model, candidate, cancellationToken);
         var prepared = Dl1CustomModelRigPreparer.Prepare(candidate, cancellationToken);
+        // A declared palette slot counts as a compiler dependency even when
+        // every weight is zero. Removing that slot can return an unused custom
+        // ancestor to its preserved Helper representation; it does not remove
+        // the ancestor or alter its authored kind/frame/animation identity.
+        var removedPaletteAncestors = new HashSet<int>();
+        if (doc.Source.Kind != CustomModelSourceKind.StockCharacter &&
+            model.Surfaces.Any(surface => surface.IsSkinned && surface.PaletteBoneIndices.Contains(removed)))
+            for (int parent = beforeBones[removed].ParentIndex; parent >= 0; parent = beforeBones[parent].ParentIndex)
+                removedPaletteAncestors.Add(parent);
         foreach (var before in beforePrepared.Contract.Nodes.Where(n => n.SourceBoneIndex != removed))
         {
             var after = prepared.Contract.Nodes.Single(n => n.SourceBoneIndex == map[before.SourceBoneIndex]);
-            if (before.Name != after.Name || before.IsDeform != after.IsDeform || !before.GlobalBindMatrix.NearlyEquals(after.GlobalBindMatrix, 1e-9) ||
+            bool expectedHelperRepresentation = before.IsDeform && !after.IsDeform &&
+                removedPaletteAncestors.Contains(before.SourceBoneIndex);
+            if (before.Name != after.Name || (before.IsDeform != after.IsDeform && !expectedHelperRepresentation) || !before.GlobalBindMatrix.NearlyEquals(after.GlobalBindMatrix, 1e-9) ||
                 !before.InverseGlobalReferenceMatrix.NearlyEquals(after.InverseGlobalReferenceMatrix, 1e-9) || before.Bounds != after.Bounds)
                 throw new InvalidDataException($"Removal changed prepared node '{before.Name}'. Review its frame/bounds dependencies first.");
         }
-        return new(model, candidate, helperId, $"Preview only: remove retention helper '{name}'. Remaining nodes and skinning are preserved. Its parent may be removed by the compiler; compile and revalidate the changed rig before deployment.")
+        return new(model, candidate, helperId, $"Preview only: remove retention helper '{name}'. Remaining nodes and skinning are preserved; unused custom ancestors retain their Helper representation. Compile and revalidate the changed rig before deployment.")
             { RemovedHelperId = helperId };
     }
 }

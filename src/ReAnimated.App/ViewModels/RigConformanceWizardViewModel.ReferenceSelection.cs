@@ -8,6 +8,7 @@ public sealed partial class RigConformanceWizardViewModel
     private Func<CancellationToken, Task<Dl1RigTemplateResolution>>? _pickRetailReference;
 
     public IAsyncRelayCommand UseSelectedRetailMeshCommand { get; private set; } = null!;
+    public IAsyncRelayCommand UsePlayerTppReferenceCommand { get; private set; } = null!;
 
     internal void SetRetailReferencePicker(Func<CancellationToken, Task<Dl1RigTemplateResolution>> picker)
     {
@@ -15,9 +16,22 @@ public sealed partial class RigConformanceWizardViewModel
         UseSelectedRetailMeshCommand?.NotifyCanExecuteChanged();
     }
 
-    private void InitializeRetailReferenceSelection() =>
+    private void InitializeRetailReferenceSelection()
+    {
         UseSelectedRetailMeshCommand = new AsyncRelayCommand(UseSelectedRetailMeshAsync,
             () => !IsBusy && _pickRetailReference is not null);
+        UsePlayerTppReferenceCommand = new AsyncRelayCommand(UsePlayerTppReferenceAsync, () => !IsBusy);
+        PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(IsBusy)) UsePlayerTppReferenceCommand.NotifyCanExecuteChanged();
+        };
+    }
+
+    private async Task UsePlayerTppReferenceAsync(CancellationToken cancellationToken)
+    {
+        TemplateProfileName = "player";
+        await ResolveTemplateAsync(cancellationToken).ConfigureAwait(true);
+    }
 
     private async Task UseSelectedRetailMeshAsync(CancellationToken cancellationToken)
     {

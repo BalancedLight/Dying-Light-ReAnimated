@@ -17,6 +17,52 @@ public sealed partial class RigChannelPolicyWorkflowTests : IDisposable
     private readonly string _directory = RpackTestData.CreateTemporaryDirectory();
 
     [Fact]
+    public void EditingOneNodeLeavesOtherNodesAvailableForExactStockDefaults()
+    {
+        var fixture = StockPreviewFixture();
+        var wizard = new RigConformanceWizardViewModel((_, _) => Task.FromResult(
+            new Dl1RigTemplateResolution(fixture.Template, fixture.Template.ProfileName,
+                fixture.Template.SourceResourceName, fixture.Template.SourceFingerprint, "test reference")), static _ => { });
+        wizard.SetModel(fixture.Model);
+        CustomModelDocument? applied = null;
+        wizard.RigPoliciesApplyRequested += (_, args) => applied = args.Model.Package.Document with { RiggingSession = args.Session };
+        wizard.SelectedChannelPolicy = wizard.ChannelPolicies[0];
+        wizard.EmitPositionChannel = false;
+        wizard.ApplySelectedChannelPolicyCommand.Execute(null);
+        Assert.NotNull(applied);
+        Assert.Single(applied.RiggingSession!.Recipe.ComponentPolicies);
+        Assert.Equal(RigAnimationComponents.Rotation | RigAnimationComponents.Scale,
+            applied.RiggingSession.Recipe.ComponentPolicies[0].EmittedMask);
+    }
+
+    [Fact]
+    public async Task AutomaticPoliciesUseExactStockAndPersistWithoutPerNodeReview()
+    {
+        var fixture = StockPreviewFixture();
+        var wizard = new RigConformanceWizardViewModel((_, _) => Task.FromResult(
+            new Dl1RigTemplateResolution(fixture.Template, fixture.Template.ProfileName,
+                fixture.Template.SourceResourceName, fixture.Template.SourceFingerprint, "test reference")), static _ => { });
+        wizard.SetModel(fixture.Model);
+        wizard.SetStockPolicySourcePicker((_, _) => Task.FromResult<Dl1MeshPreviewPayload?>(fixture.Payload));
+        CustomModelDocument? applied = null;
+        wizard.RigPoliciesApplyRequested += (_, args) => applied = args.Model.Package.Document with { RiggingSession = args.Session };
+        var command = Assert.IsAssignableFrom<CommunityToolkit.Mvvm.Input.IAsyncRelayCommand>(
+            wizard.GetType().GetProperty("ApplyAutomaticChannelPoliciesCommand")?.GetValue(wizard));
+        await command.ExecuteAsync(null);
+        Assert.NotNull(applied);
+        var expected = Dl1StockBoneScriptPolicyProposalService.Propose(fixture.Template,
+            fixture.Payload.Source.Hierarchy, fixture.Template.SourceFingerprint, fixture.Model.Package.Document,
+            Dl1CustomModelRigPreparer.Prepare(fixture.Model));
+        foreach (var row in expected.Rows.Where(row => row.Status == Dl1StockPolicyProposalStatus.Proposed))
+        {
+            var policy = applied.RiggingSession!.Recipe.ComponentPolicies.Single(policy => policy.EntityId == row.DestinationEntityId);
+            Assert.Equal(row.ProposedMask, policy.EmittedMask);
+            Assert.Equal(row.ProposedLod, policy.AnimationLod);
+            Assert.Contains(policy.LodEvidence, evidence => evidence.Kind == RigEvidenceKind.ImportedSource && evidence.ArtifactSha256 == fixture.Template.SourceFingerprint);
+        }
+    }
+
+    [Fact]
     public async Task ReopenedPolicyPreviewLoadsItsSavedReferenceWithoutReapplyingTheFit()
     {
         var fixture = StockPreviewFixture();
@@ -399,24 +445,25 @@ public sealed partial class RigChannelPolicyWorkflowTests : IDisposable
     }
 
     [Fact]
-    public void MissingDecisionsRequireExplicitChannelsLodAndOwners()
+    public void MissingDecisionsOfferEditableDefaultsAndStillRejectIncompleteControls()
     {
         var source = Imported();
         using var workspace = Workspace(source);
         var wizard = workspace.Conformance;
         Assert.True(wizard.HasChannelPolicies);
-        Assert.Null(wizard.EmitPositionChannel);
-        Assert.Null(wizard.EmitRotationChannel);
-        Assert.Null(wizard.EmitScaleChannel);
-        Assert.Null(wizard.ChannelLod);
+        Assert.True(wizard.EmitPositionChannel);
+        Assert.True(wizard.EmitRotationChannel);
+        Assert.True(wizard.EmitScaleChannel);
+        Assert.Equal(RigAnimationLod.Off, wizard.ChannelLod!.Lod);
         Assert.Null(wizard.PositionChannelOwner!.Owner);
+        wizard.EmitPositionChannel = null;
         wizard.ApplyAllChannelPoliciesCommand.Execute(null);
         Assert.Same(source.Package.Document.RiggingSession, Current(workspace).RiggingSession);
         Choose(wizard, RigAnimationComponents.None, RigAnimationLod.Off);
         wizard.PositionChannelOwner = wizard.ChannelOwnerChoices[0];
         wizard.ApplyAllChannelPoliciesCommand.Execute(null);
-        Assert.Contains("cannot be preserved", wizard.ChannelPolicyStatus, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(Current(workspace).RiggingSession!.Recipe.ComponentPolicies);
+        Assert.NotEmpty(Current(workspace).RiggingSession!.Recipe.ComponentPolicies);
+        Assert.All(Current(workspace).RiggingSession!.Recipe.ComponentPolicies, policy => Assert.Equal(RigAnimationComponents.None, policy.EmittedMask));
         wizard.PositionChannelOwner = wizard.ChannelOwnerChoices.Single(c => c.Owner == RigComponentOwner.BindInherited);
         wizard.ApplyAllChannelPoliciesCommand.Execute(null);
         Assert.All(Current(workspace).RiggingSession!.Recipe.ComponentPolicies, policy => Assert.Equal(RigAnimationComponents.None, policy.EmittedMask));
@@ -500,8 +547,8 @@ public sealed partial class RigChannelPolicyWorkflowTests : IDisposable
         var wizard = workspace.Conformance;
         Choose(wizard, RigAnimationComponents.Scale, RigAnimationLod.Lod3);
         workspace.CommitProjectRestore(new(Imported(), "another.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
-        Assert.Null(wizard.ChannelLod);
-        Assert.Null(wizard.EmitScaleChannel);
+        Assert.Equal(RigAnimationLod.Off, wizard.ChannelLod!.Lod);
+        Assert.True(wizard.EmitScaleChannel);
         Assert.Null(wizard.ScaleChannelOwner!.Owner);
         workspace.CommitProjectRestore(new(GeneratedBodyWorkflowTests.Source(), "unrigged.dlrmodel", new ProjectModelsWorkspaceState { PackageAssetId = Guid.NewGuid() }));
         Assert.False(wizard.HasChannelPolicies);

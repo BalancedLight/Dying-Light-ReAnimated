@@ -362,7 +362,8 @@ public sealed class Dl1CharacterImportTests
         (RetailAssetRecord root, Dl1MeshData mesh) = Fixture();
         const string provider = "same-source";
         const string actorName = "data/characters/group/actor.bel";
-        const string actorText = "BodyElement(Head, 1, 0, 0, 0, \"root\"); !include(\"..\\..\\surface.def\");";
+        string relativeInclude = string.Join('\\', "..", "..", "surface.def");
+        string actorText = $"BodyElement(Head, 1, 0, 0, 0, \"root\"); !include(\"{relativeInclude}\");";
         const string surfaceText = "Setting(7);";
         RetailAssetRecord actor = VirtualFile(actorName, actorText, 2, provider);
         RetailAssetRecord exact = VirtualFile("data/surface.def", surfaceText, 3, provider);

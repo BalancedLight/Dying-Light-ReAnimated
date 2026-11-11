@@ -23,7 +23,7 @@ public sealed record RigChannelPolicyRow(Guid EntityId, string Name, AnimationCo
     public string Summary => Policy is null ? "No saved channel decisions" :
         $"Position: {Owners(Policy.Position)} · Rotation: {Owners(Policy.Rotation)} · Scale: {Owners(Policy.Scale)}";
     public string ExportSummary => Policy?.EmittedMask is { } mask && Policy.AnimationLod is { } lod
-        ? $"{Dl1BoneScriptPolicyResolver.FormatComponents(mask)} · {Dl1BoneScriptPolicyResolver.FormatLod(lod)}" : "Export channels or LOD unset";
+        ? $"{Dl1BoneScriptPolicyResolver.FormatComponents(mask)} · {Dl1BoneScriptPolicyResolver.FormatLod(lod)}" : "Automatic defaults available · editable";
     private static string Owners(RigChannelOwnership channel) => channel.Owners.IsEmpty ? "unset" : string.Join(" + ", channel.Owners);
 }
 
@@ -148,6 +148,7 @@ public sealed partial class RigConformanceWizardViewModel
 
     private void InitializeChannelPolicies()
     {
+        InitializeAutomaticChannelPolicies();
         ApplySelectedChannelPolicyCommand = new RelayCommand(() => ApplyChannelPolicies(all: false), () => CanEditChannelPolicies && SelectedChannelPolicy is not null);
         ApplyFilteredChannelPoliciesCommand = new RelayCommand(
             () => ApplyChannelPolicies(all: false, filtered: true),
@@ -245,11 +246,15 @@ public sealed partial class RigConformanceWizardViewModel
         PositionChannelOwner = ChannelOwnerChoices[0];
         RotationChannelOwner = ChannelOwnerChoices[0];
         ScaleChannelOwner = ChannelOwnerChoices[0];
-        var mask = value?.Policy?.EmittedMask;
+        var effective = value?.Policy;
+        if (value is not null && _model?.Package.Document is { RiggingSession: not null } document)
+            effective = RigAnimationPolicyDefaults.Apply(document).RiggingSession!.Recipe.ComponentPolicies
+                .FirstOrDefault(policy => policy.EntityId == value.EntityId);
+        var mask = effective?.EmittedMask;
         EmitPositionChannel = mask?.HasFlag(RigAnimationComponents.Position);
         EmitRotationChannel = mask?.HasFlag(RigAnimationComponents.Rotation);
         EmitScaleChannel = mask?.HasFlag(RigAnimationComponents.Scale);
-        ChannelLod = ChannelLodChoices.FirstOrDefault(choice => choice.Lod == value?.Policy?.AnimationLod);
+        ChannelLod = ChannelLodChoices.FirstOrDefault(choice => choice.Lod == effective?.AnimationLod);
         OnPropertyChanged(nameof(SelectedChannelSummary));
         NotifyChannelPolicies();
     }
@@ -297,7 +302,9 @@ public sealed partial class RigConformanceWizardViewModel
             PositionChannelOwner.Owner, RotationChannelOwner.Owner, ScaleChannelOwner.Owner)).ToImmutableArray();
         try
         {
-            if (!RigComponentPolicyAuthoring.TryApply(model.Package.Document, token, edits, out var updated))
+            var editableDocument = RigAnimationPolicyDefaults.Apply(model.Package.Document,
+                entityIds: rows.Select(row => row.EntityId).ToHashSet());
+            if (!RigComponentPolicyAuthoring.TryApply(editableDocument, editableDocument.RiggingSession!.CreateJobToken(), edits, out var updated))
             { ChannelPolicyStatus = "The rig inputs changed. Review the current node before applying."; return; }
             if (ReferenceEquals(updated, current))
             { ChannelPolicyStatus = "These channel decisions are already saved."; return; }
@@ -318,6 +325,7 @@ public sealed partial class RigConformanceWizardViewModel
         OnPropertyChanged(nameof(CanApplyFilteredChannelPolicies));
         ApplyFilteredChannelPoliciesCommand?.NotifyCanExecuteChanged();
         ApplyAllChannelPoliciesCommand?.NotifyCanExecuteChanged();
+        ApplyAutomaticChannelPoliciesCommand?.NotifyCanExecuteChanged();
         OmitAllChannelComponentsCommand?.NotifyCanExecuteChanged();
         OnPropertyChanged(nameof(CanPreviewStockChannelPolicies));
         PreviewStockChannelPoliciesCommand?.NotifyCanExecuteChanged();

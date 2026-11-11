@@ -164,8 +164,9 @@ public sealed partial class ModelsWorkspaceViewModel
         try
         {
             Dl1PreparedAuthoredRig prepared = Dl1CustomModelRigPreparer.Prepare(model);
-            Dl1BoneScriptPolicyResolver.Resolve(model.Package.Document, prepared.Contract);
-            return new(true, 0, "All emitted nodes have explicit channel/LOD decisions with evidence.");
+            var document = RigAnimationPolicyDefaults.Apply(model.Package.Document);
+            Dl1BoneScriptPolicyResolver.Resolve(document, prepared.Contract);
+            return new(true, 0, "Animation channels are ready. Unset nodes use automatic defaults; saved edits are retained. Review or change them in Channel policies.");
         }
         catch (InvalidDataException exception)
         {
