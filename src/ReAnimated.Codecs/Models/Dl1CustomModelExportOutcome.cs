@@ -8,17 +8,23 @@ namespace ReAnimated.Codecs.Models;
 
 public enum Dl1CustomModelExportStatus { CompilerValidated, BestEffort, Failed }
 
+public sealed record Dl1NativeCompilerDiagnostics(string? JobDirectory, string Transcript, ImmutableArray<string> Warnings);
+
 /// <summary>Standalone export outcome. Only Package carries compiler-validated evidence.</summary>
 public sealed record Dl1CustomModelExportOutcome(
     Dl1CustomModelExportStatus Status,
     Dl1CustomModelPackageResult? Package,
     string ArtifactDirectory,
     string DiagnosticsPath,
-    ImmutableArray<string> Warnings);
+    ImmutableArray<string> Warnings)
+{
+    public Dl1NativeCompilerDiagnostics? NativeCompilerDiagnostics { get; init; }
+}
 
 internal static class Dl1CustomModelExportRecovery
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    internal const string CompletedCompilerKey = "Dl1CompletedNativeCompilerResult";
     internal const string ArtifactKey = "Dl1ExportArtifactDirectory";
     internal const string DiagnosticsKey = "Dl1ExportDiagnosticsPath";
     internal const string JobKey = "Dl1CompilerJobDirectory";
@@ -88,6 +94,9 @@ internal static class Dl1CustomModelExportRecovery
         string recovery = Path.Combine(parent, $"{resource}_dl1_{(hasCandidate ? "best_effort" : "failed")}_{Guid.NewGuid():N}");
         Directory.Move(temporary, recovery);
         string diagnostics = Path.Combine(recovery, "export-diagnostics.json");
+        // Keep the actual retained path discoverable even if writing its report fails.
+        error.Data[ArtifactKey] = recovery;
+        var completed = error.Data[CompletedCompilerKey] as Dl1OfficialModelCompilerResult;
         File.WriteAllText(diagnostics, JsonSerializer.Serialize(new
         {
             format = "dl-reanimated-custom-model-export-diagnostics", schemaVersion = 1,
@@ -96,7 +105,10 @@ internal static class Dl1CustomModelExportRecovery
                 ? "Best-effort compiler output: validation did not complete. Isolated for review; not approved for validated deployment."
                 : "Export failed to produce a compiled model. Editable source and diagnostics are retained.",
             exceptionType = error.GetType().FullName, error = error.Message, stackTrace = error.StackTrace,
-            compilerJobDirectory = error.Data[JobKey] as string, copyWarnings,
+            compilerJobDirectory = completed?.DiagnosticsDirectory ?? error.Data[JobKey] as string,
+            compilerTranscript = completed?.CompilerLog,
+            compilerWarnings = completed?.Warnings ?? [],
+            nativeCompilerCompleted = completed is not null, copyWarnings,
             requestedRecoveryPathError = error.Data["Dl1RequestedRecoveryPathError"] as string,
             editableInputSaveError,
         }, JsonOptions), new UTF8Encoding(false));

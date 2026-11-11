@@ -16,6 +16,70 @@ public sealed class Dl1CustomModelPackageBuilderTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
+    public async Task AnimationFailureRetainsCompletedCompilerDiagnosticsAndWarnings(bool exporterThrows)
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            string job = Path.Combine(parent, "native-job");
+            Directory.CreateDirectory(job);
+            var original = new InvalidDataException("Animation export failed after native compilation.");
+            var request = CreateRequest(parent, CreateSyntheticModel(includeAnimation: true)) with
+            {
+                AnimationScriptAlias = "transaction_anim",
+                ModelCompilerOverride = async (request, token) => (await WriteSyntheticCompiledAsync(request, token)) with
+                { DiagnosticsDirectory = job, CompilerLog = "Full native transcript survives.", Warnings = ["Native compiler warning survives."] },
+                AnimationExporterOverride = async (animation, token) =>
+                {
+                    if (exporterThrows) throw original;
+                    var result = await WriteSyntheticAnimationsAsync(animation, token);
+                    File.Delete(result.OutputPath);
+                    return result;
+                },
+            };
+            var result = await Dl1CustomModelPackageBuilder.ExportAsync(request);
+            Assert.Equal(Dl1CustomModelExportStatus.BestEffort, result.Status);
+            Assert.Null(result.Package);
+            Assert.NotNull(result.NativeCompilerDiagnostics);
+            Assert.Equal(job, result.NativeCompilerDiagnostics.JobDirectory);
+            Assert.Equal("Full native transcript survives.", result.NativeCompilerDiagnostics.Transcript);
+            Assert.Contains("Native compiler warning survives.", result.Warnings);
+            using var report = JsonDocument.Parse(await File.ReadAllTextAsync(result.DiagnosticsPath));
+            Assert.Equal(job, report.RootElement.GetProperty("compilerJobDirectory").GetString());
+            Assert.Equal("Full native transcript survives.", report.RootElement.GetProperty("compilerTranscript").GetString());
+            Assert.Contains("Native compiler warning survives.", report.RootElement.GetProperty("compilerWarnings").EnumerateArray().Select(x => x.GetString()));
+            Assert.False(report.RootElement.GetProperty("compilerValidated").GetBoolean());
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Fact]
+    public async Task ExportRecoveryFailurePreservesOriginalException()
+    {
+        string parent = CreateTemporaryDirectory();
+        try
+        {
+            var original = new InvalidOperationException("Original source export failure.");
+            var request = CreateRequest(parent) with
+            {
+                SourceWriterOverride = (source, _) =>
+                {
+                    string staging = Path.GetDirectoryName(source.OutputDirectory)!;
+                    Directory.Delete(staging, recursive: true);
+                    File.WriteAllText(staging, "occupied recovery path");
+                    throw original;
+                },
+            };
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() => Dl1CustomModelPackageBuilder.ExportAsync(request));
+            Assert.Same(original, error);
+            Assert.NotNull(error.Data["Dl1RecoveryError"]);
+        }
+        finally { Directory.Delete(parent, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
     public async Task ExportRecoversSourceAndCandidateSeparatelyWithoutReplacingValidatedPackage(bool emitsCandidate)
     {
         string parent = CreateTemporaryDirectory();
