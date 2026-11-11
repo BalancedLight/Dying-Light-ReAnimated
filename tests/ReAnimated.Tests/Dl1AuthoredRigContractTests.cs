@@ -14,6 +14,102 @@ public sealed class Dl1AuthoredRigContractTests
 {
     private static readonly int[] DepthFirstSourceOrder = [0, 1, 3, 2];
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SourceWriterPreservesUnusedWeightedAuthoringNodesAsHelpersWithoutDroppingDependencies(bool usedByAnotherSurface)
+    {
+        FbxModelAuthoringImportResult original = CreateSyntheticModel();
+        CustomModelDocument document = original.Package.Document with
+        {
+            Source = original.Package.Document.Source with
+            {
+                ContentSha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(original.Package.SourceFbx.AsSpan())),
+            },
+            Bones = original.Package.Document.Bones.Select(bone => bone with
+            {
+                LocalBounds = new Dl1AuthoredBoneBounds(new(.1, .2, .3), new(.01, .02, .03)),
+                ExactLocalBindMatrix = bone.LocalBindTransform.ToMatrix(),
+            }).ToImmutableArray(),
+            BuildSettings = original.Package.Document.BuildSettings with
+            {
+                ReferenceExistingAnimationLibrary = true,
+                AnimationScriptAlias = "explicit_existing_bank",
+            },
+        };
+        FbxModelSurface first = original.Surfaces[0] with
+        {
+            PaletteBoneIndices = [3],
+            InverseBindMatrices = [original.Surfaces[0].InverseBindMatrices[3]],
+            Vertices = original.Surfaces[0].Vertices.Select(vertex => vertex with
+            {
+                BoneIndices = [0], BoneWeights = [1.0],
+            }).ToImmutableArray(),
+        };
+        FbxModelSurface other = first with
+        {
+            Id = "other/0", MeshName = "other", PaletteBoneIndices = [2],
+            InverseBindMatrices = [original.Surfaces[0].InverseBindMatrices[2]],
+        };
+        FbxModelAuthoringImportResult model = original with
+        {
+            Package = original.Package with { Document = document },
+            Rig = document.CreateRigDefinition(),
+            Surfaces = usedByAnotherSurface ? [first, other] : [first],
+        };
+        Dl1AuthoredRigContract prepared = Dl1CustomModelRigPreparer.Prepare(model).Contract;
+        Dl1AuthoredRigNode branch = Assert.Single(prepared.Nodes, node => node.Name == "branch_b");
+
+        Assert.Equal(usedByAnotherSurface, branch.IsDeform);
+        Assert.Equal(usedByAnotherSurface ? BoneKind.Deform : BoneKind.Helper, branch.Kind);
+        Assert.Equal(document.Bones.Length, prepared.Nodes.Length);
+        Assert.All(prepared.Nodes.Where(node => node.Name != "branch_b"), node => Assert.True(node.IsDeform));
+        Assert.All(prepared.Nodes, node =>
+        {
+            AssertMatrixNear(document.Bones[node.SourceBoneIndex].ExactLocalBindMatrix, node.LocalBindMatrix, 1e-7);
+            Assert.Equal(document.Bones[node.SourceBoneIndex].LocalBounds, node.Bounds);
+        });
+        Assert.True(document.Bones[2].IsWeighted); // Stale authoring metadata must remain intact.
+        Assert.Equal([3], first.PaletteBoneIndices.ToArray());
+
+        string output = RpackTestData.CreateTemporaryDirectory();
+        try
+        {
+            Dl1SourceModelBuildResult source = await Dl1SourceModelWriter.WriteAsync(new()
+            {
+                Model = model, ResourceName = "unused_authored_nodes", OutputDirectory = output,
+            });
+            var physical = Assert.Single(source.PreparedPhysicalNodeExpectations, node => node.Name == "branch_b");
+            Assert.Equal(usedByAnotherSurface ? 8u : 4u, physical.SourceMshType);
+            Dl1ChrV4Document chr = Dl1ChrV4Codec.Parse(await File.ReadAllBytesAsync(source.CharacterDefinitionPath));
+            Assert.Contains("branch_b", chr.ObjectNames);
+            Assert.Equal(document.Bones.Length + (usedByAnotherSurface ? 2 : 1) + 1, chr.ObjectNames.Length);
+            Assert.Equal(prepared.Nodes.Select(node => node.Name), chr.ObjectNames.Take(prepared.Nodes.Length));
+        }
+        finally { RpackTestData.DeleteTemporaryDirectory(output); }
+    }
+
+    [Fact]
+    public void DeclaredSkinPaletteDependenciesDoNotDependOnPositiveVertexWeights()
+    {
+        FbxModelAuthoringImportResult original = CreateSyntheticModel();
+        FbxModelAuthoringImportResult model = original with
+        {
+            Surfaces = original.Surfaces.Select(surface => surface with
+            {
+                Vertices = surface.Vertices.Select(vertex => vertex with
+                {
+                    BoneIndices = [0], BoneWeights = [1.0],
+                }).ToImmutableArray(),
+            }).ToImmutableArray(),
+        };
+
+        Dl1PreparedAuthoredRig prepared = Dl1CustomModelRigPreparer.Prepare(model);
+
+        Assert.All(prepared.Contract.Nodes, node => Assert.True(node.IsDeform));
+        Assert.Equal([0, 1, 3, 2], Assert.Single(prepared.Surfaces).PhysicalPalette.ToArray());
+    }
+
     [Fact]
     public void GeneratedSegmentProxyBoundsDoNotCapWideDeformBones()
     {
@@ -498,7 +594,7 @@ public sealed class Dl1AuthoredRigContractTests
 
     private static FbxModelAuthoringImportResult CreateSyntheticModel()
     {
-        const string hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        string hash = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(new byte[] { 0x46, 0x42, 0x58 }));
         Guid materialId = new("73cb889e-a691-4273-9f05-ff683fc51fc8");
         ImmutableArray<CustomModelBone> bones =
         [

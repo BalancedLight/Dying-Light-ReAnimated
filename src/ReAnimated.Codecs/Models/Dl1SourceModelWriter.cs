@@ -101,6 +101,9 @@ public static class Dl1SourceModelWriter
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(request.Model);
         request.Model.Package.Document.Validate();
+        var policyDocument = RigAnimationPolicyDefaults.Apply(request.Model.Package.Document);
+        if (!ReferenceEquals(policyDocument, request.Model.Package.Document))
+            request = request with { Model = request.Model with { Package = request.Model.Package with { Document = policyDocument } } };
         Dl1StockFppRigValidation.RequireApplied(request.Model.Package.Document);
         if (request.Model.Package.Document.RigConformance?.FitStrategy == CustomModelRigFitStrategy.StockFppRegional &&
             request.Model.Package.Document.FirstPersonVisibility is { } visibility)

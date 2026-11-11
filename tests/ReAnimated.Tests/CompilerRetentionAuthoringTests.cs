@@ -18,6 +18,8 @@ public sealed class CompilerRetentionAuthoringTests : IDisposable
         StructuralNodeReview row = FbxStructuralHelperAuthoring.Inspect(source).Single(r => r.Name == "Child");
         Assert.True(row.CanAddRetentionHelper);
         Dl1PreparedAuthoredRig beforePrepared = Dl1CustomModelRigPreparer.Prepare(source);
+        Assert.False(beforePrepared.Contract.Nodes.Single(node => node.Name == row.Name).IsDeform);
+        Assert.Contains("optional", row.RetentionStatus, StringComparison.OrdinalIgnoreCase);
         string sourceSecondary = SecondaryMotionSetupSerializer.Serialize(source.Package.Document.SecondaryMotion);
         ImmutableArray<CustomModelAuthoredHelper> oldHelpers = source.Package.Document.AuthoredHelpers;
 
@@ -60,12 +62,16 @@ public sealed class CompilerRetentionAuthoringTests : IDisposable
         Assert.Equal(RigAnimationLod.Off, components.AnimationLod);
 
         Dl1PreparedAuthoredRig afterPrepared = Dl1CustomModelRigPreparer.Prepare(candidate);
+        Assert.Equal(beforePrepared.Contract.Nodes.Length + 1, afterPrepared.Contract.Nodes.Length);
+        Assert.Equal(beforePrepared.Contract.Nodes.Select(node => node.Name),
+            afterPrepared.Contract.Nodes.Where(node => node.Name != added.Name).Select(node => node.Name));
         foreach (CustomModelBone bone in source.Package.Document.CreateEffectiveBones())
         {
             var oldNode = beforePrepared.Contract.Nodes.Single(node => node.SourceBoneIndex == bone.Index);
             var newNode = afterPrepared.Contract.Nodes.Single(node => node.SourceBoneIndex == bone.Index);
             Assert.True(oldNode.GlobalBindMatrix.NearlyEquals(newNode.GlobalBindMatrix, 1e-9), bone.Name);
             Assert.Equal(oldNode.Bounds, newNode.Bounds);
+            Assert.Equal(oldNode.IsDeform, newNode.IsDeform);
         }
         int addedIndex = document.CreateEffectiveBones().Single(bone => bone.Name == added.Name).Index;
         Assert.DoesNotContain(candidate.AnimationClips.Values.SelectMany(clip => clip.TransformTracks),

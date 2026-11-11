@@ -172,6 +172,10 @@ public sealed class WpfStartupSmokeTests
                     .GetBoolean());
             Assert.False(
                 root.GetProperty(
+                        "animationLibraryEditorPreviewVerified")
+                    .GetBoolean());
+            Assert.False(
+                root.GetProperty(
                         "floatingViewportRoundTrip")
                     .GetBoolean());
             Assert.Empty(

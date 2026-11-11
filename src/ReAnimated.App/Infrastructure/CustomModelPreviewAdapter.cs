@@ -556,7 +556,7 @@ public sealed class CustomModelPreviewSession
     private ImmutableArray<Dl1ResolvedBoneScriptPolicy> ResolveReviewedPolicies()
     {
         if (_reviewedPolicies.IsDefault)
-            _reviewedPolicies = Dl1BoneScriptPolicyResolver.Resolve(Document, _authoredRig!.Contract);
+            _reviewedPolicies = Dl1BoneScriptPolicyResolver.Resolve(RigAnimationPolicyDefaults.Apply(Document), _authoredRig!.Contract);
         return _reviewedPolicies;
     }
 

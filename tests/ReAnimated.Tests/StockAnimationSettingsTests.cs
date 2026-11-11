@@ -23,7 +23,8 @@ public sealed class StockAnimationSettingsTests
             vm.Models.ReferenceExistingAnimationLibrary = true;
             var captured = vm.Models.CaptureProjectSession();
             Assert.True(captured.Model!.Package.Document.BuildSettings.ReferenceExistingAnimationLibrary);
-            Assert.Contains("without publishing local clips",vm.Models.AnimationScriptAliasSummary);
+            Assert.Contains("existing_bank.scr", vm.Models.AnimationScriptAliasSummary, StringComparison.Ordinal);
+            Assert.Contains("saved channel choices take precedence", vm.Models.AnimationScriptAliasSummary, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("data/characters/animations/animscripts", vm.Models.DeploymentPathPreview, StringComparison.Ordinal);
             Assert.DoesNotContain("<clip>.anm2", vm.Models.DeploymentPathPreview, StringComparison.Ordinal);
             Assert.Contains("retained compiled model", vm.Models.DeploymentPathPreview, StringComparison.Ordinal);

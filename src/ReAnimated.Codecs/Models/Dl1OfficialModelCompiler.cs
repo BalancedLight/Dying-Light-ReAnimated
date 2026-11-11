@@ -76,6 +76,8 @@ public sealed record Dl1OfficialModelCompilerRequest
 
     /// <summary>Optional private staging root for isolated compiler jobs; no machine path is embedded in the project.</summary>
     public string? WorkingDirectoryRoot { get; init; }
+    /// <summary>Retain isolated source, compiler outputs and transcript for review.</summary>
+    public bool PreserveIntermediateOutput { get; init; } = true;
 }
 
 public sealed record Dl1OfficialModelCompilerResult(
@@ -90,6 +92,7 @@ public sealed record Dl1OfficialModelCompilerResult(
     string CompilerLog)
 {
     public ImmutableArray<string> Warnings { get; init; } = [];
+    public string? DiagnosticsDirectory { get; init; }
 
     public ImmutableArray<string> CompiledTextureObjectPaths { get; init; } = [];
     public ImmutableDictionary<string,string> DetachedMeshObjectPaths {get;init;}=ImmutableDictionary<string,string>.Empty;
@@ -194,7 +197,7 @@ public static class Dl1OfficialModelCompiler
     public const string MaterialExportWarning =
         "Materials couldn't be exported, you may need to assign your own inside of Developer Tools!";
     private const string ToolContractIdentity =
-        "dl-reanimated-csharp-model-compiler-chr-skin-material-serialization-physical-node-all-lod-readback-prepared-surface-identity-material-byte-residual-attributed-triangles-sdk-material-graph-padding-character-full-native-effects-textures-material-publication-opaque-union-runtime-companions-detached-mesh-material-instances-preset-source-native-loader-reviews-chunk-grouping-v44";
+        "dl-reanimated-csharp-model-compiler-chr-skin-material-serialization-physical-node-all-lod-readback-prepared-surface-identity-material-byte-residual-attributed-triangles-sdk-material-graph-padding-character-full-native-effects-textures-material-publication-opaque-union-runtime-companions-detached-mesh-material-instances-preset-source-native-loader-reviews-chunk-grouping-automatic-policy-helper-preservation-v45";
     private const int MaximumCompilerLogCharacters = 4 * 1024 * 1024;
     private const long MaximumBootstrapEntryBytes = 16L * 1024L * 1024L;
     private const long MaximumBootstrapTotalBytes = 64L * 1024L * 1024L;
@@ -284,7 +287,7 @@ public static class Dl1OfficialModelCompiler
         string? animationScriptAlias)
     {
         ArgumentNullException.ThrowIfNull(model);
-        model.Package.Document.Validate();
+        model = CompleteAnimationDefaults(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(resourceName);
         ArgumentException.ThrowIfNullOrWhiteSpace(surfaceName);
         string canonicalResourceName = Dl1SourceModelWriter.SanitizeName(resourceName, 55);
@@ -308,6 +311,13 @@ public static class Dl1OfficialModelCompiler
         hash.AppendData(Encoding.UTF8.GetBytes(
             $"\0resource={canonicalResourceName}\0surface={canonicalSurfaceName}\0animationAlias={animationScriptAlias?.Trim() ?? string.Empty}"));
         return Convert.ToHexStringLower(hash.GetHashAndReset());
+    }
+
+    private static FbxModelAuthoringImportResult CompleteAnimationDefaults(FbxModelAuthoringImportResult model)
+    {
+        CustomModelDocument completed = RigAnimationPolicyDefaults.Apply(model.Package.Document);
+        return ReferenceEquals(completed, model.Package.Document) ? model :
+            model with { Package = model.Package with { Document = completed } };
     }
 
     public static string? FindDefaultCompilerExecutable()
@@ -336,6 +346,9 @@ public static class Dl1OfficialModelCompiler
         Dl1OfficialModelCompilerRequest request,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(request.Model);
+        request = request with { Model = CompleteAnimationDefaults(request.Model) };
         ValidateRequest(request);
         string compilerPath = Path.GetFullPath(request.CompilerExecutablePath);
         string materialCompilerPath = ResolveMaterialCompilerExecutable(compilerPath);
@@ -571,15 +584,10 @@ public static class Dl1OfficialModelCompiler
                                 forceRebuild: fullMaterialBuildDirectory is not null || existingMaterialDatabasePath is null),
                             projectDirectory,
                             stageTimeout,
-                            stageCancellationToken),
+                            stageCancellationToken,
+                            Path.Combine(jobDirectory, "native-material-stage")),
                         cancellationToken).ConfigureAwait(false);
                     AppendBounded(compilerLog, materialProcess.Output);
-                    if (materialProcess.ExitCode != 0)
-                    {
-                        throw new InvalidDataException(
-                            $"Techland material compiler exited with code {materialProcess.ExitCode}.");
-                    }
-
                     compiledMaterialDatabase = Path.Combine(
                         projectDirectory,
                         "Assets_PC",
@@ -592,6 +600,14 @@ public static class Dl1OfficialModelCompiler
                             if (File.Exists(emitted))
                                 File.Copy(emitted, Path.Combine(projectDirectory, "Assets_PC", name), overwrite: true);
                         }
+                    }
+                    if (materialProcess.ExitCode != 0)
+                    {
+                        string warning = AssessModelCompilerExitCode(materialProcess.ExitCode,
+                            File.Exists(compiledMaterialDatabase) && new FileInfo(compiledMaterialDatabase).Length > 0,
+                            "local_dx11.mp", "material")!;
+                        warnings.Add(warning);
+                        AppendBounded(compilerLog, warning + "\r\n");
                     }
                 }
                 catch (Exception exception) when (
@@ -708,34 +724,17 @@ public static class Dl1OfficialModelCompiler
                         outputName),
                     projectDirectory,
                     request.Timeout,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    Path.Combine(jobDirectory, $"native-resource-stage-{stage + 1:000}")).ConfigureAwait(false);
                 AppendBounded(compilerLog, process.Output);
                 string? emittedObject = TryFindCompilerOutput(
                     unit.OutputDirectory,
                     unit.ExpectedObjectFileName);
-                if (process.ExitCode != 0)
+                string? exitWarning = AssessModelCompilerExitCode(process.ExitCode, emittedObject is not null, unit.ExpectedObjectFileName);
+                if (exitWarning is not null)
                 {
-                    if ((process.ExitCode == WindowsAccessViolationExitCode ||
-                         process.ExitCode == WindowsIllegalInstructionExitCode) &&
-                        emittedObject is not null)
-                    {
-                        string exceptionName = process.ExitCode == WindowsAccessViolationExitCode
-                            ? "access violation 0xC0000005"
-                            : "illegal instruction 0xC000001D";
-                        AppendBounded(
-                            compilerLog,
-                            $"Techland compiler exited with {exceptionName} after emitting {Path.GetFileName(emittedObject)}. " +
-                            "The isolated object will be admitted only if bounded linking and ordinary RP6L validation both pass.\r\n");
-                    }
-                    else
-                    {
-                        throw new InvalidDataException(
-                            $"Techland model compiler stage {stage + 1} exited with code {process.ExitCode}. " +
-                            (emittedObject is null
-                                ? $"It did not emit the expected '{unit.ExpectedObjectFileName}'. "
-                                : $"It emitted '{unit.ExpectedObjectFileName}', but this exit status is not accepted for publication. ") +
-                            "No model bundle was published.");
-                    }
+                    warnings.Add(exitWarning);
+                    AppendBounded(compilerLog, exitWarning + "\r\n");
                 }
 
                 compiledObjects.Add(emittedObject ?? FindCompilerOutput(
@@ -1161,6 +1160,7 @@ public static class Dl1OfficialModelCompiler
                 compilerLog.ToString())
             {
                 Warnings = warnings.ToImmutable(),
+                DiagnosticsDirectory = request.PreserveIntermediateOutput ? jobDirectory : null,
                 CompiledTextureObjectPaths = outputTextureObjectPaths.ToImmutable(),
                 DetachedMeshObjectPaths = outputDetachedObjects.ToImmutable(),
                 MaterialDatabaseCompanionPaths = outputMaterialCompanions.ToImmutable(),
@@ -1208,6 +1208,19 @@ public static class Dl1OfficialModelCompiler
                 compilerLog,
                 $"Model compilation failed: {exception.GetType().Name}: {exception.Message}\r\n" +
                 $"Diagnostic job retained at {jobDirectory}\r\n");
+            exception.Data[Dl1CustomModelExportRecovery.JobKey] = jobDirectory;
+            try
+            {
+                if (Directory.Exists(jobDirectory))
+                    exception.Data[Dl1CustomModelExportRecovery.CandidatesKey] = Directory.EnumerateFiles(jobDirectory, "*", SearchOption.AllDirectories)
+                        .Where(path => path.EndsWith(".rpack", StringComparison.OrdinalIgnoreCase) ||
+                                       path.EndsWith(".msh_obj", StringComparison.OrdinalIgnoreCase))
+                        .ToArray();
+            }
+            catch (Exception discoveryError) when (discoveryError is IOException or UnauthorizedAccessException)
+            {
+                exception.Data["Dl1CompilerCandidateDiscoveryError"] = discoveryError.Message;
+            }
             throw;
         }
         finally
@@ -1224,7 +1237,7 @@ public static class Dl1OfficialModelCompiler
                         .Any(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0))
                     Directory.Delete(owned, recursive: true);
             }
-            if (completedSuccessfully)
+            if (completedSuccessfully && !request.PreserveIntermediateOutput)
             {
                 DeleteOwnedJobDirectory(jobContainer, jobDirectory);
             }
@@ -1233,7 +1246,7 @@ public static class Dl1OfficialModelCompiler
                 try
                 {
                     File.WriteAllText(
-                        Path.Combine(jobDirectory, "COMPILER_FAILURE.log"),
+                        Path.Combine(jobDirectory, completedSuccessfully ? "COMPILER.log" : "COMPILER_FAILURE.log"),
                         compilerLog.ToString(),
                         new UTF8Encoding(false));
                 }
@@ -1665,6 +1678,15 @@ public static class Dl1OfficialModelCompiler
             "-update",
             "*.*",
         ];
+    }
+
+    internal static string? AssessModelCompilerExitCode(int exitCode, bool hasExpectedOutput, string expectedFileName, string compilerKind = "model")
+    {
+        if (!hasExpectedOutput)
+            throw new InvalidDataException($"Techland {compilerKind} compiler exited with code {exitCode} without the expected '{expectedFileName}'. No model bundle was published.");
+        return exitCode == 0 ? null :
+            $"Techland {compilerKind} compiler exited with code {exitCode} after emitting '{expectedFileName}'. " +
+            "Output is admitted only after all linking and read-back validation checks pass; runtime behavior remains unverified.";
     }
 
     internal static void ValidateAnimationCompilerExitCode(
@@ -3107,7 +3129,8 @@ public static class Dl1OfficialModelCompiler
         ImmutableArray<string> arguments,
         string workingDirectory,
         TimeSpan timeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? diagnosticLogPrefix = null)
     {
         ProcessStartInfo startInfo = new()
         {
@@ -3135,8 +3158,10 @@ public static class Dl1OfficialModelCompiler
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken,
             timeoutCancellation.Token);
-        Task<string> stdout = ReadBoundedAsync(process.StandardOutput, linked.Token);
-        Task<string> stderr = ReadBoundedAsync(process.StandardError, linked.Token);
+        Task<string> stdout = ReadBoundedAsync(process.StandardOutput, linked.Token,
+            diagnosticLogPrefix is null ? null : diagnosticLogPrefix + ".stdout.log");
+        Task<string> stderr = ReadBoundedAsync(process.StandardError, linked.Token,
+            diagnosticLogPrefix is null ? null : diagnosticLogPrefix + ".stderr.log");
         try
         {
             await process.WaitForExitAsync(linked.Token).ConfigureAwait(false);
@@ -3157,12 +3182,16 @@ public static class Dl1OfficialModelCompiler
         }
     }
 
-    private static async Task<string> ReadBoundedAsync(StreamReader reader, CancellationToken cancellationToken)
+    private static async Task<string> ReadBoundedAsync(StreamReader reader, CancellationToken cancellationToken,
+        string? diagnosticLogPath = null)
     {
         var output = new StringBuilder();
+        await using StreamWriter? fullLog = diagnosticLogPath is null ? null : new StreamWriter(diagnosticLogPath, false, new UTF8Encoding(false));
         bool truncated = false;
         while (await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false) is { } line)
         {
+            if (fullLog is not null)
+                await fullLog.WriteLineAsync(line.AsMemory(), cancellationToken).ConfigureAwait(false);
             if (output.Length + line.Length + 2 <= MaximumCompilerLogCharacters)
             {
                 output.AppendLine(line);

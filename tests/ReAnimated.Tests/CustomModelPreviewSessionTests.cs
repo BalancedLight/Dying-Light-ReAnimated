@@ -436,7 +436,7 @@ public sealed class CustomModelPreviewSessionTests
     [Fact]
     [Trait("ValidationTier", "Hermetic")]
     [Trait("Gate", "CustomModelPreview")]
-    public void EvaluatedPoseComparisonRequiresCompleteMatchingStudioPolicy()
+    public void EvaluatedPoseComparisonUsesDefaultsForMissingPoliciesWithoutChangingDocument()
     {
         FbxModelAuthoringImportResult model = CreateModel(flipTextureCoordinateV: false);
         RigDefinition rig = Assert.IsType<RigDefinition>(model.Rig);
@@ -473,8 +473,9 @@ public sealed class CustomModelPreviewSessionTests
         output = CustomModelPreviewAdapter.CreateSession(
             model, CustomModelPreviewMode.Dl1Output);
 
-        Assert.Throws<InvalidDataException>(() =>
-            output.CreateSkeleton(rig.CreateBindPose(), reviewedPolicy: true));
+        Assert.NotNull(output.CreateSkeleton(rig.CreateBindPose(), reviewedPolicy: true));
+        Assert.Same(studio, model.Package.Document.RiggingSession);
+        Assert.Single(model.Package.Document.RiggingSession!.Recipe.ComponentPolicies);
         Assert.NotNull(output.CreateSkeleton(rig.CreateBindPose()));
     }
 

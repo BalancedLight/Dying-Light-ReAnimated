@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using ReAnimated.Codecs.Fbx;
+using ReAnimated.Codecs.Models;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Mathematics;
 using ReAnimated.Core.ModelAuthoring;
@@ -200,7 +201,21 @@ public sealed class CompilerRetentionRemovalTests : IDisposable
             InverseBindMatrices = surface.InverseBindMatrices.Add(TransformMatrix.Identity),
             Vertices = surface.Vertices.Select(v => v with { BoneIndices = v.BoneIndices.Add(surface.PaletteBoneIndices.Length), BoneWeights = v.BoneWeights.Add(0) }).ToImmutableArray(),
         }).ToImmutableArray() };
+        var before = Dl1CustomModelRigPreparer.Prepare(changed).Contract.Nodes;
+        Assert.True(before.Single(node => node.Name == "Child").IsDeform);
         var result = FbxCompilerRetentionAuthoring.PreviewRemoval(changed, marker.Id).Candidate;
+        var after = Dl1CustomModelRigPreparer.Prepare(result).Contract.Nodes;
+        Assert.False(after.Single(node => node.Name == "Child").IsDeform);
+        Assert.Equal(before.Length - 1, after.Length);
+        Assert.Equal(before.Where(node => node.Name != marker.Name).Select(node => node.Name), after.Select(node => node.Name));
+        Assert.Equal(changed.Package.Document.Bones, result.Package.Document.Bones);
+        foreach (var node in after)
+        {
+            var previous = before.Single(candidate => candidate.Name == node.Name);
+            Assert.Equal(previous.GlobalBindMatrix, node.GlobalBindMatrix);
+            Assert.Equal(previous.InverseGlobalReferenceMatrix, node.InverseGlobalReferenceMatrix);
+            Assert.Equal(previous.Bounds, node.Bounds);
+        }
         for (int i = 0; i < result.Surfaces.Length; i++)
         {
             Assert.Equal<int>(added.Surfaces[i].PaletteBoneIndices, result.Surfaces[i].PaletteBoneIndices);

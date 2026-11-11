@@ -57,15 +57,20 @@
      <views:BodyGuideDetectionView Visibility="{Binding HasBodyAuthoringSource, Converter={StaticResource BooleanToVisibilityConverter}}"/>
      <StackPanel Visibility="{Binding HasRiggedStudioSource, Converter={StaticResource BooleanToVisibilityConverter}}">
       <TextBlock Text="Reference skeleton" FontWeight="SemiBold" Margin="0,0,0,5"/>
+      <Button Content="Use Player 1 third-person reference" Command="{Binding UsePlayerTppReferenceCommand}"
+              HorizontalAlignment="Left" Margin="0,0,0,6"
+              ToolTip="Load the Player 1 third-person skeleton as the reference."/>
+      <TextBlock Text="Or choose another reference" Margin="0,0,0,3"/>
       <ComboBox ItemsSource="{Binding AvailableTemplateProfiles}"
                 SelectedItem="{Binding TemplateProfileName, Mode=TwoWay}"
                 Margin="0,0,0,5"
+                AutomationProperties.Name="Reference skeleton profile"
                 ToolTip="player is third-person; player_fpp is first-person."/>
       <StackPanel Visibility="{Binding IsAdvancedSetupMode, Converter={StaticResource BooleanToVisibilityConverter}}">
        <TextBlock Text="Custom reference profile"/>
        <TextBox Text="{Binding TemplateProfileName, UpdateSourceTrigger=LostFocus}"/>
       </StackPanel>
-      <WrapPanel><Button Content="Use this skeleton" Command="{Binding ResolveTemplateCommand}"/><Button Content="Use model selected in Assets" Command="{Binding UseSelectedRetailMeshCommand}"/></WrapPanel>
+      <WrapPanel><Button Content="Load selected reference" Command="{Binding ResolveTemplateCommand}"/><Button Content="Use model selected in Assets" Command="{Binding UseSelectedRetailMeshCommand}"/></WrapPanel>
       <TextBlock Text="{Binding TemplateStatus}" TextWrapping="Wrap" Margin="0,5,0,5"/>
       <Button Content="Review bone mapping" Command="{Binding OpenRiggedMappingCommand}" HorizontalAlignment="Left" Margin="0,0,0,9"/>
       <CheckBox Content="Use body shape to help match bones" IsChecked="{Binding UseGeometryCorrespondence}"/>

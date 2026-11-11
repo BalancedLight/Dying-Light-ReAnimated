@@ -249,7 +249,7 @@
                                  FontFamily="Consolas"
                                  HorizontalScrollBarVisibility="Auto"
                                  IsReadOnly="True"
-                                 Text="{Binding GeneratedSourcePreview}"
+                                 Text="{Binding GeneratedSourcePreview, Mode=OneWay}"
                                  VerticalScrollBarVisibility="Auto" />
                     </Grid>
                 </Grid>

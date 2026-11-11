@@ -20,6 +20,28 @@ namespace ReAnimated.Tests;
 public sealed class RigConformanceWizardTests
 {
     [Fact]
+    public async Task PlayerTppQuickActionResolvesPlayerAfterAnotherProfileWasSelected()
+    {
+        string? requested = null;
+        var wizard = new RigConformanceWizardViewModel(
+            (profile, _) =>
+            {
+                requested = profile;
+                return Task.FromResult(Dl1RigTemplateResolution.Failed(profile, "Test reference"));
+            },
+            static _ => { });
+        wizard.TemplateProfileName = "player_fpp";
+
+        var property = typeof(RigConformanceWizardViewModel).GetProperty("UsePlayerTppReferenceCommand");
+        Assert.NotNull(property);
+        var command = Assert.IsAssignableFrom<CommunityToolkit.Mvvm.Input.IAsyncRelayCommand>(property.GetValue(wizard));
+        await command.ExecuteAsync(null);
+
+        Assert.Equal("player", requested);
+        Assert.Equal("player", wizard.TemplateProfileName);
+    }
+
+    [Fact]
     public void NewGeometryModePreservesProportionsWhileLegacyProjectsRetainTheirDecisions()
     {
         var wizard = CreateResolvedWizard();

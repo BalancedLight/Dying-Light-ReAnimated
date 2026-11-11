@@ -1,4 +1,11 @@
 using System.Collections.Immutable;
+using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Media;
+using System.Windows.Threading;
 using ReAnimated.App.Infrastructure;
 using ReAnimated.Core.Domain;
 using ReAnimated.Core.Project;
@@ -7,6 +14,272 @@ namespace ReAnimated.Tests;
 
 public sealed class AnimationLibraryEditorTests
 {
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void RealDialogRendersGeneratedPreviewAndUpdatesItAfterEdits()
+    {
+        WpfTestDispatcher.Run(() =>
+        {
+            ProjectAnimationLibrary dependency = Library(Guid.NewGuid(), "generic_dependency");
+            ProjectRetailAssetIdentity retail = RetailScript("generic_stock", 'a');
+            ProjectAnimationLibrary library = Library(Guid.NewGuid(), "generic_preview") with
+            {
+                Imports = [ProjectImport(dependency.Id), RetailImport(retail)],
+            };
+            var dialog = new AnimationLibraryEditorDialog(new AnimationLibraryEditorRequest
+            {
+                Assignment = Assignment("generic_first.anm2"),
+                Libraries = [library, dependency],
+                RetailScripts = [new AnimationLibraryRetailScriptOption(retail, "Generic stock")],
+                SelectedLibraryId = library.Id,
+            }) { ShowActivated = false };
+            try
+            {
+                dialog.Show();
+                PumpDialog(dialog);
+                TextBox preview = Assert.Single(Descendants<TextBox>(dialog), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "GeneratedSourcePreview");
+                Assert.True(preview.IsReadOnly);
+                Assert.Contains("!include(\"generic_dependency.scr\")", preview.Text);
+                Assert.Contains("!include(\"generic_stock.scr\")", preview.Text);
+                Assert.Contains("SeqTrack( \"generic_motion\", \"generic_first.anm2\"", preview.Text);
+
+                dialog.ViewModel.OutputAnm2Name = "generic_edited.anm2";
+                PumpDialog(dialog);
+
+                Assert.Contains("SeqTrack( \"generic_motion\", \"generic_edited.anm2\"", preview.Text);
+                Assert.DoesNotContain("generic_first.anm2", preview.Text);
+            }
+            finally
+            {
+                dialog.Close();
+            }
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void CancelOrWindowCloseDiscardsEditsAndReopensOriginalAssignment(bool cancelButton)
+    {
+        WpfTestDispatcher.Run(() => WithSavedProject((project, path, originalBytes) =>
+        {
+            Guid variantId = Assert.Single(project.AnimationVariants).Id;
+            var dialog = new AnimationLibraryEditorDialog(AnimationLibraryEditorRequest.FromProject(project, variantId));
+            Assert.False(ShowModal(dialog, () =>
+            {
+                dialog.ViewModel.SelectedLibrary!.ResourceName = "generic_discarded";
+                dialog.ViewModel.OutputAnm2Name = "generic_discarded.anm2";
+                if (cancelButton)
+                    InvokeButton(dialog, "Cancel");
+                else
+                    dialog.Close();
+            }));
+
+            Assert.Null(dialog.Result);
+            Assert.Equal(originalBytes, File.ReadAllBytes(path));
+            Assert.Equal("generic_original_library", Assert.Single(project.AnimationLibraries).ResourceName);
+            var reopened = new AnimationLibraryEditorDialog(AnimationLibraryEditorRequest.FromProject(project, variantId));
+            ShowModal(reopened, () =>
+            {
+                Assert.Equal("generic_original_library", reopened.ViewModel.SelectedLibrary!.ResourceName);
+                Assert.Equal("generic_original.anm2", reopened.ViewModel.OutputAnm2Name);
+                Assert.Contains("generic_original.anm2", Preview(reopened).Text);
+            });
+        }));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void SaveAppliesAndPersistsTheEditedAssignmentThenReopensIt()
+    {
+        WpfTestDispatcher.Run(() => WithSavedProject((project, path, _) =>
+        {
+            ProjectAnimationVariant originalVariant = Assert.Single(project.AnimationVariants);
+            Guid originalLibraryId = Assert.Single(project.AnimationLibraries).Id;
+            var dialog = new AnimationLibraryEditorDialog(AnimationLibraryEditorRequest.FromProject(project, originalVariant.Id));
+            Assert.True(ShowModal(dialog, () =>
+            {
+                dialog.ViewModel.SelectedLibrary!.ResourceName = "generic_saved_library";
+                TextBox output = Assert.Single(Descendants<TextBox>(dialog), box =>
+                    BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "OutputAnm2Name");
+                output.Text = "generic_saved.anm2";
+                InvokeButton(dialog, "Save SCR assignment");
+            }));
+
+            AnimationLibraryAssignmentResult result = Assert.IsType<AnimationLibraryAssignmentResult>(dialog.Result);
+            DlraProject updated = result.ApplyTo(project, originalVariant.Id);
+            ProjectSerializer.SaveAtomic(updated, path);
+            DlraProject loaded = ProjectSerializer.Load(path);
+            ProjectAnimationVariant savedVariant = Assert.Single(loaded.AnimationVariants);
+            Assert.Equal(originalVariant.Id, savedVariant.Id);
+            Assert.Equal(originalLibraryId, savedVariant.OwningAnimationLibraryId);
+            Assert.Equal("generic_saved.anm2", savedVariant.OutputAnm2Name);
+            Assert.Equal("generic_saved_library", Assert.Single(loaded.AnimationLibraries).ResourceName);
+            Assert.Equal(project.AnimationSources, updated.AnimationSources);
+            Assert.Equal(project.Models, updated.Models);
+            var reopened = new AnimationLibraryEditorDialog(AnimationLibraryEditorRequest.FromProject(loaded, originalVariant.Id));
+            ShowModal(reopened, () =>
+            {
+                Assert.Equal("generic_saved_library", reopened.ViewModel.SelectedLibrary!.ResourceName);
+                Assert.Equal("generic_saved.anm2", reopened.ViewModel.OutputAnm2Name);
+                Assert.Contains("generic_saved_library.scr", Preview(reopened).Text);
+                Assert.Contains("generic_saved.anm2", Preview(reopened).Text);
+            });
+        }));
+    }
+
+    [Fact]
+    [Trait("ValidationTier", "Hermetic")]
+    [Trait("Gate", "ViewModelWpf")]
+    public void InvalidAssignmentKeepsDialogOpenAndProjectUnchanged()
+    {
+        WpfTestDispatcher.Run(() => WithSavedProject((project, path, originalBytes) =>
+        {
+            Guid variantId = Assert.Single(project.AnimationVariants).Id;
+            var dialog = new AnimationLibraryEditorDialog(AnimationLibraryEditorRequest.FromProject(project, variantId));
+            Assert.False(ShowModal(dialog, () =>
+            {
+                dialog.ViewModel.OutputAnm2Name = "invalid output.anm2";
+                InvokeButton(dialog, "Save SCR assignment");
+                Assert.True(dialog.IsVisible);
+                Assert.Null(dialog.Result);
+                Assert.True(dialog.ViewModel.HasValidationMessage);
+                Assert.Contains("never silently renamed", dialog.ViewModel.ValidationMessage);
+                Assert.Contains("Complete the assignment", Preview(dialog).Text);
+                Assert.Equal(originalBytes, File.ReadAllBytes(path));
+                InvokeButton(dialog, "Cancel");
+            }));
+            Assert.Null(dialog.Result);
+            Assert.Equal(originalBytes, File.ReadAllBytes(path));
+            Assert.Equal("generic_original.anm2", Assert.Single(project.AnimationVariants).OutputAnm2Name);
+        }));
+    }
+
+    private static void WithSavedProject(Action<DlraProject, string, byte[]> action)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"ReAnimated-ScrDialog-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            ProjectAnimationLibrary library = Library(Guid.NewGuid(), "generic_original_library");
+            DlraProject project = CreateProject();
+            project = project with
+            {
+                AnimationLibraries = [library],
+                AnimationVariants = [Assert.Single(project.AnimationVariants) with
+                {
+                    OwningAnimationLibraryId = library.Id,
+                    OutputAnm2Name = "generic_original.anm2",
+                }],
+            };
+            string path = Path.Combine(directory, "assignment.dlraproj");
+            ProjectSerializer.SaveAtomic(project, path);
+            action(project, path, File.ReadAllBytes(path));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static TextBox Preview(Window dialog) => Assert.Single(Descendants<TextBox>(dialog), box =>
+        BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "GeneratedSourcePreview");
+
+    private static void InvokeButton(Window dialog, string content)
+    {
+        Button button = Assert.Single(Descendants<Button>(dialog), button => Equals(button.Content, content));
+        var provider = (IInvokeProvider)new ButtonAutomationPeer(button).GetPattern(PatternInterface.Invoke);
+        provider.Invoke();
+        PumpDialog(dialog);
+    }
+
+    private static bool? ShowModal(Window dialog, Action action)
+    {
+        var failures = new List<Exception>();
+        DispatcherUnhandledExceptionEventHandler handler = (_, args) =>
+        {
+            failures.Add(args.Exception);
+            args.Handled = true;
+            dialog.Dispatcher.BeginInvoke(DispatcherPriority.Send, new Action(dialog.Close));
+        };
+        dialog.Dispatcher.UnhandledException += handler;
+        dialog.ShowActivated = false;
+        dialog.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() =>
+        {
+            try
+            {
+                dialog.UpdateLayout();
+                action();
+            }
+            catch (Exception exception)
+            {
+                failures.Add(exception);
+            }
+            finally
+            {
+                dialog.Close();
+            }
+        }));
+        bool? result;
+        try
+        {
+            result = dialog.ShowDialog();
+        }
+        finally
+        {
+            dialog.Dispatcher.UnhandledException -= handler;
+            dialog.Close();
+        }
+        if (failures.Count != 0)
+            throw new AggregateException("The real modal dialog failed.", failures);
+        return result;
+    }
+
+    // A synchronous constructor-only test misses deferred WPF binding activation.
+    // Preserve every dispatcher failure as a test failure; never suppress it.
+    private static void PumpDialog(Window dialog)
+    {
+        var failures = new List<Exception>();
+        DispatcherUnhandledExceptionEventHandler handler = (_, args) =>
+        {
+            failures.Add(args.Exception);
+            args.Handled = true;
+        };
+        Dispatcher dispatcher = dialog.Dispatcher;
+        dispatcher.UnhandledException += handler;
+        try
+        {
+            dialog.UpdateLayout();
+            var frame = new DispatcherFrame();
+            dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => frame.Continue = false));
+            Dispatcher.PushFrame(frame);
+        }
+        finally
+        {
+            dispatcher.UnhandledException -= handler;
+        }
+
+        if (failures.Count != 0)
+            throw new AggregateException("The real dialog failed while activating deferred WPF work.", failures);
+    }
+
+    private static IEnumerable<T> Descendants<T>(DependencyObject root) where T : DependencyObject
+    {
+        for (int index = 0; index < VisualTreeHelper.GetChildrenCount(root); index++)
+        {
+            DependencyObject child = VisualTreeHelper.GetChild(root, index);
+            if (child is T match)
+                yield return match;
+            foreach (T descendant in Descendants<T>(child))
+                yield return descendant;
+        }
+    }
+
     [Fact]
     public void RenamingALibraryPreservesAuthoredEventsAndCompiledBacking()
     {

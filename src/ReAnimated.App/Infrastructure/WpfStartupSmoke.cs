@@ -6,10 +6,12 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
 using ReAnimated.App.ViewModels;
 using ReAnimated.App.Views;
+using ReAnimated.Core.Project;
 using ReAnimated.Renderer.D3D11;
 
 namespace ReAnimated.App.Infrastructure;
@@ -44,6 +46,7 @@ internal sealed class WpfStartupSmoke
     private readonly TimeSpan _timeout;
     private readonly Stopwatch _stopwatch = new();
     private int _finishing;
+    private bool _animationLibraryEditorPreviewVerified;
 
     private WpfStartupSmoke(
         string outputDirectory,
@@ -332,6 +335,10 @@ internal sealed class WpfStartupSmoke
                 await MaterializeAnimationLibraryRowAsync(
                     window);
 
+            stage = "WPF animation SCR assignment preview";
+            await VerifyAnimationLibraryEditorPreviewAsync(window);
+            _animationLibraryEditorPreviewVerified = true;
+
             // Materialize the Retarget/Edit dock workspace after the
             // animation-table check so resize and floating-window evidence
             // covers the source/target layout users interact with.
@@ -441,6 +448,54 @@ internal sealed class WpfStartupSmoke
                         statusHandler;
                 }
             }
+        }
+    }
+
+    private static async Task VerifyAnimationLibraryEditorPreviewAsync(Window owner)
+    {
+        var library = new ProjectAnimationLibrary
+        {
+            Id = Guid.NewGuid(),
+            ResourceName = "startup_smoke_library",
+            DisplayName = "Startup smoke library",
+        };
+        var dialog = new AnimationLibraryEditorDialog(new AnimationLibraryEditorRequest
+        {
+            Assignment = new AnimationLibrarySequenceAssignment(
+                Guid.NewGuid(), "startup_smoke_clip", "startup_smoke_first.anm2", 31, 30),
+            Libraries = [library],
+            SelectedLibraryId = library.Id,
+        })
+        {
+            Owner = owner,
+            ShowActivated = false,
+            ShowInTaskbar = false,
+            WindowStartupLocation = WindowStartupLocation.Manual,
+        };
+        PositionOffscreen(dialog);
+        try
+        {
+            dialog.Show();
+            await dialog.Dispatcher.InvokeAsync(() => dialog.UpdateLayout(), DispatcherPriority.ContextIdle);
+            TextBox preview = FindVisualChildren<TextBox>(dialog).Single(box =>
+                BindingOperations.GetBinding(box, TextBox.TextProperty)?.Path.Path == "GeneratedSourcePreview");
+            if (!preview.IsReadOnly ||
+                !preview.Text.Contains("SeqTrack( \"startup_smoke_clip\", \"startup_smoke_first.anm2\"", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("The packaged SCR assignment dialog did not render its generated source preview.");
+            }
+
+            dialog.ViewModel.OutputAnm2Name = "startup_smoke_updated.anm2";
+            await dialog.Dispatcher.InvokeAsync(() => dialog.UpdateLayout(), DispatcherPriority.ContextIdle);
+            if (!preview.Text.Contains("SeqTrack( \"startup_smoke_clip\", \"startup_smoke_updated.anm2\"", StringComparison.Ordinal) ||
+                preview.Text.Contains("startup_smoke_first.anm2", StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("The packaged SCR assignment dialog did not update its generated source preview after editing the ANM2 assignment.");
+            }
+        }
+        finally
+        {
+            dialog.Close();
         }
     }
 
@@ -995,7 +1050,10 @@ internal sealed class WpfStartupSmoke
             resizeSteps,
             ErrorStage: null,
             ErrorType: null,
-            ErrorMessage: null);
+            ErrorMessage: null)
+        {
+            AnimationLibraryEditorPreviewVerified = _animationLibraryEditorPreviewVerified,
+        };
         if (TryWriteResult(result))
         {
             IsComplete = true;
@@ -1073,7 +1131,10 @@ internal sealed class WpfStartupSmoke
             resizeSteps,
             stage,
             exception.GetType().FullName,
-            CreateFailureMessage(exception));
+            CreateFailureMessage(exception))
+        {
+            AnimationLibraryEditorPreviewVerified = _animationLibraryEditorPreviewVerified,
+        };
 
     private static string CreateFailureMessage(
         Exception exception)
@@ -1274,7 +1335,11 @@ internal sealed class WpfStartupSmoke
         [property: JsonPropertyName("errorType")]
         string? ErrorType,
         [property: JsonPropertyName("errorMessage")]
-        string? ErrorMessage);
+        string? ErrorMessage)
+    {
+        [JsonPropertyName("animationLibraryEditorPreviewVerified")]
+        public bool AnimationLibraryEditorPreviewVerified { get; init; }
+    }
 
     internal sealed record WpfViewportSmokeResult(
         [property: JsonPropertyName("index")]

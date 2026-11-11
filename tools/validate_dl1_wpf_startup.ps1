@@ -279,6 +279,7 @@ try {
         [int]$smoke.schemaVersion -ne 4 -or
         -not [bool]$smoke.complete -or
         -not [bool]$smoke.animationLibraryRowMaterialized -or
+        -not [bool]$smoke.animationLibraryEditorPreviewVerified -or
         -not [bool]$smoke.floatingViewportRoundTrip -or
         [string]$smoke.processArchitecture -ne "X64" -or
         [int]$smoke.requiredViewportCount -ne 2 -or

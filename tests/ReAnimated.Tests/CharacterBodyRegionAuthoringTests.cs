@@ -371,10 +371,19 @@ public sealed class CharacterBodyRegionAuthoringTests
             AssertStale(CharacterBodyRegionAuthoring.Reconcile(changedSource));
 
             CharacterResourceRecord physics = Record(accepted.Package, "physics");
+            byte[] changedBytes = Encoding.UTF8.GetBytes("changed retained bytes");
             var changedPayloads = accepted.Package.CompanionPayloads.SetItem(physics.EntryPath!,
-                ImmutableArray.Create(Encoding.UTF8.GetBytes("changed retained bytes")));
+                ImmutableArray.Create(changedBytes));
+            var changedInventory = accepted.Package.Document.CharacterResources! with
+            {
+                Resources = accepted.Package.Document.CharacterResources!.Resources.Select(resource =>
+                    resource.Id == physics.Id ? resource with
+                    { ContentSha256 = Convert.ToHexStringLower(SHA256.HashData(changedBytes)), ByteLength = changedBytes.Length }
+                    : resource).ToImmutableArray(),
+            };
             FbxModelAuthoringImportResult changedAsset = CharacterBodyRegionAuthoring.Reconcile(accepted with
-            { Package = accepted.Package with { CompanionPayloads = changedPayloads } });
+            { Package = accepted.Package with { CompanionPayloads = changedPayloads,
+                Document = accepted.Package.Document with { CharacterResources = changedInventory } } });
             AssertStale(changedAsset);
             InvalidDataException blocked = await Assert.ThrowsAsync<InvalidDataException>(() => Dl1SourceModelWriter.WriteAsync(new()
             { Model = changedAsset, OutputDirectory = directory, ResourceName = "generic_body_region" }));
